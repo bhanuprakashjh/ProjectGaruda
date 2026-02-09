@@ -20,6 +20,12 @@
 - Removed invalid DShot CMD 255 for bootloader entry (DShot spec: 0-47 only)
 - Cleaned up draft working comments in commutation table
 - Added `HAL_ADC_SelectBEMFChannel()` for AD2CH0 PINSEL muxing
+- Wired `HAL_ADC_SelectBEMFChannel()` call into `HAL_PWM_SetCommutationStep()`
+- Resolved CMP3/overcurrent conflict: all 3 CMPs → BEMF ZC only;
+  overcurrent uses external PCI8 (RB11) + ADC software threshold
+- Updated all Tier 2 reuse descriptions to match 3-CMP ZC architecture
+- Added `DSHOT_RATE_T` enum typedef with lookup table for Hz conversion
+- Removed all stale "CMP3 → overcurrent" references throughout document
 
 **v2.1:** Incorporates lessons from studying BLHeli, VESC, ASAC-ESC, Sapog,
 Bluejay, and AM32 reference firmware. See `reference_esc_comparison.md` for
@@ -49,10 +55,10 @@ file-by-file breakdown of what we take, what we adapt, and what we replace.
 | File | What Changes |
 |------|-------------|
 | `hal/port_config.c` | **Keep:** PWM output pin mappings (PWM1H/L→RD2/RD3, PWM2H/L→RD0/RD1, PWM3H/L→RC3/RC4), LED pins (RD5, RC9), button pins (RD9, RD10), UART pin remapping (RC11→RX, RC10→TX), fault PCI input (RB11→PCI8). **Remove:** Op-amp config for current sensing (we don't use internal op-amps for BEMF). **Add:** DShot input capture pin (choose available RP pin → Input Capture), BEMF ADC channel pin configs (ANSELx, TRISx for phase voltage divider inputs). |
-| `hal/pwm.c` | **Keep:** `PCLKCON` master config (DIVSEL=0, MCLKSEL=1), `MPER = LOOPTIME_TCY`, all dead time values (`PGxDT`), complementary mode (`PMOD=0`), `PENH=1/PENL=1`, bootstrap charging sequence, PG1 as master / PG2,PG3 as slaves. **Change:** Remove SVM trigger configuration. Add override-mode initialization (set `OVRENH=1, OVRENL=1, OVRDAT=0` on all 3 generators at startup = all outputs LOW). Change `ADC_SAMPLING_POINT` in `PG1TRIGA` to sample at PWM center for BEMF (same register, possibly different value). Keep fault PCI config (CMP3 → PWM shutdown). |
+| `hal/pwm.c` | **Keep:** `PCLKCON` master config (DIVSEL=0, MCLKSEL=1), `MPER = LOOPTIME_TCY`, all dead time values (`PGxDT`), complementary mode (`PMOD=0`), `PENH=1/PENL=1`, bootstrap charging sequence, PG1 as master / PG2,PG3 as slaves. **Change:** Remove SVM trigger configuration. Add override-mode initialization (set `OVRENH=1, OVRENL=1, OVRDAT=0` on all 3 generators at startup = all outputs LOW). Change `ADC_SAMPLING_POINT` in `PG1TRIGA` to sample at PWM center for BEMF (same register, possibly different value). Keep fault PCI config on external fault pin (RB11→PCI8 for external overcurrent/overvoltage hardware). **Note:** CMP3 is NO LONGER used for PWM PCI overcurrent — all 3 comparators are dedicated to BEMF ZC detection. Overcurrent protection uses: (a) external fault pin PCI8, (b) software ADC threshold in ISR. |
 | `hal/pwm.h` | **Keep:** `PWM_PDC1/2/3`, `PWM_PHASE1/2/3` macros, `DEADTIME` calculation formula, `LOOPTIME_TCY` formula, `MIN_DUTY/MAX_DUTY`, bootstrap constants. **Change:** `PWMFREQUENCY_HZ` from 20000 → 24000 (or configurable). Remove `SINGLE_SHUNT` conditionals (not applicable). |
 | `hal/adc.c` | **Keep:** ADC core enable sequence (`AD1CON.ON=1`, wait `ADRDY`), ADC2 core enable, Vbus channel config (AD1CH4, pin RA7, PINSEL=6). **Remove:** All op-amp output channels (IA on AD1CH0, IB on AD2CH0, IBUS on AD1CH2/CH3). **Add:** 3x BEMF phase voltage channels (one per motor phase, on appropriate ADC channels — see pin mapping section). Keep potentiometer channel for dev board testing. **Change:** Interrupt source to BEMF completion (not pot or IBUS). |
-| `hal/cmp.c/.h` | **Keep:** `InitializeCMPs()` with DAC calibration read from flash (POSINLADJ, NEGINLADJ, DNLADJ), DACCTRL1 init, filter clock divider. **Change:** Repurpose CMP3 for BEMF zero-crossing detection instead of overcurrent. Change `INSEL` to select BEMF input. Change `CMPPOL` based on expected ZC polarity. Add CMP1/CMP2 initialization for multi-comparator ZC (one per phase). DAC reference = Vbus/2 (dynamic, updated from ADC reading). |
+| `hal/cmp.c/.h` | **Keep:** `InitializeCMPs()` with DAC calibration read from flash (POSINLADJ, NEGINLADJ, DNLADJ), DACCTRL1 init, filter clock divider. **Change:** Initialize all 3 comparators (CMP1/CMP2/CMP3) for BEMF zero-crossing detection, one per phase: CMP1B=RA4 (Phase A), CMP2B=RB2 (Phase B), CMP3B=RB5 (Phase C), all with INSEL=1. Each DACx provides Vbus/2 reference. Only the floating-phase comparator is enabled per step. CMP3 is NO LONGER used for overcurrent — overcurrent uses external fault pin (PCI8/RB11) + software ADC threshold. |
 | `hal/board_service.c/.h` | **Keep:** `HAL_InitPeripherals()` call sequence, `HAL_MC1PWMEnableOutputs()` (clear overrides), `HAL_MC1PWMDisableOutputs()` (set overrides, OVRDAT=0), `HAL_MC1ClearPWMPCIFault()`, button handling (`ButtonScan`, debounce), heartbeat LED. **Remove:** `HAL_MC1MotorInputsRead()` (FOC-specific current reading), `HAL_PWM_DutyCycleRegister_Set()` / `HAL_PWM_PhaseRegister_Set()` (single-shunt phase shifting). **Add:** `HAL_SetCommutationStep()` (new, writes override registers per 6-step table), `HAL_ReadBEMF()` (reads floating phase ADC). |
 | `hal/measure.c/.h` | **Keep:** `MCAPP_MeasureAvgInit()` / `MCAPP_MeasureAvg()` (moving average filter), `MCAPP_MEASURE_VDC_T` struct. **Remove:** Current offset calibration (`MeasureCurrentOffset`, `MeasureCurrentCalibrate`). **Add:** BEMF measurement structures and Vbus/2 reference calculation. |
 | `main.c` | **Keep:** Init sequence (`InitOscillator()` → `SetupGPIOPorts()` → `HAL_InitPeripherals()` → service init), Timer1 ISR structure (button handling, heartbeat LED, command buffering). **Replace:** `MCAPP_MC1ServiceInit()` with `GARUDA_ServiceInit()`. Replace FOC service call with Garuda state machine. |
@@ -323,7 +329,7 @@ garudaESC.X/
 │   ├── defaults.h              # Factory defaults
 │   └── calibration.c/.h        # Dead-time calibration
 ├── protection/
-│   ├── overcurrent.c/.h        # HW comparator fault
+│   ├── overcurrent.c/.h        # External PCI8 fault + ADC software threshold
 │   ├── thermal.c/.h            # Temperature monitoring
 │   ├── voltage.c/.h            # Under/over voltage
 │   └── signal_loss.c/.h        # Signal timeout failsafe
@@ -494,9 +500,11 @@ void InitPWMGenerator1(void)
     PG1TRIGAbits.TRIGA = 0;      // Center of PWM cycle (0 = center in center-aligned)
     PG1TRIGAbits.CAHALF = 0;
 
-    // Fault PCI: Comparator output for overcurrent (from reference)
+    // Fault PCI: External fault input on PCI8 (RB11) — NOT comparator.
+    // All 3 comparators are dedicated to BEMF ZC detection.
+    // Overcurrent is handled by: (a) external HW fault on PCI8, (b) ADC software threshold.
     PG1EVTbits.FLTIEN = 1;       // Fault interrupt enable
-    // ... (fault PCI config same as reference)
+    // PCI8 is mapped to RB11 via _PCI8R=28 in port_config.c (from reference)
 
     PG1DCbits.DC = 0;            // Start at 0% duty
 }
@@ -580,6 +588,14 @@ void HAL_PWM_SetCommutationStep(uint8_t step, uint16_t duty)
     PG1DCbits.DC = (s->phaseA.ovrenh == 0) ? duty : 0;
     PG2DCbits.DC = (s->phaseB.ovrenh == 0) ? duty : 0;
     PG3DCbits.DC = (s->phaseC.ovrenh == 0) ? duty : 0;
+
+    // Mux ADC to sample the floating phase's BEMF on next PWM cycle.
+    // BEMF_B and BEMF_C share AD2CH0 — must switch PINSEL per step.
+    HAL_ADC_SelectBEMFChannel(s->floatingPhase);
+
+    // Configure comparator for floating phase ZC detection (hybrid mode)
+    // dacRef = latest Vbus/2 from ADC, zcPolarity from commutation table
+    // HAL_CMP_SetupForZC(s->floatingPhase, g_dacRefVbusHalf, s->zcPolarity);
 }
 
 void HAL_PWM_DisableAllOutputs(void)
@@ -1062,10 +1078,15 @@ uint8_t HAL_CMP_ReadZC(uint8_t floatingPhase)
 }
 ```
 
-Note: CMP3 is still available for overcurrent detection if needed, but in
-ZC hybrid mode it monitors Phase C BEMF. For overcurrent, use a separate
-ADC channel with software threshold or dedicate CMP3 to overcurrent and
-use only CMP1/CMP2 + ADC for the 3rd phase ZC.
+**Overcurrent strategy (final decision):** All 3 comparators (CMP1/CMP2/CMP3)
+are dedicated to BEMF ZC detection. Overcurrent protection uses two paths:
+  1. **External fault pin (PCI8/RB11):** Hardware trip from external overcurrent
+     detector on the power board → PWM PCI instant shutdown (<200ns).
+     Already configured in reference PWM fault PCI code.
+  2. **Software ADC threshold:** Read bus current via ADC in the PWM-cycle ISR.
+     Soft limit → proportional duty reduction (P-controller).
+     Hard limit → set ESC_FAULT state.
+This avoids the CMP3 conflict entirely.
 
 **Acceptance:** With motor spinning (open-loop), UART outputs BEMF ADC values.
 ZC transitions visible in data. LED toggles on each zero-crossing event.
@@ -1720,10 +1741,20 @@ typedef struct __attribute__((packed)) {
 // reserved[34] + crc16(2) = 36, total = 28 + 36 = 64 bytes
 _Static_assert(sizeof(GARUDA_CONFIG_T) == 64, "Config struct must be 64 bytes");
 
-// DShot rate enum (dshotRate field):
-// 0=auto-detect, 1=DShot150, 2=DShot300, 3=DShot600, 4=DShot1200
-// Decode in code: uint16_t rateHz = (dshotRate == 0) ? 0 :
-//                 (uint16_t[]){0, 150, 300, 600, 1200}[dshotRate];
+// DShot rate enum typedef (stored as uint8_t in config struct for packing):
+typedef enum {
+    DSHOT_RATE_AUTO = 0,
+    DSHOT_RATE_150  = 1,
+    DSHOT_RATE_300  = 2,
+    DSHOT_RATE_600  = 3,
+    DSHOT_RATE_1200 = 4,
+} DSHOT_RATE_T;
+
+// Lookup table to convert enum to Hz:
+static const uint16_t dshotRateHz[] = {0, 150, 300, 600, 1200};
+// Usage: uint16_t hz = dshotRateHz[config.dshotRate];
+// The struct field is uint8_t (not the enum) for __packed__ compatibility,
+// but all code should use DSHOT_RATE_T constants for assignment/comparison.
 ```
 
 #### Task 4.2: Protection Features
@@ -1732,8 +1763,9 @@ All adapted from reference fault detection pattern:
 
 ```c
 // overcurrent.c — uses reference's PWM PCI mechanism
-// CMP3 → PCI8 → PWM fault → _PWM1Interrupt
-// Reference value: CMP_REF = (ILIMIT * ADC_HALF / IPEAK) + ADC_HALF
+// External fault pin RB11 → PCI8 → PWM fault → _PWMInterrupt
+// (CMP3 is NOT used for overcurrent — all comparators are for BEMF ZC)
+// Software overcurrent: ADC reads bus current, compares against threshold
 
 // thermal.c — NTC on ADC channel
 void THERMAL_Update(GARUDA_DATA_T *g) {
@@ -2198,8 +2230,9 @@ void OVERCURRENT_SoftLimit(GARUDA_DATA_T *g)
     }
 }
 
-// Tier 2: Hard limit — hardware comparator → PWM PCI (instant)
-// Already configured via PGxFPCI (from reference FOC code)
+// Tier 2: Hard limit — external fault pin (RB11/PCI8) → PWM PCI (instant)
+// Already configured via PGxFPCI + _PCI8R=28 (from reference port_config)
+// External overcurrent/overvoltage HW on power board triggers PCI8
 // Response time: <200ns (hardware, not software)
 ```
 
