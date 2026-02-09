@@ -6,6 +6,7 @@ sapog/
 bluejay/
 AM32/
 betaflight/
+dspic33a-dac-dma-sinewave/
 
 # MPLAB X build artifacts
 *.o
@@ -21,12 +22,14 @@ debug/
 *.X/build/
 *.X/dist/
 *.X/debug/
+.generated_files/
 
 # IDE files
 .idea/
 .vscode/
 *.code-workspace
 nbproject/private/
+nbproject/Makefile-local-*.mk
 
 # OS files
 .DS_Store
