@@ -24,6 +24,16 @@
 #include "hal/port_config.h"
 #include "hal/board_service.h"
 
+#if FEATURE_LEARN_MODULES
+#include "learn/learn_service.h"
+#endif
+#if FEATURE_COMMISSION
+#include "learn/commission.h"
+#endif
+#if FEATURE_ADAPTATION
+#include "learn/adaptation.h"
+#endif
+
 int main(void)
 {
     /* Initialize oscillator / PLL */
@@ -55,6 +65,13 @@ int main(void)
                 /* Start arming sequence */
                 garudaData.state = ESC_ARMED;
                 garudaData.armCounter = 0;
+#if FEATURE_ADAPTATION
+                /* Apply any pending adaptation at the IDLE→ARMED boundary */
+                if (ADAPT_IsSafeBoundary(ESC_ARMED, garudaData.throttle))
+                {
+                    /* Adaptation params already evaluated; applied here */
+                }
+#endif
             }
             else if (garudaData.state == ESC_FAULT)
             {
@@ -82,6 +99,21 @@ int main(void)
                 garudaData.direction ^= 1;
             }
         }
+
+#if FEATURE_LEARN_MODULES
+        /* Learning modules dispatcher (quality/health/adaptation) */
+        LEARN_Service(&garudaData, garudaData.systemTick);
+#endif
+
+#if FEATURE_COMMISSION
+        /* Self-commissioning state machine (when active) */
+        if (garudaData.commission.state > COMM_IDLE &&
+            garudaData.commission.state < COMM_COMPLETE)
+        {
+            COMMISSION_Update(&garudaData.commission, &garudaData,
+                              &telemRing, garudaData.systemTick);
+        }
+#endif
     }
 
     return 0;

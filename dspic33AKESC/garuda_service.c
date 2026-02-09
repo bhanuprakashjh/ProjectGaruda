@@ -28,6 +28,10 @@
 #include "motor/commutation.h"
 #include "motor/startup.h"
 
+#if FEATURE_LEARN_MODULES
+#include "learn/learn_service.h"
+#endif
+
 /* Global ESC runtime data — volatile: shared between ISRs and main loop */
 volatile GARUDA_DATA_T garudaData;
 
@@ -67,6 +71,10 @@ void GARUDA_ServiceInit(void)
     /* Enable ADC interrupt to start the control loop */
     GARUDA_ClearADCIF();
     GARUDA_EnableADCInterrupt();
+
+#if FEATURE_LEARN_MODULES
+    LEARN_ServiceInit(&garudaData);
+#endif
 }
 
 /**

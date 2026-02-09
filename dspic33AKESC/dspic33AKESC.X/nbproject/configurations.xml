@@ -20,6 +20,15 @@
         <itemPath>../motor/pi.h</itemPath>
         <itemPath>../motor/startup.h</itemPath>
       </logicalFolder>
+      <logicalFolder name="learn" displayName="learn" projectFiles="true">
+        <itemPath>../learn/ring_buffer.h</itemPath>
+        <itemPath>../learn/quality.h</itemPath>
+        <itemPath>../learn/health.h</itemPath>
+        <itemPath>../learn/adaptation.h</itemPath>
+        <itemPath>../learn/commission.h</itemPath>
+        <itemPath>../learn/learn_service.h</itemPath>
+      </logicalFolder>
+      <itemPath>../hal/eeprom.h</itemPath>
       <itemPath>../garuda_types.h</itemPath>
       <itemPath>../garuda_config.h</itemPath>
       <itemPath>../garuda_calc_params.h</itemPath>
@@ -54,6 +63,15 @@
         <itemPath>../motor/pi.c</itemPath>
         <itemPath>../motor/startup.c</itemPath>
       </logicalFolder>
+      <logicalFolder name="learn" displayName="learn" projectFiles="true">
+        <itemPath>../learn/ring_buffer.c</itemPath>
+        <itemPath>../learn/quality.c</itemPath>
+        <itemPath>../learn/health.c</itemPath>
+        <itemPath>../learn/adaptation.c</itemPath>
+        <itemPath>../learn/commission.c</itemPath>
+        <itemPath>../learn/learn_service.c</itemPath>
+      </logicalFolder>
+      <itemPath>../hal/eeprom.c</itemPath>
       <itemPath>../garuda_service.c</itemPath>
       <itemPath>../main.c</itemPath>
     </logicalFolder>
@@ -121,7 +139,7 @@
         <property key="enable-symbols" value="true"/>
         <property key="enable-unroll-loops" value="false"/>
         <property key="expand-pragma-config" value="false"/>
-        <property key="extra-include-directories" value="../hal;../motor;.."/>
+        <property key="extra-include-directories" value="../hal;../motor;../learn;.."/>
         <property key="isolate-each-function" value="false"/>
         <property key="keep-inline" value="false"/>
         <property key="oXC16gcc-cnsts-mauxflash" value="false"/>

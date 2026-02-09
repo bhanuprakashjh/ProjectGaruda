@@ -18,6 +18,12 @@
 #include "../hal/hal_pwm.h"
 #include "../hal/hal_adc.h"
 
+#if FEATURE_LEARN_MODULES
+#include "../learn/ring_buffer.h"
+#include "../learn/learn_service.h"
+#include <string.h>
+#endif
+
 /* 6-step commutation table */
 const COMMUTATION_STEP_T commutationTable[6] =
 {
@@ -42,6 +48,21 @@ const COMMUTATION_STEP_T commutationTable[6] =
  */
 void COMMUTATION_AdvanceStep(volatile GARUDA_DATA_T *pData)
 {
+#if FEATURE_LEARN_MODULES
+    /* Build telemetry sample from the COMPLETED step (before advancing) */
+    {
+        TELEM_SAMPLE_T sample;
+        sample.timestamp = pData->systemTick;
+        sample.step = pData->currentStep;
+        sample.zcPolarity = commutationTable[pData->currentStep].zcPolarity;
+        sample.zcLatencyTicks = 0;  /* Phase 2: fill from ZC timing */
+        sample.duty = (uint16_t)pData->duty;
+        sample.vbusRaw = pData->vbusRaw;
+        sample.faultFlags = 0;      /* Phase 2: set from BEMF detection */
+        RingBuffer_Write(&telemRing, &sample);
+    }
+#endif
+
     pData->currentStep++;
     if (pData->currentStep >= 6)
     {
