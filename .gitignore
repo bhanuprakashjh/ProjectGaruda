@@ -1,0 +1,43 @@
+# Reference ESC repos (large, cloned externally)
+BLHeli/
+vesc-bldc/
+asac-esc/
+sapog/
+bluejay/
+AM32/
+betaflight/
+
+# MPLAB X build artifacts
+*.o
+*.d
+*.elf
+*.hex
+*.map
+*.lst
+*.cof
+dist/
+build/
+debug/
+*.X/build/
+*.X/dist/
+*.X/debug/
+
+# IDE files
+.idea/
+.vscode/
+*.code-workspace
+nbproject/private/
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Claude Code
+.claude/
+
+# Microchip reference code (copyrighted, not redistributable)
+reference/
+
+# Large binary files (datasheets)
+*.pdf
+
