@@ -18,15 +18,15 @@
  * score = 255 - clamp(255 * (current - baseline) / baseline, 0, 255)
  * When current <= baseline, score = 255 (perfect).
  * When current >= 2*baseline, score = 0 (worst). */
-static uint8_t ScoreFromDrift(uint16_t current, uint16_t baseline)
+static uint8_t ScoreFromDrift(float current, float baseline)
 {
-    if (baseline == 0 || current <= baseline)
+    if (baseline <= 0.0f || current <= baseline)
         return 255;
 
-    uint32_t drift = (uint32_t)(current - baseline) * 255 / baseline;
-    if (drift >= 255)
+    float drift = (current - baseline) * 255.0f / baseline;
+    if (drift >= 255.0f)
         return 0;
-    return (uint8_t)(255 - drift);
+    return (uint8_t)(255.0f - drift);
 }
 
 void HEALTH_Init(HEALTH_STATE_T *health, const LEARNED_PARAMS_T *learned)
@@ -39,8 +39,8 @@ void HEALTH_Init(HEALTH_STATE_T *health, const LEARNED_PARAMS_T *learned)
     health->compositeHealth = 255;
     health->trend = 0;
     health->operatingHours = 0;
-    health->baselineJitterQ8 = 0;
-    health->baselineAsymmetryQ8 = 0;
+    health->baselineJitter = 0.0f;
+    health->baselineAsymmetry = 0.0f;
     health->baselineResistanceMilliOhm = 0;
 
     if (learned != NULL)
@@ -51,9 +51,9 @@ void HEALTH_Init(HEALTH_STATE_T *health, const LEARNED_PARAMS_T *learned)
 
 void HEALTH_SetBaseline(HEALTH_STATE_T *health, const QUALITY_METRICS_T *quality)
 {
-    health->baselineJitterQ8 = quality->zcJitterQ8;
+    health->baselineJitter = quality->zcJitter;
     /* Asymmetry baseline: placeholder — Phase 2 will provide step timing */
-    health->baselineAsymmetryQ8 = 0;
+    health->baselineAsymmetry = 0.0f;
 }
 
 void HEALTH_Update(HEALTH_STATE_T *health, const QUALITY_METRICS_T *quality,
@@ -63,9 +63,9 @@ void HEALTH_Update(HEALTH_STATE_T *health, const QUALITY_METRICS_T *quality,
     (void)pData;    /* used in Phase 2+ for thermal/electrical sensing */
 
     /* Bearing: ZC jitter vs baseline */
-    if (health->baselineJitterQ8 > 0)
-        health->bearingScore = ScoreFromDrift(quality->zcJitterQ8,
-                                              health->baselineJitterQ8);
+    if (health->baselineJitter > 0.0f)
+        health->bearingScore = ScoreFromDrift(quality->zcJitter,
+                                              health->baselineJitter);
 
     /* Balance: step timing asymmetry vs baseline */
     /* Phase 2 will populate asymmetry data; for now hold at 255 */

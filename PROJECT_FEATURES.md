@@ -103,11 +103,11 @@ Real-time assessment of commutation quality from telemetry data.
 
 | Metric | Type | Description |
 |--------|------|-------------|
-| **ZC miss rate** | Q8.8 fixed-point | Fraction of commutation steps where no ZC event was detected |
-| **False cross rate** | Q8.8 | Fraction of ZC events with wrong polarity (noise-triggered) |
-| **Timeout rate** | Q8.8 | Fraction of steps where ZC timed out (forced commutation used) |
-| **ZC jitter** | Q8.8 (std dev) | Standard deviation of ZC latency — computed via Welford's online algorithm (no sample storage) |
-| **Confidence score** | 0-255 | Composite: `255 - (missRate/2 + falseRate/2 + timeoutRate + desyncs*50)` |
+| **ZC miss rate** | float (0.0-1.0) | Fraction of commutation steps where no ZC event was detected |
+| **False cross rate** | float (0.0-1.0) | Fraction of ZC events with wrong polarity (noise-triggered) |
+| **Timeout rate** | float (0.0-1.0) | Fraction of steps where ZC timed out (forced commutation used) |
+| **ZC jitter** | float (std dev) | Standard deviation of ZC latency in timer ticks — computed via Welford's online algorithm (no sample storage) |
+| **Confidence score** | 0-255 | Composite: `255 - (missRate*127.5 + falseRate*127.5 + timeoutRate*255 + desyncs*50)` |
 
 Operates on a sliding time window (default 1000 ms, configurable). Drains telemetry samples from a lock-free ring buffer (ISR -> main loop, 13 bytes/sample, <35 ns write time).
 

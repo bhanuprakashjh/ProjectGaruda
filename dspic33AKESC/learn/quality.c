@@ -14,54 +14,36 @@
 
 #if FEATURE_LEARN_MODULES
 
-/* Welford's state for ZC latency jitter (internal) */
+#include <math.h>
+
+/* Welford's online algorithm for incremental mean + variance */
 static uint32_t welfordCount;
-static int32_t  welfordMeanQ8;      /* Q8.8 fixed-point */
-static int32_t  welfordM2Q16;       /* Q16.16 for variance accumulator */
+static float    welfordMean;
+static float    welfordM2;
 
 static void Welford_Reset(void)
 {
     welfordCount = 0;
-    welfordMeanQ8 = 0;
-    welfordM2Q16 = 0;
+    welfordMean = 0.0f;
+    welfordM2 = 0.0f;
 }
 
 static void Welford_AddSample(uint16_t latency)
 {
-    int32_t valQ8 = (int32_t)latency << 8;
+    float val = (float)latency;
     welfordCount++;
-    int32_t delta = valQ8 - welfordMeanQ8;
-    welfordMeanQ8 += delta / (int32_t)welfordCount;
-    int32_t delta2 = valQ8 - welfordMeanQ8;
-    welfordM2Q16 += (delta >> 4) * (delta2 >> 4);  /* scale to avoid overflow */
+    float delta = val - welfordMean;
+    welfordMean += delta / (float)welfordCount;
+    float delta2 = val - welfordMean;
+    welfordM2 += delta * delta2;
 }
 
-static uint16_t Welford_GetStdDevQ8(void)
+static float Welford_GetStdDev(void)
 {
     if (welfordCount < 2)
-        return 0;
-    /* Variance = M2 / (count-1), but M2 is scaled by 2^-8 from the shift */
-    uint32_t varianceScaled = (uint32_t)(welfordM2Q16 / (int32_t)(welfordCount - 1));
-    /* Integer square root approximation for std dev */
-    uint32_t x = varianceScaled;
-    uint32_t result = 0;
-    uint32_t bit = 1UL << 30;
-    while (bit > x)
-        bit >>= 2;
-    while (bit != 0)
-    {
-        if (x >= result + bit)
-        {
-            x -= result + bit;
-            result = (result >> 1) + bit;
-        }
-        else
-        {
-            result >>= 1;
-        }
-        bit >>= 2;
-    }
-    return (uint16_t)result;
+        return 0.0f;
+    float variance = welfordM2 / (float)(welfordCount - 1);
+    return sqrtf(variance);
 }
 
 void QUALITY_Init(QUALITY_METRICS_T *metrics)
@@ -71,10 +53,10 @@ void QUALITY_Init(QUALITY_METRICS_T *metrics)
     metrics->zcTimeoutCount = 0;
     metrics->falseCrossCount = 0;
     metrics->desyncRecoveries = 0;
-    metrics->zcMissRateQ8 = 0;
-    metrics->falseRateQ8 = 0;
-    metrics->timeoutRateQ8 = 0;
-    metrics->zcJitterQ8 = 0;
+    metrics->zcMissRate = 0.0f;
+    metrics->falseRate = 0.0f;
+    metrics->timeoutRate = 0.0f;
+    metrics->zcJitter = 0.0f;
     metrics->confidenceScore = 0;
     metrics->lastWindowTotal = 0;
     metrics->windowStartTick = 0;
@@ -95,31 +77,30 @@ void QUALITY_ResetWindow(QUALITY_METRICS_T *metrics, uint32_t now)
 
 static void ComputeRatesAndConfidence(QUALITY_METRICS_T *metrics)
 {
-    uint16_t total = metrics->zcTotalCount;
-    if (total == 0)
+    float total = (float)metrics->zcTotalCount;
+    if (total < 1.0f)
     {
-        metrics->zcMissRateQ8 = 0;
-        metrics->falseRateQ8 = 0;
-        metrics->timeoutRateQ8 = 0;
+        metrics->zcMissRate = 0.0f;
+        metrics->falseRate = 0.0f;
+        metrics->timeoutRate = 0.0f;
         metrics->confidenceScore = 0;
         return;
     }
 
-    /* Q8.8 rates: (count * 256) / total */
-    metrics->zcMissRateQ8 = (uint16_t)(((uint32_t)metrics->zcMissCount << 8) / total);
-    metrics->falseRateQ8 = (uint16_t)(((uint32_t)metrics->falseCrossCount << 8) / total);
-    metrics->timeoutRateQ8 = (uint16_t)(((uint32_t)metrics->zcTimeoutCount << 8) / total);
-    metrics->zcJitterQ8 = Welford_GetStdDevQ8();
+    metrics->zcMissRate = (float)metrics->zcMissCount / total;
+    metrics->falseRate = (float)metrics->falseCrossCount / total;
+    metrics->timeoutRate = (float)metrics->zcTimeoutCount / total;
+    metrics->zcJitter = Welford_GetStdDev();
 
     /* Confidence = 255 - penalties, clamped [0,255] */
-    int16_t conf = 255;
-    conf -= (int16_t)(metrics->zcMissRateQ8 >> 1);     /* missRate / 2 */
-    conf -= (int16_t)(metrics->falseRateQ8 >> 1);       /* falseRate / 2 */
-    conf -= (int16_t)metrics->timeoutRateQ8;             /* timeoutRate */
-    conf -= (int16_t)metrics->desyncRecoveries * 50;     /* heavy penalty */
+    float conf = 255.0f;
+    conf -= metrics->zcMissRate * 127.5f;               /* missRate / 2 scaled to 255 */
+    conf -= metrics->falseRate * 127.5f;                 /* falseRate / 2 scaled to 255 */
+    conf -= metrics->timeoutRate * 255.0f;               /* timeoutRate scaled to 255 */
+    conf -= (float)metrics->desyncRecoveries * 50.0f;    /* heavy penalty */
 
-    if (conf < 0) conf = 0;
-    if (conf > 255) conf = 255;
+    if (conf < 0.0f) conf = 0.0f;
+    if (conf > 255.0f) conf = 255.0f;
     metrics->confidenceScore = (uint8_t)conf;
 }
 

@@ -20,8 +20,8 @@
 /* Timing advance step size (degrees per adjustment) */
 #define TIMING_STEP_DEG     1
 
-/* Startup duty step size (Q8.8 percent per adjustment, ~0.5%) */
-#define STARTUP_DUTY_STEP   128
+/* Startup duty step size (percent per adjustment) */
+#define STARTUP_DUTY_STEP   0.5f
 
 /* Ramp accel step size (eRPM/s per adjustment) */
 #define RAMP_ACCEL_STEP     500
@@ -32,14 +32,14 @@
 void ADAPT_Init(ADAPT_PARAMS_T *adapt, const GARUDA_CONFIG_T *config)
 {
     adapt->timingAdvanceDeg = 0;
-    adapt->startupDutyPercent = (uint16_t)config->alignDutyPercent << 8;
+    adapt->startupDutyPercent = (float)config->alignDutyPercent;
     adapt->rampAccelErpmPerS = config->rampAccelErpmPerS;
     adapt->alignTimeMs = config->alignTimeMs;
 
     adapt->timingAdvanceMin = TIMING_ADVANCE_MIN_DEG;
     adapt->timingAdvanceMax = TIMING_ADVANCE_MAX_DEG;
-    adapt->startupDutyMin = 2 << 8;     /* 2% Q8.8 */
-    adapt->startupDutyMax = 15 << 8;    /* 15% Q8.8 */
+    adapt->startupDutyMin = 2.0f;
+    adapt->startupDutyMax = 15.0f;
 
     adapt->lkgTimingAdvanceDeg = adapt->timingAdvanceDeg;
     adapt->lkgStartupDutyPercent = adapt->startupDutyPercent;
@@ -76,12 +76,12 @@ ADAPT_ACTION_T ADAPT_Evaluate(ADAPT_PARAMS_T *adapt,
     adapt->consecutiveFailures = 0;
 
     /* Priority 1: Timing advance optimization based on ZC miss rate */
-    if (quality->zcMissRateQ8 > (25 << 8) / 100)   /* > ~25% miss rate */
+    if (quality->zcMissRate > 0.25f)
     {
         if (adapt->timingAdvanceDeg > adapt->timingAdvanceMin)
             return ADAPT_TIMING_DECREASE;
     }
-    else if (quality->zcMissRateQ8 < (5 << 8) / 100 &&  /* < ~5% miss rate */
+    else if (quality->zcMissRate < 0.05f &&
              quality->confidenceScore > 220)
     {
         if (adapt->timingAdvanceDeg < adapt->timingAdvanceMax)
@@ -111,6 +111,13 @@ static uint16_t ClampU16(int32_t val, uint16_t min, uint16_t max)
     return (uint16_t)val;
 }
 
+static float ClampF(float val, float min, float max)
+{
+    if (val < min) return min;
+    if (val > max) return max;
+    return val;
+}
+
 bool ADAPT_Apply(ADAPT_PARAMS_T *adapt, ADAPT_ACTION_T action)
 {
     if (adapt->adaptationLocked || action == ADAPT_NO_CHANGE)
@@ -137,14 +144,14 @@ bool ADAPT_Apply(ADAPT_PARAMS_T *adapt, ADAPT_ACTION_T action)
             break;
 
         case ADAPT_STARTUP_DUTY_UP:
-            adapt->startupDutyPercent = ClampU16(
-                (int32_t)adapt->startupDutyPercent + STARTUP_DUTY_STEP,
+            adapt->startupDutyPercent = ClampF(
+                adapt->startupDutyPercent + STARTUP_DUTY_STEP,
                 adapt->startupDutyMin, adapt->startupDutyMax);
             break;
 
         case ADAPT_STARTUP_DUTY_DOWN:
-            adapt->startupDutyPercent = ClampU16(
-                (int32_t)adapt->startupDutyPercent - STARTUP_DUTY_STEP,
+            adapt->startupDutyPercent = ClampF(
+                adapt->startupDutyPercent - STARTUP_DUTY_STEP,
                 adapt->startupDutyMin, adapt->startupDutyMax);
             break;
 

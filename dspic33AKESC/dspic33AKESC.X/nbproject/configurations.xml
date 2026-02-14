@@ -15,11 +15,6 @@
         <itemPath>../hal/timer1.h</itemPath>
         <itemPath>../hal/uart1.h</itemPath>
       </logicalFolder>
-      <logicalFolder name="motor" displayName="motor" projectFiles="true">
-        <itemPath>../motor/commutation.h</itemPath>
-        <itemPath>../motor/pi.h</itemPath>
-        <itemPath>../motor/startup.h</itemPath>
-      </logicalFolder>
       <logicalFolder name="learn" displayName="learn" projectFiles="true">
         <itemPath>../learn/ring_buffer.h</itemPath>
         <itemPath>../learn/quality.h</itemPath>
@@ -27,6 +22,11 @@
         <itemPath>../learn/adaptation.h</itemPath>
         <itemPath>../learn/commission.h</itemPath>
         <itemPath>../learn/learn_service.h</itemPath>
+      </logicalFolder>
+      <logicalFolder name="motor" displayName="motor" projectFiles="true">
+        <itemPath>../motor/commutation.h</itemPath>
+        <itemPath>../motor/pi.h</itemPath>
+        <itemPath>../motor/startup.h</itemPath>
       </logicalFolder>
       <itemPath>../hal/eeprom.h</itemPath>
       <itemPath>../garuda_types.h</itemPath>
@@ -58,11 +58,6 @@
         <itemPath>../hal/timer1.c</itemPath>
         <itemPath>../hal/uart1.c</itemPath>
       </logicalFolder>
-      <logicalFolder name="motor" displayName="motor" projectFiles="true">
-        <itemPath>../motor/commutation.c</itemPath>
-        <itemPath>../motor/pi.c</itemPath>
-        <itemPath>../motor/startup.c</itemPath>
-      </logicalFolder>
       <logicalFolder name="learn" displayName="learn" projectFiles="true">
         <itemPath>../learn/ring_buffer.c</itemPath>
         <itemPath>../learn/quality.c</itemPath>
@@ -70,6 +65,11 @@
         <itemPath>../learn/adaptation.c</itemPath>
         <itemPath>../learn/commission.c</itemPath>
         <itemPath>../learn/learn_service.c</itemPath>
+      </logicalFolder>
+      <logicalFolder name="motor" displayName="motor" projectFiles="true">
+        <itemPath>../motor/commutation.c</itemPath>
+        <itemPath>../motor/pi.c</itemPath>
+        <itemPath>../motor/startup.c</itemPath>
       </logicalFolder>
       <itemPath>../hal/eeprom.c</itemPath>
       <itemPath>../garuda_service.c</itemPath>

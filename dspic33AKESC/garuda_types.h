@@ -93,10 +93,10 @@ typedef struct
     uint16_t falseCrossCount;
     uint16_t desyncRecoveries;
     /* Computed at end of each window (persist across resets) */
-    uint16_t zcMissRateQ8;      /* Q8.8 fixed-point */
-    uint16_t falseRateQ8;       /* Q8.8 */
-    uint16_t timeoutRateQ8;     /* Q8.8 */
-    uint16_t zcJitterQ8;        /* ZC latency std dev, Q8.8 */
+    float zcMissRate;           /* 0.0-1.0 */
+    float falseRate;            /* 0.0-1.0 */
+    float timeoutRate;          /* 0.0-1.0 */
+    float zcJitter;             /* ZC latency std dev in timer ticks */
     uint8_t  confidenceScore;   /* 0-255 */
     uint16_t lastWindowTotal;   /* zcTotalCount from last completed window */
     uint32_t windowStartTick;
@@ -120,15 +120,15 @@ typedef enum
 typedef struct
 {
     uint8_t  timingAdvanceDeg;          /* 0-30 active */
-    uint16_t startupDutyPercent;        /* Q8.8 */
+    float    startupDutyPercent;         /* percent (0.0-100.0) */
     uint16_t rampAccelErpmPerS;
     uint16_t alignTimeMs;
     uint8_t  timingAdvanceMin;          /* envelope min */
     uint8_t  timingAdvanceMax;          /* envelope max */
-    uint16_t startupDutyMin;
-    uint16_t startupDutyMax;
+    float    startupDutyMin;            /* percent */
+    float    startupDutyMax;            /* percent */
     uint8_t  lkgTimingAdvanceDeg;       /* last-known-good */
-    uint16_t lkgStartupDutyPercent;
+    float    lkgStartupDutyPercent;
     uint16_t lkgRampAccelErpmPerS;
     uint16_t lkgAlignTimeMs;
     uint8_t  rollbackCount;
@@ -181,8 +181,8 @@ typedef struct
     uint8_t  compositeHealth;   /* weighted average */
     int8_t   trend;             /* +1/0/-1 */
     uint16_t operatingHours;
-    uint16_t baselineJitterQ8;
-    uint16_t baselineAsymmetryQ8;
+    float    baselineJitter;             /* std dev in timer ticks */
+    float    baselineAsymmetry;
     uint16_t baselineResistanceMilliOhm;
 } HEALTH_STATE_T;
 
