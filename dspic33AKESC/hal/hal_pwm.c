@@ -80,6 +80,12 @@ void InitPWMGenerators(void)
 
     /* Charge bootstrap capacitors */
     ChargeBootstrapCapacitors();
+
+    /* Re-assert overrides after bootstrap charging — keep all outputs LOW.
+     * Bootstrap leaves overrides released (fine for FOC reference), but our
+     * 6-step commutation needs override control: outputs must stay LOW
+     * until the state machine enters ESC_ALIGN. */
+    InitDutyPWM123Generators();
 }
 
 /**
@@ -310,7 +316,7 @@ void InitPWMGenerator2(void)
     PG2EVTbits.ADTR1EN3 = 0;
     PG2EVTbits.ADTR1EN2 = 0;
     PG2EVTbits.ADTR1EN1 = 0;
-    PG2EVTbits.UPDTRG = 0;
+    PG2EVTbits.UPDTRG = 1;         /* DC write triggers UPDATE (fix: slave wasn't loading duty) */
     PG2EVTbits.PGTRGSEL = 0;
     PG2EVTbits.FLTIEN = 0;
     PG2EVTbits.CLIEN = 0;
@@ -404,7 +410,7 @@ void InitPWMGenerator3(void)
     PG3EVTbits.ADTR1EN3 = 0;
     PG3EVTbits.ADTR1EN2 = 0;
     PG3EVTbits.ADTR1EN1 = 0;
-    PG3EVTbits.UPDTRG = 0;
+    PG3EVTbits.UPDTRG = 1;         /* DC write triggers UPDATE (fix: slave wasn't loading duty) */
     PG3EVTbits.PGTRGSEL = 0;
     PG3EVTbits.FLTIEN = 0;
     PG3EVTbits.CLIEN = 0;
@@ -538,7 +544,11 @@ void HAL_PWM_SetDutyCycle(uint32_t duty)
     if (duty < MIN_DUTY) duty = MIN_DUTY;
     if (duty > MAX_DUTY) duty = MAX_DUTY;
 
-    PWM_PDC1 = duty;
-    PWM_PDC2 = duty;
+    /* Write slave generators first, then master.
+     * PG1 (master, UPDTRG=1) triggers an update broadcast on DC write.
+     * Writing PG2/PG3 first ensures their buffers are set before
+     * the master broadcasts the update event. */
     PWM_PDC3 = duty;
+    PWM_PDC2 = duty;
+    PWM_PDC1 = duty;
 }

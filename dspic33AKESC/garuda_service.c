@@ -197,6 +197,13 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
             }
             break;
 
+#if DIAGNOSTIC_MANUAL_STEP
+        case ESC_OL_RAMP:
+            /* Manual step mode: hold current step, SW2 advances.
+             * Immediately transition to CLOSED_LOOP (which also holds). */
+            garudaData.state = ESC_CLOSED_LOOP;
+            break;
+#else
         case ESC_OL_RAMP:
             if (STARTUP_OpenLoopRamp(&garudaData))
             {
@@ -205,7 +212,13 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
                 garudaData.state = ESC_CLOSED_LOOP;
             }
             break;
+#endif
 
+#if DIAGNOSTIC_MANUAL_STEP
+        case ESC_CLOSED_LOOP:
+            /* Manual step mode: hold current step. SW2 advances from main loop. */
+            break;
+#else
         case ESC_CLOSED_LOOP:
             /* Phase 1: keep forced commutation at final ramp speed.
              * Phase 2 will replace this with BEMF ZC-driven commutation. */
@@ -219,6 +232,7 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
                 garudaData.rampCounter = garudaData.rampStepPeriod;
             }
             break;
+#endif
 
         case ESC_BRAKING:
             break;

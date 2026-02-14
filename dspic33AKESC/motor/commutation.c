@@ -42,7 +42,9 @@ const COMMUTATION_STEP_T commutationTable[6] =
 };
 
 /**
- * @brief Advance to the next commutation step (0→1→2→3→4→5→0).
+ * @brief Advance to the next commutation step.
+ * direction=0 (CW):  0→1→2→3→4→5→0
+ * direction=1 (CCW): 0→5→4→3→2→1→0
  * Updates PWM override registers and selects the BEMF ADC channel
  * for the new floating phase.
  */
@@ -63,10 +65,20 @@ void COMMUTATION_AdvanceStep(volatile GARUDA_DATA_T *pData)
     }
 #endif
 
-    pData->currentStep++;
-    if (pData->currentStep >= 6)
+    if (pData->direction == 0)
     {
-        pData->currentStep = 0;
+        /* Forward: 0→1→2→3→4→5→0 */
+        pData->currentStep++;
+        if (pData->currentStep >= 6)
+            pData->currentStep = 0;
+    }
+    else
+    {
+        /* Reverse: 0→5→4→3→2→1→0 */
+        if (pData->currentStep == 0)
+            pData->currentStep = 5;
+        else
+            pData->currentStep--;
     }
 
     /* Apply the new commutation pattern to PWM overrides */

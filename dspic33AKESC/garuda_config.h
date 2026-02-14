@@ -20,6 +20,14 @@ extern "C" {
 #define FEATURE_COMMISSION      0   /* requires FEATURE_LEARN_MODULES */
 #define FEATURE_EEPROM_V2       0   /* requires at least one above */
 
+/* Diagnostic: Manual step mode (1=enabled)
+ * SW1: Start motor → align to step 0
+ * SW2: Manually advance one commutation step
+ * LED2: Toggles on each step advance
+ * No automatic ramp — user controls step timing.
+ * Set to 0 for normal auto-ramp operation. */
+#define DIAGNOSTIC_MANUAL_STEP  0
+
 /* Learn module tuning (only compiled when FEATURE_LEARN_MODULES=1) */
 #if FEATURE_LEARN_MODULES
 #define TELEM_RING_SIZE             64      /* power of 2, 64*13=832B RAM */
@@ -40,17 +48,18 @@ extern "C" {
 #define DEADTIME_NS                750         /* Dead time in nanoseconds */
 
 /* Motor Configuration */
-#define MOTOR_POLE_PAIRS           7
+#define MOTOR_POLE_PAIRS           5           /* Hurst DMB0224C10002: 10 poles = 5 pairs */
 #define DIRECTION_DEFAULT          0           /* 0=CW, 1=CCW */
 
 /* Startup / Alignment */
-#define ALIGN_TIME_MS              200         /* Time to hold alignment position */
-#define ALIGN_DUTY_PERCENT         5           /* Duty cycle during alignment */
+#define ALIGN_TIME_MS              500         /* Time to hold alignment position */
+#define ALIGN_DUTY_PERCENT         20          /* Duty cycle during alignment (must > MIN_DUTY) */
 
 /* Open-Loop Ramp */
-#define INITIAL_ERPM               2000        /* Starting eRPM for forced commutation */
-#define RAMP_TARGET_ERPM           15000       /* eRPM at which to transition to closed-loop */
-#define RAMP_ACCEL_ERPM_PER_S      5000        /* Ramp acceleration rate */
+#define INITIAL_ERPM               300         /* ~5 steps/sec — slow start */
+#define RAMP_TARGET_ERPM           5000        /* 1000 mech RPM (5 pole pairs) */
+#define RAMP_ACCEL_ERPM_PER_S      1000        /* Moderate acceleration */
+#define RAMP_DUTY_PERCENT          40          /* Duty cap during open-loop ramp */
 
 /* Arming */
 #define ARM_TIME_MS                500         /* Throttle must be zero for this long to arm */

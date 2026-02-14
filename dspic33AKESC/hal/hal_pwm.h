@@ -34,8 +34,12 @@ extern "C" {
 
 #define PWM_TRIGA                   PG1TRIGAbits.TRIGA
 
-/* PWM Fault PCI */
-#define ENABLE_PWM_FAULT_PCI
+/* PWM Fault PCI — DISABLED for initial motor testing.
+ * Reference uses CMP3 output (PSS=0b11101) as fault source, but our
+ * code had RPn/PCI8R (PSS=0b01000) mapped to floating RB11 pin,
+ * causing continuous false fault triggers.
+ * TODO: Re-enable with correct CMP3 overcurrent detection. */
+/* #define ENABLE_PWM_FAULT_PCI */
 #define PCI_FAULT_ACTIVE_STATUS     PG1STATbits.FLTACT
 #define _PWMInterrupt               _PWM1Interrupt
 #define ClearPWMIF()                _PWM1IF = 0

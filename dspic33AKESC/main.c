@@ -23,6 +23,9 @@
 #include "hal/clock.h"
 #include "hal/port_config.h"
 #include "hal/board_service.h"
+#include "hal/hal_pwm.h"
+#include "motor/startup.h"
+#include "motor/commutation.h"
 
 #if FEATURE_LEARN_MODULES
 #include "learn/learn_service.h"
@@ -62,8 +65,11 @@ int main(void)
         {
             if (garudaData.state == ESC_IDLE)
             {
-                /* Start arming sequence */
-                garudaData.state = ESC_ARMED;
+                /* Skip arming — go directly to ALIGN for initial motor testing.
+                 * TODO: Restore ESC_ARMED with throttle-zero check for production. */
+                garudaData.state = ESC_ALIGN;
+                STARTUP_Init(&garudaData);
+                LED2 = 1;
                 garudaData.armCounter = 0;
 #if FEATURE_ADAPTATION
                 /* Apply any pending adaptation at the IDLE→ARMED boundary */
@@ -91,14 +97,29 @@ int main(void)
             }
         }
 
-        /* Button 2 (SW2) — Change direction (only when idle) */
+#if DIAGNOSTIC_MANUAL_STEP
+        /* DIAGNOSTIC: SW2 manually advances one commutation step.
+         * Only active when motor is running (ALIGN/OL_RAMP/CLOSED_LOOP). */
         if (IsPressed_Button2())
         {
-            if (garudaData.state == ESC_IDLE)
+            if (garudaData.state == ESC_OL_RAMP ||
+                garudaData.state == ESC_CLOSED_LOOP)
             {
-                garudaData.direction ^= 1;
+                COMMUTATION_AdvanceStep(&garudaData);
+                HAL_PWM_SetDutyCycle(garudaData.duty);
+                LED2 ^= 1;  /* Toggle LED2 as visual step indicator */
             }
         }
+#else
+        /* Button 2 (SW2) — Change direction.
+         * For initial testing: allowed in any state so we can find
+         * the correct direction without reflashing.
+         * TODO: Restrict to IDLE only for production. */
+        if (IsPressed_Button2())
+        {
+            garudaData.direction ^= 1;
+        }
+#endif
 
 #if FEATURE_LEARN_MODULES
         /* Learning modules dispatcher (quality/health/adaptation) */

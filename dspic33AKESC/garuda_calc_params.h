@@ -39,6 +39,9 @@ extern "C" {
 /* Alignment duty cycle in PWM counts */
 #define ALIGN_DUTY                  (uint32_t)((ALIGN_DUTY_PERCENT / 100.0f) * LOOPTIME_TCY)
 
+/* Ramp duty cap in PWM counts */
+#define RAMP_DUTY_CAP               (uint32_t)((RAMP_DUTY_PERCENT / 100.0f) * LOOPTIME_TCY)
+
 /* Timer1 period = 100us, so alignment time in Timer1 ticks */
 #define ALIGN_TIME_COUNTS           (uint32_t)(ALIGN_TIME_MS * 10)
 

@@ -61,6 +61,12 @@ bool STARTUP_Align(volatile GARUDA_DATA_T *pData)
  * Advances commutation steps at decreasing intervals and gradually
  * increases duty cycle.
  *
+ * Acceleration is driven by RAMP_ACCEL_ERPM_PER_S:
+ *   Each commutation step spans stepPeriod * 100us seconds.
+ *   delta_eRPM = ACCEL * stepPeriod / 10000
+ *   new_eRPM = current_eRPM + delta_eRPM
+ *   new_stepPeriod = 100000 / new_eRPM
+ *
  * @return true when ramp target speed is reached
  */
 bool STARTUP_OpenLoopRamp(volatile GARUDA_DATA_T *pData)
@@ -76,28 +82,33 @@ bool STARTUP_OpenLoopRamp(volatile GARUDA_DATA_T *pData)
     {
         COMMUTATION_AdvanceStep(pData);
 
-        /* Decrease step period (increase speed) */
-        /* Acceleration: reduce period by a fixed amount per step
-         * RAMP_ACCEL_ERPM_PER_S converts to period decrement:
-         * At each step, reduce by: (stepPeriod^2 * ACCEL) / 100000
-         * Simplified: decrement by 1 tick per step until min reached */
-        if (pData->rampStepPeriod > MIN_STEP_PERIOD + 1)
-        {
-            pData->rampStepPeriod--;
-        }
+        /* Compute new step period from RAMP_ACCEL_ERPM_PER_S */
+        uint32_t curPeriod = pData->rampStepPeriod;
+        if (curPeriod == 0) curPeriod = INITIAL_STEP_PERIOD;
+        uint32_t curErpm = 100000UL / curPeriod;
+        uint32_t deltaErpm = ((uint32_t)RAMP_ACCEL_ERPM_PER_S * curPeriod) / 10000UL;
+        if (deltaErpm < 1) deltaErpm = 1;
+        uint32_t newErpm = curErpm + deltaErpm;
+        uint32_t newPeriod = 100000UL / newErpm;
+        if (newPeriod < MIN_STEP_PERIOD)
+            newPeriod = MIN_STEP_PERIOD;
+        pData->rampStepPeriod = newPeriod;
 
         pData->rampCounter = pData->rampStepPeriod;
 
-        /* Gradually increase duty from ALIGN_DUTY toward a higher value */
-        if (pData->duty < (MAX_DUTY / 4))
+        /* Gradually increase duty toward RAMP_DUTY_CAP.
+         * Increment ~0.5% of LOOPTIME per step for smooth torque ramp. */
+        if (pData->duty < RAMP_DUTY_CAP)
         {
-            pData->duty += 1;
+            pData->duty += (LOOPTIME_TCY / 200);
+            if (pData->duty > RAMP_DUTY_CAP)
+                pData->duty = RAMP_DUTY_CAP;
         }
         HAL_PWM_SetDutyCycle(pData->duty);
     }
 
     /* Check if we've reached the target speed */
-    if (pData->rampStepPeriod <= MIN_STEP_PERIOD + 1)
+    if (pData->rampStepPeriod <= MIN_STEP_PERIOD)
     {
         return true; /* Ready for closed-loop transition */
     }
