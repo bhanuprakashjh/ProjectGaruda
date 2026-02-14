@@ -81,11 +81,12 @@ void GARUDA_ServiceInit(void)
  * @brief ADC ISR — runs at PWM rate (24kHz).
  * Reads BEMF/Vbus, runs state machine, updates PWM.
  */
-void __attribute__((__interrupt__, auto_psv)) GARUDA_ADC_INTERRUPT(void)
+void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
 {
-    GARUDA_ClearADCIF();
-
-    /* Read ADC values */
+    /* Read ADC values — MUST read the interrupt source buffer (AD1CH0DATA)
+     * to clear the data-ready condition, otherwise the interrupt re-fires
+     * immediately and starves all lower-priority ISRs. */
+    garudaData.bemf.bemfRaw = ADCBUF_BEMF_A;   /* AD1CH0DATA — interrupt source */
     garudaData.vbusRaw = ADCBUF_VBUS;
     garudaData.potRaw = ADCBUF_POT;
 
@@ -127,6 +128,9 @@ void __attribute__((__interrupt__, auto_psv)) GARUDA_ADC_INTERRUPT(void)
             HAL_MC1PWMDisableOutputs();
             break;
     }
+
+    /* Clear interrupt flag AFTER reading all buffers (matches reference) */
+    GARUDA_ClearADCIF();
 }
 
 /**
@@ -134,16 +138,17 @@ void __attribute__((__interrupt__, auto_psv)) GARUDA_ADC_INTERRUPT(void)
  * Handles: heartbeat LED, board service, commutation timing for
  * align/ramp states, 1ms system tick.
  */
-void __attribute__((__interrupt__, auto_psv)) _T1Interrupt(void)
+void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
 {
-    TIMER1_InterruptFlagClear();
-
     /* Heartbeat LED — toggle at ~2Hz (250ms) */
     heartbeatCounter++;
     if (heartbeatCounter >= HEART_BEAT_LED_COUNT)
     {
         heartbeatCounter = 0;
-        LED1 ^= 1;
+        if (LED1 == 1)
+            LED1 = 0;
+        else
+            LED1 = 1;
     }
 
     /* Board service step (drives button debounce at 1ms) */
@@ -221,21 +226,23 @@ void __attribute__((__interrupt__, auto_psv)) _T1Interrupt(void)
         case ESC_FAULT:
             break;
     }
+
+    TIMER1_InterruptFlagClear();
 }
 
 /**
  * @brief PWM Fault ISR — handles PCI fault events.
  */
-void __attribute__((__interrupt__, auto_psv)) _PWMInterrupt(void)
+void __attribute__((__interrupt__, no_auto_psv)) _PWMInterrupt(void)
 {
-    ClearPWMIF();
-
     if (PCI_FAULT_ACTIVE_STATUS)
     {
         /* Fault detected — disable outputs and set fault state */
+        HAL_MC1ClearPWMPCIFault();
         HAL_MC1PWMDisableOutputs();
         garudaData.state = ESC_FAULT;
         garudaData.faultCode = FAULT_OVERCURRENT;
         LED2 = 0;
     }
+    ClearPWMIF();
 }

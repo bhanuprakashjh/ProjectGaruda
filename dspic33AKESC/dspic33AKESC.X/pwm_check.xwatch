@@ -1,0 +1,13 @@
+MPLAB X Watch List: PWM-CHECK-001
+garudaData.throttle:<RTW>,
+garudaData.potRaw:<RTW>,
+garudaData.vbusRaw:<RTW>,
+garudaData.bemf.bemfRaw:<RTW>,
+garudaData.bemf.vbusHalf:<RTW>,
+garudaData.systemTick:<RTW>,
+garudaData.state:<RTW>,
+garudaData.duty:<RTW>,
+garudaData.currentStep:<RTW>,
+garudaData.faultCode:<RTW>,
+garudaData.direction:<RTW>,
+garudaData.armCounter:<RTW>,
