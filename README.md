@@ -2,19 +2,19 @@
 
 **Open-source drone ESC firmware for the Microchip dsPIC33AK128MC106**
 
-6-step trapezoidal BLDC motor control with sensorless ADC-based BEMF zero-crossing detection — built from scratch for high-performance multirotor applications.
+6-step trapezoidal BLDC motor control with sensorless ADC-based BEMF zero-crossing detection and sinusoidal V/f startup — built from scratch for high-performance multirotor applications.
 
 ---
 
 ## Current Status
 
-**Motor runs stable closed-loop across the full speed range (1,300 - 18,500 eRPM) with zero desyncs and zero timeout-forced commutations.**
+**Motor runs stable closed-loop across the full speed range (1,300 - 18,500 eRPM) with zero desyncs and zero timeout-forced commutations. Smooth sine startup eliminates alignment jerk and stepping noise.**
 
 | Metric | Value |
 |--------|-------|
-| **Program flash** | ~13 KB (9%) of 128 KB |
-| **Data RAM** | ~200 bytes (1%) of 16 KB |
-| **Source files** | 16 source, 19 headers |
+| **Program flash** | ~16 KB (12%) of 128 KB |
+| **Data RAM** | ~264 bytes (1.6%) of 16 KB |
+| **Source files** | 22 source, 25 headers |
 | **Speed range** | 1,300 - 18,500 eRPM (pot-controlled) |
 | **Desyncs in testing** | 0 |
 | **Timeout-forced comms** | 0 |
@@ -30,6 +30,7 @@
 | **Phase A** | Safety baseline (arming gate, fault protection, Vbus OV/UV) | HW verified |
 | **Phase B** | Control improvements (duty slew, desync recovery, timing advance) | HW verified |
 | **Phase C** | Dynamic blanking, Vbus sag power limiting | HW verified |
+| **Phase D** | Sinusoidal V/f startup (replaces trap align+ramp) | HW verified |
 | **Phase E** | BEMF integration shadow estimator (validation mode) | HW verified |
 
 ---
@@ -80,6 +81,39 @@
 - **C1: Dynamic blanking** — blanking window scales with speed (3% of step period base) plus extra blanking at high duty (>70%) to suppress demagnetization noise. Hard cap at 25% of step period.
 - **C2: Vbus sag power limiting** — monitors bus voltage and proportionally reduces duty when Vbus dips below threshold (900 ADC). Hysteresis band prevents oscillation. Protects against brown-out under load.
 
+### Phase D — Sinusoidal V/f Startup
+
+Replaces the trapezoidal forced-commutation startup (which produces an audible clunk during alignment and stepping noise during the low-speed ramp) with a smooth sinusoidal 3-phase drive. The motor is driven by a rotating magnetic field at 120-degree phase offsets, eliminating alignment jerk, reducing acoustic noise, and delivering smoother low-speed torque.
+
+**How it works:**
+
+1. **Sine Alignment** (replaces trap alignment): All three phases are driven sinusoidally at a fixed electrical angle (90 degrees = Phase A peak). The rotor locks smoothly to a known position without the mechanical snap of single-phase energization. Duration: 500 ms (`ALIGN_TIME_MS`).
+
+2. **Sine V/f Ramp** (replaces trap forced ramp): The electrical angle advances at increasing frequency from 300 eRPM (`INITIAL_ERPM`) to 2,000 eRPM (`RAMP_TARGET_ERPM`). Voltage amplitude scales linearly with frequency (constant V/f ratio) to maintain constant flux. A low-frequency boost (the alignment voltage) overcomes static friction. Acceleration: 1,000 eRPM/s.
+
+3. **Transition to 6-step**: At target speed, the current electrical angle is mapped to the nearest 60-degree sector, which selects the corresponding commutation step. PWM switches from 3-phase sine (all phases active in complementary mode) to 6-step trap (1 PWM, 1 LOW, 1 FLOAT). The ESC enters closed-loop with BEMF ZC detection taking over within a few electrical cycles.
+
+**ISR architecture:**
+- **ADC ISR (24 kHz)** owns the sine waveform: `STARTUP_SineComputeDuties()` advances the angle, looks up the sine table for 3 phases at 120-degree offsets, and writes per-phase duties via `HAL_PWM_SetDutyCycle3Phase()`. This gives ~720 updates per electrical cycle at 2,000 eRPM — very smooth waveform.
+- **Timer1 ISR (10 kHz)** owns the V/f profile: `STARTUP_SineRamp()` manages the eRPM ramp and amplitude scaling. Same structural role as the existing trapezoidal ramp.
+
+**Key implementation details:**
+- **256-entry Q15 sine lookup table** (512 bytes flash) — power-of-2 for shift-based indexing
+- **Q16 fixed-point angle** (0 = 0 degrees, 65535 = ~360 degrees) — wraps naturally with `uint16_t` overflow
+- **Q16 fractional eRPM accumulator** — sub-Hz ramp resolution without floating point
+- **Direction-aware**: angle advances forward for CW, backward for CCW; sector mapping mirrors for CCW
+- **Phase ordering A->C->B** matches the commutation table CW sequence (not the intuitive A->B->C)
+- **Safe sector mapping**: `((uint32_t)adj * 6) >> 16` always produces 0-5 (never 6)
+- **Race-free transition**: `sine.active` flag is cleared before PWM override changes, preventing the ADC ISR from overwriting 6-step overrides with sine duties
+- **`COMMUTATION_ApplyStep()`**: extracted helper that sets PWM overrides + ADC mux + settle count in one call — used for the sine-to-trap transition and internally by `AdvanceStep()`
+
+**Tuning parameters** (in `garuda_config.h`):
+- `SINE_ALIGN_MODULATION_PCT` (15%) — modulation depth during alignment
+- `SINE_RAMP_MODULATION_PCT` (35%) — modulation depth at target speed
+- `SINE_PHASE_OFFSET_DEG` (60 degrees) — sector-to-step calibration offset for the Hurst motor. Adjustable in 60-degree increments (0, 60, 120, 180, 240, 300) until the sine-to-trap transition is smooth.
+
+**Feature flag**: `FEATURE_SINE_STARTUP`. Setting to 0 reverts to trapezoidal alignment + forced ramp with zero code overhead.
+
 ### Phase E — BEMF Integration Shadow Estimator
 
 A **shadow-only** integration-based commutation estimator that runs alongside the primary threshold ZC detection. It does NOT control the motor — it computes when it *would* commutate and logs diagnostics comparing shadow vs actual commutation timing.
@@ -120,9 +154,12 @@ All features are individually toggleable via compile-time flags in `garuda_confi
 #define FEATURE_DYNAMIC_BLANKING 1  /* Phase C1: Speed+duty blanking */
 #define FEATURE_VBUS_SAG_LIMIT   1  /* Phase C2: Vbus sag power limit */
 #define FEATURE_BEMF_INTEGRATION 1  /* Phase E: Shadow integration */
+#define FEATURE_SINE_STARTUP     1  /* Phase D: Sine startup */
 ```
 
-Setting any flag to 0 completely removes that feature from the build (dead code elimination).
+Setting any flag to 0 completely removes that feature from the build (dead code elimination). Compile-time guards enforce dependencies:
+- `FEATURE_SINE_STARTUP` requires `FEATURE_BEMF_CLOSED_LOOP` (needs ZC for closed-loop transition)
+- `FEATURE_SINE_STARTUP` is incompatible with `DIAGNOSTIC_MANUAL_STEP` (conflicting PWM writes)
 
 ---
 
@@ -158,7 +195,8 @@ dspic33AKESC/
 │   ├── clock.c/.h                PLL init: 200MHz sys, 400MHz PWM, 100MHz ADC
 │   ├── device_config.c           Fuse pragmas (WDT, JTAG, protection bits)
 │   ├── port_config.c/.h          GPIO mapping: PWM, BEMF, LED, buttons, UART, DShot
-│   ├── hal_pwm.c/.h              24kHz center-aligned PWM, 6-step override control
+│   ├── hal_pwm.c/.h              24kHz center-aligned PWM, 6-step override control,
+│   │                             3-phase sine duty writes, override release
 │   ├── hal_adc.c/.h              BEMF/Vbus/Pot ADC channels, floating phase muxing
 │   ├── hal_comparator.c/.h       CMP1/2/3 with DAC (initialized, not in control loop)
 │   ├── board_service.c/.h        Peripheral init, button debounce, PWM enable/disable
@@ -167,8 +205,8 @@ dspic33AKESC/
 │   └── delay.h                   Blocking delay using libpic30
 │
 ├── motor/
-│   ├── commutation.c/.h          6-step commutation table + step advance
-│   ├── startup.c/.h              Alignment hold + open-loop forced ramp
+│   ├── commutation.c/.h          6-step commutation table, step advance, ApplyStep
+│   ├── startup.c/.h              Trap align+ramp, sine align+V/f ramp, transition
 │   ├── bemf_zc.c/.h              BEMF zero-crossing detection + integration shadow
 │   └── pi.c/.h                   PI controller (from AN1292 reference)
 │
@@ -189,12 +227,12 @@ dspic33AKESC/
     ^                    |
     |                    | throttle < 200 ADC for 500ms
     |                    v
-    |               [ALIGN]       hold step 0 at 20% duty for 500ms
-    |                    |
+    |               [ALIGN]       sine: 3-phase lock at 90deg / trap: step 0 at 20% duty
+    |                    |        duration: 500ms
     |                    v
-    |              [OL_RAMP]      forced commutation 300 -> 2000 eRPM
+    |              [OL_RAMP]      sine: V/f ramp 300->2000 eRPM / trap: forced commutation
     |                    |
-    |                    | ZC sync lock (6 consecutive valid ZCs)
+    |                    | sine: target speed reached / trap: ZC sync lock
     |                    v
     |            [CLOSED_LOOP]    ADC-based BEMF ZC commutation
     |                    |
@@ -209,6 +247,23 @@ dspic33AKESC/
     +----[FAULT]<--------+
          SW1 clears fault -> [IDLE]
 ```
+
+---
+
+## Commutation Table
+
+The 6-step trapezoidal commutation table used during closed-loop operation:
+
+| Step | Phase A | Phase B | Phase C | Floating | ZC Polarity |
+|------|---------|---------|---------|----------|-------------|
+| 0 | PWM | LOW | FLOAT | C | Rising |
+| 1 | FLOAT | LOW | PWM | A | Falling |
+| 2 | LOW | FLOAT | PWM | B | Rising |
+| 3 | LOW | PWM | FLOAT | C | Falling |
+| 4 | FLOAT | PWM | LOW | A | Rising |
+| 5 | PWM | FLOAT | LOW | B | Falling |
+
+CW rotation sequence: A->C->B (steps 0->1->2->3->4->5). This is critical for correct sine phase ordering during Phase D startup (B leads A by +120 degrees, C lags A by -120 degrees).
 
 ---
 
@@ -286,7 +341,7 @@ EOF
 
 ---
 
-## Further Testing
+## Testing
 
 ### Tests Completed
 
@@ -297,6 +352,9 @@ EOF
 - Direction change restriction — verified: blocked outside IDLE state
 - Board fault PCI — active, no false triggers (injection not tested)
 - Vbus OV/UV — active, no false triggers (injection not tested)
+- Sine startup — verified: smooth alignment, V/f ramp, transition to closed-loop
+- Sine direction — verified: CW and CCW sine rotation matches commutation direction
+- Sine-to-trap transition — verified with SINE_PHASE_OFFSET_DEG=60 on Hurst motor
 
 ### Tests Recommended
 
@@ -309,7 +367,8 @@ EOF
 | **Sustained pot oscillation** | Known weakness: prolonged rapid back-and-forth can cause drift | Jerk pot rapidly for >10 seconds |
 | **Cold start** | Startup at low Vbus | Test alignment + ramp at minimum viable voltage |
 | **Thermal** | Temperature rise at max speed | Run at 100% for 10 minutes, monitor FET temperature |
-| **Direction reversal** | Clean stop → reverse → start | Use SW2 in IDLE, verify correct rotation |
+| **Direction reversal** | Clean stop -> reverse -> start | Use SW2 in IDLE, verify correct rotation |
+| **Sine phase offset sweep** | Optimal transition angle for other motors | Sweep 0/60/120/180/240/300 degrees |
 
 ---
 
@@ -322,11 +381,8 @@ EOF
 - **Phase A**: Safety baseline (arming, fault protection, Vbus monitoring)
 - **Phase B**: Control improvements (duty slew, desync recovery, timing advance)
 - **Phase C**: Dynamic blanking, Vbus sag power limiting
+- **Phase D**: Sinusoidal V/f startup (smooth 3-phase drive, eliminates alignment jerk)
 - **Phase E**: BEMF integration shadow estimator (validated, >99% accuracy at high speed)
-
-### Next Up
-
-- **Phase D: Sine Startup** — Replace forced trapezoidal ramp with sinusoidal drive for smooth, quiet low-speed startup. Eliminates the mechanical jerk during alignment and ramp. Required for production drones (acoustic signature matters).
 
 ### Future
 
@@ -347,8 +403,8 @@ EOF
 
 | ISR | Source | Rate | Purpose |
 |-----|--------|------|---------|
-| `_AD1CH0Interrupt` | ADC1 CH0 complete | 24 kHz | BEMF sampling, ZC detection, integration, commutation, Vbus/pot reads |
-| `_T1Interrupt` | Timer1 | 10 kHz (100 us) | Heartbeat, button debounce, state machine (arm/align/ramp), duty slew, systemTick |
+| `_AD1CH0Interrupt` | ADC1 CH0 complete | 24 kHz | BEMF sampling, ZC detection, integration, commutation, sine waveform generation, Vbus/pot reads |
+| `_T1Interrupt` | Timer1 | 10 kHz (100 us) | Heartbeat, button debounce, state machine (arm/align/ramp), duty slew, V/f profile, systemTick |
 | `_PWM1Interrupt` | PWM fault PCI | On fault | Immediate PWM shutdown, set ESC_FAULT |
 
 ### Clock Domains
@@ -369,6 +425,8 @@ CLK8 = 100 MHz  |  UART clock
 - **Native float math**: The dsPIC33AK has a hardware FPU. No fixed-point (Q8.8) used — all runtime calculations use native `float` where needed.
 - **Shadow-first integration**: The BEMF integration estimator runs as a shadow alongside threshold ZC, validating its accuracy before any future promotion to active control.
 - **Feature flags everywhere**: Every phase is gated behind `#if FEATURE_*` flags. Setting a flag to 0 dead-code-eliminates the entire feature with zero overhead.
+- **Sine startup for production**: Trapezoidal forced commutation produces audible clunks and stepping noise. Sine V/f drive eliminates these for drone applications where acoustic signature matters. Both startup paths are available via `FEATURE_SINE_STARTUP`.
+- **ISR-driven sine, not blocking loops**: Sine waveform updates run in the ADC ISR at 24 kHz (not in a `while` loop with delays). This maintains system responsiveness and allows the Timer1 ISR to handle the V/f ramp profile independently.
 
 ---
 
@@ -382,7 +440,7 @@ This project adapts the HAL layer from **Microchip AN1292** (FOC-PLL for dsPIC33
 | **VESC** | Proportional current limiting, packet protocol |
 | **Sapog** | Least-squares ZC regression |
 | **Bluejay** | Bidirectional DShot + EDT |
-| **AM32** | Multi-MCU DShot patterns |
+| **AM32** | Sine LUT startup, multi-MCU DShot patterns |
 
 ---
 
