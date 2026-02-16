@@ -129,7 +129,24 @@ bool BEMF_ZC_Poll(volatile GARUDA_DATA_T *pData, uint16_t now)
 
     /* Compute blanking window — edge tracking runs inside, confirmation only outside */
     uint16_t elapsed = (uint16_t)(now - pData->timing.lastCommTick);
-    uint16_t blankTicks = (uint16_t)((uint32_t)pData->timing.stepPeriod * ZC_BLANKING_PERCENT / 100);
+    uint16_t sp = pData->timing.stepPeriod;
+#if FEATURE_DYNAMIC_BLANKING
+    uint16_t blankBase = (uint16_t)((uint32_t)sp * ZC_BLANKING_PERCENT / 100);
+    uint8_t dutyPct = (uint8_t)((uint32_t)pData->duty * 100 / LOOPTIME_TCY);
+    uint16_t blankDutyBoost = 0;
+    if (dutyPct > ZC_DEMAG_DUTY_THRESH)
+    {
+        blankDutyBoost = (uint16_t)((uint32_t)sp * ZC_DEMAG_BLANK_EXTRA_PERCENT
+                         * (dutyPct - ZC_DEMAG_DUTY_THRESH)
+                         / (100 * (100 - ZC_DEMAG_DUTY_THRESH)));
+    }
+    uint16_t blankTicks = blankBase + blankDutyBoost;
+    uint16_t blankMax = sp / 4;
+    if (blankTicks > blankMax) blankTicks = blankMax;
+#else
+    uint16_t blankTicks = (uint16_t)((uint32_t)sp * ZC_BLANKING_PERCENT / 100);
+#endif
+    if (blankTicks < 1) blankTicks = 1;  /* Floor: 1 tick (~42us) to reject demagnetization spikes */
     bool inBlanking = (elapsed < blankTicks);
 
     /* Skip if sample is invalid (stale AD2 data after mux switch) */
@@ -317,8 +334,31 @@ bool BEMF_ZC_Poll(volatile GARUDA_DATA_T *pData, uint16_t now)
                 pData->timing.hasPrevZc = true;
             }
 
-            /* 30-degree delay: commutate at stepPeriod/2 after ZC */
+            /* Commutation delay after ZC.
+             * Default: 30° = stepPeriod/2.
+             * With timing advance: linear by eRPM (not stepPeriod).
+             * eRPM = ERPM_FROM_ADC_STEP_NUM / stepPeriod. */
+#if FEATURE_TIMING_ADVANCE
+            uint16_t sp = pData->timing.stepPeriod;
+            uint32_t eRPM = ERPM_FROM_ADC_STEP_NUM / sp;
+            uint16_t advDeg;
+            if (eRPM <= RAMP_TARGET_ERPM)
+                advDeg = TIMING_ADVANCE_MIN_DEG;
+            else if (eRPM >= MAX_CLOSED_LOOP_ERPM)
+                advDeg = TIMING_ADVANCE_MAX_DEG;
+            else
+            {
+                uint32_t range = MAX_CLOSED_LOOP_ERPM - RAMP_TARGET_ERPM;
+                uint32_t pos = eRPM - RAMP_TARGET_ERPM;
+                advDeg = TIMING_ADVANCE_MIN_DEG +
+                    (uint16_t)((uint32_t)(TIMING_ADVANCE_MAX_DEG - TIMING_ADVANCE_MIN_DEG)
+                               * pos / range);
+            }
+            uint16_t delay = (uint16_t)((uint32_t)sp * (30 - advDeg) / 60);
+            pData->zcDiag.lastAdvanceDeg = advDeg;
+#else
             uint16_t delay = pData->timing.stepPeriod / 2;
+#endif
             pData->timing.commDeadline = (uint16_t)(now + delay);
             pData->timing.deadlineActive = true;
         }

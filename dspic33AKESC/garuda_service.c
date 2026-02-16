@@ -66,6 +66,9 @@ void GARUDA_ServiceInit(void)
     garudaData.rampCounter = 0;
     garudaData.systemTick = 0;
     garudaData.armCounter = 0;
+    garudaData.runCommandActive = false;
+    garudaData.desyncRestartAttempts = 0;
+    garudaData.recoveryCounter = 0;
 
     garudaData.bemf.bemfRaw = 0;
     garudaData.bemf.zcThreshold = 0;
@@ -126,9 +129,42 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
     /* Duty-proportional ZC threshold = virtual neutral point.
      * neutral = Vbus * duty / (2 * LOOPTIME_TCY)
      * Approximated as (vbusRaw * duty) >> 18 for 24kHz PWM.
-     * At 8% duty: ~52 counts.  At 40% duty: ~261 counts. */
-    garudaData.bemf.zcThreshold = (uint16_t)(
-        ((uint32_t)garudaData.vbusRaw * garudaData.duty) >> ZC_DUTY_THRESHOLD_SHIFT);
+     *
+     * Asymmetric IIR smoothing prevents threshold-BEMF mismatch during
+     * rapid duty transients.  Threshold tracks UP fast (motor accelerating,
+     * BEMF rising) but DOWN slowly (motor coasting, BEMF stays high).
+     * Rise: tau ~0.33ms (8 ticks).  Fall: tau ~10.7ms (256 ticks). */
+    {
+        static uint16_t zcThreshSmooth = 0;
+        uint16_t rawThresh = (uint16_t)(
+            ((uint32_t)garudaData.vbusRaw * garudaData.duty) >> ZC_DUTY_THRESHOLD_SHIFT);
+
+        if (garudaData.state == ESC_CLOSED_LOOP)
+        {
+            if (prevAdcState != ESC_CLOSED_LOOP)
+            {
+                zcThreshSmooth = rawThresh;  /* Seed on CL entry */
+            }
+            else if (rawThresh >= zcThreshSmooth)
+            {
+                /* Rising — track fast (tau ~8 ticks = 0.33ms) */
+                zcThreshSmooth += ((uint16_t)(rawThresh - zcThreshSmooth) + 4) >> 3;
+            }
+            else
+            {
+                /* Falling — track slow (tau ~256 ticks = 10.7ms) */
+                uint16_t decay = ((uint16_t)(zcThreshSmooth - rawThresh) + 128) >> 8;
+                if (decay == 0) decay = 1;  /* Guarantee convergence */
+                zcThreshSmooth -= decay;
+            }
+            garudaData.bemf.zcThreshold = zcThreshSmooth;
+        }
+        else
+        {
+            zcThreshSmooth = rawThresh;  /* Non-CL: instant tracking */
+            garudaData.bemf.zcThreshold = rawThresh;
+        }
+    }
 #else
     garudaData.bemf.zcThreshold = garudaData.vbusRaw >> 1;
 #endif
@@ -158,6 +194,47 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
 #else
     garudaData.bemf.bemfRaw = phaseB_val;
     (void)phaseAC_val;  /* AD2CH0DATA must be read; suppress unused warning */
+#endif
+
+    /* Bus voltage fault enforcement (OV/UV) */
+#if FEATURE_VBUS_FAULT
+    {
+        static uint8_t vbusOvCount = 0, vbusUvCount = 0;
+
+        if (garudaData.state >= ESC_ALIGN && garudaData.state <= ESC_CLOSED_LOOP)
+        {
+            if (garudaData.vbusRaw > VBUS_OVERVOLTAGE_ADC)
+            {
+                if (++vbusOvCount >= VBUS_FAULT_FILTER)
+                {
+                    HAL_MC1PWMDisableOutputs();
+                    garudaData.state = ESC_FAULT;
+                    garudaData.faultCode = FAULT_OVERVOLTAGE;
+                    garudaData.runCommandActive = false;
+                    LED2 = 0;
+                }
+            }
+            else { vbusOvCount = 0; }
+
+            if (garudaData.vbusRaw < VBUS_UNDERVOLTAGE_ADC)
+            {
+                if (++vbusUvCount >= VBUS_FAULT_FILTER)
+                {
+                    HAL_MC1PWMDisableOutputs();
+                    garudaData.state = ESC_FAULT;
+                    garudaData.faultCode = FAULT_UNDERVOLTAGE;
+                    garudaData.runCommandActive = false;
+                    LED2 = 0;
+                }
+            }
+            else { vbusUvCount = 0; }
+        }
+        else
+        {
+            vbusOvCount = 0;
+            vbusUvCount = 0;
+        }
+    }
 #endif
 
     /* State machine */
@@ -229,13 +306,35 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                     && garudaData.timing.risingZcWorks)
                 {
                     garudaData.timing.zcSynced = true;
+                    garudaData.desyncRestartAttempts = 0;
                     /* Seed post-sync: if ZC was just confirmed on this step,
-                     * set a 30-degree deadline.  Otherwise check if this step
-                     * is undetectable and schedule timing-based commutation. */
+                     * set a commutation deadline with timing advance.
+                     * Otherwise check if this step is undetectable and
+                     * schedule timing-based commutation. */
                     if (garudaData.bemf.zeroCrossDetected)
                     {
+#if FEATURE_TIMING_ADVANCE
+                        uint16_t sp0 = garudaData.timing.stepPeriod;
+                        uint32_t eRPM0 = ERPM_FROM_ADC_STEP_NUM / sp0;
+                        uint16_t adv0;
+                        if (eRPM0 <= RAMP_TARGET_ERPM)
+                            adv0 = TIMING_ADVANCE_MIN_DEG;
+                        else if (eRPM0 >= MAX_CLOSED_LOOP_ERPM)
+                            adv0 = TIMING_ADVANCE_MAX_DEG;
+                        else
+                        {
+                            uint32_t r0 = MAX_CLOSED_LOOP_ERPM - RAMP_TARGET_ERPM;
+                            uint32_t p0 = eRPM0 - RAMP_TARGET_ERPM;
+                            adv0 = TIMING_ADVANCE_MIN_DEG +
+                                (uint16_t)((uint32_t)(TIMING_ADVANCE_MAX_DEG - TIMING_ADVANCE_MIN_DEG)
+                                           * p0 / r0);
+                        }
+                        uint16_t d0 = (uint16_t)((uint32_t)sp0 * (30 - adv0) / 60);
+                        garudaData.timing.commDeadline = (uint16_t)(adcIsrTick + d0);
+#else
                         garudaData.timing.commDeadline = (uint16_t)(
                             adcIsrTick + garudaData.timing.stepPeriod / 2);
+#endif
                         garudaData.timing.deadlineActive = true;
                     }
                     else
@@ -265,10 +364,28 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                 if (toResult == ZC_TIMEOUT_DESYNC)
                 {
                     garudaData.zcDiag.zcDesyncCount++;
+#if FEATURE_DESYNC_RECOVERY
+                    if (garudaData.runCommandActive)
+                    {
+                        HAL_MC1PWMDisableOutputs();
+                        garudaData.state = ESC_RECOVERY;
+                        garudaData.recoveryCounter = DESYNC_COAST_COUNTS;
+                        LED2 = 0;
+                    }
+                    else
+                    {
+                        /* Run command not active — graceful stop */
+                        HAL_MC1PWMDisableOutputs();
+                        garudaData.desyncRestartAttempts = 0;
+                        garudaData.state = ESC_IDLE;
+                        LED2 = 0;
+                    }
+#else
                     garudaData.state = ESC_FAULT;
                     garudaData.faultCode = FAULT_DESYNC;
                     HAL_MC1PWMDisableOutputs();
                     LED2 = 0;
+#endif
                 }
                 else if (toResult == ZC_TIMEOUT_FORCE_STEP)
                 {
@@ -312,6 +429,79 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                     ((uint32_t)garudaData.potRaw * (cap - MIN_DUTY)) / 4096;
                 if (mappedDuty < MIN_DUTY) mappedDuty = MIN_DUTY;
                 if (mappedDuty > cap) mappedDuty = cap;
+
+#if FEATURE_DUTY_SLEW
+                {
+                    static uint32_t prevDuty = 0;
+                    /* Seed on first closed-loop entry (not from 0) */
+                    if (prevAdcState != ESC_CLOSED_LOOP)
+                        prevDuty = garudaData.duty;
+
+                    int32_t delta = (int32_t)mappedDuty - (int32_t)prevDuty;
+                    if (delta > 0)
+                    {
+                        /* Rate-limited increase */
+                        if ((uint32_t)delta > DUTY_SLEW_UP_RATE)
+                            mappedDuty = prevDuty + DUTY_SLEW_UP_RATE;
+                    }
+                    else if (delta < 0)
+                    {
+                        /* Fast decrease (throttle cut response) */
+                        if ((uint32_t)(-delta) > DUTY_SLEW_DOWN_RATE)
+                            mappedDuty = prevDuty - DUTY_SLEW_DOWN_RATE;
+                    }
+                    prevDuty = mappedDuty;
+                }
+#endif
+                /* Speed governor: prevent motor from exceeding max CL speed.
+                 * When stepPeriod hits the floor clamp, freeze duty to stop
+                 * further acceleration (clamped stepPeriod = wrong timing). */
+                if (garudaData.timing.stepPeriod <= MIN_CL_ADC_STEP_PERIOD
+                    && mappedDuty > garudaData.duty)
+                {
+                    mappedDuty = garudaData.duty;
+                }
+
+#if FEATURE_VBUS_SAG_LIMIT
+                /* Bus voltage sag power limiting: reduce duty when Vbus dips
+                 * under load to prevent desync from collapsing BEMF amplitude.
+                 * Hysteresis between threshold and recovery prevents oscillation. */
+                {
+                    static uint16_t vbusFiltered = 0;
+                    static bool vbusSagActive = false;
+
+                    /* Seed filter on CL entry to prevent false sag latch from zero init */
+                    if (prevAdcState != ESC_CLOSED_LOOP)
+                    {
+                        vbusFiltered = garudaData.vbusRaw;
+                        vbusSagActive = false;
+                    }
+
+                    vbusFiltered = (uint16_t)(
+                        ((uint32_t)vbusFiltered * 7 + garudaData.vbusRaw) >> 3);
+
+                    if (!vbusSagActive && vbusFiltered < VBUS_SAG_THRESHOLD_ADC)
+                        vbusSagActive = true;
+                    else if (vbusSagActive && vbusFiltered > VBUS_SAG_RECOVERY_ADC)
+                        vbusSagActive = false;
+
+                    if (vbusSagActive)
+                    {
+                        uint32_t sagDepth = (vbusFiltered < VBUS_SAG_THRESHOLD_ADC) ?
+                            (VBUS_SAG_THRESHOLD_ADC - vbusFiltered) : 0;
+                        uint32_t reduction = (sagDepth * VBUS_SAG_GAIN) >> 4;
+                        if (reduction >= mappedDuty)
+                            mappedDuty = MIN_DUTY;
+                        else
+                            mappedDuty -= reduction;
+                    }
+
+                    /* Floor clamp: sag reduction must not push duty below MIN_DUTY */
+                    if (mappedDuty < MIN_DUTY)
+                        mappedDuty = MIN_DUTY;
+                }
+#endif
+
                 garudaData.duty = mappedDuty;
             }
             HAL_PWM_SetDutyCycle(garudaData.duty);
@@ -324,6 +514,10 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
 #endif
 
         case ESC_BRAKING:
+            break;
+
+        case ESC_RECOVERY:
+            /* PWM already disabled on entry — coast-down handled in Timer1 */
             break;
 
         case ESC_FAULT:
@@ -378,7 +572,7 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
 
         case ESC_ARMED:
             /* Verify throttle stays at zero for ARM_TIME */
-            if (garudaData.throttle < 50) /* Near-zero threshold */
+            if (garudaData.throttle < ARM_THROTTLE_ZERO_ADC)
             {
                 garudaData.armCounter++;
                 if (garudaData.armCounter >= ARM_TIME_COUNTS)
@@ -447,6 +641,41 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
         case ESC_BRAKING:
             break;
 
+        case ESC_RECOVERY:
+#if FEATURE_DESYNC_RECOVERY
+            if (garudaData.recoveryCounter > 0)
+            {
+                garudaData.recoveryCounter--;
+            }
+            else
+            {
+                if (garudaData.runCommandActive &&
+                    garudaData.desyncRestartAttempts < DESYNC_MAX_RESTARTS)
+                {
+                    garudaData.desyncRestartAttempts++;
+                    garudaData.state = ESC_ALIGN;
+                    STARTUP_Init(&garudaData);
+                    LED2 = 1;
+                }
+                else if (!garudaData.runCommandActive)
+                {
+                    /* User pressed stop during coast — graceful idle */
+                    garudaData.desyncRestartAttempts = 0;
+                    garudaData.state = ESC_IDLE;
+                    LED2 = 0;
+                }
+                else
+                {
+                    /* Max restarts exhausted — permanent fault */
+                    garudaData.runCommandActive = false;
+                    garudaData.state = ESC_FAULT;
+                    garudaData.faultCode = FAULT_DESYNC;
+                    LED2 = 0;
+                }
+            }
+#endif
+            break;
+
         case ESC_FAULT:
             break;
     }
@@ -466,6 +695,7 @@ void __attribute__((__interrupt__, no_auto_psv)) _PWMInterrupt(void)
         HAL_MC1PWMDisableOutputs();
         garudaData.state = ESC_FAULT;
         garudaData.faultCode = FAULT_OVERCURRENT;
+        garudaData.runCommandActive = false;
         LED2 = 0;
     }
     ClearPWMIF();

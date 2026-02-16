@@ -87,6 +87,10 @@ extern "C" {
 #define MAX_CL_STEP_PERIOD_T1      ERPM_TO_STEP_TICKS(MAX_CLOSED_LOOP_ERPM)
 #define MIN_CL_ADC_STEP_PERIOD     TIMER1_TO_ADC_TICKS(MAX_CL_STEP_PERIOD_T1) /* ~24 ticks at 10000 eRPM */
 
+/* eRPM from adcIsrTick stepPeriod: eRPM = 60 / (stepPeriod * 6 / PWMFREQUENCY_HZ)
+ * = PWMFREQUENCY_HZ * 10 / stepPeriod.  Precomputed numerator: */
+#define ERPM_FROM_ADC_STEP_NUM      (uint32_t)(PWMFREQUENCY_HZ * 10UL)
+
 /* Compile-time config sanity checks */
 _Static_assert(MIN_CL_ADC_STEP_PERIOD > 0,    "MIN_CL_ADC_STEP_PERIOD must be > 0");
 _Static_assert(MIN_CL_ADC_STEP_PERIOD <= MIN_ADC_STEP_PERIOD,
@@ -121,6 +125,49 @@ _Static_assert(ZC_FILTER_MIN >= 1,             "ZC_FILTER_MIN must be >= 1");
 _Static_assert(ZC_FILTER_MAX >= ZC_FILTER_MIN, "ZC_FILTER_MAX must be >= ZC_FILTER_MIN");
 #endif
 #endif /* FEATURE_BEMF_CLOSED_LOOP */
+
+/* Phase B1: Duty slew rate limits (frequency-independent) */
+#if FEATURE_DUTY_SLEW
+/* Per ADC ISR tick: MAX_DUTY * percent / 100 / ticks_per_ms
+ * ticks_per_ms = PWMFREQUENCY_HZ / 1000 = 24 */
+#define DUTY_SLEW_UP_RATE   (uint32_t)( \
+    (uint64_t)MAX_DUTY * DUTY_SLEW_UP_PERCENT_PER_MS / 100 \
+    / (PWMFREQUENCY_HZ / 1000))
+#define DUTY_SLEW_DOWN_RATE (uint32_t)( \
+    (uint64_t)MAX_DUTY * DUTY_SLEW_DOWN_PERCENT_PER_MS / 100 \
+    / (PWMFREQUENCY_HZ / 1000))
+#endif
+
+/* Phase B2: Desync recovery coast-down counts (Timer1 = 100us ticks) */
+#if FEATURE_DESYNC_RECOVERY
+#define DESYNC_COAST_COUNTS     (uint32_t)(DESYNC_COAST_MS * 10)
+#endif
+
+/* Phase B3: Timing advance static asserts */
+#if FEATURE_TIMING_ADVANCE
+_Static_assert(TIMING_ADVANCE_MAX_DEG < 30,  "Must leave positive delay");
+_Static_assert(TIMING_ADVANCE_MIN_DEG <= TIMING_ADVANCE_MAX_DEG, "Min <= Max");
+_Static_assert(TIMING_ADVANCE_MAX_DEG <= 25, "Advance > 25 deg risks desync");
+_Static_assert(MIN_ADC_STEP_PERIOD > MIN_CL_ADC_STEP_PERIOD,
+               "Timing advance interpolation range must be non-zero");
+#endif
+
+/* Feature dependency guards */
+#if FEATURE_TIMING_ADVANCE && !FEATURE_BEMF_CLOSED_LOOP
+#error "Timing advance requires FEATURE_BEMF_CLOSED_LOOP"
+#endif
+#if FEATURE_DESYNC_RECOVERY && !FEATURE_BEMF_CLOSED_LOOP
+#error "Desync recovery requires FEATURE_BEMF_CLOSED_LOOP"
+#endif
+#if FEATURE_DUTY_SLEW && !FEATURE_BEMF_CLOSED_LOOP
+#error "Duty slew requires FEATURE_BEMF_CLOSED_LOOP"
+#endif
+#if FEATURE_DYNAMIC_BLANKING && !FEATURE_BEMF_CLOSED_LOOP
+#error "Dynamic blanking requires FEATURE_BEMF_CLOSED_LOOP"
+#endif
+#if FEATURE_VBUS_SAG_LIMIT && !FEATURE_BEMF_CLOSED_LOOP
+#error "Vbus sag limiting requires FEATURE_BEMF_CLOSED_LOOP"
+#endif
 
 #ifdef __cplusplus
 }

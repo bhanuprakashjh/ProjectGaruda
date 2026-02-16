@@ -65,14 +65,13 @@ int main(void)
         {
             if (garudaData.state == ESC_IDLE)
             {
-                /* Skip arming — go directly to ALIGN for initial motor testing.
-                 * TODO: Restore ESC_ARMED with throttle-zero check for production. */
-                garudaData.state = ESC_ALIGN;
-                STARTUP_Init(&garudaData);
-                LED2 = 1;
+                /* Enter arming — Timer1 ESC_ARMED handler verifies throttle=0
+                 * for ARM_TIME_MS, then transitions to ESC_ALIGN. */
+                garudaData.runCommandActive = true;
+                garudaData.desyncRestartAttempts = 0;
+                garudaData.state = ESC_ARMED;
                 garudaData.armCounter = 0;
 #if FEATURE_ADAPTATION
-                /* Apply any pending adaptation at the IDLE→ARMED boundary */
                 if (ADAPT_IsSafeBoundary(ESC_ARMED, garudaData.throttle))
                 {
                     /* Adaptation params already evaluated; applied here */
@@ -82,6 +81,8 @@ int main(void)
             else if (garudaData.state == ESC_FAULT)
             {
                 /* Clear fault and return to idle */
+                garudaData.runCommandActive = false;
+                garudaData.desyncRestartAttempts = 0;
                 garudaData.faultCode = FAULT_NONE;
                 HAL_MC1ClearPWMPCIFault();
                 HAL_MC1PWMDisableOutputs();
@@ -90,7 +91,9 @@ int main(void)
             }
             else
             {
-                /* Stop motor */
+                /* Stop motor (any running state including ESC_RECOVERY) */
+                garudaData.runCommandActive = false;
+                garudaData.desyncRestartAttempts = 0;
                 HAL_MC1PWMDisableOutputs();
                 garudaData.state = ESC_IDLE;
                 LED2 = 0;
@@ -111,13 +114,13 @@ int main(void)
             }
         }
 #else
-        /* Button 2 (SW2) — Change direction.
-         * For initial testing: allowed in any state so we can find
-         * the correct direction without reflashing.
-         * TODO: Restrict to IDLE only for production. */
+        /* Button 2 (SW2) — Change direction (IDLE only — safe) */
         if (IsPressed_Button2())
         {
-            garudaData.direction ^= 1;
+            if (garudaData.state == ESC_IDLE)
+            {
+                garudaData.direction ^= 1;
+            }
         }
 #endif
 

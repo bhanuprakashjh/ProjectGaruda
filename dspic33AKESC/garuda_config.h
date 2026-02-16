@@ -16,10 +16,16 @@ extern "C" {
 
 /* Feature Flags (0=disabled, 1=enabled) */
 #define FEATURE_BEMF_CLOSED_LOOP 1  /* Phase 2: BEMF ZC detection (0=Phase 1 open-loop only) */
-#define FEATURE_LEARN_MODULES   0   /* master: ring buffer + quality + health */
-#define FEATURE_ADAPTATION      0   /* requires FEATURE_LEARN_MODULES */
-#define FEATURE_COMMISSION      0   /* requires FEATURE_LEARN_MODULES */
-#define FEATURE_EEPROM_V2       0   /* requires at least one above */
+#define FEATURE_VBUS_FAULT       1  /* Phase A4: Bus voltage OV/UV fault enforcement */
+#define FEATURE_DESYNC_RECOVERY  1  /* Phase B2: Controlled restart-on-desync (ESC_RECOVERY) */
+#define FEATURE_DUTY_SLEW        1  /* Phase B1: Asymmetric duty slew rate limiter */
+#define FEATURE_TIMING_ADVANCE   1  /* Phase B3: Linear timing advance by RPM (0-15 deg linear by speed) */
+#define FEATURE_DYNAMIC_BLANKING 1  /* Phase C1: Speed+duty-aware blanking (extra blank at high duty/demag) */
+#define FEATURE_VBUS_SAG_LIMIT   1  /* Phase C2: Bus voltage sag power limiting (reduce duty on Vbus dip) */
+#define FEATURE_LEARN_MODULES    0  /* master: ring buffer + quality + health */
+#define FEATURE_ADAPTATION       0  /* requires FEATURE_LEARN_MODULES */
+#define FEATURE_COMMISSION       0  /* requires FEATURE_LEARN_MODULES */
+#define FEATURE_EEPROM_V2        0  /* requires at least one above */
 
 /* Diagnostic: Manual step mode (1=enabled)
  * SW1: Start motor → align to step 0
@@ -37,8 +43,6 @@ extern "C" {
 #define QUALITY_UPDATE_DIVIDER      1       /* every 1ms */
 #define HEALTH_UPDATE_DIVIDER       10      /* every 10ms */
 #define ADAPT_EVAL_DIVIDER          100     /* every 100ms */
-#define TIMING_ADVANCE_MIN_DEG      0
-#define TIMING_ADVANCE_MAX_DEG      30
 #define ADAPT_MIN_CONFIDENCE        180
 #define ADAPT_MAX_CONSECUTIVE_FAIL  3
 #define ADAPT_MAX_ROLLBACK_TOTAL    10
@@ -59,16 +63,49 @@ extern "C" {
 /* Open-Loop Ramp */
 #define INITIAL_ERPM               300         /* ~5 steps/sec — slow start */
 #define RAMP_TARGET_ERPM           2000        /* 400 mech RPM — slow for ZC bring-up (step=5ms >> L/R=1.14ms) */
-#define MAX_CLOSED_LOOP_ERPM       10000       /* Max eRPM in closed loop (2000 mech RPM) */
+#define MAX_CLOSED_LOOP_ERPM       20000       /* Max eRPM in closed loop (Hurst no-load ~15625 eRPM) */
 #define RAMP_ACCEL_ERPM_PER_S      1000        /* Moderate acceleration */
 #define RAMP_DUTY_PERCENT          40          /* Duty cap during open-loop ramp */
 
 /* Arming */
 #define ARM_TIME_MS                500         /* Throttle must be zero for this long to arm */
+#define ARM_THROTTLE_ZERO_ADC      200         /* Max pot ADC to consider "zero" (~4.9% of 4095) */
 
 /* Bus Voltage */
 #define VBUS_OVERVOLTAGE_ADC       3600        /* ~52V with typical divider (tunable) */
 #define VBUS_UNDERVOLTAGE_ADC      500         /* ~7V with typical divider (tunable) */
+#define VBUS_FAULT_FILTER          3           /* Consecutive ADC samples to confirm fault (3 = ~125us) */
+
+/* Duty Slew Rate (Phase B1) */
+#if FEATURE_DUTY_SLEW
+#define DUTY_SLEW_UP_PERCENT_PER_MS     2   /* Max duty increase: 2%/ms (~50ms full scale) */
+#define DUTY_SLEW_DOWN_PERCENT_PER_MS   5   /* Max duty decrease: 5%/ms (~20ms full scale) */
+#endif
+
+/* Desync Recovery (Phase B2) */
+#if FEATURE_DESYNC_RECOVERY
+#define DESYNC_COAST_MS             200     /* Coast-down time before restart attempt */
+#define DESYNC_MAX_RESTARTS         3       /* Max restart attempts before permanent fault */
+#endif
+
+/* Timing Advance (Phase B3) */
+#if FEATURE_TIMING_ADVANCE
+#define TIMING_ADVANCE_MIN_DEG      0       /* Degrees advance at low speed */
+#define TIMING_ADVANCE_MAX_DEG      15      /* Degrees advance at max speed */
+#endif
+
+/* Dynamic Blanking (Phase C1) */
+#if FEATURE_DYNAMIC_BLANKING
+#define ZC_DEMAG_DUTY_THRESH         70   /* Duty % above which extra blanking applies */
+#define ZC_DEMAG_BLANK_EXTRA_PERCENT 12   /* Extra blanking % of step period at 100% duty */
+#endif
+
+/* Bus Voltage Sag Limiting (Phase C2) */
+#if FEATURE_VBUS_SAG_LIMIT
+#define VBUS_SAG_THRESHOLD_ADC   900      /* Vbus below this → reduce duty (~13V with typical divider) */
+#define VBUS_SAG_RECOVERY_ADC    1000     /* Vbus above this → release limit (hysteresis band = 100) */
+#define VBUS_SAG_GAIN            8        /* Duty reduction proportional to sag depth: (depth * gain) >> 4 */
+#endif
 
 /* Comparator DAC reference for overcurrent fault (from reference) */
 #define CMP_REF_DCBUS_FAULT        2048        /* Default DAC reference, midscale */

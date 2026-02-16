@@ -36,8 +36,13 @@ void ADAPT_Init(ADAPT_PARAMS_T *adapt, const GARUDA_CONFIG_T *config)
     adapt->rampAccelErpmPerS = config->rampAccelErpmPerS;
     adapt->alignTimeMs = config->alignTimeMs;
 
+#ifdef TIMING_ADVANCE_MIN_DEG
     adapt->timingAdvanceMin = TIMING_ADVANCE_MIN_DEG;
     adapt->timingAdvanceMax = TIMING_ADVANCE_MAX_DEG;
+#else
+    adapt->timingAdvanceMin = 0;
+    adapt->timingAdvanceMax = 15;
+#endif
     adapt->startupDutyMin = 2.0f;
     adapt->startupDutyMax = 15.0f;
 

@@ -26,8 +26,16 @@ typedef enum
     ESC_OL_RAMP,
     ESC_CLOSED_LOOP,
     ESC_BRAKING,
+    ESC_RECOVERY,       /* Desync coast-down before restart attempt */
     ESC_FAULT
 } ESC_STATE_T;
+
+/* Enum ordering guards — voltage fault check uses >= / <= on state enum */
+_Static_assert(ESC_IDLE < ESC_ARMED, "State enum ordering violated");
+_Static_assert(ESC_ARMED < ESC_ALIGN, "State enum ordering violated");
+_Static_assert(ESC_ALIGN < ESC_CLOSED_LOOP, "State enum ordering violated");
+_Static_assert(ESC_CLOSED_LOOP < ESC_RECOVERY, "State enum ordering violated");
+_Static_assert(ESC_RECOVERY < ESC_FAULT, "State enum ordering violated");
 
 /* Phase output states for 6-step commutation */
 typedef enum
@@ -122,6 +130,9 @@ typedef struct
     uint16_t zcThresholdMax;
     /* Per-step ZC confirmed count (which of the 6 steps fire?) */
     uint16_t zcPerStep[6];
+#if FEATURE_TIMING_ADVANCE
+    uint8_t  lastAdvanceDeg;        /* Last computed timing advance in degrees */
+#endif
 } ZC_DIAG_T;
 #endif
 
@@ -358,6 +369,11 @@ typedef struct
     uint32_t rampCounter;       /* counts down within current step */
     uint32_t systemTick;        /* 1ms tick counter */
     uint16_t armCounter;        /* counts up during arming phase */
+
+    /* Run command and recovery */
+    bool     runCommandActive;       /* SW1-driven latch: true = user wants motor running */
+    uint8_t  desyncRestartAttempts;  /* Reset on successful sync lock */
+    uint32_t recoveryCounter;        /* Timer1 countdown during coast-down */
 
     /* Sub-structures */
     BEMF_STATE_T bemf;

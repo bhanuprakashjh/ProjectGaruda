@@ -125,8 +125,10 @@ void MapGPIOHWFunction(void)
     TRISDbits.TRISD10 = 1;
 
     /* ================================================================
-     * PWM Fault PCI8 input
+     * PWM Fault PCI8 input — board OC+OV fault (M1_FAULT_OC_OV)
      * DIM:040 - Pin #32 : RP28/SDI2/RB11
+     * TRISB11 = 1 (input) from TRISB=0xFFFF init above.
+     * ANSELB11 = 0 (digital) from ANSELB=0x0000 init above.
      * ================================================================ */
     _PCI8R = 28;
 
