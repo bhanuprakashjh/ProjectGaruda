@@ -95,6 +95,9 @@ typedef struct
     bool     zcSynced;              /* True = ZC-driven, False = forced */
     bool     deadlineActive;        /* True when commDeadline is valid */
     bool     hasPrevZc;             /* True after first post-sync ZC (guards zcInterval calc) */
+#if FEATURE_BEMF_INTEGRATION
+    bool     deadlineIsZc;         /* true = ZC-driven deadline, false = fallback/timing */
+#endif
 } TIMING_STATE_T;
 
 /* Diagnostic counters for ZC bring-up debugging (ADC threshold method).
@@ -134,6 +137,33 @@ typedef struct
     uint8_t  lastAdvanceDeg;        /* Last computed timing advance in degrees */
 #endif
 } ZC_DIAG_T;
+#endif
+
+#if FEATURE_BEMF_INTEGRATION
+typedef struct {
+    /* Per-step state (reset on commutation) */
+    int32_t  integral;           /* Running sum of polarity-adjusted |deviation| */
+    int32_t  intThreshold;       /* Trigger level for this step */
+    uint16_t stepDevMax;         /* Max polarity-adjusted clamped sample THIS step */
+    uint16_t shadowFireTick;     /* adcIsrTick when shadow would commutate */
+    bool     shadowFired;        /* true once integral crosses threshold */
+
+    /* Smoothed BEMF deviation peak (IIR across steps) */
+    uint16_t bemfPeakSmooth;     /* 7/8 old + 1/8 new */
+
+    /* Diagnostics (uint32_t: 17k eRPM = 2833 comms/sec, uint16 wraps in 23s) */
+    int16_t  shadowVsActual;     /* (shadowFireTick - actualTick), always <= 0;
+                                  * SHADOW_NO_FIRE_SENTINEL when shadow didn't fire */
+    uint32_t shadowHitCount;     /* |diff| <= tolerance */
+    uint32_t shadowMissCount;    /* |diff| > tolerance (includes noFire) */
+    uint32_t shadowNoFireCount;  /* Shadow didn't fire before actual comm */
+    uint32_t shadowAbsErrorSum;  /* Sum of |diff| for mean absolute error */
+    int32_t  shadowErrorSum;     /* Sum of signed diff (for mean signed error / bias) */
+    uint32_t shadowSampleCount;  /* Total ZC-driven comms scored (hit+miss+noFire) */
+    uint32_t shadowSkipCount;    /* Fallback/timeout comms excluded from scoring */
+    uint32_t shadowUnseededSkip; /* Skipped because bemfPeakSmooth not yet seeded */
+    uint32_t shadowStepPeriodSum;/* Sum of stepPeriod at each scoring (for norm MAE) */
+} BEMF_INTEG_T;
 #endif
 
 /* Telemetry fault flag bitmasks */
@@ -381,6 +411,10 @@ typedef struct
 
 #if FEATURE_BEMF_CLOSED_LOOP
     ZC_DIAG_T zcDiag;
+#endif
+
+#if FEATURE_BEMF_INTEGRATION
+    BEMF_INTEG_T integ;
 #endif
 
 #if FEATURE_LEARN_MODULES

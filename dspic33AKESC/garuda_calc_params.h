@@ -168,6 +168,15 @@ _Static_assert(MIN_ADC_STEP_PERIOD > MIN_CL_ADC_STEP_PERIOD,
 #if FEATURE_VBUS_SAG_LIMIT && !FEATURE_BEMF_CLOSED_LOOP
 #error "Vbus sag limiting requires FEATURE_BEMF_CLOSED_LOOP"
 #endif
+#if FEATURE_BEMF_INTEGRATION && !FEATURE_BEMF_CLOSED_LOOP
+#error "BEMF integration requires FEATURE_BEMF_CLOSED_LOOP"
+#endif
+#if FEATURE_BEMF_INTEGRATION
+_Static_assert(INTEG_THRESHOLD_GAIN > 0 && INTEG_THRESHOLD_GAIN < 1024,
+               "INTEG_THRESHOLD_GAIN out of useful range");
+_Static_assert(INTEG_HIT_DIVISOR >= 2 && INTEG_HIT_DIVISOR <= 16,
+               "INTEG_HIT_DIVISOR out of range");
+#endif
 
 #ifdef __cplusplus
 }

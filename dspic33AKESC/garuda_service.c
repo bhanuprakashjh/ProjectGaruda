@@ -96,6 +96,9 @@ void GARUDA_ServiceInit(void)
     garudaData.timing.zcSynced = false;
     garudaData.timing.deadlineActive = false;
     garudaData.timing.hasPrevZc = false;
+#if FEATURE_BEMF_INTEGRATION
+    garudaData.timing.deadlineIsZc = false;
+#endif
 
     /* Enable ADC interrupt to start the control loop */
     GARUDA_ClearADCIF();
@@ -307,6 +310,12 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                 {
                     garudaData.timing.zcSynced = true;
                     garudaData.desyncRestartAttempts = 0;
+#if FEATURE_BEMF_INTEGRATION
+                    garudaData.integ.bemfPeakSmooth = 0;
+                    garudaData.integ.integral = 0;
+                    garudaData.integ.stepDevMax = 0;
+                    garudaData.integ.shadowFired = false;
+#endif
                     /* Seed post-sync: if ZC was just confirmed on this step,
                      * set a commutation deadline with timing advance.
                      * Otherwise check if this step is undetectable and
@@ -336,6 +345,9 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                             adcIsrTick + garudaData.timing.stepPeriod / 2);
 #endif
                         garudaData.timing.deadlineActive = true;
+#if FEATURE_BEMF_INTEGRATION
+                        garudaData.timing.deadlineIsZc = true;
+#endif
                     }
                     else
                     {
@@ -353,6 +365,54 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                 /* Check commutation deadline (handles both ZC-based and timing-based) */
                 if (BEMF_ZC_CheckDeadline(&garudaData, adcIsrTick))
                 {
+#if FEATURE_BEMF_INTEGRATION
+                    if (!garudaData.timing.deadlineIsZc)
+                    {
+                        garudaData.integ.shadowSkipCount++;
+                    }
+                    else if (garudaData.integ.bemfPeakSmooth == 0)
+                    {
+                        garudaData.integ.shadowUnseededSkip++;
+                    }
+                    else
+                    {
+                        uint16_t tol = garudaData.timing.stepPeriod / INTEG_HIT_DIVISOR;
+                        if (tol < 1) tol = 1;
+
+                        garudaData.integ.shadowSampleCount++;
+                        garudaData.integ.shadowStepPeriodSum +=
+                            garudaData.timing.stepPeriod;
+
+                        if (garudaData.integ.shadowFired)
+                        {
+                            int16_t diff = (int16_t)(garudaData.integ.shadowFireTick
+                                                   - adcIsrTick);
+                            garudaData.integ.shadowVsActual = diff;
+
+                            /* Saturating add via int64_t — no UB */
+                            {
+                                int64_t wide = (int64_t)garudaData.integ.shadowErrorSum + diff;
+                                if (wide < INT32_MIN) wide = INT32_MIN;
+                                else if (wide > INT32_MAX) wide = INT32_MAX;
+                                garudaData.integ.shadowErrorSum = (int32_t)wide;
+                            }
+
+                            int16_t absDiff = (diff < 0) ? -diff : diff;
+                            garudaData.integ.shadowAbsErrorSum += (uint32_t)absDiff;
+
+                            if (absDiff <= (int16_t)tol)
+                                garudaData.integ.shadowHitCount++;
+                            else
+                                garudaData.integ.shadowMissCount++;
+                        }
+                        else
+                        {
+                            garudaData.integ.shadowNoFireCount++;
+                            garudaData.integ.shadowMissCount++;
+                            garudaData.integ.shadowVsActual = SHADOW_NO_FIRE_SENTINEL;
+                        }
+                    }
+#endif
                     COMMUTATION_AdvanceStep(&garudaData);
                     BEMF_ZC_OnCommutation(&garudaData, adcIsrTick);
                     /* If new step can't detect ZC, schedule timing-based comm */
@@ -389,6 +449,9 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                 }
                 else if (toResult == ZC_TIMEOUT_FORCE_STEP)
                 {
+#if FEATURE_BEMF_INTEGRATION
+                    garudaData.integ.shadowSkipCount++;
+#endif
                     garudaData.zcDiag.zcTimeoutForceCount++;
                     /* Increment per-step miss counter (before AdvanceStep
                      * changes currentStep).  Saturate at 255. */

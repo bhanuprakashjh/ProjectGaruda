@@ -22,6 +22,7 @@ extern "C" {
 #define FEATURE_TIMING_ADVANCE   1  /* Phase B3: Linear timing advance by RPM (0-15 deg linear by speed) */
 #define FEATURE_DYNAMIC_BLANKING 1  /* Phase C1: Speed+duty-aware blanking (extra blank at high duty/demag) */
 #define FEATURE_VBUS_SAG_LIMIT   1  /* Phase C2: Bus voltage sag power limiting (reduce duty on Vbus dip) */
+#define FEATURE_BEMF_INTEGRATION 0  /* Phase E: Shadow integration estimator (shadow-only, no control) */
 #define FEATURE_LEARN_MODULES    0  /* master: ring buffer + quality + health */
 #define FEATURE_ADAPTATION       0  /* requires FEATURE_LEARN_MODULES */
 #define FEATURE_COMMISSION       0  /* requires FEATURE_LEARN_MODULES */
@@ -105,6 +106,14 @@ extern "C" {
 #define VBUS_SAG_THRESHOLD_ADC   900      /* Vbus below this → reduce duty (~13V with typical divider) */
 #define VBUS_SAG_RECOVERY_ADC    1000     /* Vbus above this → release limit (hysteresis band = 100) */
 #define VBUS_SAG_GAIN            8        /* Duty reduction proportional to sag depth: (depth * gain) >> 4 */
+#endif
+
+/* BEMF Integration Shadow Estimator (Phase E) */
+#if FEATURE_BEMF_INTEGRATION
+#define INTEG_THRESHOLD_GAIN  256   /* Q8.8: 256=1.0x */
+#define INTEG_HIT_DIVISOR     8     /* Tolerance = stepPeriod / 8 (~7.5 deg elec) */
+#define INTEG_CLAMP           0x7FFFFF
+#define SHADOW_NO_FIRE_SENTINEL  ((int16_t)0x7FFF)  /* shadowVsActual when shadow didn't fire */
 #endif
 
 /* Comparator DAC reference for overcurrent fault (from reference) */

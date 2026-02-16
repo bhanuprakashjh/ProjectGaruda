@@ -20,6 +20,54 @@
 #include "commutation.h"
 #include "../garuda_calc_params.h"
 
+/* Per-phase Q15 gain + signed offset correction (shared by Poll and integration fast path) */
+static const uint16_t phaseGain[3] = {
+    ZC_PHASE_GAIN_A, ZC_PHASE_GAIN_B, ZC_PHASE_GAIN_C
+};
+static const int16_t phaseOffset[3] = {
+    ZC_PHASE_OFFSET_A, ZC_PHASE_OFFSET_B, ZC_PHASE_OFFSET_C
+};
+
+/**
+ * @brief Apply per-phase gain/offset correction and clamp to [0, 4095].
+ * Shared by normal Poll path and integration-only fast path.
+ */
+static inline int32_t computeVCorrected(uint16_t vFloat, uint8_t floatPhase)
+{
+    int32_t v = (int32_t)(((uint32_t)vFloat * phaseGain[floatPhase]) >> 15)
+              + phaseOffset[floatPhase];
+    if (v < 0) v = 0;
+    if (v > 4095) v = 4095;
+    return v;
+}
+
+/**
+ * @brief Compute blanking ticks for current step.
+ * Shared by normal Poll path and integration-only fast path.
+ */
+static inline uint16_t computeBlankTicks(volatile GARUDA_DATA_T *pData)
+{
+    uint16_t sp = pData->timing.stepPeriod;
+#if FEATURE_DYNAMIC_BLANKING
+    uint16_t blankBase = (uint16_t)((uint32_t)sp * ZC_BLANKING_PERCENT / 100);
+    uint8_t dutyPct = (uint8_t)((uint32_t)pData->duty * 100 / LOOPTIME_TCY);
+    uint16_t blankDutyBoost = 0;
+    if (dutyPct > ZC_DEMAG_DUTY_THRESH)
+    {
+        blankDutyBoost = (uint16_t)((uint32_t)sp * ZC_DEMAG_BLANK_EXTRA_PERCENT
+                         * (dutyPct - ZC_DEMAG_DUTY_THRESH)
+                         / (100 * (100 - ZC_DEMAG_DUTY_THRESH)));
+    }
+    uint16_t bt = blankBase + blankDutyBoost;
+    uint16_t blankMax = sp / 4;
+    if (bt > blankMax) bt = blankMax;
+#else
+    uint16_t bt = (uint16_t)((uint32_t)sp * ZC_BLANKING_PERCENT / 100);
+#endif
+    if (bt < 1) bt = 1;
+    return bt;
+}
+
 /**
  * @brief Initialize ZC detection state for closed-loop entry.
  * Called once when ADC ISR first detects ESC_CLOSED_LOOP state.
@@ -79,6 +127,26 @@ void BEMF_ZC_Init(volatile GARUDA_DATA_T *pData, uint16_t initialStepPeriod)
     pData->zcDiag.zcThresholdMax = 0;
     for (uint8_t j = 0; j < 6; j++)
         pData->zcDiag.zcPerStep[j] = 0;
+
+#if FEATURE_BEMF_INTEGRATION
+    pData->integ.integral = 0;
+    pData->integ.intThreshold = 1;
+    pData->integ.stepDevMax = 0;
+    pData->integ.shadowFireTick = 0;
+    pData->integ.shadowFired = false;
+    pData->integ.bemfPeakSmooth = 0;
+    pData->integ.shadowVsActual = 0;
+    pData->integ.shadowHitCount = 0;
+    pData->integ.shadowMissCount = 0;
+    pData->integ.shadowNoFireCount = 0;
+    pData->integ.shadowAbsErrorSum = 0;
+    pData->integ.shadowErrorSum = 0;
+    pData->integ.shadowSampleCount = 0;
+    pData->integ.shadowSkipCount = 0;
+    pData->integ.shadowUnseededSkip = 0;
+    pData->integ.shadowStepPeriodSum = 0;
+    pData->timing.deadlineIsZc = false;
+#endif
 }
 
 /**
@@ -103,6 +171,34 @@ void BEMF_ZC_OnCommutation(volatile GARUDA_DATA_T *pData, uint16_t now)
      * Falling ZC (zcPolarity=-1): BEMF crosses Vbus/2 going down → after ZC, CMPSTAT=0 */
     int8_t pol = commutationTable[pData->currentStep].zcPolarity;
     pData->bemf.cmpExpected = (pol > 0) ? 1 : 0;
+
+#if FEATURE_BEMF_INTEGRATION
+    /* IIR smooth: 7/8 old + 1/8 new. Seed on first nonzero. */
+    if (pData->integ.stepDevMax > 0)
+    {
+        if (pData->integ.bemfPeakSmooth == 0)
+            pData->integ.bemfPeakSmooth = pData->integ.stepDevMax;
+        else
+            pData->integ.bemfPeakSmooth = (uint16_t)(
+                ((uint32_t)pData->integ.bemfPeakSmooth * 7
+                 + pData->integ.stepDevMax) >> 3);
+    }
+
+    /* Reset per-step state */
+    pData->integ.integral = 0;
+    pData->integ.stepDevMax = 0;
+    pData->integ.shadowFired = false;
+
+    /* Threshold = bemfPeakSmooth * stepPeriod / 4 * gain. */
+    {
+        int32_t peak = (int32_t)pData->integ.bemfPeakSmooth;
+        if (peak < 10) peak = 10;  /* Floor */
+        int32_t rawThreshold = peak * (int32_t)pData->timing.stepPeriod / 4;
+        pData->integ.intThreshold = (rawThreshold * INTEG_THRESHOLD_GAIN) >> 8;
+        if (pData->integ.intThreshold < 1)
+            pData->integ.intThreshold = 1;
+    }
+#endif
 }
 
 /**
@@ -125,28 +221,50 @@ bool BEMF_ZC_Poll(volatile GARUDA_DATA_T *pData, uint16_t now)
 {
     /* One ZC per step guard — prevent multiple noisy edges from counting */
     if (pData->bemf.zeroCrossDetected)
+    {
+#if FEATURE_BEMF_INTEGRATION
+        /* Post-ZC integration-only fast path.
+         * Computes vCorrected and runs integration accumulation.
+         * Skips ALL diagnostic counters, blanking, and edge detection. */
+        if (pData->timing.zcSynced && pData->bemf.bemfSampleValid)
+        {
+            uint16_t elapsed = (uint16_t)(now - pData->timing.lastCommTick);
+            uint16_t blankTicks = computeBlankTicks(pData);
+            uint8_t floatPhase = commutationTable[pData->currentStep].floatingPhase;
+            uint16_t vFloat = pData->bemf.bemfRaw;
+            uint16_t zcThresh = pData->bemf.zcThreshold;
+            int32_t vCorrected = computeVCorrected(vFloat, floatPhase);
+
+            if (elapsed >= blankTicks)
+            {
+                int32_t dev = vCorrected - (int32_t)zcThresh;
+                int8_t pol = commutationTable[pData->currentStep].zcPolarity;
+                int32_t sample = (pol > 0) ? dev : -dev;
+                if (sample < 0) sample = 0;
+
+                if ((uint16_t)sample > pData->integ.stepDevMax)
+                    pData->integ.stepDevMax = (uint16_t)sample;
+
+                if (!pData->integ.shadowFired)
+                {
+                    pData->integ.integral += sample;
+                    if (pData->integ.integral > INTEG_CLAMP)
+                        pData->integ.integral = INTEG_CLAMP;
+                    if (pData->integ.integral >= pData->integ.intThreshold)
+                    {
+                        pData->integ.shadowFired = true;
+                        pData->integ.shadowFireTick = now;
+                    }
+                }
+            }
+        }
+#endif
         return false;
+    }
 
     /* Compute blanking window — edge tracking runs inside, confirmation only outside */
     uint16_t elapsed = (uint16_t)(now - pData->timing.lastCommTick);
-    uint16_t sp = pData->timing.stepPeriod;
-#if FEATURE_DYNAMIC_BLANKING
-    uint16_t blankBase = (uint16_t)((uint32_t)sp * ZC_BLANKING_PERCENT / 100);
-    uint8_t dutyPct = (uint8_t)((uint32_t)pData->duty * 100 / LOOPTIME_TCY);
-    uint16_t blankDutyBoost = 0;
-    if (dutyPct > ZC_DEMAG_DUTY_THRESH)
-    {
-        blankDutyBoost = (uint16_t)((uint32_t)sp * ZC_DEMAG_BLANK_EXTRA_PERCENT
-                         * (dutyPct - ZC_DEMAG_DUTY_THRESH)
-                         / (100 * (100 - ZC_DEMAG_DUTY_THRESH)));
-    }
-    uint16_t blankTicks = blankBase + blankDutyBoost;
-    uint16_t blankMax = sp / 4;
-    if (blankTicks > blankMax) blankTicks = blankMax;
-#else
-    uint16_t blankTicks = (uint16_t)((uint32_t)sp * ZC_BLANKING_PERCENT / 100);
-#endif
-    if (blankTicks < 1) blankTicks = 1;  /* Floor: 1 tick (~42us) to reject demagnetization spikes */
+    uint16_t blankTicks = computeBlankTicks(pData);
     bool inBlanking = (elapsed < blankTicks);
 
     /* Skip if sample is invalid (stale AD2 data after mux switch) */
@@ -161,17 +279,8 @@ bool BEMF_ZC_Poll(volatile GARUDA_DATA_T *pData, uint16_t now)
     uint16_t vFloat = pData->bemf.bemfRaw;
     uint16_t zcThresh = pData->bemf.zcThreshold;
 
-    /* Per-phase Q15 gain + signed offset correction */
-    static const uint16_t phaseGain[3] = {
-        ZC_PHASE_GAIN_A, ZC_PHASE_GAIN_B, ZC_PHASE_GAIN_C
-    };
-    static const int16_t phaseOffset[3] = {
-        ZC_PHASE_OFFSET_A, ZC_PHASE_OFFSET_B, ZC_PHASE_OFFSET_C
-    };
-    int32_t vCorrected = (int32_t)(((uint32_t)vFloat * phaseGain[floatPhase]) >> 15)
-                       + phaseOffset[floatPhase];
-    if (vCorrected < 0) vCorrected = 0;
-    if (vCorrected > 4095) vCorrected = 4095;
+    /* Per-phase gain + offset correction (shared helper) */
+    int32_t vCorrected = computeVCorrected(vFloat, floatPhase);
 
     uint8_t cmpNow;
     if ((uint16_t)vCorrected > zcThresh + ZC_ADC_DEADBAND)
@@ -202,6 +311,33 @@ bool BEMF_ZC_Poll(volatile GARUDA_DATA_T *pData, uint16_t now)
         pData->zcDiag.zcThresholdMin = zcThresh;
     if (zcThresh > pData->zcDiag.zcThresholdMax)
         pData->zcDiag.zcThresholdMax = zcThresh;
+
+#if FEATURE_BEMF_INTEGRATION
+    /* Pre-ZC integration accumulation (normal path, before zeroCrossDetected is set).
+     * Gated on zcSynced (no pre-sync training) AND past blanking (no noise contamination). */
+    if (pData->timing.zcSynced && elapsed >= blankTicks)
+    {
+        int32_t dev = (int32_t)vCorrected - (int32_t)zcThresh;
+        int8_t pol = commutationTable[pData->currentStep].zcPolarity;
+        int32_t sample = (pol > 0) ? dev : -dev;
+        if (sample < 0) sample = 0;  /* Pre-ZC: clamp to 0 */
+
+        if ((uint16_t)sample > pData->integ.stepDevMax)
+            pData->integ.stepDevMax = (uint16_t)sample;
+
+        if (!pData->integ.shadowFired)
+        {
+            pData->integ.integral += sample;
+            if (pData->integ.integral > INTEG_CLAMP)
+                pData->integ.integral = INTEG_CLAMP;
+            if (pData->integ.integral >= pData->integ.intThreshold)
+            {
+                pData->integ.shadowFired = true;
+                pData->integ.shadowFireTick = now;
+            }
+        }
+    }
+#endif
 
     /* First read after commutation — initialize cmpPrev, no edge possible yet */
     if (pData->bemf.cmpPrev == 0xFF)
@@ -361,6 +497,9 @@ bool BEMF_ZC_Poll(volatile GARUDA_DATA_T *pData, uint16_t now)
 #endif
             pData->timing.commDeadline = (uint16_t)(now + delay);
             pData->timing.deadlineActive = true;
+#if FEATURE_BEMF_INTEGRATION
+            pData->timing.deadlineIsZc = true;
+#endif
         }
 
         /* Reset step spacing counter for next interval measurement */
@@ -459,6 +598,9 @@ void BEMF_ZC_HandleUndetectableStep(volatile GARUDA_DATA_T *pData, uint16_t now)
          * - If not → fallback fires, avoiding the 2× timeout jerk */
         pData->timing.commDeadline = (uint16_t)(now + pData->timing.stepPeriod);
         pData->timing.deadlineActive = true;
+#if FEATURE_BEMF_INTEGRATION
+        pData->timing.deadlineIsZc = false;
+#endif
         /* zeroCrossDetected is NOT set — Poll can still detect and override */
     }
 }
