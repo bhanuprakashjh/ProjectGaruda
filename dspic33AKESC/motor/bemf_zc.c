@@ -189,11 +189,40 @@ void BEMF_ZC_OnCommutation(volatile GARUDA_DATA_T *pData, uint16_t now)
     pData->integ.stepDevMax = 0;
     pData->integ.shadowFired = false;
 
-    /* Threshold = bemfPeakSmooth * stepPeriod / 4 * gain. */
+    /* Threshold = peak * delayTicks / 2 * gain.
+     * delayTicks = actual ZC-to-commutation window, accounting for timing
+     * advance. Without advance: delayTicks = stepPeriod/2 (30 deg).
+     * With advance: delayTicks = stepPeriod * (30 - advDeg) / 60.
+     * This fixes the x5max noFire problem: at 18k eRPM with 13 deg advance,
+     * delay shrinks from stepPeriod/2 to ~4 ticks, and the old stepPeriod/4
+     * formula set the threshold too high for the available window. */
     {
         int32_t peak = (int32_t)pData->integ.bemfPeakSmooth;
         if (peak < 10) peak = 10;  /* Floor */
-        int32_t rawThreshold = peak * (int32_t)pData->timing.stepPeriod / 4;
+
+        uint16_t sp = pData->timing.stepPeriod;
+#if FEATURE_TIMING_ADVANCE
+        uint32_t eRPM = ERPM_FROM_ADC_STEP_NUM / sp;
+        uint16_t advDeg;
+        if (eRPM <= RAMP_TARGET_ERPM)
+            advDeg = TIMING_ADVANCE_MIN_DEG;
+        else if (eRPM >= MAX_CLOSED_LOOP_ERPM)
+            advDeg = TIMING_ADVANCE_MAX_DEG;
+        else
+        {
+            uint32_t range = MAX_CLOSED_LOOP_ERPM - RAMP_TARGET_ERPM;
+            uint32_t pos = eRPM - RAMP_TARGET_ERPM;
+            advDeg = TIMING_ADVANCE_MIN_DEG +
+                (uint16_t)((uint32_t)(TIMING_ADVANCE_MAX_DEG - TIMING_ADVANCE_MIN_DEG)
+                           * pos / range);
+        }
+        uint16_t delayTicks = (uint16_t)((uint32_t)sp * (30 - advDeg) / 60);
+#else
+        uint16_t delayTicks = sp / 2;
+#endif
+        if (delayTicks < 1) delayTicks = 1;
+
+        int32_t rawThreshold = peak * (int32_t)delayTicks / 2;
         pData->integ.intThreshold = (rawThreshold * INTEG_THRESHOLD_GAIN) >> 8;
         if (pData->integ.intThreshold < 1)
             pData->integ.intThreshold = 1;
