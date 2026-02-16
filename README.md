@@ -2,21 +2,127 @@
 
 **Open-source drone ESC firmware for the Microchip dsPIC33AK128MC106**
 
-6-step trapezoidal BLDC motor control with sensorless BEMF zero-crossing detection — built from scratch for high-performance multirotor applications.
+6-step trapezoidal BLDC motor control with sensorless ADC-based BEMF zero-crossing detection — built from scratch for high-performance multirotor applications.
 
 ---
 
-## Current Status: Phase 1 Complete
+## Current Status
 
-Phase 1 firmware compiles and links with **zero errors, zero warnings**.
+**Motor runs stable closed-loop across the full speed range (1,300 - 18,500 eRPM) with zero desyncs and zero timeout-forced commutations.**
 
-- 14 source files, 17 headers
-- Program flash: **9,024 bytes (6%)** of 128 KB
-- Data RAM: **88 bytes (<1%)** of 16 KB
-- Open-loop motor control: IDLE -> ARMED -> ALIGN -> OL_RAMP -> steady-state hold
-- Hardware fault protection via external PCI8 overcurrent pin
+| Metric | Value |
+|--------|-------|
+| **Program flash** | ~13 KB (9%) of 128 KB |
+| **Data RAM** | ~200 bytes (1%) of 16 KB |
+| **Source files** | 16 source, 19 headers |
+| **Speed range** | 1,300 - 18,500 eRPM (pot-controlled) |
+| **Desyncs in testing** | 0 |
+| **Timeout-forced comms** | 0 |
+| **Motor** | Hurst DMB0224C10002 (10-pole, 24V) |
+| **Dev board** | MCLV-48V-300W (Microchip) |
 
-Phase 2 (BEMF closed-loop commutation) is next.
+### Implemented Phases
+
+| Phase | Description | Status |
+|-------|-------------|--------|
+| **Phase 1** | Hardware bring-up, open-loop forced commutation | HW verified |
+| **Phase 2** | ADC-based BEMF zero-crossing closed-loop commutation | HW verified |
+| **Phase A** | Safety baseline (arming gate, fault protection, Vbus OV/UV) | HW verified |
+| **Phase B** | Control improvements (duty slew, desync recovery, timing advance) | HW verified |
+| **Phase C** | Dynamic blanking, Vbus sag power limiting | HW verified |
+| **Phase E** | BEMF integration shadow estimator (validation mode) | HW verified |
+
+---
+
+## Features
+
+### Phase 1 — Hardware Foundation
+
+- **200 MHz PLL clock** with dedicated domains: 400 MHz PWM, 100 MHz ADC, 400 MHz comparator
+- **24 kHz center-aligned complementary PWM** with 750 ns dead time on 3 half-bridge generators
+- **6-step commutation** with per-phase override control (PWM active / LOW sink / high-Z float)
+- **Dual-core 12-bit ADC**: BEMF phase voltages, Vbus, potentiometer (speed reference)
+- **Open-loop startup**: alignment hold (500 ms, 20% duty) followed by forced ramp (300 to 2,000 eRPM)
+- **Hardware fault protection** via external PCI overcurrent pin (DIM040/RP28)
+- **Button control**: SW1 start/stop, SW2 direction change
+- **Heartbeat LED** at 2 Hz, motor-running indicator LED
+
+### Phase 2 — Closed-Loop BEMF Commutation
+
+- **ADC-based zero-crossing detection** with software threshold tracking (`Vbus * duty / 2`)
+- **Per-phase gain/offset correction** for ADC channel mismatch compensation
+- **Majority filter** with speed-adaptive filter count (reduces at high eRPM for faster response)
+- **Deadband hysteresis** around threshold to reject noise
+- **AD2 mux settle delay** (2 samples) for shared ADC channel between Phase B and C
+- **IIR step period smoothing** (3/4 old + 1/4 new) for stable commutation timing
+- **Commutation deadline engine**: ZC-to-commutation delay = `stepPeriod * (30 - advanceDeg) / 60`
+- **Forced-step timeout**: `2 * stepPeriod` safety net (never triggered in normal operation)
+- **Sync detection**: 6 consecutive valid ZCs declare lock, transitions from ramp to closed-loop
+- **Per-step miss tracking**: fallback to timing-based deadline after 2 consecutive misses on any step
+- **Asymmetric IIR threshold smoothing**: rise tau = 0.33 ms, fall tau = 10.7 ms — prevents ZC loss during rapid throttle transients
+- **Speed governor**: duty frozen when `stepPeriod` hits minimum floor
+
+### Phase A — Safety Baseline
+
+- **A1: Arming gate** — throttle must be below 200 ADC (~5%) for 500 ms before motor start. Prevents accidental spin-up.
+- **A2: Direction change restricted** — only allowed in IDLE state. Changing direction while spinning is blocked.
+- **A3: Board fault PCI** — external overcurrent via DIM040/RP28. Immediate PWM shutdown, latched until SW1 clear.
+- **A4: Vbus OV/UV enforcement** — 3-sample filter prevents false triggers. Overvoltage (>52 V) and undervoltage (<7 V) fault codes.
+
+### Phase B — Control Improvements
+
+- **B1: Asymmetric duty slew rate** — 2%/ms ramp-up, 5%/ms ramp-down. Prevents current spikes on acceleration, allows fast braking response.
+- **B2: Desync recovery** — on desync fault, enters ESC_RECOVERY state: 200 ms coast-down, then automatic restart. Maximum 3 restart attempts before permanent fault.
+- **B3: Timing advance** — linear 0-15 degrees by eRPM. Compensates for commutation delay at high speed, improves efficiency and top-end performance.
+
+### Phase C — Advanced ZC Protection
+
+- **C1: Dynamic blanking** — blanking window scales with speed (3% of step period base) plus extra blanking at high duty (>70%) to suppress demagnetization noise. Hard cap at 25% of step period.
+- **C2: Vbus sag power limiting** — monitors bus voltage and proportionally reduces duty when Vbus dips below threshold (900 ADC). Hysteresis band prevents oscillation. Protects against brown-out under load.
+
+### Phase E — BEMF Integration Shadow Estimator
+
+A **shadow-only** integration-based commutation estimator that runs alongside the primary threshold ZC detection. It does NOT control the motor — it computes when it *would* commutate and logs diagnostics comparing shadow vs actual commutation timing.
+
+**How it works:**
+1. After each commutation, the floating phase BEMF deviates from the virtual neutral threshold
+2. The integrator accumulates `|BEMF - threshold|` (polarity-adjusted) each ADC tick after the blanking window
+3. When the integral reaches a threshold proportional to `bemfPeakSmooth * delayTicks`, the shadow fires
+4. At each actual commutation, the shadow fire tick is compared to the actual tick
+5. Statistics are accumulated: hit rate, miss rate, noFire rate, mean absolute error, signed bias
+
+**Timing-advance-aware threshold**: The integration threshold accounts for the actual ZC-to-commutation delay window, which shrinks with timing advance at high speed. Without this correction, the shadow has 90% noFire rate at max speed.
+
+**Test Results (x6 series, Hurst DMB0224C10002, 24 V):**
+
+| Test Point | Pot | eRPM | Step Period | Hit Rate | NoFire Rate | Bias (ticks) |
+|------------|-----|------|-------------|----------|-------------|--------------|
+| x6min | 1% | ~1,300 | 186 | 97.0% | 2.9% | -1.7 |
+| x6min+ | 12% | ~3,000 | 79 | 99.4% | 0.5% | -1.9 |
+| x6mid | 27% | ~5,300 | 45 | 98.2% | 1.7% | -1.9 |
+| x6mid+ | 50% | ~9,200 | 26 | 99.9% | 0.1% | -1.3 |
+| x6max | 100% | ~18,500 | 13 | 99.95% | 0.04% | -0.4 |
+
+All 5 test points pass criteria: **hit rate >90%** and **noFire rate <5%**.
+
+---
+
+## Feature Flags
+
+All features are individually toggleable via compile-time flags in `garuda_config.h`:
+
+```c
+#define FEATURE_BEMF_CLOSED_LOOP 1  /* Phase 2: BEMF ZC detection */
+#define FEATURE_VBUS_FAULT       1  /* Phase A4: Bus voltage OV/UV */
+#define FEATURE_DESYNC_RECOVERY  1  /* Phase B2: Restart-on-desync */
+#define FEATURE_DUTY_SLEW        1  /* Phase B1: Asymmetric duty slew */
+#define FEATURE_TIMING_ADVANCE   1  /* Phase B3: Linear timing advance */
+#define FEATURE_DYNAMIC_BLANKING 1  /* Phase C1: Speed+duty blanking */
+#define FEATURE_VBUS_SAG_LIMIT   1  /* Phase C2: Vbus sag power limit */
+#define FEATURE_BEMF_INTEGRATION 1  /* Phase E: Shadow integration */
+```
+
+Setting any flag to 0 completely removes that feature from the build (dead code elimination).
 
 ---
 
@@ -24,13 +130,13 @@ Phase 2 (BEMF closed-loop commutation) is next.
 
 | Parameter | Value |
 |-----------|-------|
-| **MCU** | dsPIC33AK128MC106 |
+| **MCU** | dsPIC33AK128MC106 (32-bit, hardware FPU) |
 | **Core** | 200 MHz DSP |
 | **Flash / RAM** | 128 KB / 16 KB |
-| **ADC** | Dual-core, 12-bit |
-| **Comparators** | 3 with built-in DAC (for BEMF ZC) |
+| **ADC** | Dual-core, 12-bit, 24 kHz sample rate (PWM-triggered) |
 | **PWM** | 3 generators, 400 MHz timebase, complementary with dead-time |
 | **Dev Board** | MCLV-48V-300W (Microchip) |
+| **Motor** | Hurst DMB0224C10002 (10-pole, 24 V, 1.0 A rated) |
 | **Compiler** | XC-DSC v3.30 |
 | **IDE** | MPLAB X v6.30 |
 | **DFP** | dsPIC33AK-MC_DFP v1.4.172 |
@@ -43,36 +149,66 @@ Phase 2 (BEMF closed-loop commutation) is next.
 dspic33AKESC/
 ├── main.c                        Entry point, init sequence, button polling
 ├── garuda_types.h                All data structures and enums
-├── garuda_config.h               User-tunable parameters (knobs)
-├── garuda_calc_params.h          Derived constants computed from config
+├── garuda_config.h               User-tunable parameters (feature flags + knobs)
+├── garuda_calc_params.h          Derived constants and compile-time checks
 ├── garuda_service.c/.h           State machine + ADC/Timer1/PWM fault ISRs
 ├── util.h                        Math utilities (from AN1292 reference)
 │
 ├── hal/
 │   ├── clock.c/.h                PLL init: 200MHz sys, 400MHz PWM, 100MHz ADC
 │   ├── device_config.c           Fuse pragmas (WDT, JTAG, protection bits)
-│   ├── port_config.c/.h          GPIO pin mapping: PWM, BEMF, LED, buttons, UART, DShot
+│   ├── port_config.c/.h          GPIO mapping: PWM, BEMF, LED, buttons, UART, DShot
 │   ├── hal_pwm.c/.h              24kHz center-aligned PWM, 6-step override control
 │   ├── hal_adc.c/.h              BEMF/Vbus/Pot ADC channels, floating phase muxing
-│   ├── hal_comparator.c/.h       CMP1/2/3 with DAC for BEMF ZC (Phase 2 integration)
+│   ├── hal_comparator.c/.h       CMP1/2/3 with DAC (initialized, not in control loop)
 │   ├── board_service.c/.h        Peripheral init, button debounce, PWM enable/disable
 │   ├── timer1.c/.h               100us tick timer (prescaler 1:8, 100MHz clock)
 │   ├── uart1.c/.h                UART1 8N1 (for future GSP/debug)
 │   └── delay.h                   Blocking delay using libpic30
 │
-└── motor/
-    ├── commutation.c/.h          6-step commutation table + step advance
-    ├── startup.c/.h              Alignment hold + open-loop forced ramp
-    └── pi.c/.h                   PI controller (from AN1292 reference)
+├── motor/
+│   ├── commutation.c/.h          6-step commutation table + step advance
+│   ├── startup.c/.h              Alignment hold + open-loop forced ramp
+│   ├── bemf_zc.c/.h              BEMF zero-crossing detection + integration shadow
+│   └── pi.c/.h                   PI controller (from AN1292 reference)
+│
+└── learn/                        Self-learning modules (disabled, future use)
+    ├── telemetry_ring.c/.h       Ring buffer for runtime telemetry
+    ├── quality.c/.h              Signal quality scoring
+    ├── health.c/.h               Motor health tracking
+    └── adaptation.c/.h           Adaptive parameter tuning
 ```
 
-### File Categories
+---
 
-| Category | Files | Origin |
-|----------|-------|--------|
-| **Verbatim from AN1292** | clock.c/.h, device_config.c, timer1.c/.h, uart1.c/.h, delay.h, util.h, pi.c/.h | Direct copy |
-| **Adapted from AN1292** | port_config.c/.h, hal_pwm.c/.h, hal_adc.c/.h, hal_comparator.c/.h, board_service.c/.h | Modified |
-| **New for Garuda** | garuda_types.h, garuda_config.h, garuda_calc_params.h, garuda_service.c/.h, commutation.c/.h, startup.c/.h, main.c | Written from scratch |
+## State Machine
+
+```
+           SW1 press
+  [IDLE] -----------> [ARMED]
+    ^                    |
+    |                    | throttle < 200 ADC for 500ms
+    |                    v
+    |               [ALIGN]       hold step 0 at 20% duty for 500ms
+    |                    |
+    |                    v
+    |              [OL_RAMP]      forced commutation 300 -> 2000 eRPM
+    |                    |
+    |                    | ZC sync lock (6 consecutive valid ZCs)
+    |                    v
+    |            [CLOSED_LOOP]    ADC-based BEMF ZC commutation
+    |                    |
+    | SW1 press          |
+    +--------------------+
+    |                    |
+    |                    | desync detected
+    |                    v
+    |             [RECOVERY]      200ms coast, then auto-restart (max 3x)
+    |                    |
+    |  overcurrent/OV/UV |  3x restart fail
+    +----[FAULT]<--------+
+         SW1 clears fault -> [IDLE]
+```
 
 ---
 
@@ -86,207 +222,27 @@ dsPIC33AK128MC106 - Project Garuda Pin Map
   RD0 -- PWM2H -- Phase B High     RD1 -- PWM2L -- Phase B Low
   RC3 -- PWM3H -- Phase C High     RC4 -- PWM3L -- Phase C Low
 
- BEMF SENSING (3 pins)
-  RA4 -- AD1AN1 / CMP1B -- Phase A    (ADC1 CH0, PINSEL=1)
-  RB2 -- AD2AN4 / CMP2B -- Phase B    (ADC2 CH0, PINSEL=4)
-  RB5 -- AD2AN2 / CMP3B -- Phase C    (ADC2 CH0, PINSEL=2, muxed with B)
+ BEMF SENSING (3 pins — ADC-based threshold detection)
+  RB9  -- AD2AN10 -- Phase A voltage    (ADC2 CH0, PINSEL=10)
+  RB8  -- AD1AN11 -- Phase B voltage    (ADC1 CH0, PINSEL=11)
+  RA10 -- AD2AN7  -- Phase C voltage    (ADC2 CH0, PINSEL=7, muxed with A)
 
  ANALOG INPUTS
   RA7  -- AD1AN6  -- DC bus voltage (Vbus)
-  RA11 -- AD1AN10 -- Potentiometer (speed reference in Phase 1)
+  RA11 -- AD1AN10 -- Potentiometer (speed reference)
 
  PROTOCOL I/O
-  RD8  -- RP57/ICM1 -- DShot input (Input Capture, Phase 3)
+  RD8  -- RP57/ICM1 -- DShot input (Input Capture, future)
   RC10 -- RP43/U1TX -- UART TX
   RC11 -- RP44/U1RX -- UART RX
 
  FAULT / UI
-  RB11 -- RP28/PCI8 -- External overcurrent fault input
+  RB11 -- RP28/PCI8 -- External overcurrent fault input (DIM040)
   RD5  -- LED1      -- Heartbeat (2Hz blink)
   RC9  -- LED2      -- Motor running indicator
   RD9  -- SW1       -- Start/Stop motor
   RD10 -- SW2       -- Change direction (when idle)
 ```
-
-### Clock Domains
-
-```
-8 MHz FRC -> PLL1 -> 800 MHz VCO
-
-CLK1 = 200 MHz  |  System clock (FCY)
-CLK5 = 400 MHz  |  PWM timebase
-CLK6 = 100 MHz  |  ADC clock
-CLK7 = 400 MHz  |  DAC / Comparator clock
-CLK8 = 100 MHz  |  UART clock
-```
-
----
-
-## State Machine
-
-```
-           SW1 press
-  [IDLE] -----------> [ARMED]
-    ^                    |
-    |                    | throttle=0 for 500ms
-    |                    v
-    |               [ALIGN]       hold step 0 at 5% duty for 200ms
-    |                    |
-    |                    v
-    |              [OL_RAMP]      forced commutation, decreasing period
-    |                    |
-    |                    | rampStepPeriod <= MIN_STEP_PERIOD
-    |                    v
-    |            [CLOSED_LOOP]    Phase 1: holds at final ramp speed
-    |                    |        Phase 2: BEMF ZC-driven commutation
-    | SW1 press          |
-    +--------------------+
-    |
-    |  overcurrent
-    +--- [FAULT] ----> SW1 clears fault -> [IDLE]
-```
-
-### State Descriptions
-
-| State | Entry Condition | Behavior |
-|-------|----------------|----------|
-| `ESC_IDLE` | Power-on / SW1 stop | All PWM outputs LOW, heartbeat LED blinks |
-| `ESC_ARMED` | SW1 press from IDLE | Verifies throttle near zero for 500ms (`ARM_TIME_MS`) |
-| `ESC_ALIGN` | Arm timer complete | Holds commutation step 0 at `ALIGN_DUTY` for 200ms |
-| `ESC_OL_RAMP` | Alignment complete | Forced commutation with decreasing step period, increasing duty |
-| `ESC_CLOSED_LOOP` | Ramp target reached | Phase 1: continues forced commutation at final speed |
-| `ESC_FAULT` | PCI8 overcurrent | All outputs disabled, LED2 off, SW1 to clear |
-
----
-
-## Important APIs
-
-### PWM Control (`hal/hal_pwm.h`)
-
-```c
-void InitPWMGenerators(void);
-// Initialize all 3 PWM generators: 24kHz center-aligned, complementary mode,
-// dead time, bootstrap charging. PG1=master, PG2/PG3=slaves.
-
-void HAL_PWM_SetCommutationStep(uint8_t step);
-// Apply 6-step commutation pattern via PGxIOCON override registers.
-// step 0-5. For each phase: PWM_ACTIVE releases override,
-// LOW forces H=off/L=on (sink), FLOAT forces both off (high-Z).
-
-void HAL_PWM_SetDutyCycle(uint32_t duty);
-// Set duty cycle on all 3 generators. Clamped to [MIN_DUTY, MAX_DUTY].
-// Only the active (non-overridden) phase produces output.
-```
-
-### ADC (`hal/hal_adc.h`)
-
-```c
-void InitializeADCs(void);
-// Configure ADC1 (BEMF_A on CH0, Vbus on CH4, Pot on CH1)
-// and ADC2 (BEMF_B/C on CH0, muxed via PINSEL).
-
-void HAL_ADC_SelectBEMFChannel(uint8_t floatingPhase);
-// Mux AD2CH0 PINSEL for the floating phase:
-//   0=Phase A (AD1CH0, no mux needed)
-//   1=Phase B (AD2CH0, PINSEL=4)
-//   2=Phase C (AD2CH0, PINSEL=2)
-```
-
-Key macros:
-- `ADCBUF_BEMF_A` / `ADCBUF_BEMF_BC` - ADC result registers
-- `ADCBUF_VBUS` / `ADCBUF_POT` - Bus voltage and potentiometer
-- `GARUDA_ADC_INTERRUPT` = `_AD1CH0Interrupt` (fires at PWM rate, 24kHz)
-
-### Comparator (`hal/hal_comparator.h`)
-
-```c
-void InitializeCMPs(void);
-// Initialize CMP1/2/3 for BEMF zero-crossing with DAC calibration from flash.
-// CMP1B=RA4, CMP2B=RB2, CMP3B=RB5, all using INSEL=1 (B input).
-
-void HAL_CMP_EnableFloatingPhase(uint8_t phase);
-// Enable only the comparator for the current floating phase (0=A, 1=B, 2=C).
-// Disables the other two to avoid false triggers. Turns on DACCTRL1.
-
-void HAL_CMP_SetReference(uint16_t vbusHalf);
-// Update DAC1/2/3 reference to Vbus/2 for zero-crossing threshold.
-```
-
-Note: Comparators are initialized but not wired into the commutation loop yet. Phase 2 will integrate ZC detection.
-
-### Commutation (`motor/commutation.h`)
-
-```c
-extern const COMMUTATION_STEP_T commutationTable[6];
-// 6-step BLDC commutation sequence:
-//   Step 0: A=PWM,   B=LOW,   C=FLOAT  (sense C rising)
-//   Step 1: A=FLOAT, B=LOW,   C=PWM    (sense A falling)
-//   Step 2: A=LOW,   B=FLOAT, C=PWM    (sense B rising)
-//   Step 3: A=LOW,   B=PWM,   C=FLOAT  (sense C falling)
-//   Step 4: A=FLOAT, B=PWM,   C=LOW    (sense A rising)
-//   Step 5: A=PWM,   B=FLOAT, C=LOW    (sense B falling)
-
-void COMMUTATION_AdvanceStep(volatile GARUDA_DATA_T *pData);
-// Increment step 0->1->...->5->0, apply PWM overrides,
-// select ADC channel for the new floating phase.
-```
-
-### Startup (`motor/startup.h`)
-
-```c
-void STARTUP_Init(volatile GARUDA_DATA_T *pData);
-// Initialize: step=0, alignCounter=ALIGN_TIME_COUNTS,
-// rampStepPeriod=INITIAL_STEP_PERIOD, duty=ALIGN_DUTY.
-
-bool STARTUP_Align(volatile GARUDA_DATA_T *pData);
-// Hold step 0 at ALIGN_DUTY. Called every 100us from Timer1 ISR.
-// Returns true when alignment time (200ms) has elapsed.
-
-bool STARTUP_OpenLoopRamp(volatile GARUDA_DATA_T *pData);
-// Forced commutation with decreasing step period.
-// Returns true when rampStepPeriod <= MIN_STEP_PERIOD.
-```
-
-### Board Service (`hal/board_service.h`)
-
-```c
-void HAL_InitPeripherals(void);
-// Master init: ADC -> CMP -> PWM -> Timer1. Called once from main().
-
-void HAL_MC1PWMEnableOutputs(void);
-void HAL_MC1PWMDisableOutputs(void);
-// Enable/disable all 6 PWM outputs via override registers.
-
-void HAL_MC1ClearPWMPCIFault(void);
-// Clear latched PCI fault via software termination.
-
-bool IsPressed_Button1(void);  // SW1: Start/Stop
-bool IsPressed_Button2(void);  // SW2: Direction change
-```
-
-### ISR Map
-
-| ISR | Source | Rate | Purpose |
-|-----|--------|------|---------|
-| `_AD1CH0Interrupt` | ADC1 CH0 complete | 24 kHz (PWM rate) | Read BEMF/Vbus/Pot, update duty |
-| `_T1Interrupt` | Timer1 | 10 kHz (100us) | Heartbeat, button service, state machine (arm/align/ramp/hold) |
-| `_PWM1Interrupt` | PWM fault PCI | On fault | Disable outputs, set ESC_FAULT |
-
----
-
-## Configuration Parameters (`garuda_config.h`)
-
-| Parameter | Default | Description |
-|-----------|---------|-------------|
-| `PWMFREQUENCY_HZ` | 24000 | PWM switching frequency |
-| `DEADTIME_NS` | 750 | Dead time in nanoseconds |
-| `MOTOR_POLE_PAIRS` | 7 | Motor pole pairs |
-| `DIRECTION_DEFAULT` | 0 | 0=CW, 1=CCW |
-| `ALIGN_TIME_MS` | 200 | Alignment hold time |
-| `ALIGN_DUTY_PERCENT` | 5 | Duty during alignment |
-| `INITIAL_ERPM` | 2000 | Starting eRPM for ramp |
-| `RAMP_TARGET_ERPM` | 15000 | Target eRPM (end of ramp) |
-| `ARM_TIME_MS` | 500 | Throttle-zero time to arm |
 
 ---
 
@@ -311,165 +267,108 @@ cd dspic33AKESC/dspic33AKESC.X
 PATH="/path/to/xc-dsc/v3.30/bin:$PATH" make build
 ```
 
----
+### Programming
 
-## Phase 1 Test Procedure
+Uses PKoB 4 on-board debugger (MCLV-48V-300W). Program via MPLAB X or MDB CLI:
 
-### Test 1: Build Verification
-
-**Goal:** Confirm firmware compiles with no errors or warnings.
-
+```bash
+mdb.sh <<EOF
+device dsPIC33AK128MC106
+hwtool pkob4
+program dist/default/production/dspic33AKESC.X.production.hex
+run
+wait 5
+quit
+EOF
 ```
-Expected output:
-  Total "program" memory used (bytes): ~9024 (6%)
-  Total "data" memory used (bytes): 88 (<1%)
-  Three ISR handlers registered: __AD1CH0Interrupt, __T1Interrupt, __PWM1Interrupt
-```
 
-### Test 2: Boot and Heartbeat (MPLAB SIM or Hardware)
-
-**Goal:** Verify clock init and Timer1 ISR.
-
-1. Load firmware in MPLAB SIM (or program to MCLV-48V-300W board)
-2. Run
-3. **Watch:** `heartbeatCounter` in `garuda_service.c` increments every 100us
-4. **Watch:** `LED1` (RD5/LATD5) toggles every 250ms (2500 Timer1 ticks)
-5. **Watch:** `garudaData.systemTick` increments every 1ms (10 Timer1 ticks)
-6. **Watch:** `garudaData.state` == `ESC_IDLE` (value 0)
-
-**Pass criteria:** LED1 toggles at 2Hz, systemTick counts up, state stays IDLE.
-
-### Test 3: Button Press and Arming
-
-**Goal:** Verify button debounce and ARMED state transition.
-
-1. Set breakpoint at `garuda_service.c` Timer1 ISR, `ESC_ARMED` case
-2. Simulate SW1 press: set `PORTDbits.RD9 = 0` (active low) in stimulus
-3. **Watch:** `garudaData.state` transitions IDLE -> ARMED
-4. **Watch:** `garudaData.armCounter` increments every 100us
-5. Keep `garudaData.throttle` < 50 (pot stimulus near zero)
-6. After 5000 counts (500ms): state transitions ARMED -> ALIGN
-7. **Watch:** `LED2` (RC9/LATC9) goes HIGH
-
-**Pass criteria:** IDLE -> ARMED -> ALIGN transition in 500ms with throttle at zero. If throttle > 50 during arming, armCounter resets.
-
-### Test 4: Alignment Phase
-
-**Goal:** Verify motor locks to step 0 at low duty.
-
-1. Set breakpoint at `STARTUP_Align()` in `startup.c`
-2. **Watch:** `PG1IOCONbits.OVRENH` == 0, `PG1IOCONbits.OVRENL` == 0 (Phase A = PWM active)
-3. **Watch:** `PG2IOCONbits.OVRDAT` == 0b01 (Phase B = LOW sink)
-4. **Watch:** `PG3IOCONbits.OVRDAT` == 0b00 (Phase C = FLOAT)
-5. **Watch:** `PG1DC` == `ALIGN_DUTY` value
-6. **Watch:** `garudaData.alignCounter` counts down from `ALIGN_TIME_COUNTS`
-7. After 2000 counts (200ms): state transitions ALIGN -> OL_RAMP
-
-**Pass criteria:** Step 0 pattern held for 200ms, correct override register values.
-
-### Test 5: Open-Loop Ramp
-
-**Goal:** Verify forced commutation with accelerating speed.
-
-1. Set breakpoint at `COMMUTATION_AdvanceStep()` in `commutation.c`
-2. **Watch:** `garudaData.currentStep` cycles 0 -> 1 -> 2 -> 3 -> 4 -> 5 -> 0
-3. **Watch:** `garudaData.rampStepPeriod` decreases by 1 each step
-4. **Watch:** `garudaData.duty` increases gradually
-5. **Watch:** PGxIOCON override registers change per commutation table at each step
-6. When `rampStepPeriod` <= `MIN_STEP_PERIOD + 1`: state transitions OL_RAMP -> CLOSED_LOOP
-
-**Pass criteria:** All 6 commutation steps cycle correctly, speed increases, transition occurs.
-
-On hardware with scope:
-- Probe PWM1H/PWM1L (RD2/RD3): 24kHz complementary with 750ns dead time
-- Probe all 6 PWM pins: correct 6-step pattern, one phase PWM, one LOW, one floating
-- Frequency of commutation cycle increases during ramp
-
-### Test 6: Steady-State Hold (CLOSED_LOOP in Phase 1)
-
-**Goal:** Verify motor continues running at final ramp speed.
-
-1. After OL_RAMP -> CLOSED_LOOP transition
-2. **Watch:** `garudaData.state` == `ESC_CLOSED_LOOP` (value 4)
-3. **Watch:** Commutation continues at fixed `rampStepPeriod` (MIN_STEP_PERIOD)
-4. **Watch:** `garudaData.duty` stays constant
-5. Press SW1 (simulate RD9 low): state -> IDLE, all PWM outputs LOW
-
-**Pass criteria:** Motor holds speed, SW1 stops it cleanly.
-
-### Test 7: Fault Response
-
-**Goal:** Verify overcurrent fault path.
-
-1. Simulate PCI8 fault: drive `PORTBbits.RB11` (or trigger in stimulus)
-2. **Watch:** `_PWM1Interrupt` fires
-3. **Watch:** All PGxIOCON OVRENH/OVRENL = 1, OVRDAT = 0 (all outputs LOW)
-4. **Watch:** `garudaData.state` == `ESC_FAULT`, `garudaData.faultCode` == `FAULT_OVERCURRENT`
-5. **Watch:** `LED2` goes LOW
-6. Press SW1: fault clears, state -> IDLE
-
-**Pass criteria:** Immediate shutdown on fault, clean recovery on SW1.
-
-### Test 8: Direction Change
-
-**Goal:** Verify direction toggle only works in IDLE.
-
-1. In IDLE state, press SW2 (simulate RD10 low)
-2. **Watch:** `garudaData.direction` toggles 0 -> 1
-3. Start motor (SW1), then press SW2 during ramp
-4. **Watch:** `garudaData.direction` does NOT change (only changes in IDLE)
-
-**Pass criteria:** Direction only changes when motor is stopped.
-
-### Test 9: Static Assert Verification
-
-**Goal:** Confirm config struct size guard.
-
-1. Temporarily change `reserved[48]` to `reserved[49]` in `garuda_types.h`
-2. Build -> should fail with: `static assertion failed: GARUDA_CONFIG_T must be 64 bytes`
-3. Revert the change
-
-**Pass criteria:** Compile-time failure on struct size mismatch.
+**Note**: Use `run` (debug mode), not `reset` — the dsPIC33AK has a known issue where `reset` leaves the chip stuck in boot ROM.
 
 ---
 
-## Implementation Roadmap
+## Further Testing
 
-### Phase 1: Foundation (COMPLETE)
-- Clock init (200 MHz PLL), GPIO config, peripheral init
-- 24 kHz center-aligned PWM with dead-time and 6-step override control
-- ADC reads BEMF phase voltages, Vbus, potentiometer
-- Open-loop forced commutation: align -> ramp -> steady-state hold
-- External overcurrent fault protection via PCI8
-- Button control: start/stop, direction change
-- Heartbeat LED, motor running indicator
+### Tests Completed
 
-### Phase 2: Closed-Loop BEMF Control (NEXT)
-- Wire comparators into commutation loop (APIs already exist)
-- ADC-based zero-crossing detection with majority filter
-- Commutation timing engine with 30-degree delay
-- Open-loop -> closed-loop transition
-- Demagnetization compensation
-- Desync detection and recovery
+- Full speed range pot sweep (min to max) — stable, zero desyncs
+- Rapid pot transients (short bursts) — IIR threshold smoothing handles well
+- Shadow integration estimator at 5 speed points — all pass >90% hit rate
+- Arming gate — verified: motor won't start with throttle above 5%
+- Direction change restriction — verified: blocked outside IDLE state
+- Board fault PCI — active, no false triggers (injection not tested)
+- Vbus OV/UV — active, no false triggers (injection not tested)
 
-### Phase 3: DShot Protocol
-- DShot150/300/600/1200 decoding via Input Capture (ICM1 pin already mapped)
-- Auto-rate detection
-- Full command set (CMD 0-47)
-- Bidirectional DShot with GCR encoding
+### Tests Recommended
 
-### Phase 4: Protection, Config & Communication
-- Thermal monitoring with linear derating
-- Under/overvoltage protection
-- Signal loss failsafe
-- 64-byte EEPROM config with CRC-16
-- Garuda Serial Protocol (GSP) over UART
+| Test | What to Check | How |
+|------|--------------|-----|
+| **Vbus fault injection** | OV/UV trip and recovery | Vary supply voltage above 52 V / below 7 V |
+| **PCI fault injection** | Overcurrent path | Inject signal on DIM040 pin |
+| **Load testing** | Shadow accuracy under mechanical load | Hold motor shaft at various speeds |
+| **Soak test** | Long-duration stability | Run at mid speed for 30+ minutes |
+| **Sustained pot oscillation** | Known weakness: prolonged rapid back-and-forth can cause drift | Jerk pot rapidly for >10 seconds |
+| **Cold start** | Startup at low Vbus | Test alignment + ramp at minimum viable voltage |
+| **Thermal** | Temperature rise at max speed | Run at 100% for 10 minutes, monitor FET temperature |
+| **Direction reversal** | Clean stop → reverse → start | Use SW2 in IDLE, verify correct rotation |
 
-### Phase 5: Advanced Features
-- Adaptive timing advance
-- External rotation detection
-- Motor auto-detection
-- Web-based configurator (WebSerial API)
+---
+
+## Roadmap
+
+### Completed
+
+- **Phase 1**: Hardware foundation, open-loop forced commutation
+- **Phase 2**: ADC-based BEMF closed-loop commutation
+- **Phase A**: Safety baseline (arming, fault protection, Vbus monitoring)
+- **Phase B**: Control improvements (duty slew, desync recovery, timing advance)
+- **Phase C**: Dynamic blanking, Vbus sag power limiting
+- **Phase E**: BEMF integration shadow estimator (validated, >99% accuracy at high speed)
+
+### Next Up
+
+- **Phase D: Sine Startup** — Replace forced trapezoidal ramp with sinusoidal drive for smooth, quiet low-speed startup. Eliminates the mechanical jerk during alignment and ramp. Required for production drones (acoustic signature matters).
+
+### Future
+
+- **DShot Protocol** (Phase 3) — DShot150/300/600/1200 decoding via Input Capture (ICM1 pin already mapped). Auto-rate detection, full command set (CMD 0-47), bidirectional DShot with GCR encoding.
+- **Hybrid Commutation** — Promote integration estimator from shadow to active commutation (requires further validation on production motor/board). Threshold ZC as fallback.
+- **Garuda Serial Protocol (GSP)** — UART-based configuration and telemetry protocol. Web-based configurator using WebSerial API.
+- **64-byte EEPROM Config** — Persistent configuration storage with CRC-16 integrity check.
+- **Thermal Monitoring** — Linear duty derating based on temperature.
+- **Signal Loss Failsafe** — Auto-disarm on DShot signal loss.
+- **Motor Auto-Detection** — Measure resistance, inductance, and Ke at startup to auto-tune parameters.
+- **Production ESC Board** — Custom PCB designed for the dsPIC33AK128MC106, replacing the MCLV-48V-300W dev board.
+
+---
+
+## Architecture Notes
+
+### ISR Map
+
+| ISR | Source | Rate | Purpose |
+|-----|--------|------|---------|
+| `_AD1CH0Interrupt` | ADC1 CH0 complete | 24 kHz | BEMF sampling, ZC detection, integration, commutation, Vbus/pot reads |
+| `_T1Interrupt` | Timer1 | 10 kHz (100 us) | Heartbeat, button debounce, state machine (arm/align/ramp), duty slew, systemTick |
+| `_PWM1Interrupt` | PWM fault PCI | On fault | Immediate PWM shutdown, set ESC_FAULT |
+
+### Clock Domains
+
+```
+8 MHz FRC -> PLL1 -> 800 MHz VCO
+
+CLK1 = 200 MHz  |  System clock (FCY)
+CLK5 = 400 MHz  |  PWM timebase
+CLK6 = 100 MHz  |  ADC clock
+CLK7 = 400 MHz  |  DAC / Comparator clock
+CLK8 = 100 MHz  |  UART clock
+```
+
+### Key Design Decisions
+
+- **ADC-based ZC, not comparator-based**: The MCLV-48V-300W DIM board's phase voltage divider pins are not routable to comparator inputs. ADC threshold detection is used instead, with software deadband and majority filter.
+- **Native float math**: The dsPIC33AK has a hardware FPU. No fixed-point (Q8.8) used — all runtime calculations use native `float` where needed.
+- **Shadow-first integration**: The BEMF integration estimator runs as a shadow alongside threshold ZC, validating its accuracy before any future promotion to active control.
+- **Feature flags everywhere**: Every phase is gated behind `#if FEATURE_*` flags. Setting a flag to 0 dead-code-eliminates the entire feature with zero overhead.
 
 ---
 
