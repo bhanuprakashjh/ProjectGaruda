@@ -51,6 +51,7 @@ OBJECTDIR=build/${CND_CONF}/${IMAGE_TYPE}
 DISTDIR=dist/${CND_CONF}/${IMAGE_TYPE}
 
 # Source Files Quoted if spaced
+<<<<<<< Updated upstream
 SOURCEFILES_QUOTED_IF_SPACED=../hal/board_service.c ../hal/clock.c ../hal/device_config.c ../hal/hal_adc.c ../hal/hal_comparator.c ../hal/hal_pwm.c ../hal/port_config.c ../hal/timer1.c ../hal/uart1.c ../learn/ring_buffer.c ../learn/quality.c ../learn/health.c ../learn/adaptation.c ../learn/commission.c ../learn/learn_service.c ../motor/commutation.c ../motor/pi.c ../motor/startup.c ../motor/bemf_zc.c ../hal/eeprom.c ../garuda_service.c ../main.c
 
 # Object Files Quoted if spaced
@@ -62,6 +63,19 @@ OBJECTFILES=${OBJECTDIR}/_ext/1360926148/board_service.o ${OBJECTDIR}/_ext/13609
 
 # Source Files
 SOURCEFILES=../hal/board_service.c ../hal/clock.c ../hal/device_config.c ../hal/hal_adc.c ../hal/hal_comparator.c ../hal/hal_pwm.c ../hal/port_config.c ../hal/timer1.c ../hal/uart1.c ../learn/ring_buffer.c ../learn/quality.c ../learn/health.c ../learn/adaptation.c ../learn/commission.c ../learn/learn_service.c ../motor/commutation.c ../motor/pi.c ../motor/startup.c ../motor/bemf_zc.c ../hal/eeprom.c ../garuda_service.c ../main.c
+=======
+SOURCEFILES_QUOTED_IF_SPACED=../hal/board_service.c ../hal/clock.c ../hal/device_config.c ../hal/hal_adc.c ../hal/hal_comparator.c ../hal/hal_pwm.c ../hal/port_config.c ../hal/timer1.c ../hal/uart1.c ../learn/ring_buffer.c ../learn/quality.c ../learn/health.c ../learn/adaptation.c ../learn/commission.c ../learn/learn_service.c ../motor/commutation.c ../motor/pi.c ../motor/startup.c ../x2cscope/diagnostics.c ../hal/eeprom.c ../garuda_service.c ../main.c
+
+# Object Files Quoted if spaced
+OBJECTFILES_QUOTED_IF_SPACED=${OBJECTDIR}/_ext/1360926148/board_service.o ${OBJECTDIR}/_ext/1360926148/clock.o ${OBJECTDIR}/_ext/1360926148/device_config.o ${OBJECTDIR}/_ext/1360926148/hal_adc.o ${OBJECTDIR}/_ext/1360926148/hal_comparator.o ${OBJECTDIR}/_ext/1360926148/hal_pwm.o ${OBJECTDIR}/_ext/1360926148/port_config.o ${OBJECTDIR}/_ext/1360926148/timer1.o ${OBJECTDIR}/_ext/1360926148/uart1.o ${OBJECTDIR}/_ext/2111190731/ring_buffer.o ${OBJECTDIR}/_ext/2111190731/quality.o ${OBJECTDIR}/_ext/2111190731/health.o ${OBJECTDIR}/_ext/2111190731/adaptation.o ${OBJECTDIR}/_ext/2111190731/commission.o ${OBJECTDIR}/_ext/2111190731/learn_service.o ${OBJECTDIR}/_ext/2109951130/commutation.o ${OBJECTDIR}/_ext/2109951130/pi.o ${OBJECTDIR}/_ext/2109951130/startup.o ${OBJECTDIR}/_ext/1798147462/diagnostics.o ${OBJECTDIR}/_ext/1360926148/eeprom.o ${OBJECTDIR}/_ext/1472/garuda_service.o ${OBJECTDIR}/_ext/1472/main.o
+POSSIBLE_DEPFILES=${OBJECTDIR}/_ext/1360926148/board_service.o.d ${OBJECTDIR}/_ext/1360926148/clock.o.d ${OBJECTDIR}/_ext/1360926148/device_config.o.d ${OBJECTDIR}/_ext/1360926148/hal_adc.o.d ${OBJECTDIR}/_ext/1360926148/hal_comparator.o.d ${OBJECTDIR}/_ext/1360926148/hal_pwm.o.d ${OBJECTDIR}/_ext/1360926148/port_config.o.d ${OBJECTDIR}/_ext/1360926148/timer1.o.d ${OBJECTDIR}/_ext/1360926148/uart1.o.d ${OBJECTDIR}/_ext/2111190731/ring_buffer.o.d ${OBJECTDIR}/_ext/2111190731/quality.o.d ${OBJECTDIR}/_ext/2111190731/health.o.d ${OBJECTDIR}/_ext/2111190731/adaptation.o.d ${OBJECTDIR}/_ext/2111190731/commission.o.d ${OBJECTDIR}/_ext/2111190731/learn_service.o.d ${OBJECTDIR}/_ext/2109951130/commutation.o.d ${OBJECTDIR}/_ext/2109951130/pi.o.d ${OBJECTDIR}/_ext/2109951130/startup.o.d ${OBJECTDIR}/_ext/1798147462/diagnostics.o.d ${OBJECTDIR}/_ext/1360926148/eeprom.o.d ${OBJECTDIR}/_ext/1472/garuda_service.o.d ${OBJECTDIR}/_ext/1472/main.o.d
+
+# Object Files
+OBJECTFILES=${OBJECTDIR}/_ext/1360926148/board_service.o ${OBJECTDIR}/_ext/1360926148/clock.o ${OBJECTDIR}/_ext/1360926148/device_config.o ${OBJECTDIR}/_ext/1360926148/hal_adc.o ${OBJECTDIR}/_ext/1360926148/hal_comparator.o ${OBJECTDIR}/_ext/1360926148/hal_pwm.o ${OBJECTDIR}/_ext/1360926148/port_config.o ${OBJECTDIR}/_ext/1360926148/timer1.o ${OBJECTDIR}/_ext/1360926148/uart1.o ${OBJECTDIR}/_ext/2111190731/ring_buffer.o ${OBJECTDIR}/_ext/2111190731/quality.o ${OBJECTDIR}/_ext/2111190731/health.o ${OBJECTDIR}/_ext/2111190731/adaptation.o ${OBJECTDIR}/_ext/2111190731/commission.o ${OBJECTDIR}/_ext/2111190731/learn_service.o ${OBJECTDIR}/_ext/2109951130/commutation.o ${OBJECTDIR}/_ext/2109951130/pi.o ${OBJECTDIR}/_ext/2109951130/startup.o ${OBJECTDIR}/_ext/1798147462/diagnostics.o ${OBJECTDIR}/_ext/1360926148/eeprom.o ${OBJECTDIR}/_ext/1472/garuda_service.o ${OBJECTDIR}/_ext/1472/main.o
+
+# Source Files
+SOURCEFILES=../hal/board_service.c ../hal/clock.c ../hal/device_config.c ../hal/hal_adc.c ../hal/hal_comparator.c ../hal/hal_pwm.c ../hal/port_config.c ../hal/timer1.c ../hal/uart1.c ../learn/ring_buffer.c ../learn/quality.c ../learn/health.c ../learn/adaptation.c ../learn/commission.c ../learn/learn_service.c ../motor/commutation.c ../motor/pi.c ../motor/startup.c ../x2cscope/diagnostics.c ../hal/eeprom.c ../garuda_service.c ../main.c
+>>>>>>> Stashed changes
 
 
 
@@ -196,6 +210,7 @@ ${OBJECTDIR}/_ext/2109951130/startup.o: ../motor/startup.c  .generated_files/fla
 	@${RM} ${OBJECTDIR}/_ext/2109951130/startup.o.d
 	@${RM} ${OBJECTDIR}/_ext/2109951130/startup.o
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../motor/startup.c  -o ${OBJECTDIR}/_ext/2109951130/startup.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/2109951130/startup.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
+<<<<<<< Updated upstream
 
 ${OBJECTDIR}/_ext/2109951130/bemf_zc.o: ../motor/bemf_zc.c  .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/2109951130"
@@ -204,6 +219,16 @@ ${OBJECTDIR}/_ext/2109951130/bemf_zc.o: ../motor/bemf_zc.c  .generated_files/fla
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../motor/bemf_zc.c  -o ${OBJECTDIR}/_ext/2109951130/bemf_zc.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/2109951130/bemf_zc.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 
 ${OBJECTDIR}/_ext/1360926148/eeprom.o: ../hal/eeprom.c  .generated_files/flags/default/e5e1db0d131b79f7356bf91181beba3dd367cffe .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+=======
+	
+${OBJECTDIR}/_ext/1798147462/diagnostics.o: ../x2cscope/diagnostics.c  .generated_files/flags/default/3853f1e147fbd88c2e764f126e0b461d20648a7f .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+	@${MKDIR} "${OBJECTDIR}/_ext/1798147462" 
+	@${RM} ${OBJECTDIR}/_ext/1798147462/diagnostics.o.d 
+	@${RM} ${OBJECTDIR}/_ext/1798147462/diagnostics.o 
+	${MP_CC} $(MP_EXTRA_CC_PRE)  ../x2cscope/diagnostics.c  -o ${OBJECTDIR}/_ext/1798147462/diagnostics.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1798147462/diagnostics.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
+	
+${OBJECTDIR}/_ext/1360926148/eeprom.o: ../hal/eeprom.c  .generated_files/flags/default/67d521a881089d7ac4450e499e5126f9a3b58d1b .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+>>>>>>> Stashed changes
 	@${MKDIR} "${OBJECTDIR}/_ext/1360926148" 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/eeprom.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/eeprom.o 
@@ -329,6 +354,7 @@ ${OBJECTDIR}/_ext/2109951130/startup.o: ../motor/startup.c  .generated_files/fla
 	@${RM} ${OBJECTDIR}/_ext/2109951130/startup.o.d
 	@${RM} ${OBJECTDIR}/_ext/2109951130/startup.o
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../motor/startup.c  -o ${OBJECTDIR}/_ext/2109951130/startup.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/2109951130/startup.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
+<<<<<<< Updated upstream
 
 ${OBJECTDIR}/_ext/2109951130/bemf_zc.o: ../motor/bemf_zc.c  .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/2109951130"
@@ -337,6 +363,16 @@ ${OBJECTDIR}/_ext/2109951130/bemf_zc.o: ../motor/bemf_zc.c  .generated_files/fla
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../motor/bemf_zc.c  -o ${OBJECTDIR}/_ext/2109951130/bemf_zc.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/2109951130/bemf_zc.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 
 ${OBJECTDIR}/_ext/1360926148/eeprom.o: ../hal/eeprom.c  .generated_files/flags/default/10a9db2964e639079d90426315b0a6c487d6ba13 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+=======
+	
+${OBJECTDIR}/_ext/1798147462/diagnostics.o: ../x2cscope/diagnostics.c  .generated_files/flags/default/bf0a006a7f88a9a96a2e56b0fb421f4fb3f3fc0e .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+	@${MKDIR} "${OBJECTDIR}/_ext/1798147462" 
+	@${RM} ${OBJECTDIR}/_ext/1798147462/diagnostics.o.d 
+	@${RM} ${OBJECTDIR}/_ext/1798147462/diagnostics.o 
+	${MP_CC} $(MP_EXTRA_CC_PRE)  ../x2cscope/diagnostics.c  -o ${OBJECTDIR}/_ext/1798147462/diagnostics.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1798147462/diagnostics.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
+	
+${OBJECTDIR}/_ext/1360926148/eeprom.o: ../hal/eeprom.c  .generated_files/flags/default/93ba713df97acc6d1f0dc83af0b46e2822690da8 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+>>>>>>> Stashed changes
 	@${MKDIR} "${OBJECTDIR}/_ext/1360926148" 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/eeprom.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/eeprom.o 
