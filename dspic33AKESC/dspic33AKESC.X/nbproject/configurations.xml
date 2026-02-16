@@ -27,6 +27,7 @@
         <itemPath>../motor/commutation.h</itemPath>
         <itemPath>../motor/pi.h</itemPath>
         <itemPath>../motor/startup.h</itemPath>
+        <itemPath>../motor/bemf_zc.h</itemPath>
       </logicalFolder>
       <itemPath>../hal/eeprom.h</itemPath>
       <itemPath>../garuda_types.h</itemPath>
@@ -70,6 +71,7 @@
         <itemPath>../motor/commutation.c</itemPath>
         <itemPath>../motor/pi.c</itemPath>
         <itemPath>../motor/startup.c</itemPath>
+        <itemPath>../motor/bemf_zc.c</itemPath>
       </logicalFolder>
       <itemPath>../hal/eeprom.c</itemPath>
       <itemPath>../garuda_service.c</itemPath>

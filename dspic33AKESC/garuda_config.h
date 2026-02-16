@@ -15,6 +15,7 @@ extern "C" {
 #endif
 
 /* Feature Flags (0=disabled, 1=enabled) */
+#define FEATURE_BEMF_CLOSED_LOOP 1  /* Phase 2: BEMF ZC detection (0=Phase 1 open-loop only) */
 #define FEATURE_LEARN_MODULES   0   /* master: ring buffer + quality + health */
 #define FEATURE_ADAPTATION      0   /* requires FEATURE_LEARN_MODULES */
 #define FEATURE_COMMISSION      0   /* requires FEATURE_LEARN_MODULES */
@@ -57,7 +58,8 @@ extern "C" {
 
 /* Open-Loop Ramp */
 #define INITIAL_ERPM               300         /* ~5 steps/sec — slow start */
-#define RAMP_TARGET_ERPM           5000        /* 1000 mech RPM (5 pole pairs) */
+#define RAMP_TARGET_ERPM           2000        /* 400 mech RPM — slow for ZC bring-up (step=5ms >> L/R=1.14ms) */
+#define MAX_CLOSED_LOOP_ERPM       10000       /* Max eRPM in closed loop (2000 mech RPM) */
 #define RAMP_ACCEL_ERPM_PER_S      1000        /* Moderate acceleration */
 #define RAMP_DUTY_PERCENT          40          /* Duty cap during open-loop ramp */
 
@@ -70,6 +72,46 @@ extern "C" {
 
 /* Comparator DAC reference for overcurrent fault (from reference) */
 #define CMP_REF_DCBUS_FAULT        2048        /* Default DAC reference, midscale */
+
+/* Phase 2: BEMF Closed-Loop ZC Detection Parameters (ADC threshold method) */
+#if FEATURE_BEMF_CLOSED_LOOP
+/* Core ZC detection */
+#define ZC_BLANKING_PERCENT     3       /* Ignore ZC for first 3% of step period after commutation */
+#define ZC_FILTER_THRESHOLD     2       /* Reduced from 3: deadband is primary noise gate */
+#define ZC_SYNC_THRESHOLD       6       /* Confirmed ZCs to declare lock (6 = two e-cycles of rising-only) */
+#define ZC_MISS_LIMIT           12      /* Missed steps before FAULT_DESYNC (two e-cycles) */
+#define ZC_STALENESS_LIMIT      12      /* Max forced steps without a ZC before resetting goodZcCount */
+#define ZC_STEP_MISS_LIMIT      2       /* Per-step misses before fallback deadline (timing-based) */
+#define ZC_TIMEOUT_MULT         2       /* Timeout = ZC_TIMEOUT_MULT * stepPeriod (in adcIsrTick) */
+
+/* ADC threshold parameters.
+ * Threshold tracks the virtual neutral: Vbus * duty / (2 * LOOPTIME_TCY).
+ * Approximated as (vbusRaw * duty) >> ZC_DUTY_THRESHOLD_SHIFT.
+ * Shift 18 is accurate for 24kHz PWM (2*LOOPTIME_TCY ≈ 266K ≈ 2^18). */
+#define ZC_DUTY_THRESHOLD_SHIFT 18
+#define ZC_ADC_DEADBAND         4       /* Reduced from 10: tighter deadband for faster ZC crossing */
+#define ZC_AD2_SETTLE_SAMPLES   2       /* Increased from 1: extra settle for AD2 mux (steps 1,3,4) */
+
+/* Per-phase signed offset correction (ADC counts). Default 0. */
+#define ZC_PHASE_OFFSET_A       0
+#define ZC_PHASE_OFFSET_B       0
+#define ZC_PHASE_OFFSET_C       0
+
+/* Per-phase Q15 gain correction. 32768 = 1.0 (unity). */
+#define ZC_PHASE_GAIN_A         32768
+#define ZC_PHASE_GAIN_B         32768
+#define ZC_PHASE_GAIN_C         32768
+
+/* Phase 2B: Adaptive refinements (disabled for initial bring-up) */
+#define ZC_ADAPTIVE_FILTER      1       /* Speed-dependent filter: drops to ZC_FILTER_MIN at high eRPM */
+#define ZC_ADAPTIVE_PERIOD      1       /* IIR smoothing on stepPeriod: 3/4 old + 1/4 new */
+
+#if ZC_ADAPTIVE_FILTER
+#define ZC_FILTER_MIN           1
+#define ZC_FILTER_MAX           3
+#define ZC_FILTER_SPEED_THRESH  16
+#endif
+#endif /* FEATURE_BEMF_CLOSED_LOOP */
 
 #ifdef __cplusplus
 }

@@ -47,22 +47,83 @@ typedef struct
     int8_t zcPolarity;      /* +1 = rising ZC, -1 = falling ZC */
 } COMMUTATION_STEP_T;
 
-/* BEMF sensing state (stubbed for Phase 1, filled in Phase 2) */
+/* BEMF sensing state */
 typedef struct
 {
-    uint16_t bemfRaw;
-    uint16_t vbusHalf;
-    bool zeroCrossDetected;
+    uint16_t bemfRaw;           /* Floating phase ADC reading (0-4095) */
+    uint16_t zcThreshold;       /* ZC comparison threshold (scaled from Vbus) */
+    bool     zeroCrossDetected; /* ZC event detected this step */
+    uint8_t  cmpPrev;           /* Previous computed state (0 or 1, 0xFF=unknown) */
+    uint8_t  cmpExpected;       /* Expected post-ZC state (0 or 1) */
+    uint8_t  filterCount;       /* Consecutive reads matching cmpExpected */
+    uint8_t  ad2SettleCount;    /* Samples to discard after AD2 PINSEL change (0=settled) */
+    bool     bemfSampleValid;   /* false when bemfRaw is stale after mux switch */
 } BEMF_STATE_T;
 
-/* Commutation timing state (stubbed for Phase 1, filled in Phase 2) */
+/* ZC timeout result enum */
+typedef enum
+{
+    ZC_TIMEOUT_NONE = 0,        /* No timeout — keep waiting */
+    ZC_TIMEOUT_FORCE_STEP,      /* One forced step needed (re-armed internally) */
+    ZC_TIMEOUT_DESYNC           /* Too many misses — fault */
+} ZC_TIMEOUT_RESULT_T;
+
+/* Commutation timing state */
 typedef struct
 {
-    uint32_t stepPeriod;        /* current commutation step period in timer counts */
-    uint32_t lastZcTimestamp;
-    uint32_t zcInterval;
-    uint16_t filterCount;
+    uint16_t stepPeriod;            /* Current step period in adcIsrTick units */
+    uint16_t lastCommTick;          /* adcIsrTick at last commutation (timeout basis) */
+    uint16_t lastZcTick;            /* adcIsrTick at last confirmed ZC */
+    uint16_t prevZcTick;            /* adcIsrTick at ZC before lastZcTick (for interval) */
+    uint16_t zcInterval;            /* Ticks between last two ZCs */
+    uint16_t commDeadline;          /* adcIsrTick when next commutation should fire */
+    uint16_t forcedCountdown;       /* Ticks remaining for forced commutation (pre-sync) */
+    uint16_t goodZcCount;           /* Consecutive valid ZC events */
+    uint8_t  consecutiveMissedSteps;/* Steps where ZC was not detected */
+    uint8_t  stepsSinceLastZc;      /* Forced steps since last confirmed ZC (interval compensation) */
+    uint8_t  stepMissCount[6];      /* Per-step consecutive miss counter for fallback scheduling */
+    bool     risingZcWorks;         /* True after any rising-ZC step is confirmed */
+    bool     fallingZcWorks;        /* True after any falling-ZC step is confirmed */
+    bool     zcSynced;              /* True = ZC-driven, False = forced */
+    bool     deadlineActive;        /* True when commDeadline is valid */
+    bool     hasPrevZc;             /* True after first post-sync ZC (guards zcInterval calc) */
 } TIMING_STATE_T;
+
+/* Diagnostic counters for ZC bring-up debugging (ADC threshold method).
+ * Readable via debugger halt. All uint16_t/uint8_t to avoid atomicity issues. */
+#if FEATURE_BEMF_CLOSED_LOOP
+typedef struct
+{
+    /* Event counters */
+    uint16_t zcConfirmedCount;
+    uint16_t zcTimeoutForceCount;
+    uint16_t zcDesyncCount;
+    uint16_t forcedStepPresyncCount;
+    /* Signal diagnostics */
+    uint16_t zcPollTotal;           /* Polls that passed blanking AND were valid */
+    uint16_t zcAboveTotal;          /* Polls where computed state = 1 */
+    uint16_t blankSkipTotal;
+    uint16_t invalidSampleTotal;    /* Polls skipped due to stale AD2 mux data */
+    uint16_t deadbandHoldTotal;
+    /* Blanking-aware transition tracking */
+    uint16_t blankTransitionTotal;  /* Correct-polarity edges detected during blanking */
+    uint16_t wrongEdgeTotal;        /* Transitions opposite to expected polarity */
+    /* Last-sample snapshot */
+    uint16_t lastFloatAdc;
+    uint16_t lastZcThreshold;
+    uint8_t  lastStateNow;
+    uint8_t  lastCmpExpected;
+    uint8_t  lastFloatPhase;
+    uint8_t  lastEdgeCount;
+    /* Per-phase min/max (detect stuck channels / scaling mismatch) */
+    uint16_t floatAdcMin[3];        /* Init to 4095 */
+    uint16_t floatAdcMax[3];        /* Init to 0 */
+    uint16_t zcThresholdMin;
+    uint16_t zcThresholdMax;
+    /* Per-step ZC confirmed count (which of the 6 steps fire?) */
+    uint16_t zcPerStep[6];
+} ZC_DIAG_T;
+#endif
 
 /* Telemetry fault flag bitmasks */
 #define TELEM_FLAG_ZC_MISSED       0x01
@@ -301,6 +362,10 @@ typedef struct
     /* Sub-structures */
     BEMF_STATE_T bemf;
     TIMING_STATE_T timing;
+
+#if FEATURE_BEMF_CLOSED_LOOP
+    ZC_DIAG_T zcDiag;
+#endif
 
 #if FEATURE_LEARN_MODULES
     QUALITY_METRICS_T quality;

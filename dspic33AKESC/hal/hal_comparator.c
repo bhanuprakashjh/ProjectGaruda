@@ -1,11 +1,12 @@
 /**
  * @file hal_comparator.c
  *
- * @brief Comparator/DAC module configuration for BEMF zero-crossing detection.
- * Adapted from AN1292 reference — initializes all 3 CMP modules.
+ * @brief Comparator/DAC module configuration.
  *
- * Phase 1: Comparators initialized and DACs set to Vbus/2, but ZC detection
- * is not yet wired into commutation (that's Phase 2).
+ * NOTE: NOT used for BEMF ZC detection — phase voltage pins are not routable
+ * to CMP inputs on MCLV-48V-300W DIM. Retained for future overcurrent PCI
+ * fault use (CMP3). InitializeCMPs() is not called at startup; see
+ * board_service.c HAL_InitPeripherals() for re-enable instructions.
  *
  * Component: COMPARATOR
  */
@@ -189,4 +190,20 @@ void HAL_CMP_SetReference(uint16_t vbusHalf)
     DAC1DATbits.DACDAT = vbusHalf;
     DAC2DATbits.DACDAT = vbusHalf;
     DAC3DATbits.DACDAT = vbusHalf;
+}
+
+/**
+ * @brief Read comparator output status for given phase.
+ * @param phase 0=A (CMP1), 1=B (CMP2), 2=C (CMP3)
+ * @return CMPSTAT bit: 1 if BEMF > DAC ref, 0 if BEMF < DAC ref
+ */
+uint8_t HAL_CMP_ReadStatus(uint8_t phase)
+{
+    switch (phase)
+    {
+        case 0: return DAC1CONbits.CMPSTAT;
+        case 1: return DAC2CONbits.CMPSTAT;
+        case 2: return DAC3CONbits.CMPSTAT;
+        default: return 0;
+    }
 }

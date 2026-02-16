@@ -128,15 +128,15 @@ static void ButtonGroupInitialize(void)
 }
 
 /**
- * @brief Initialize all peripherals (ADC, CMP, PWM, Timer1).
- * No op-amp init — we use direct BEMF sensing.
+ * @brief Initialize all peripherals (ADC, PWM, Timer1).
+ * No op-amp or CMP init — ZC uses ADC threshold, not hardware comparators.
  */
 void HAL_InitPeripherals(void)
 {
     InitializeADCs();
 
-    InitializeCMPs();
-    HAL_CMP_SetReference(CMP_REF_DCBUS_FAULT);
+    /* TODO: Re-add InitializeCMPs() + HAL_CMP_SetReference() here if PCI fault
+     * is switched from RPn source (PSS=0b01000) to CMP3 source (PSS=0b11101) */
 
     /* Make sure ADC does not generate interrupt while initializing */
     GARUDA_DisableADCInterrupt();

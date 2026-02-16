@@ -74,6 +74,54 @@ extern "C" {
 /* ADC sampling point (trigger position within PWM period) */
 #define ADC_SAMPLING_POINT              0
 
+/* Phase 2: Timer1-tick to ADC ISR tick conversion.
+ * Timer1 tick = 100us. ADC ISR tick = 1/24000 s = 41.67us.
+ * Ratio: 100/41.67 = 2.4. adcIsrTicks = Timer1_ticks * 12/5 */
+#if FEATURE_BEMF_CLOSED_LOOP
+#define TIMER1_TO_ADC_TICKS(t1)     (uint16_t)(((uint32_t)(t1) * 12) / 5)
+
+/* Step periods in adcIsrTick units */
+#define INITIAL_ADC_STEP_PERIOD     TIMER1_TO_ADC_TICKS(INITIAL_STEP_PERIOD)   /* ~800 ticks at 300 eRPM */
+#define MIN_ADC_STEP_PERIOD         TIMER1_TO_ADC_TICKS(MIN_STEP_PERIOD)       /* ~120 ticks at 2000 eRPM (ramp handoff) */
+/* Closed-loop speed limit — decoupled from ramp target */
+#define MAX_CL_STEP_PERIOD_T1      ERPM_TO_STEP_TICKS(MAX_CLOSED_LOOP_ERPM)
+#define MIN_CL_ADC_STEP_PERIOD     TIMER1_TO_ADC_TICKS(MAX_CL_STEP_PERIOD_T1) /* ~24 ticks at 10000 eRPM */
+
+/* Compile-time config sanity checks */
+_Static_assert(MIN_CL_ADC_STEP_PERIOD > 0,    "MIN_CL_ADC_STEP_PERIOD must be > 0");
+_Static_assert(MIN_CL_ADC_STEP_PERIOD <= MIN_ADC_STEP_PERIOD,
+               "CL min step period must be <= ramp min step period");
+_Static_assert(ZC_FILTER_THRESHOLD >= 1,       "ZC_FILTER_THRESHOLD must be >= 1");
+_Static_assert(ZC_TIMEOUT_MULT >= 1,           "ZC_TIMEOUT_MULT must be >= 1");
+_Static_assert(ZC_SYNC_THRESHOLD >= 1,         "ZC_SYNC_THRESHOLD must be >= 1");
+_Static_assert(ZC_BLANKING_PERCENT < 100,      "ZC_BLANKING_PERCENT must be < 100");
+_Static_assert(ZC_ADC_DEADBAND < 512,          "ZC_ADC_DEADBAND must be < 512");
+_Static_assert(ZC_STALENESS_LIMIT >= 6,        "ZC_STALENESS_LIMIT must be >= 6 (one e-cycle)");
+_Static_assert(ZC_STEP_MISS_LIMIT >= 1,        "ZC_STEP_MISS_LIMIT must be >= 1");
+/* Duty-proportional threshold: (vbusRaw * duty) >> SHIFT approximates
+ * Vbus * D / 2.  Verify 2*LOOPTIME_TCY is in the right power-of-2 range. */
+_Static_assert(2UL * LOOPTIME_TCY >= (1UL << ZC_DUTY_THRESHOLD_SHIFT)
+            && 2UL * LOOPTIME_TCY <  (1UL << (ZC_DUTY_THRESHOLD_SHIFT + 1)),
+               "ZC_DUTY_THRESHOLD_SHIFT doesn't match 2*LOOPTIME_TCY range");
+_Static_assert(ZC_AD2_SETTLE_SAMPLES >= 1 && ZC_AD2_SETTLE_SAMPLES <= 4,
+               "ZC_AD2_SETTLE_SAMPLES must be 1-4");
+_Static_assert(ZC_PHASE_GAIN_A > 0 && ZC_PHASE_GAIN_A < 65536, "Gain A out of Q15 range");
+_Static_assert(ZC_PHASE_GAIN_B > 0 && ZC_PHASE_GAIN_B < 65536, "Gain B out of Q15 range");
+_Static_assert(ZC_PHASE_GAIN_C > 0 && ZC_PHASE_GAIN_C < 65536, "Gain C out of Q15 range");
+/* Wrap-safety for uint16_t half-range compares in BEMF_ZC_CheckDeadline and
+ * BEMF_ZC_CheckTimeout: (now - target) < 0x8000 is correct only when the
+ * target is less than 32768 ticks in the future.
+ * Largest future target = timeout = stepPeriod * ZC_TIMEOUT_MULT.
+ * At slowest speed, stepPeriod = INITIAL_ADC_STEP_PERIOD.
+ * Enforce < 16384 to leave margin for ISR jitter. */
+_Static_assert((uint32_t)INITIAL_ADC_STEP_PERIOD * ZC_TIMEOUT_MULT < 16384,
+               "Max step timeout exceeds uint16 half-range wrap safety margin");
+#if ZC_ADAPTIVE_FILTER
+_Static_assert(ZC_FILTER_MIN >= 1,             "ZC_FILTER_MIN must be >= 1");
+_Static_assert(ZC_FILTER_MAX >= ZC_FILTER_MIN, "ZC_FILTER_MAX must be >= ZC_FILTER_MIN");
+#endif
+#endif /* FEATURE_BEMF_CLOSED_LOOP */
+
 #ifdef __cplusplus
 }
 #endif

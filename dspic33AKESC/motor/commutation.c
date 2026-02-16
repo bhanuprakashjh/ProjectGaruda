@@ -84,6 +84,14 @@ void COMMUTATION_AdvanceStep(volatile GARUDA_DATA_T *pData)
     /* Apply the new commutation pattern to PWM overrides */
     HAL_PWM_SetCommutationStep(pData->currentStep);
 
-    /* Select the ADC channel for the floating phase */
-    HAL_ADC_SelectBEMFChannel(commutationTable[pData->currentStep].floatingPhase);
+    /* Select ADC channel for floating phase; returns true if AD2 PINSEL changed */
+    bool muxChanged = HAL_ADC_SelectBEMFChannel(
+        commutationTable[pData->currentStep].floatingPhase);
+
+#if FEATURE_BEMF_CLOSED_LOOP
+    if (muxChanged)
+        pData->bemf.ad2SettleCount = ZC_AD2_SETTLE_SAMPLES;
+#else
+    (void)muxChanged;
+#endif
 }

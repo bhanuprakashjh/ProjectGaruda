@@ -6,7 +6,7 @@
  * Initialization sequence:
  *   1. InitOscillator() — 200MHz system clock, 400MHz PWM, 100MHz ADC
  *   2. SetupGPIOPorts() — PWM, BEMF, LED, button, UART, DShot pins
- *   3. HAL_InitPeripherals() — ADC, CMP, PWM, Timer1
+ *   3. HAL_InitPeripherals() — ADC, PWM, Timer1
  *   4. GARUDA_ServiceInit() — state machine data, enable ADC ISR
  *   5. Main loop — button polling, board service (all real work in ISRs)
  *

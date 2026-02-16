@@ -5,7 +5,7 @@
  * Adapted from AN1292 reference:
  *   - Keeps: PWM outputs, LEDs, buttons, UART PPS, PCI8 fault
  *   - Removes: Op-amp configuration (OA1/OA2/OA3 not used)
- *   - Adds: BEMF ADC pins (RA4, RB2, RB5), DShot IC1 pin (RD8)
+ *   - Adds: Phase voltage ADC pins (RB9, RB8, RA10), DShot IC1 pin (RD8)
  *
  * Definitions in this file are for dsPIC33AK128MC106
  *
@@ -64,20 +64,19 @@ void SetupGPIOPorts(void)
 void MapGPIOHWFunction(void)
 {
     /* ================================================================
-     * BEMF Sensing Pins (analog input for ADC, no op-amps)
+     * Phase Voltage Feedback (MCLV-48V-300W via EV68M17A DIM)
+     * M1_VA : DIM:009 - RB9  (AD2AN10)
+     * M1_VB : DIM:011 - RB8  (AD1AN11)
+     * M1_VC : DIM:022 - RA10 (AD2AN7)
      * ================================================================ */
+    ANSELBbits.ANSELB9 = 1;
+    TRISBbits.TRISB9 = 1;
 
-    /* BEMF_A : PIN14: OA1IN+/AD1AN1/CMP1B/RP5/RA4 */
-    ANSELAbits.ANSELA4 = 1;
-    TRISAbits.TRISA4 = 1;
+    ANSELBbits.ANSELB8 = 1;
+    TRISBbits.TRISB8 = 1;
 
-    /* BEMF_B : PIN22: OA2IN+/AD2AN4/CMP2B/RP19/RB2 */
-    ANSELBbits.ANSELB2 = 1;
-    TRISBbits.TRISB2 = 1;
-
-    /* BEMF_C : PIN17: OA3IN+/AD2AN2/CMP3B/RP22/RB5 */
-    ANSELBbits.ANSELB5 = 1;
-    TRISBbits.TRISB5 = 1;
+    ANSELAbits.ANSELA10 = 1;
+    TRISAbits.TRISA10 = 1;
 
     /* ================================================================
      * Potentiometer input (POT1) - used as Speed Reference
