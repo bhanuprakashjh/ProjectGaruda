@@ -23,6 +23,7 @@ extern "C" {
 #define FEATURE_DYNAMIC_BLANKING 1  /* Phase C1: Speed+duty-aware blanking (extra blank at high duty/demag) */
 #define FEATURE_VBUS_SAG_LIMIT   1  /* Phase C2: Bus voltage sag power limiting (reduce duty on Vbus dip) */
 #define FEATURE_BEMF_INTEGRATION 1  /* Phase E: Shadow integration estimator (shadow-only, no control) */
+#define FEATURE_SINE_STARTUP     1  /* Phase D: Sine startup (replaces trap align+ramp) */
 #define FEATURE_LEARN_MODULES    0  /* master: ring buffer + quality + health */
 #define FEATURE_ADAPTATION       0  /* requires FEATURE_LEARN_MODULES */
 #define FEATURE_COMMISSION       0  /* requires FEATURE_LEARN_MODULES */
@@ -114,6 +115,14 @@ extern "C" {
 #define INTEG_HIT_DIVISOR     8     /* Tolerance = stepPeriod / 8 (~7.5 deg elec) */
 #define INTEG_CLAMP           0x7FFFFF
 #define SHADOW_NO_FIRE_SENTINEL  ((int16_t)0x7FFF)  /* shadowVsActual when shadow didn't fire */
+#endif
+
+/* Sine Startup (Phase D) */
+#if FEATURE_SINE_STARTUP
+#define SINE_ALIGN_MODULATION_PCT   15  /* Modulation depth % during alignment */
+#define SINE_RAMP_MODULATION_PCT    35  /* Modulation depth % at target speed */
+#define SINE_PHASE_OFFSET_DEG       60  /* Sector->step offset. Calibrate in 60 deg increments
+                                         * (0,60,120,180,240,300) until transition is smooth. */
 #endif
 
 /* Comparator DAC reference for overcurrent fault (from reference) */

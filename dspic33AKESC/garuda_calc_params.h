@@ -178,6 +178,58 @@ _Static_assert(INTEG_HIT_DIVISOR >= 2 && INTEG_HIT_DIVISOR <= 16,
                "INTEG_HIT_DIVISOR out of range");
 #endif
 
+/* Phase D: Sine startup dependency guards and derived constants */
+#if FEATURE_SINE_STARTUP && !FEATURE_BEMF_CLOSED_LOOP
+#error "Sine startup requires FEATURE_BEMF_CLOSED_LOOP for transition to trap"
+#endif
+#if FEATURE_SINE_STARTUP && DIAGNOSTIC_MANUAL_STEP
+#error "Sine startup and DIAGNOSTIC_MANUAL_STEP cannot be enabled simultaneously"
+#endif
+
+#if FEATURE_SINE_STARTUP
+/* Center duty for sine (50% of period) */
+#define SINE_CENTER_DUTY   ((uint32_t)(LOOPTIME_TCY / 2))
+
+/* Amplitude limits in PWM counts */
+#define SINE_MIN_AMPLITUDE ((uint32_t)(LOOPTIME_TCY * SINE_ALIGN_MODULATION_PCT / 200))
+#define SINE_MAX_AMPLITUDE ((uint32_t)(LOOPTIME_TCY * SINE_RAMP_MODULATION_PCT / 200))
+
+/* eRPM -> angleIncrement conversion (Q16 fixed-point multiplier).
+ *
+ * CRITICAL: INITIAL_ERPM and RAMP_TARGET_ERPM are already ELECTRICAL RPM.
+ * No MOTOR_POLE_PAIRS factor. See Binding Rule 1.
+ *
+ * freq_Hz = eRPM / 60
+ * angleInc = freq_Hz * 65536 / PWMFREQUENCY_HZ
+ *          = eRPM * 65536 / (60 * PWMFREQUENCY_HZ)
+ *
+ * Q16: angleIncrement = (eRPM * SINE_ERPM_TO_ANGLE_Q16) >> 16 */
+#define SINE_ERPM_TO_ANGLE_Q16 \
+    ((uint32_t)((uint64_t)65536UL * 65536UL / (60UL * PWMFREQUENCY_HZ)))
+
+/* eRPM ramp rate per Timer1 tick (Q16 fractional).
+ * Each Timer1 tick = 100us, so 10000 ticks/sec.
+ * erpmFrac += RATE per tick; actual eRPM delta = erpmFrac >> 16 */
+#define SINE_ERPM_RAMP_RATE_Q16 \
+    ((uint32_t)((uint64_t)RAMP_ACCEL_ERPM_PER_S * 65536UL / 10000UL))
+
+/* Phase offset for sector->step mapping (Q16 angle units) */
+#define SINE_PHASE_OFFSET_Q16 \
+    ((uint16_t)((uint32_t)SINE_PHASE_OFFSET_DEG * 65536UL / 360UL))
+
+/* Alignment angle: 90 deg = Phase A peak (d-axis toward A) = 16384 Q16 */
+#define SINE_ALIGN_ANGLE_Q16   ((uint16_t)16384)
+
+_Static_assert(RAMP_TARGET_ERPM > INITIAL_ERPM,
+               "RAMP_TARGET_ERPM must be > INITIAL_ERPM (sine V/f ramp denominator)");
+_Static_assert(SINE_ALIGN_MODULATION_PCT >= 5 && SINE_ALIGN_MODULATION_PCT <= 50,
+               "SINE_ALIGN_MODULATION_PCT out of range");
+_Static_assert(SINE_RAMP_MODULATION_PCT >= 10 && SINE_RAMP_MODULATION_PCT <= 80,
+               "SINE_RAMP_MODULATION_PCT out of range");
+_Static_assert(SINE_PHASE_OFFSET_DEG < 360,
+               "SINE_PHASE_OFFSET_DEG must be 0-359");
+#endif
+
 #ifdef __cplusplus
 }
 #endif

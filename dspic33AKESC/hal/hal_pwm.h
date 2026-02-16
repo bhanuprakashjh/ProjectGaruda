@@ -56,6 +56,11 @@ void ChargeBootstrapCapacitors(void);
 void HAL_PWM_SetCommutationStep(uint8_t step);
 void HAL_PWM_SetDutyCycle(uint32_t duty);
 
+#if FEATURE_SINE_STARTUP
+void HAL_PWM_SetDutyCycle3Phase(uint32_t dutyA, uint32_t dutyB, uint32_t dutyC);
+void HAL_PWM_ReleaseAllOverrides(void);
+#endif
+
 #ifdef __cplusplus
 }
 #endif

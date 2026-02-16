@@ -245,10 +245,23 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
     {
         case ESC_IDLE:
         case ESC_ARMED:
+            break;
+
+#if FEATURE_SINE_STARTUP
         case ESC_ALIGN:
         case ESC_OL_RAMP:
-            /* Handled in Timer1 ISR */
+            if (garudaData.sine.active)
+            {
+                uint32_t dA, dB, dC;
+                STARTUP_SineComputeDuties(&garudaData, &dA, &dB, &dC);
+                HAL_PWM_SetDutyCycle3Phase(dA, dB, dC);
+            }
             break;
+#else
+        case ESC_ALIGN:
+        case ESC_OL_RAMP:
+            break;
+#endif
 
 #if DIAGNOSTIC_MANUAL_STEP
         case ESC_CLOSED_LOOP:
@@ -268,6 +281,10 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                     initPeriod = INITIAL_ADC_STEP_PERIOD;
                 BEMF_ZC_Init(&garudaData, initPeriod);
                 BEMF_ZC_OnCommutation(&garudaData, adcIsrTick);
+                /* Fix 5: BEMF_ZC_Init clears ad2SettleCount. Force fresh
+                 * settle to protect against stale AD2 data on CL entry.
+                 * Costs 2 samples (~83us) — harmless. */
+                garudaData.bemf.ad2SettleCount = ZC_AD2_SETTLE_SAMPLES;
             }
 
             if (!garudaData.timing.zcSynced)
@@ -653,26 +670,54 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
             break;
 
         case ESC_ALIGN:
+#if FEATURE_SINE_STARTUP
+            if (STARTUP_SineAlign(&garudaData))
+                garudaData.state = ESC_OL_RAMP;
+#else
             if (STARTUP_Align(&garudaData))
             {
-                /* Alignment complete — start open-loop ramp */
                 garudaData.state = ESC_OL_RAMP;
                 garudaData.rampCounter = garudaData.rampStepPeriod;
             }
+#endif
             break;
 
 #if DIAGNOSTIC_MANUAL_STEP
         case ESC_OL_RAMP:
-            /* Manual step mode: hold current step, SW2 advances.
-             * Immediately transition to CLOSED_LOOP (which also holds). */
             garudaData.state = ESC_CLOSED_LOOP;
+            break;
+#elif FEATURE_SINE_STARTUP
+        case ESC_OL_RAMP:
+            if (STARTUP_SineRamp(&garudaData))
+            {
+                /* 1. Stop sine in ADC ISR FIRST */
+                garudaData.sine.active = false;
+
+                /* 2. Map angle to step (direction-aware, safe 0-5) */
+                uint8_t step = STARTUP_SineGetTransitionStep(&garudaData);
+
+                /* 3. Apply step: PWM overrides + ADC mux + settle count */
+                COMMUTATION_ApplyStep(&garudaData, step);
+
+                /* 4. Set 6-step duty — 1:1 amplitude match */
+                garudaData.duty = garudaData.sine.amplitude;
+                if (garudaData.duty < MIN_DUTY)
+                    garudaData.duty = MIN_DUTY;
+                if (garudaData.duty > RAMP_DUTY_CAP)
+                    garudaData.duty = RAMP_DUTY_CAP;
+                HAL_PWM_SetDutyCycle(garudaData.duty);
+
+                /* 5. Seed rampStepPeriod for CL entry */
+                garudaData.rampStepPeriod = MIN_STEP_PERIOD;
+
+                /* 6. Transition to closed-loop */
+                garudaData.state = ESC_CLOSED_LOOP;
+            }
             break;
 #else
         case ESC_OL_RAMP:
             if (STARTUP_OpenLoopRamp(&garudaData))
             {
-                /* Ramp complete — hold at current speed/duty.
-                 * Phase 2 will transition to ESC_CLOSED_LOOP here. */
                 garudaData.state = ESC_CLOSED_LOOP;
             }
             break;

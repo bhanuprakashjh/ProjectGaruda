@@ -552,3 +552,40 @@ void HAL_PWM_SetDutyCycle(uint32_t duty)
     PWM_PDC2 = duty;
     PWM_PDC1 = duty;
 }
+
+#if FEATURE_SINE_STARTUP
+/**
+ * @brief Set independent duty cycles on all three PWM generators.
+ * Used by sine startup to drive 3-phase sinusoidal waveforms.
+ * Each phase gets its own duty value. Clamps to MIN_DUTY..MAX_DUTY.
+ * Write order: slaves (PG3, PG2) before master (PG1).
+ */
+void HAL_PWM_SetDutyCycle3Phase(uint32_t dutyA, uint32_t dutyB, uint32_t dutyC)
+{
+    if (dutyA < MIN_DUTY) dutyA = MIN_DUTY;
+    if (dutyA > MAX_DUTY) dutyA = MAX_DUTY;
+    if (dutyB < MIN_DUTY) dutyB = MIN_DUTY;
+    if (dutyB > MAX_DUTY) dutyB = MAX_DUTY;
+    if (dutyC < MIN_DUTY) dutyC = MIN_DUTY;
+    if (dutyC > MAX_DUTY) dutyC = MAX_DUTY;
+
+    PWM_PDC3 = dutyC;
+    PWM_PDC2 = dutyB;
+    PWM_PDC1 = dutyA;
+}
+
+/**
+ * @brief Release all PWM override registers.
+ * Sets OVRENH=0, OVRENL=0 on PG1, PG2, PG3, allowing all three
+ * generators to drive complementary PWM from their own PGxDC values.
+ */
+void HAL_PWM_ReleaseAllOverrides(void)
+{
+    PG3IOCONbits.OVRENH = 0;
+    PG3IOCONbits.OVRENL = 0;
+    PG2IOCONbits.OVRENH = 0;
+    PG2IOCONbits.OVRENL = 0;
+    PG1IOCONbits.OVRENH = 0;
+    PG1IOCONbits.OVRENL = 0;
+}
+#endif

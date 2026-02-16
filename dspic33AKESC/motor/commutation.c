@@ -81,12 +81,27 @@ void COMMUTATION_AdvanceStep(volatile GARUDA_DATA_T *pData)
             pData->currentStep--;
     }
 
-    /* Apply the new commutation pattern to PWM overrides */
-    HAL_PWM_SetCommutationStep(pData->currentStep);
+    /* Apply the new commutation pattern */
+    COMMUTATION_ApplyStep(pData, pData->currentStep);
+}
 
-    /* Select ADC channel for floating phase; returns true if AD2 PINSEL changed */
+/**
+ * @brief Apply a specific commutation step (PWM overrides + ADC mux + settle).
+ * Use this whenever a non-incremental step change is needed (e.g. sine→trap
+ * transition). AdvanceStep calls this internally after incrementing the step.
+ *
+ * @param pData  Pointer to ESC runtime data
+ * @param step   Commutation step index (0-5)
+ */
+void COMMUTATION_ApplyStep(volatile GARUDA_DATA_T *pData, uint8_t step)
+{
+    if (step >= 6) step %= 6;
+
+    pData->currentStep = step;
+    HAL_PWM_SetCommutationStep(step);
+
     bool muxChanged = HAL_ADC_SelectBEMFChannel(
-        commutationTable[pData->currentStep].floatingPhase);
+        commutationTable[step].floatingPhase);
 
 #if FEATURE_BEMF_CLOSED_LOOP
     if (muxChanged)

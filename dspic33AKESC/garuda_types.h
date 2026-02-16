@@ -166,6 +166,16 @@ typedef struct {
 } BEMF_INTEG_T;
 #endif
 
+#if FEATURE_SINE_STARTUP
+typedef struct {
+    uint16_t angle;            /* Q16 electrical angle (0=0 deg, 65535~360 deg) */
+    uint16_t angleIncrement;   /* Q16 angle step per ADC ISR tick */
+    uint16_t amplitude;        /* Sine amplitude in PWM counts (0..LOOPTIME_TCY/2) */
+    uint32_t erpmFrac;         /* Q16 fractional eRPM accumulator for smooth ramp */
+    bool     active;           /* true while sine drive is running in ADC ISR */
+} SINE_STATE_T;
+#endif
+
 /* Telemetry fault flag bitmasks */
 #define TELEM_FLAG_ZC_MISSED       0x01
 #define TELEM_FLAG_ZC_TIMEOUT      0x02
@@ -415,6 +425,10 @@ typedef struct
 
 #if FEATURE_BEMF_INTEGRATION
     BEMF_INTEG_T integ;
+#endif
+
+#if FEATURE_SINE_STARTUP
+    SINE_STATE_T sine;
 #endif
 
 #if FEATURE_LEARN_MODULES

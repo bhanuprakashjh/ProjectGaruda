@@ -20,6 +20,7 @@ extern "C" {
 extern const COMMUTATION_STEP_T commutationTable[6];
 
 void COMMUTATION_AdvanceStep(volatile GARUDA_DATA_T *pData);
+void COMMUTATION_ApplyStep(volatile GARUDA_DATA_T *pData, uint8_t step);
 
 #ifdef __cplusplus
 }
