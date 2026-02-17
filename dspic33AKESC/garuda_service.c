@@ -29,6 +29,10 @@
 #if FEATURE_BEMF_CLOSED_LOOP
 #include "motor/bemf_zc.h"
 #endif
+#if FEATURE_ADC_CMP_ZC
+#include "motor/hwzc.h"
+#include "hal/hal_timer.h"
+#endif
 
 #if FEATURE_LEARN_MODULES
 #include "learn/learn_service.h"
@@ -96,13 +100,29 @@ void GARUDA_ServiceInit(void)
     garudaData.timing.zcSynced = false;
     garudaData.timing.deadlineActive = false;
     garudaData.timing.hasPrevZc = false;
-#if FEATURE_BEMF_INTEGRATION
+#if FEATURE_BEMF_INTEGRATION || FEATURE_ADC_CMP_ZC
     garudaData.timing.deadlineIsZc = false;
+#endif
+
+    /* ISR priority setup */
+#if FEATURE_ADC_CMP_ZC
+    _AD1CH0IP = 6;      /* ADC ISR lowered from 7 to 6 when HW ZC available */
+    _AD1CMP5IP = 7;     /* AD1 comparator CH5: highest priority */
+    _AD2CMP1IP = 7;     /* AD2 comparator CH1: highest priority */
+    _CCT1IP = 7;        /* SCCP1 timer: highest priority */
 #endif
 
     /* Enable ADC interrupt to start the control loop */
     GARUDA_ClearADCIF();
     GARUDA_EnableADCInterrupt();
+
+#if FEATURE_ADC_CMP_ZC
+    HWZC_Init(&garudaData);
+    HAL_ADC_InitHighSpeedBEMF();
+    HAL_SCCP1_Init();
+    HAL_SCCP2_Init();
+    /* No StartHighSpeedConversion needed — channels use PWM1 trigger (TRG1SRC=4) */
+#endif
 
 #if FEATURE_LEARN_MODULES
     LEARN_ServiceInit(&garudaData);
@@ -281,11 +301,45 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                     initPeriod = INITIAL_ADC_STEP_PERIOD;
                 BEMF_ZC_Init(&garudaData, initPeriod);
                 BEMF_ZC_OnCommutation(&garudaData, adcIsrTick);
-                /* Fix 5: BEMF_ZC_Init clears ad2SettleCount. Force fresh
-                 * settle to protect against stale AD2 data on CL entry.
-                 * Costs 2 samples (~83us) — harmless. */
                 garudaData.bemf.ad2SettleCount = ZC_AD2_SETTLE_SAMPLES;
             }
+
+#if FEATURE_ADC_CMP_ZC
+            /* HW->SW fallback re-seed (Rule 9) */
+            if (garudaData.hwzc.fallbackPending)
+            {
+                garudaData.hwzc.fallbackPending = false;
+                garudaData.hwzc.enablePending = false;
+                uint16_t swPeriod = HWZC_SCCP2_TO_ADC(
+                    garudaData.hwzc.stepPeriodHR);
+                if (swPeriod < MIN_ADC_STEP_PERIOD)
+                    swPeriod = MIN_ADC_STEP_PERIOD;
+                if (swPeriod > INITIAL_ADC_STEP_PERIOD)
+                    swPeriod = INITIAL_ADC_STEP_PERIOD;
+                BEMF_ZC_Init(&garudaData, swPeriod);
+                BEMF_ZC_OnCommutation(&garudaData, adcIsrTick);
+                garudaData.bemf.ad2SettleCount = ZC_AD2_SETTLE_SAMPLES;
+
+                if (garudaData.hwzc.goodZcCount >= ZC_SYNC_THRESHOLD)
+                {
+                    /* HW ZC had good lock — seed as synced to avoid
+                     * pre-sync forced-commutation jerk at transition */
+                    garudaData.timing.zcSynced = true;
+                    garudaData.timing.goodZcCount = ZC_SYNC_THRESHOLD;
+                    garudaData.timing.forcedCountdown =
+                        swPeriod * ZC_TIMEOUT_MULT;
+                }
+                else
+                {
+                    /* HW ZC was struggling — conservative pre-sync */
+                    garudaData.timing.zcSynced = false;
+                    garudaData.timing.forcedCountdown = swPeriod;
+                }
+            }
+
+            if (!garudaData.hwzc.enabled)
+            {
+#endif /* FEATURE_ADC_CMP_ZC */
 
             if (!garudaData.timing.zcSynced)
             {
@@ -296,13 +350,6 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
 
                 if (garudaData.timing.forcedCountdown == 0)
                 {
-                    /* No penalty for missed ZC in pre-sync.
-                     * goodZcCount only increments (inside BEMF_ZC_Poll on
-                     * confirmed ZC).  This allows sync lock even when only
-                     * rising-ZC steps produce detectable crossings (50% hit
-                     * rate).  Noise-lock is prevented by the ZC_FILTER_THRESHOLD
-                     * (3 consecutive confirming samples) inside Poll. */
-
                     COMMUTATION_AdvanceStep(&garudaData);
                     BEMF_ZC_OnCommutation(&garudaData, adcIsrTick);
                     garudaData.timing.forcedCountdown = garudaData.timing.stepPeriod;
@@ -312,16 +359,9 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                 /* Passive ZC detection (builds goodZcCount, no commutation trigger) */
                 BEMF_ZC_Poll(&garudaData, adcIsrTick);
 
-                /* Staleness guard: if too many forced steps pass without any
-                 * ZC confirmation, the accumulated goodZcCount is stale.
-                 * At 50% hit rate (rising-only), stepsSinceLastZc normally
-                 * peaks at 2.  12 = two full electrical cycles of silence. */
                 if (garudaData.timing.stepsSinceLastZc > ZC_STALENESS_LIMIT)
                     garudaData.timing.goodZcCount = 0;
 
-                /* Check for ZC lock:
-                 * 1. goodZcCount >= threshold (enough recent confirmed ZCs)
-                 * 2. At least one polarity confirmed (risingZcWorks) */
                 if (garudaData.timing.goodZcCount >= (uint16_t)ZC_SYNC_THRESHOLD
                     && garudaData.timing.risingZcWorks)
                 {
@@ -333,10 +373,6 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                     garudaData.integ.stepDevMax = 0;
                     garudaData.integ.shadowFired = false;
 #endif
-                    /* Seed post-sync: if ZC was just confirmed on this step,
-                     * set a commutation deadline with timing advance.
-                     * Otherwise check if this step is undetectable and
-                     * schedule timing-based commutation. */
                     if (garudaData.bemf.zeroCrossDetected)
                     {
 #if FEATURE_TIMING_ADVANCE
@@ -362,7 +398,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                             adcIsrTick + garudaData.timing.stepPeriod / 2);
 #endif
                         garudaData.timing.deadlineActive = true;
-#if FEATURE_BEMF_INTEGRATION
+#if FEATURE_BEMF_INTEGRATION || FEATURE_ADC_CMP_ZC
                         garudaData.timing.deadlineIsZc = true;
 #endif
                     }
@@ -376,10 +412,28 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
             {
                 /* === POST-SYNC: ZC-driven commutation === */
 
-                /* Poll for ZC (skipped on undetectable steps via zeroCrossDetected guard) */
+#if FEATURE_ADC_CMP_ZC
+                /* Crossover check + enablePending management (Rule 12).
+                 * dbgLatchDisable: after first HW ZC failure, permanently
+                 * block re-enable so motor stays on SW ZC and diagnostics
+                 * are preserved for debugger reading. */
+                if (!garudaData.hwzc.dbgLatchDisable)
+                {
+                    uint32_t curErpm = ERPM_FROM_ADC_STEP_NUM /
+                        garudaData.timing.stepPeriod;
+                    if (curErpm >= HWZC_CROSSOVER_ERPM)
+                        garudaData.hwzc.enablePending = true;
+                    else if (garudaData.hwzc.enablePending
+                             && curErpm < (HWZC_CROSSOVER_ERPM
+                                           - HWZC_HYSTERESIS_ERPM))
+                        garudaData.hwzc.enablePending = false;
+                }
+#endif
+
+                /* Poll for ZC */
                 BEMF_ZC_Poll(&garudaData, adcIsrTick);
 
-                /* Check commutation deadline (handles both ZC-based and timing-based) */
+                /* Check commutation deadline */
                 if (BEMF_ZC_CheckDeadline(&garudaData, adcIsrTick))
                 {
 #if FEATURE_BEMF_INTEGRATION
@@ -406,7 +460,6 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                                                    - adcIsrTick);
                             garudaData.integ.shadowVsActual = diff;
 
-                            /* Saturating add via int64_t — no UB */
                             {
                                 int64_t wide = (int64_t)garudaData.integ.shadowErrorSum + diff;
                                 if (wide < INT32_MIN) wide = INT32_MIN;
@@ -430,13 +483,26 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                         }
                     }
 #endif
+#if FEATURE_ADC_CMP_ZC
+                    /* Snapshot deadlineIsZc BEFORE AdvanceStep clears it (Rule 14) */
+                    bool wasZcDeadline = garudaData.timing.deadlineIsZc;
+#endif
                     COMMUTATION_AdvanceStep(&garudaData);
                     BEMF_ZC_OnCommutation(&garudaData, adcIsrTick);
-                    /* If new step can't detect ZC, schedule timing-based comm */
                     BEMF_ZC_HandleUndetectableStep(&garudaData, adcIsrTick);
+
+#if FEATURE_ADC_CMP_ZC
+                    /* enablePending hook: hand off to hardware ZC at true-ZC
+                     * commutation boundary only (Rule 12) */
+                    if (garudaData.hwzc.enablePending && wasZcDeadline)
+                    {
+                        HWZC_Enable(&garudaData);
+                        goto cl_duty_control;
+                    }
+#endif
                 }
 
-                /* Timeout watchdog (skipped on undetectable steps via deadlineActive guard) */
+                /* Timeout watchdog */
                 ZC_TIMEOUT_RESULT_T toResult = BEMF_ZC_CheckTimeout(&garudaData, adcIsrTick);
                 if (toResult == ZC_TIMEOUT_DESYNC)
                 {
@@ -451,7 +517,6 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                     }
                     else
                     {
-                        /* Run command not active — graceful stop */
                         HAL_MC1PWMDisableOutputs();
                         garudaData.desyncRestartAttempts = 0;
                         garudaData.state = ESC_IDLE;
@@ -470,8 +535,6 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                     garudaData.integ.shadowSkipCount++;
 #endif
                     garudaData.zcDiag.zcTimeoutForceCount++;
-                    /* Increment per-step miss counter (before AdvanceStep
-                     * changes currentStep).  Saturate at 255. */
                     {
                         uint8_t s = garudaData.currentStep;
                         if (garudaData.timing.stepMissCount[s] < 255)
@@ -479,18 +542,12 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                     }
                     COMMUTATION_AdvanceStep(&garudaData);
                     BEMF_ZC_OnCommutation(&garudaData, adcIsrTick);
-                    /* If new step can't detect ZC, schedule timing-based comm */
                     BEMF_ZC_HandleUndetectableStep(&garudaData, adcIsrTick);
 
-                    /* If goodZcCount dropped to 0, lose sync → revert to forced */
                     if (garudaData.timing.goodZcCount == 0)
                     {
                         garudaData.timing.zcSynced = false;
                         garudaData.timing.hasPrevZc = false;
-                        /* Reset stepPeriod to OL ramp value.  Without this,
-                         * the inflated post-sync stepPeriod persists, causing
-                         * the motor to run far below ramp target speed and
-                         * making ZC detection harder (weaker BEMF). */
                         uint16_t initPeriod = TIMER1_TO_ADC_TICKS(garudaData.rampStepPeriod);
                         if (initPeriod < MIN_ADC_STEP_PERIOD)
                             initPeriod = MIN_ADC_STEP_PERIOD;
@@ -500,9 +557,53 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                 }
             }
 
-            /* Duty cycle control.  Pot controls duty in both modes.
-             * Pre-sync: capped at RAMP_DUTY_CAP (safety — forced commutation).
-             * Post-sync: full range up to MAX_DUTY. */
+#if FEATURE_ADC_CMP_ZC
+            }
+            else
+            {
+                /* hwzc.enabled=true: software ZC block skipped.
+                 * SCCP1 ISR + comparator ISR handle commutation. */
+
+                /* No speed-drop fallback: once HW ZC activates, it stays
+                 * active at all speeds. The ADC comparator works fine at low
+                 * eRPM (24kHz samples → plenty per step). Only miss-limit
+                 * triggers fallback (error condition). This eliminates the
+                 * HW→SW transition jerk during normal deceleration. */
+
+#if FEATURE_BEMF_INTEGRATION
+                /* Read-only observer: keep shadow integration warm (Rule 11) */
+                {
+                    bool newComm = (garudaData.hwzc.commSeq
+                                    != garudaData.hwzc.obsCommSeq);
+                    if (newComm)
+                    {
+                        garudaData.hwzc.obsCommSeq =
+                            garudaData.hwzc.commSeq;
+                        garudaData.hwzc.obsLastCommTick = adcIsrTick;
+                        /* Seqlock read of stepPeriodHR (Rule 13) */
+                        uint32_t sp;
+                        uint16_t s1, s2;
+                        do {
+                            s1 = garudaData.hwzc.writeSeq;
+                            sp = garudaData.hwzc.stepPeriodHR;
+                            s2 = garudaData.hwzc.writeSeq;
+                        } while (s1 != s2 || (s1 & 1));
+                        uint16_t obsPeriod = HWZC_SCCP2_TO_ADC(sp);
+                        BEMF_INTEG_ObserverOnComm(&garudaData, obsPeriod);
+                        garudaData.hwzc.shadowHwzcSkipCount++;
+                    }
+                    BEMF_INTEG_ObserverTick(&garudaData, adcIsrTick,
+                        garudaData.hwzc.obsLastCommTick);
+                }
+#endif /* FEATURE_BEMF_INTEGRATION */
+            }
+#endif /* FEATURE_ADC_CMP_ZC */
+
+#if FEATURE_ADC_CMP_ZC
+        cl_duty_control:
+#endif
+
+            /* Duty cycle control. */
             {
                 uint32_t cap = garudaData.timing.zcSynced ? MAX_DUTY : RAMP_DUTY_CAP;
                 uint32_t mappedDuty = MIN_DUTY +
@@ -513,29 +614,23 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
 #if FEATURE_DUTY_SLEW
                 {
                     static uint32_t prevDuty = 0;
-                    /* Seed on first closed-loop entry (not from 0) */
                     if (prevAdcState != ESC_CLOSED_LOOP)
                         prevDuty = garudaData.duty;
 
                     int32_t delta = (int32_t)mappedDuty - (int32_t)prevDuty;
                     if (delta > 0)
                     {
-                        /* Rate-limited increase */
                         if ((uint32_t)delta > DUTY_SLEW_UP_RATE)
                             mappedDuty = prevDuty + DUTY_SLEW_UP_RATE;
                     }
                     else if (delta < 0)
                     {
-                        /* Fast decrease (throttle cut response) */
                         if ((uint32_t)(-delta) > DUTY_SLEW_DOWN_RATE)
                             mappedDuty = prevDuty - DUTY_SLEW_DOWN_RATE;
                     }
                     prevDuty = mappedDuty;
                 }
 #endif
-                /* Speed governor: prevent motor from exceeding max CL speed.
-                 * When stepPeriod hits the floor clamp, freeze duty to stop
-                 * further acceleration (clamped stepPeriod = wrong timing). */
                 if (garudaData.timing.stepPeriod <= MIN_CL_ADC_STEP_PERIOD
                     && mappedDuty > garudaData.duty)
                 {
@@ -543,14 +638,10 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                 }
 
 #if FEATURE_VBUS_SAG_LIMIT
-                /* Bus voltage sag power limiting: reduce duty when Vbus dips
-                 * under load to prevent desync from collapsing BEMF amplitude.
-                 * Hysteresis between threshold and recovery prevents oscillation. */
                 {
                     static uint16_t vbusFiltered = 0;
                     static bool vbusSagActive = false;
 
-                    /* Seed filter on CL entry to prevent false sag latch from zero init */
                     if (prevAdcState != ESC_CLOSED_LOOP)
                     {
                         vbusFiltered = garudaData.vbusRaw;
@@ -576,7 +667,6 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                             mappedDuty -= reduction;
                     }
 
-                    /* Floor clamp: sag reduction must not push duty below MIN_DUTY */
                     if (mappedDuty < MIN_DUTY)
                         mappedDuty = MIN_DUTY;
                 }
@@ -808,3 +898,54 @@ void __attribute__((__interrupt__, no_auto_psv)) _PWMInterrupt(void)
     }
     ClearPWMIF();
 }
+
+#if FEATURE_ADC_CMP_ZC
+/**
+ * @brief ADC1 Comparator CH5 ISR — ZC detected on Phase B.
+ * Do NOT re-read AD1CH5DATA for validation (Rule 10).
+ */
+void __attribute__((__interrupt__, no_auto_psv)) _AD1CMP5Interrupt(void)
+{
+    _AD1CMP5IE = 0;              /* Disable immediately to prevent re-trigger */
+    AD1CMPSTATbits.CH5CMP = 0;  /* Clear comparator status */
+    HWZC_OnZcDetected(&garudaData);
+    _AD1CMP5IF = 0;
+}
+
+/**
+ * @brief ADC2 Comparator CH1 ISR — ZC detected on Phase A or C.
+ */
+void __attribute__((__interrupt__, no_auto_psv)) _AD2CMP1Interrupt(void)
+{
+    _AD2CMP1IE = 0;
+    AD2CMPSTATbits.CH1CMP = 0;
+    HWZC_OnZcDetected(&garudaData);
+    _AD2CMP1IF = 0;
+}
+
+/**
+ * @brief SCCP1 Timer ISR — blanking expired, commutation deadline, or timeout.
+ * Action determined by hwzc.phase (Rule 3: phase is set BEFORE timer starts).
+ */
+void __attribute__((__interrupt__, no_auto_psv)) _CCT1Interrupt(void)
+{
+    /* disableRequested is checked inside OnCommDeadline/OnTimeout
+     * AFTER commutation fires — never mid-step (avoids lost-comm jerk). */
+
+    switch (garudaData.hwzc.phase)
+    {
+        case HWZC_BLANKING:
+            HWZC_OnBlankingExpired(&garudaData);
+            break;
+        case HWZC_WATCHING:
+            HWZC_OnTimeout(&garudaData);
+            break;
+        case HWZC_COMM_PENDING:
+            HWZC_OnCommDeadline(&garudaData);
+            break;
+        default:
+            break;
+    }
+    _CCT1IF = 0;
+}
+#endif /* FEATURE_ADC_CMP_ZC */

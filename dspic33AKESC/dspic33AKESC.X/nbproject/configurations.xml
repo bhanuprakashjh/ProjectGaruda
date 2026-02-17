@@ -14,6 +14,7 @@
         <itemPath>../hal/port_config.h</itemPath>
         <itemPath>../hal/timer1.h</itemPath>
         <itemPath>../hal/uart1.h</itemPath>
+        <itemPath>../hal/hal_timer.h</itemPath>
       </logicalFolder>
       <logicalFolder name="learn" displayName="learn" projectFiles="true">
         <itemPath>../learn/ring_buffer.h</itemPath>
@@ -28,6 +29,7 @@
         <itemPath>../motor/pi.h</itemPath>
         <itemPath>../motor/startup.h</itemPath>
         <itemPath>../motor/bemf_zc.h</itemPath>
+        <itemPath>../motor/hwzc.h</itemPath>
       </logicalFolder>
       <itemPath>../hal/eeprom.h</itemPath>
       <itemPath>../garuda_types.h</itemPath>
@@ -58,6 +60,7 @@
         <itemPath>../hal/port_config.c</itemPath>
         <itemPath>../hal/timer1.c</itemPath>
         <itemPath>../hal/uart1.c</itemPath>
+        <itemPath>../hal/hal_timer.c</itemPath>
       </logicalFolder>
       <logicalFolder name="learn" displayName="learn" projectFiles="true">
         <itemPath>../learn/ring_buffer.c</itemPath>
@@ -72,6 +75,7 @@
         <itemPath>../motor/pi.c</itemPath>
         <itemPath>../motor/startup.c</itemPath>
         <itemPath>../motor/bemf_zc.c</itemPath>
+        <itemPath>../motor/hwzc.c</itemPath>
       </logicalFolder>
       <itemPath>../hal/eeprom.c</itemPath>
       <itemPath>../garuda_service.c</itemPath>

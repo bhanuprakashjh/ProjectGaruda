@@ -49,6 +49,17 @@ extern "C" {
 void InitializeADCs(void);
 bool HAL_ADC_SelectBEMFChannel(uint8_t floatingPhase);
 
+#if FEATURE_ADC_CMP_ZC
+#include "../garuda_config.h"
+void HAL_ADC_InitHighSpeedBEMF(void);
+void HAL_ADC_ConfigComparator(uint8_t adcCore, uint16_t threshold, bool risingZc);
+void HAL_ADC_EnableComparatorIE(uint8_t adcCore);
+void HAL_ADC_DisableComparatorIE(uint8_t adcCore);
+void HAL_ADC_ClearComparatorFlag(uint8_t adcCore);
+void HAL_ADC_SetHighSpeedPinsel(uint8_t pinsel);
+void HAL_ADC_StartHighSpeedConversion(void);
+#endif
+
 #ifdef __cplusplus
 }
 #endif

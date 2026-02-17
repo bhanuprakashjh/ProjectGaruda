@@ -24,6 +24,7 @@ extern "C" {
 #define FEATURE_VBUS_SAG_LIMIT   1  /* Phase C2: Bus voltage sag power limiting (reduce duty on Vbus dip) */
 #define FEATURE_BEMF_INTEGRATION 1  /* Phase E: Shadow integration estimator (shadow-only, no control) */
 #define FEATURE_SINE_STARTUP     1  /* Phase D: Sine startup (replaces trap align+ramp) */
+#define FEATURE_ADC_CMP_ZC       1  /* Phase F: ADC comparator-based high-speed ZC */
 #define FEATURE_LEARN_MODULES    0  /* master: ring buffer + quality + health */
 #define FEATURE_ADAPTATION       0  /* requires FEATURE_LEARN_MODULES */
 #define FEATURE_COMMISSION       0  /* requires FEATURE_LEARN_MODULES */
@@ -123,6 +124,17 @@ extern "C" {
 #define SINE_RAMP_MODULATION_PCT    35  /* Modulation depth % at target speed */
 #define SINE_PHASE_OFFSET_DEG       60  /* Sector->step offset. Calibrate in 60 deg increments
                                          * (0,60,120,180,240,300) until transition is smooth. */
+#endif
+
+/* ADC Comparator ZC (Phase F) */
+#if FEATURE_ADC_CMP_ZC
+#define HWZC_BLANKING_PERCENT    5   /* Blanking as % of step period (after commutation) */
+#define HWZC_CROSSOVER_ERPM   5000   /* eRPM above which hardware ZC activates */
+#define HWZC_HYSTERESIS_ERPM   500   /* Hysteresis band for crossover (prevents oscillation) */
+#define HWZC_SYNC_THRESHOLD      6   /* Consecutive HW ZCs to declare sync */
+#define HWZC_MISS_LIMIT          3   /* Missed HW ZCs before fallback to software ZC (low for debug) */
+#define HWZC_CMP_DEADBAND        4   /* ADC counts deadband for comparator sanity check */
+#define HWZC_SAMC               3    /* Sample time for high-speed channels (200ns conversion) */
 #endif
 
 /* Comparator DAC reference for overcurrent fault (from reference) */

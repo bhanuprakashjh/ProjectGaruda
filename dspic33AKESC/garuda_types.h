@@ -95,7 +95,7 @@ typedef struct
     bool     zcSynced;              /* True = ZC-driven, False = forced */
     bool     deadlineActive;        /* True when commDeadline is valid */
     bool     hasPrevZc;             /* True after first post-sync ZC (guards zcInterval calc) */
-#if FEATURE_BEMF_INTEGRATION
+#if FEATURE_BEMF_INTEGRATION || FEATURE_ADC_CMP_ZC
     bool     deadlineIsZc;         /* true = ZC-driven deadline, false = fallback/timing */
 #endif
 } TIMING_STATE_T;
@@ -174,6 +174,54 @@ typedef struct {
     uint32_t erpmFrac;         /* Q16 fractional eRPM accumulator for smooth ramp */
     bool     active;           /* true while sine drive is running in ADC ISR */
 } SINE_STATE_T;
+#endif
+
+#if FEATURE_ADC_CMP_ZC
+typedef enum {
+    HWZC_IDLE,           /* Not active (not in CL or below crossover) */
+    HWZC_BLANKING,       /* After commutation, waiting for blanking expiry */
+    HWZC_WATCHING,       /* Comparator enabled, waiting for ZC crossing */
+    HWZC_COMM_PENDING    /* ZC detected, waiting for SCCP1 commutation delay */
+} HWZC_PHASE_T;
+
+typedef struct {
+    HWZC_PHASE_T phase;          /* Current state in the step cycle */
+    bool         enabled;         /* Master enable (true when eRPM > crossover) */
+    bool         enablePending;   /* Set by crossover check, cleared at next commutation */
+    uint8_t      activeCore;      /* Which ADC core has active comparator: 1=AD1, 2=AD2 */
+    uint32_t     lastZcStamp;     /* SCCP2 timestamp at last confirmed ZC (prio-7 only) */
+    uint32_t     lastCommStamp;   /* SCCP2 timestamp at last commutation (prio-7 only) */
+    uint32_t     stepPeriodHR;    /* Step period in SCCP2 ticks — seqlocked */
+    uint16_t     writeSeq;        /* Seqlock: odd=write-in-progress, even=stable */
+    uint16_t     commSeq;         /* Incremented each HW commutation (16-bit, atomic) */
+    uint16_t     goodZcCount;     /* Consecutive confirmed ZC events */
+    uint16_t     missCount;       /* Consecutive missed ZC (forced steps) */
+    bool         fallbackPending; /* Set by HWZC_Disable, cleared by ADC ISR re-seed */
+    bool         disableRequested; /* Set by ADC ISR (prio-6) for speed hysteresis fallback */
+    bool         dbgLatchDisable;  /* Debug: after first HW ZC failure, block re-enable permanently */
+
+    /* Diagnostics (debugger reads only — tearing acceptable) */
+    uint32_t     totalZcCount;    /* Total hardware ZC detections */
+    uint32_t     totalMissCount;  /* Total forced steps in hardware mode */
+    uint32_t     totalCommCount;  /* Total hardware-driven commutations */
+
+    /* Timeout diagnostics: captures state at last timeout event */
+    uint16_t     dbgTimeoutAdcVal;  /* ADC data from active HS channel at timeout */
+    uint16_t     dbgTimeoutThresh;  /* CMPLO value that was configured */
+    uint8_t      dbgTimeoutCmpmod;  /* CMPMOD that was configured */
+    uint8_t      dbgTimeoutCmpstat; /* CHxCMP flag at timeout (1=condition met but ISR missed) */
+    uint8_t      dbgTimeoutCore;    /* Which ADC core was active (1 or 2) */
+    uint8_t      dbgTimeoutStep;    /* Commutation step at timeout */
+    uint16_t     dbgTimeoutBemfThresh; /* bemf.zcThreshold at timeout */
+    uint16_t     dbgEnableStepPeriod;  /* timing.stepPeriod when HWZC_Enable was called */
+    uint16_t     dbgAdvanceDeg;        /* Current timing advance in HW ZC path (degrees) */
+
+#if FEATURE_BEMF_INTEGRATION
+    uint32_t     shadowHwzcSkipCount; /* Scoring opportunities skipped in HW ZC mode */
+    uint16_t     obsCommSeq;      /* Observer's last-seen commSeq */
+    uint16_t     obsLastCommTick; /* adcIsrTick at last observed HW commutation */
+#endif
+} HWZC_STATE_T;
 #endif
 
 /* Telemetry fault flag bitmasks */
@@ -429,6 +477,10 @@ typedef struct
 
 #if FEATURE_SINE_STARTUP
     SINE_STATE_T sine;
+#endif
+
+#if FEATURE_ADC_CMP_ZC
+    HWZC_STATE_T hwzc;
 #endif
 
 #if FEATURE_LEARN_MODULES

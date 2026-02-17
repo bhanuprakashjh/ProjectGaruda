@@ -145,6 +145,8 @@ void BEMF_ZC_Init(volatile GARUDA_DATA_T *pData, uint16_t initialStepPeriod)
     pData->integ.shadowSkipCount = 0;
     pData->integ.shadowUnseededSkip = 0;
     pData->integ.shadowStepPeriodSum = 0;
+#endif
+#if FEATURE_BEMF_INTEGRATION || FEATURE_ADC_CMP_ZC
     pData->timing.deadlineIsZc = false;
 #endif
 }
@@ -526,7 +528,7 @@ bool BEMF_ZC_Poll(volatile GARUDA_DATA_T *pData, uint16_t now)
 #endif
             pData->timing.commDeadline = (uint16_t)(now + delay);
             pData->timing.deadlineActive = true;
-#if FEATURE_BEMF_INTEGRATION
+#if FEATURE_BEMF_INTEGRATION || FEATURE_ADC_CMP_ZC
             pData->timing.deadlineIsZc = true;
 #endif
         }
@@ -627,11 +629,150 @@ void BEMF_ZC_HandleUndetectableStep(volatile GARUDA_DATA_T *pData, uint16_t now)
          * - If not → fallback fires, avoiding the 2× timeout jerk */
         pData->timing.commDeadline = (uint16_t)(now + pData->timing.stepPeriod);
         pData->timing.deadlineActive = true;
-#if FEATURE_BEMF_INTEGRATION
+#if FEATURE_BEMF_INTEGRATION || FEATURE_ADC_CMP_ZC
         pData->timing.deadlineIsZc = false;
 #endif
         /* zeroCrossDetected is NOT set — Poll can still detect and override */
     }
 }
+
+#if FEATURE_ADC_CMP_ZC && FEATURE_BEMF_INTEGRATION
+
+/* Cached step period from last ObserverOnComm call — used by ObserverTick
+ * for blanking computation (avoids reading stale timing.stepPeriod). */
+static uint16_t obsStepPeriod = 0;
+
+/**
+ * @brief Observer: handle new HW commutation detected via commSeq change.
+ * Extracts IIR smoothing and per-step reset from BEMF_ZC_OnCommutation().
+ * Called from the ADC ISR hwzc.enabled branch when commSeq changes.
+ *
+ * @param pData       Pointer to global ESC data
+ * @param stepPeriod  HW step period converted to ADC ticks (HWZC_SCCP2_TO_ADC)
+ */
+void BEMF_INTEG_ObserverOnComm(volatile GARUDA_DATA_T *pData, uint16_t stepPeriod)
+{
+    obsStepPeriod = stepPeriod;
+
+    /* IIR smooth bemfPeakSmooth: 7/8 old + 1/8 new */
+    if (pData->integ.stepDevMax > 0)
+    {
+        if (pData->integ.bemfPeakSmooth == 0)
+            pData->integ.bemfPeakSmooth = pData->integ.stepDevMax;
+        else
+            pData->integ.bemfPeakSmooth = (uint16_t)(
+                ((uint32_t)pData->integ.bemfPeakSmooth * 7
+                 + pData->integ.stepDevMax) >> 3);
+    }
+
+    /* Reset per-step state */
+    pData->integ.integral = 0;
+    pData->integ.stepDevMax = 0;
+    pData->integ.shadowFired = false;
+
+    /* Recompute intThreshold from bemfPeakSmooth and stepPeriod */
+    {
+        int32_t peak = (int32_t)pData->integ.bemfPeakSmooth;
+        if (peak < 10) peak = 10;
+
+        uint16_t sp = stepPeriod;
+#if FEATURE_TIMING_ADVANCE
+        uint32_t eRPM = ERPM_FROM_ADC_STEP_NUM / sp;
+        uint16_t advDeg;
+        if (eRPM <= RAMP_TARGET_ERPM)
+            advDeg = TIMING_ADVANCE_MIN_DEG;
+        else if (eRPM >= MAX_CLOSED_LOOP_ERPM)
+            advDeg = TIMING_ADVANCE_MAX_DEG;
+        else
+        {
+            uint32_t range = MAX_CLOSED_LOOP_ERPM - RAMP_TARGET_ERPM;
+            uint32_t pos = eRPM - RAMP_TARGET_ERPM;
+            advDeg = TIMING_ADVANCE_MIN_DEG +
+                (uint16_t)((uint32_t)(TIMING_ADVANCE_MAX_DEG - TIMING_ADVANCE_MIN_DEG)
+                           * pos / range);
+        }
+        uint16_t delayTicks = (uint16_t)((uint32_t)sp * (30 - advDeg) / 60);
+#else
+        uint16_t delayTicks = sp / 2;
+#endif
+        if (delayTicks < 1) delayTicks = 1;
+
+        int32_t rawThreshold = peak * (int32_t)delayTicks / 2;
+        pData->integ.intThreshold = (rawThreshold * INTEG_THRESHOLD_GAIN) >> 8;
+        if (pData->integ.intThreshold < 1)
+            pData->integ.intThreshold = 1;
+    }
+}
+
+/**
+ * @brief Observer: run integration accumulation each 24kHz tick during HW ZC.
+ * Extracts the post-ZC integration fast path from BEMF_ZC_Poll().
+ * Called every ADC ISR tick when hwzc.enabled.
+ *
+ * @param pData        Pointer to global ESC data
+ * @param now          Current adcIsrTick
+ * @param lastCommTick adcIsrTick at last observed HW commutation
+ */
+void BEMF_INTEG_ObserverTick(volatile GARUDA_DATA_T *pData, uint16_t now,
+                              uint16_t lastCommTick)
+{
+    if (!pData->bemf.bemfSampleValid || obsStepPeriod == 0)
+        return;
+
+    uint16_t elapsed = (uint16_t)(now - lastCommTick);
+
+    /* Compute blanking using cached obsStepPeriod (not timing.stepPeriod) */
+    uint16_t blankTicks;
+#if FEATURE_DYNAMIC_BLANKING
+    {
+        uint16_t blankBase = (uint16_t)((uint32_t)obsStepPeriod * ZC_BLANKING_PERCENT / 100);
+        uint8_t dutyPct = (uint8_t)((uint32_t)pData->duty * 100 / LOOPTIME_TCY);
+        uint16_t blankDutyBoost = 0;
+        if (dutyPct > ZC_DEMAG_DUTY_THRESH)
+        {
+            blankDutyBoost = (uint16_t)((uint32_t)obsStepPeriod * ZC_DEMAG_BLANK_EXTRA_PERCENT
+                             * (dutyPct - ZC_DEMAG_DUTY_THRESH)
+                             / (100 * (100 - ZC_DEMAG_DUTY_THRESH)));
+        }
+        blankTicks = blankBase + blankDutyBoost;
+        uint16_t blankMax = obsStepPeriod / 4;
+        if (blankTicks > blankMax) blankTicks = blankMax;
+    }
+#else
+    blankTicks = (uint16_t)((uint32_t)obsStepPeriod * ZC_BLANKING_PERCENT / 100);
+#endif
+    if (blankTicks < 1) blankTicks = 1;
+
+    if (elapsed < blankTicks)
+        return;
+
+    /* Accumulate integration sample */
+    uint8_t floatPhase = commutationTable[pData->currentStep].floatingPhase;
+    uint16_t vFloat = pData->bemf.bemfRaw;
+    uint16_t zcThresh = pData->bemf.zcThreshold;
+    int32_t vCorrected = computeVCorrected(vFloat, floatPhase);
+
+    int32_t dev = vCorrected - (int32_t)zcThresh;
+    int8_t pol = commutationTable[pData->currentStep].zcPolarity;
+    int32_t sample = (pol > 0) ? dev : -dev;
+    if (sample < 0) sample = 0;
+
+    if ((uint16_t)sample > pData->integ.stepDevMax)
+        pData->integ.stepDevMax = (uint16_t)sample;
+
+    if (!pData->integ.shadowFired)
+    {
+        pData->integ.integral += sample;
+        if (pData->integ.integral > INTEG_CLAMP)
+            pData->integ.integral = INTEG_CLAMP;
+        if (pData->integ.integral >= pData->integ.intThreshold)
+        {
+            pData->integ.shadowFired = true;
+            pData->integ.shadowFireTick = now;
+        }
+    }
+}
+
+#endif /* FEATURE_ADC_CMP_ZC && FEATURE_BEMF_INTEGRATION */
 
 #endif /* FEATURE_BEMF_CLOSED_LOOP */

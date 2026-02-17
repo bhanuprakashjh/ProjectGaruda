@@ -230,6 +230,41 @@ _Static_assert(SINE_PHASE_OFFSET_DEG < 360,
                "SINE_PHASE_OFFSET_DEG must be 0-359");
 #endif
 
+/* Phase F: ADC Comparator ZC dependency guard and derived constants */
+#if FEATURE_ADC_CMP_ZC && !FEATURE_BEMF_CLOSED_LOOP
+#error "ADC comparator ZC requires FEATURE_BEMF_CLOSED_LOOP"
+#endif
+
+#if FEATURE_ADC_CMP_ZC
+/* SCCP2 clock: FCY = 100 MHz -> 10ns per tick -> 1e8 ticks/sec */
+#define HWZC_TIMER_HZ           100000000UL
+
+/* eRPM <-> SCCP2 step period conversion.
+ * Step freq = eRPM / 10 Hz -> step period = 10 / eRPM seconds.
+ * In SCCP2 ticks: (10 / eRPM) * 1e8 = 1e9 / eRPM. */
+#define HWZC_ERPM_TO_TICKS(erpm)  (1000000000UL / (erpm))
+#define HWZC_TICKS_TO_ERPM(ticks) (1000000000UL / (ticks))
+
+/* ADC ISR tick <-> SCCP2 tick conversion.
+ * 1 ADC tick = 1/PWMFREQUENCY_HZ seconds = 1e8/PWMFREQUENCY_HZ SCCP2 ticks.
+ * At 24kHz: 1 ADC tick = 100000000/24000 = 4166 SCCP2 ticks. */
+#define HWZC_ADC_TO_SCCP2(t)   ((uint32_t)(t) * (HWZC_TIMER_HZ / PWMFREQUENCY_HZ))
+#define HWZC_SCCP2_TO_ADC(t)   ((uint16_t)((t) / (HWZC_TIMER_HZ / PWMFREQUENCY_HZ)))
+
+/* Minimum step period in SCCP2 ticks at MAX_CLOSED_LOOP_ERPM */
+#define HWZC_MIN_STEP_TICKS     HWZC_ERPM_TO_TICKS(MAX_CLOSED_LOOP_ERPM)
+
+/* Crossover step period threshold (SCCP2 ticks) */
+#define HWZC_CROSSOVER_TICKS    HWZC_ERPM_TO_TICKS(HWZC_CROSSOVER_ERPM)
+
+_Static_assert(HWZC_CROSSOVER_ERPM > RAMP_TARGET_ERPM,
+               "HW ZC crossover must be above ramp target");
+_Static_assert(HWZC_CROSSOVER_ERPM <= MAX_CLOSED_LOOP_ERPM,
+               "HW ZC crossover must be within CL range");
+_Static_assert(HWZC_BLANKING_PERCENT >= 1 && HWZC_BLANKING_PERCENT <= 20,
+               "HWZC_BLANKING_PERCENT out of range");
+#endif
+
 #ifdef __cplusplus
 }
 #endif

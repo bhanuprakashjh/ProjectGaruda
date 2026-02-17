@@ -20,6 +20,7 @@
 #include <stdbool.h>
 
 #include "hal_adc.h"
+#include "../garuda_config.h"
 
 /**
  * @brief Initialize and enable both ADC cores with phase voltage, Vbus, and Pot channels.
@@ -101,3 +102,139 @@ bool HAL_ADC_SelectBEMFChannel(uint8_t floatingPhase)
             return false;
     }
 }
+
+#if FEATURE_ADC_CMP_ZC
+
+/**
+ * @brief Initialize high-speed BEMF channels for back-to-back conversion.
+ * AD1CH5: Phase B (RB8, PINSEL=11, fixed).
+ * AD2CH1: Phase A/C (RB9/RA10, PINSEL muxed per step).
+ * Both use PWM1 trigger (24kHz) — adequate for Hurst motor at 20K eRPM.
+ * Comparator disabled initially (CMPMOD=0).
+ *
+ * For FPV motors (>120K eRPM), switch to RPTCNT repeat timer
+ * (TRG1SRC=3, RPTCNT=0) for continuous ~5.9 Msps conversion.
+ */
+void HAL_ADC_InitHighSpeedBEMF(void)
+{
+    /* AD1CH5: Phase B high-speed (RB8 = AD1AN11)
+     * Uses PWM1 trigger (same as existing channels) — 24kHz sample rate.
+     * For Hurst motor at 20K eRPM, that's ~12 samples/step — adequate.
+     * Comparator checks each sample and fires ISR on crossing. */
+    AD1CH5CONbits.PINSEL = 11;
+    AD1CH5CONbits.SAMC = HWZC_SAMC;
+    AD1CH5CONbits.LEFT = 0;
+    AD1CH5CONbits.DIFF = 0;
+    AD1CH5CONbits.TRG1SRC = 4;   /* PWM1 ADC Trigger 1 (24kHz) */
+    AD1CH5CONbits.TRG2SRC = 0;   /* No secondary trigger */
+    AD1CH5CONbits.CMPMOD = 0;    /* Comparator disabled initially */
+    AD1CH5CMPLO = 0;
+    AD1CH5CMPHI = 0;
+
+    /* AD2CH1: Phase A/C high-speed (initial: RB9 = AD2AN10) */
+    AD2CH1CONbits.PINSEL = 10;
+    AD2CH1CONbits.SAMC = HWZC_SAMC;
+    AD2CH1CONbits.LEFT = 0;
+    AD2CH1CONbits.DIFF = 0;
+    AD2CH1CONbits.TRG1SRC = 4;   /* PWM1 ADC Trigger 1 (24kHz) */
+    AD2CH1CONbits.TRG2SRC = 0;   /* No secondary trigger */
+    AD2CH1CONbits.CMPMOD = 0;    /* Comparator disabled initially */
+    AD2CH1CMPLO = 0;
+    AD2CH1CMPHI = 0;
+
+    /* Comparator interrupts: clear and leave disabled */
+    _AD1CMP5IF = 0;
+    _AD1CMP5IE = 0;
+    _AD2CMP1IF = 0;
+    _AD2CMP1IE = 0;
+}
+
+/**
+ * @brief Configure comparator mode and threshold on a high-speed channel.
+ * @param adcCore  1=AD1CH5 (Phase B), 2=AD2CH1 (Phase A/C)
+ * @param threshold  ADC count threshold for CMPLO register
+ * @param risingZc  true=rising ZC (greater-than), false=falling (less-or-equal)
+ */
+void HAL_ADC_ConfigComparator(uint8_t adcCore, uint16_t threshold, bool risingZc)
+{
+    if (adcCore == 1)
+    {
+        AD1CH5CONbits.CMPMOD = risingZc ? 0b011 : 0b100;
+        AD1CH5CMPLO = threshold;
+    }
+    else
+    {
+        AD2CH1CONbits.CMPMOD = risingZc ? 0b011 : 0b100;
+        AD2CH1CMPLO = threshold;
+    }
+}
+
+/**
+ * @brief Enable comparator interrupt on a high-speed channel.
+ * Clears flag before enabling to prevent stale triggers.
+ * @param adcCore  1=AD1CH5, 2=AD2CH1
+ */
+void HAL_ADC_EnableComparatorIE(uint8_t adcCore)
+{
+    if (adcCore == 1)
+    {
+        _AD1CMP5IF = 0;
+        _AD1CMP5IE = 1;
+    }
+    else
+    {
+        _AD2CMP1IF = 0;
+        _AD2CMP1IE = 1;
+    }
+}
+
+/**
+ * @brief Disable comparator interrupt on a high-speed channel.
+ * @param adcCore  1=AD1CH5, 2=AD2CH1
+ */
+void HAL_ADC_DisableComparatorIE(uint8_t adcCore)
+{
+    if (adcCore == 1)
+        _AD1CMP5IE = 0;
+    else
+        _AD2CMP1IE = 0;
+}
+
+/**
+ * @brief Clear comparator status flag and interrupt flag.
+ * @param adcCore  1=AD1CH5, 2=AD2CH1
+ */
+void HAL_ADC_ClearComparatorFlag(uint8_t adcCore)
+{
+    if (adcCore == 1)
+    {
+        AD1CMPSTATbits.CH5CMP = 0;
+        _AD1CMP5IF = 0;
+    }
+    else
+    {
+        AD2CMPSTATbits.CH1CMP = 0;
+        _AD2CMP1IF = 0;
+    }
+}
+
+/**
+ * @brief Set PINSEL for AD2CH1 high-speed channel (Phase A vs Phase C mux).
+ * @param pinsel  10=Phase A (RB9), 7=Phase C (RA10)
+ */
+void HAL_ADC_SetHighSpeedPinsel(uint8_t pinsel)
+{
+    AD2CH1CONbits.PINSEL = pinsel;
+}
+
+/**
+ * @brief Fire software trigger on both high-speed channels to start
+ * back-to-back continuous conversion. TRG2SRC=immediate keeps them running.
+ */
+void HAL_ADC_StartHighSpeedConversion(void)
+{
+    AD1SWTRGbits.CH5TRG = 1;
+    AD2SWTRGbits.CH1TRG = 1;
+}
+
+#endif /* FEATURE_ADC_CMP_ZC */
