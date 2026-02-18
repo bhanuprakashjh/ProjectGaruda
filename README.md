@@ -92,7 +92,11 @@ Replaces the trapezoidal forced-commutation startup (which produces an audible c
 
 2. **Sine V/f Ramp** (replaces trap forced ramp): The electrical angle advances at increasing frequency from 300 eRPM (`INITIAL_ERPM`) to 2,000 eRPM (`RAMP_TARGET_ERPM`). Voltage amplitude scales linearly with frequency (constant V/f ratio) to maintain constant flux. A low-frequency boost (the alignment voltage) overcomes static friction. Acceleration: 1,000 eRPM/s.
 
-3. **Transition to 6-step**: At target speed, the current electrical angle is mapped to the nearest 60-degree sector, which selects the corresponding commutation step. PWM switches from 3-phase sine (all phases active in complementary mode) to 6-step trap (1 PWM, 1 LOW, 1 FLOAT). The ESC enters closed-loop with BEMF ZC detection taking over within a few electrical cycles.
+3. **Coast gap**: At target speed, all three phases are set to center duty (zero net voltage) for 4 ms (`SINE_COAST_GAP_MS`). The motor coasts on inertia while winding currents decay via the L/R time constant (1.14 ms for Hurst motor). 4 ms = ~3.5 time constants = 97% current decay. The sine angle is pre-advanced during the coast to compensate for rotor movement on inertia.
+
+4. **Transition to 6-step**: After the coast gap, the pre-advanced electrical angle is mapped to the nearest 60-degree sector, which selects the corresponding commutation step. PWM switches from 3-phase sine (all phases active in complementary mode) to 6-step trap (1 PWM, 1 LOW, 1 FLOAT). The ESC enters closed-loop with BEMF ZC detection taking over within a few electrical cycles.
+
+5. **Post-sync slow slew**: After ZC sync is declared, the duty slew-up rate is reduced to 1/8th of normal (0.25%/ms instead of 2%/ms) for 2 seconds (`POST_SYNC_SETTLE_MS`). This prevents low-inertia motors from accelerating faster than the stepPeriod IIR filter can track, which would cause late commutation and desync.
 
 **ISR architecture:**
 - **ADC ISR (24 kHz)** owns the sine waveform: `STARTUP_SineComputeDuties()` advances the angle, looks up the sine table for 3 phases at 120-degree offsets, and writes per-phase duties via `HAL_PWM_SetDutyCycle3Phase()`. This gives ~720 updates per electrical cycle at 2,000 eRPM — very smooth waveform.
@@ -112,6 +116,10 @@ Replaces the trapezoidal forced-commutation startup (which produces an audible c
 - `SINE_ALIGN_MODULATION_PCT` (15%) — modulation depth during alignment
 - `SINE_RAMP_MODULATION_PCT` (35%) — modulation depth at target speed
 - `SINE_PHASE_OFFSET_DEG` (60 degrees) — sector-to-step calibration offset for the Hurst motor. Adjustable in 60-degree increments (0, 60, 120, 180, 240, 300) until the sine-to-trap transition is smooth.
+- `SINE_COAST_GAP_MS` (4 ms) — de-energization gap before sine-to-trap transition. Motor coasts on inertia while winding currents decay. Eliminates current discontinuity jerk.
+- `SINE_TRAP_DUTY_NUM` / `SINE_TRAP_DUTY_DEN` (6/5) — sine-to-trap duty scale factor (tuning knobs, 1:1 mapping currently active)
+- `POST_SYNC_SETTLE_MS` (2000 ms) — reduced slew-up rate period after ZC sync declaration
+- `POST_SYNC_SLEW_DIVISOR` (8) — slew-up rate divisor during settle period (8 = 0.25%/ms)
 
 **Feature flag**: `FEATURE_SINE_STARTUP`. Setting to 0 reverts to trapezoidal alignment + forced ramp with zero code overhead.
 
@@ -413,7 +421,8 @@ EOF
 - Vbus OV/UV — active, no false triggers (injection not tested)
 - Sine startup — verified: smooth alignment, V/f ramp, transition to closed-loop
 - Sine direction — verified: CW and CCW sine rotation matches commutation direction
-- Sine-to-trap transition — verified with SINE_PHASE_OFFSET_DEG=60 on Hurst motor
+- Sine-to-trap transition — verified with 4 ms coast gap and SINE_PHASE_OFFSET_DEG=60 on Hurst motor
+- Post-sync slow slew — verified: prevents pot ramp stall on low-inertia motor across full pot range
 - Hardware ZC (single-sample) — 41,714 detections, zero misses across full speed range
 - Hardware ZC (4x oversampled) — 38,522 detections, zero misses across full speed range
 - SW-to-HW ZC crossover at 5,000 eRPM — seamless transition in both directions
@@ -428,10 +437,10 @@ EOF
 | **Load testing** | Shadow accuracy under mechanical load | Hold motor shaft at various speeds |
 | **Soak test** | Long-duration stability | Run at mid speed for 30+ minutes |
 | **Sustained pot oscillation** | Known weakness: prolonged rapid back-and-forth can cause drift | Jerk pot rapidly for >10 seconds |
+| **Sine phase offset sweep** | Reduce remaining small transition jerk | Sweep SINE_PHASE_OFFSET_DEG: 0/60/120/180/240/300 |
 | **Cold start** | Startup at low Vbus | Test alignment + ramp at minimum viable voltage |
 | **Thermal** | Temperature rise at max speed | Run at 100% for 10 minutes, monitor FET temperature |
 | **Direction reversal** | Clean stop -> reverse -> start | Use SW2 in IDLE, verify correct rotation |
-| **Sine phase offset sweep** | Optimal transition angle for other motors | Sweep 0/60/120/180/240/300 degrees |
 
 ---
 
