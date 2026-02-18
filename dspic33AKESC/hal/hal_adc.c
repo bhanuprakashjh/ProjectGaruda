@@ -63,7 +63,10 @@ void InitializeADCs(void)
     AD1CH5CONbits.LEFT = 0;
     AD1CH5CONbits.DIFF = 0;
     AD1CH5CONbits.TRG1SRC = 14;  /* SCCP3 Trigger out */
-    AD1CH5CONbits.TRG2SRC = 0;   /* No secondary trigger */
+    AD1CH5CONbits.TRG2SRC = 2;   /* Immediate re-trigger for oversampling repeats */
+    AD1CH5CONbits.MODE = 0b11;   /* Oversampling mode */
+    AD1CH5CONbits.ACCNUM = 0b00; /* 4 samples, result right-shifted by 2 bits */
+    AD1CH5CONbits.ACCBRST = 1;   /* Non-interruptible burst (prevent 24kHz split) */
     AD1CH5CONbits.CMPMOD = 0;    /* Comparator disabled initially */
     AD1CH5CMPLO = 0;
     AD1CH5CMPHI = 0;
@@ -74,7 +77,10 @@ void InitializeADCs(void)
     AD2CH1CONbits.LEFT = 0;
     AD2CH1CONbits.DIFF = 0;
     AD2CH1CONbits.TRG1SRC = 14;  /* SCCP3 Trigger out */
-    AD2CH1CONbits.TRG2SRC = 0;   /* No secondary trigger */
+    AD2CH1CONbits.TRG2SRC = 2;   /* Immediate re-trigger for oversampling repeats */
+    AD2CH1CONbits.MODE = 0b11;   /* Oversampling mode */
+    AD2CH1CONbits.ACCNUM = 0b00; /* 4 samples, result right-shifted by 2 bits */
+    AD2CH1CONbits.ACCBRST = 1;   /* Non-interruptible burst (prevent 24kHz split) */
     AD2CH1CONbits.CMPMOD = 0;    /* Comparator disabled initially */
     AD2CH1CMPLO = 0;
     AD2CH1CMPHI = 0;
@@ -142,9 +148,9 @@ bool HAL_ADC_SelectBEMFChannel(uint8_t floatingPhase)
  * flags and leaves comparator interrupts disabled.
  *
  * Trigger: TRG1SRC=14 (SCCP3 Trigger out) at HWZC_ADC_SAMPLE_HZ.
- * Previous attempts with TRG1SRC=3 (RPTCNT, RESERVED on this silicon)
- * and TRG1SRC=1+TRG2SRC=2 (SW+immediate, ignored in MODE=00)
- * both produced ADC=0.
+ * Mode: 4x oversampling (MODE=11, ACCNUM=00, TRG2SRC=2).
+ * Each SCCP3 trigger produces a 4-sample averaged result (+6 dB SNR).
+ * Comparator fires on the averaged result; threshold scale unchanged.
  */
 void HAL_ADC_InitHighSpeedBEMF(void)
 {
