@@ -26,6 +26,9 @@
 #include "hal/hal_pwm.h"
 #include "motor/startup.h"
 #include "motor/commutation.h"
+#if FEATURE_ADC_CMP_ZC
+#include "motor/hwzc.h"
+#endif
 
 #if FEATURE_LEARN_MODULES
 #include "learn/learn_service.h"
@@ -81,6 +84,11 @@ int main(void)
             else if (garudaData.state == ESC_FAULT)
             {
                 /* Clear fault and return to idle */
+#if FEATURE_ADC_CMP_ZC
+                if (garudaData.hwzc.enabled)
+                    HWZC_Disable(&garudaData);
+                garudaData.hwzc.fallbackPending = false;
+#endif
                 garudaData.runCommandActive = false;
                 garudaData.desyncRestartAttempts = 0;
                 garudaData.faultCode = FAULT_NONE;
@@ -92,6 +100,11 @@ int main(void)
             else
             {
                 /* Stop motor (any running state including ESC_RECOVERY) */
+#if FEATURE_ADC_CMP_ZC
+                if (garudaData.hwzc.enabled)
+                    HWZC_Disable(&garudaData);
+                garudaData.hwzc.fallbackPending = false;
+#endif
                 garudaData.runCommandActive = false;
                 garudaData.desyncRestartAttempts = 0;
                 HAL_MC1PWMDisableOutputs();

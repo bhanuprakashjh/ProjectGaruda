@@ -197,7 +197,6 @@ typedef struct {
     uint16_t     goodZcCount;     /* Consecutive confirmed ZC events */
     uint16_t     missCount;       /* Consecutive missed ZC (forced steps) */
     bool         fallbackPending; /* Set by HWZC_Disable, cleared by ADC ISR re-seed */
-    bool         disableRequested; /* Set by ADC ISR (prio-6) for speed hysteresis fallback */
     bool         dbgLatchDisable;  /* Debug: after first HW ZC failure, block re-enable permanently */
 
     /* Diagnostics (debugger reads only — tearing acceptable) */

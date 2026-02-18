@@ -49,7 +49,6 @@ void HWZC_Init(volatile GARUDA_DATA_T *pData)
     pData->hwzc.goodZcCount = 0;
     pData->hwzc.missCount = 0;
     pData->hwzc.fallbackPending = false;
-    pData->hwzc.disableRequested = false;
     pData->hwzc.dbgLatchDisable = false;
     pData->hwzc.totalZcCount = 0;
     pData->hwzc.totalMissCount = 0;
@@ -82,7 +81,6 @@ void HWZC_Enable(volatile GARUDA_DATA_T *pData)
 {
     pData->hwzc.enabled = true;
     pData->hwzc.enablePending = false;
-    pData->hwzc.disableRequested = false;
     pData->hwzc.goodZcCount = 0;
     pData->hwzc.missCount = 0;
 
@@ -90,12 +88,17 @@ void HWZC_Enable(volatile GARUDA_DATA_T *pData)
     pData->hwzc.dbgEnableStepPeriod = pData->timing.stepPeriod;
     pData->hwzc.stepPeriodHR = HWZC_ADC_TO_SCCP2(pData->timing.stepPeriod);
 
-    /* Initialize timestamps */
+    /* Initialize timestamps. Seed lastZcStamp to half a step period before
+     * now so the first measured interval (first real ZC - lastZcStamp) is
+     * approximately one full step, not half a step. Without this, the first
+     * IIR update biases stepPeriodHR low, causing an early commutation. */
     uint32_t now = HAL_SCCP2_ReadTimestamp();
-    pData->hwzc.lastZcStamp = now;
+    pData->hwzc.lastZcStamp = now - pData->hwzc.stepPeriodHR / 2;
     pData->hwzc.lastCommStamp = now;
 
-    /* Enable SCCP1 interrupt (priority already set by ServiceInit) */
+    /* Enable SCCP1 interrupt (priority already set by ServiceInit).
+     * Clear any stale flag first to prevent immediate spurious ISR entry. */
+    _CCT1IF = 0;
     _CCT1IE = 1;
 
     /* Arm hardware for the current (new) step */
@@ -111,9 +114,11 @@ void HWZC_Disable(volatile GARUDA_DATA_T *pData)
 {
     pData->hwzc.enabled = false;
 
-    /* Stop timer and disable all HW ZC interrupts */
+    /* Stop timer and disable all HW ZC interrupts.
+     * Clear _CCT1IF to prevent stale event on next HWZC_Enable(). */
     HAL_SCCP1_Stop();
     _CCT1IE = 0;
+    _CCT1IF = 0;
     HAL_ADC_DisableComparatorIE(1);
     HAL_ADC_DisableComparatorIE(2);
 

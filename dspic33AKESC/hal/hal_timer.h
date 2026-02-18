@@ -27,6 +27,9 @@ void HAL_SCCP1_Stop(void);
 void HAL_SCCP2_Init(void);
 uint32_t HAL_SCCP2_ReadTimestamp(void);
 
+void HAL_SCCP3_InitPeriodic(uint32_t periodTicks);
+void HAL_SCCP3_Stop(void);
+
 #ifdef __cplusplus
 }
 #endif

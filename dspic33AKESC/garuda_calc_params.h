@@ -247,7 +247,10 @@ _Static_assert(SINE_PHASE_OFFSET_DEG < 360,
 
 /* ADC ISR tick <-> SCCP2 tick conversion.
  * 1 ADC tick = 1/PWMFREQUENCY_HZ seconds = 1e8/PWMFREQUENCY_HZ SCCP2 ticks.
- * At 24kHz: 1 ADC tick = 100000000/24000 = 4166 SCCP2 ticks. */
+ * At 24kHz: 1 ADC tick = 100000000/24000 = 4166 SCCP2 ticks.
+ * CAUTION: HWZC_SCCP2_TO_ADC truncates to uint16_t via integer division.
+ * For stepPeriodHR < 4166, result is 0. Callers MUST clamp to >= 1 before
+ * using as a divisor. */
 #define HWZC_ADC_TO_SCCP2(t)   ((uint32_t)(t) * (HWZC_TIMER_HZ / PWMFREQUENCY_HZ))
 #define HWZC_SCCP2_TO_ADC(t)   ((uint16_t)((t) / (HWZC_TIMER_HZ / PWMFREQUENCY_HZ)))
 
@@ -257,6 +260,13 @@ _Static_assert(SINE_PHASE_OFFSET_DEG < 360,
 /* Crossover step period threshold (SCCP2 ticks) */
 #define HWZC_CROSSOVER_TICKS    HWZC_ERPM_TO_TICKS(HWZC_CROSSOVER_ERPM)
 
+/* SCCP3 period for high-speed ADC triggering.
+ * FCY / sample_rate = ticks per trigger pulse.
+ * At 1 MHz: 100000000 / 1000000 = 100 ticks = 1us between conversions. */
+#define HWZC_SCCP3_PERIOD       (HWZC_TIMER_HZ / HWZC_ADC_SAMPLE_HZ)
+
+_Static_assert(HWZC_SCCP3_PERIOD >= 21,
+               "SCCP3 period too short (ADC needs ~205ns = 21 ticks at 100MHz)");
 _Static_assert(HWZC_CROSSOVER_ERPM > RAMP_TARGET_ERPM,
                "HW ZC crossover must be above ramp target");
 _Static_assert(HWZC_CROSSOVER_ERPM <= MAX_CLOSED_LOOP_ERPM,

@@ -121,7 +121,7 @@ void GARUDA_ServiceInit(void)
     HAL_ADC_InitHighSpeedBEMF();
     HAL_SCCP1_Init();
     HAL_SCCP2_Init();
-    /* No StartHighSpeedConversion needed — channels use PWM1 trigger (TRG1SRC=4) */
+    HAL_SCCP3_InitPeriodic(HWZC_SCCP3_PERIOD);  /* Start high-speed ADC trigger */
 #endif
 
 #if FEATURE_LEARN_MODULES
@@ -230,6 +230,11 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
             {
                 if (++vbusOvCount >= VBUS_FAULT_FILTER)
                 {
+#if FEATURE_ADC_CMP_ZC
+                    if (garudaData.hwzc.enabled)
+                        HWZC_Disable(&garudaData);
+                    garudaData.hwzc.fallbackPending = false;
+#endif
                     HAL_MC1PWMDisableOutputs();
                     garudaData.state = ESC_FAULT;
                     garudaData.faultCode = FAULT_OVERVOLTAGE;
@@ -243,6 +248,11 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
             {
                 if (++vbusUvCount >= VBUS_FAULT_FILTER)
                 {
+#if FEATURE_ADC_CMP_ZC
+                    if (garudaData.hwzc.enabled)
+                        HWZC_Disable(&garudaData);
+                    garudaData.hwzc.fallbackPending = false;
+#endif
                     HAL_MC1PWMDisableOutputs();
                     garudaData.state = ESC_FAULT;
                     garudaData.faultCode = FAULT_UNDERVOLTAGE;
@@ -291,6 +301,50 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
 #elif FEATURE_BEMF_CLOSED_LOOP
         case ESC_CLOSED_LOOP:
         {
+            /* Throttle-zero shutdown: if pot returns to zero after being raised,
+             * gracefully stop. Don't wait for desync — at low duty the HW ZC
+             * comparator can trigger on noise indefinitely, keeping the motor
+             * in a stalled-but-"running" state (audible buzz).
+             *
+             * hasSeenThrottle prevents false shutdown at CL entry — the arming
+             * gate requires pot=0, so pot is still at zero when CL starts.
+             * Only arm the shutdown after the user has raised the pot once. */
+            {
+                static bool hasSeenThrottle = false;
+                static uint16_t zeroThrottleCount = 0;
+
+                if (prevAdcState != ESC_CLOSED_LOOP)
+                {
+                    hasSeenThrottle = false;
+                    zeroThrottleCount = 0;
+                }
+
+                if (garudaData.throttle >= ARM_THROTTLE_ZERO_ADC)
+                    hasSeenThrottle = true;
+
+                if (hasSeenThrottle && garudaData.throttle < ARM_THROTTLE_ZERO_ADC)
+                {
+                    if (++zeroThrottleCount >= (PWMFREQUENCY_HZ / 20))  /* 50ms */
+                    {
+#if FEATURE_ADC_CMP_ZC
+                        if (garudaData.hwzc.enabled)
+                            HWZC_Disable(&garudaData);
+                        garudaData.hwzc.fallbackPending = false;
+#endif
+                        HAL_MC1PWMDisableOutputs();
+                        garudaData.runCommandActive = false;
+                        garudaData.state = ESC_IDLE;
+                        LED2 = 0;
+                        zeroThrottleCount = 0;
+                        break;
+                    }
+                }
+                else
+                {
+                    zeroThrottleCount = 0;
+                }
+            }
+
             /* Detect first entry into CLOSED_LOOP (state transition) */
             if (prevAdcState != ESC_CLOSED_LOOP)
             {
@@ -302,6 +356,12 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                 BEMF_ZC_Init(&garudaData, initPeriod);
                 BEMF_ZC_OnCommutation(&garudaData, adcIsrTick);
                 garudaData.bemf.ad2SettleCount = ZC_AD2_SETTLE_SAMPLES;
+#if FEATURE_ADC_CMP_ZC
+                /* Clear stale HWZC state from any prior run */
+                garudaData.hwzc.fallbackPending = false;
+                garudaData.hwzc.enablePending = false;
+                garudaData.hwzc.dbgLatchDisable = false;
+#endif
             }
 
 #if FEATURE_ADC_CMP_ZC
@@ -589,6 +649,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                             s2 = garudaData.hwzc.writeSeq;
                         } while (s1 != s2 || (s1 & 1));
                         uint16_t obsPeriod = HWZC_SCCP2_TO_ADC(sp);
+                        if (obsPeriod < 1) obsPeriod = 1;
                         BEMF_INTEG_ObserverOnComm(&garudaData, obsPeriod);
                         garudaData.hwzc.shadowHwzcSkipCount++;
                     }
@@ -606,8 +667,21 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
             /* Duty cycle control. */
             {
                 uint32_t cap = garudaData.timing.zcSynced ? MAX_DUTY : RAMP_DUTY_CAP;
-                uint32_t mappedDuty = MIN_DUTY +
-                    ((uint32_t)garudaData.potRaw * (cap - MIN_DUTY)) / 4096;
+                uint32_t mappedDuty;
+
+                if (!garudaData.timing.zcSynced)
+                {
+                    /* Pre-sync: hold duty at CL entry level.
+                     * Don't let pot changes affect duty while forced
+                     * commutation is trying to lock ZC — changing duty
+                     * shifts the threshold and confuses detection. */
+                    mappedDuty = garudaData.duty;
+                }
+                else
+                {
+                    mappedDuty = MIN_DUTY +
+                        ((uint32_t)garudaData.potRaw * (cap - MIN_DUTY)) / 4096;
+                }
                 if (mappedDuty < MIN_DUTY) mappedDuty = MIN_DUTY;
                 if (mappedDuty > cap) mappedDuty = cap;
 
@@ -848,12 +922,22 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
             else
             {
                 if (garudaData.runCommandActive &&
-                    garudaData.desyncRestartAttempts < DESYNC_MAX_RESTARTS)
+                    garudaData.desyncRestartAttempts < DESYNC_MAX_RESTARTS &&
+                    garudaData.throttle >= ARM_THROTTLE_ZERO_ADC)
                 {
                     garudaData.desyncRestartAttempts++;
                     garudaData.state = ESC_ALIGN;
                     STARTUP_Init(&garudaData);
                     LED2 = 1;
+                }
+                else if (garudaData.throttle < ARM_THROTTLE_ZERO_ADC)
+                {
+                    /* Throttle is zero — user wants motor stopped.
+                     * Don't restart, go to IDLE. */
+                    garudaData.runCommandActive = false;
+                    garudaData.desyncRestartAttempts = 0;
+                    garudaData.state = ESC_IDLE;
+                    LED2 = 0;
                 }
                 else if (!garudaData.runCommandActive)
                 {
@@ -889,11 +973,18 @@ void __attribute__((__interrupt__, no_auto_psv)) _PWMInterrupt(void)
     if (PCI_FAULT_ACTIVE_STATUS)
     {
         /* Fault detected — disable outputs and set fault state */
+#if FEATURE_ADC_CMP_ZC
+        if (garudaData.hwzc.enabled)
+            HWZC_Disable(&garudaData);
+#endif
         HAL_MC1ClearPWMPCIFault();
         HAL_MC1PWMDisableOutputs();
         garudaData.state = ESC_FAULT;
         garudaData.faultCode = FAULT_OVERCURRENT;
         garudaData.runCommandActive = false;
+#if FEATURE_ADC_CMP_ZC
+        garudaData.hwzc.fallbackPending = false;
+#endif
         LED2 = 0;
     }
     ClearPWMIF();
@@ -908,7 +999,8 @@ void __attribute__((__interrupt__, no_auto_psv)) _AD1CMP5Interrupt(void)
 {
     _AD1CMP5IE = 0;              /* Disable immediately to prevent re-trigger */
     AD1CMPSTATbits.CH5CMP = 0;  /* Clear comparator status */
-    HWZC_OnZcDetected(&garudaData);
+    if (garudaData.hwzc.enabled)
+        HWZC_OnZcDetected(&garudaData);
     _AD1CMP5IF = 0;
 }
 
@@ -919,7 +1011,8 @@ void __attribute__((__interrupt__, no_auto_psv)) _AD2CMP1Interrupt(void)
 {
     _AD2CMP1IE = 0;
     AD2CMPSTATbits.CH1CMP = 0;
-    HWZC_OnZcDetected(&garudaData);
+    if (garudaData.hwzc.enabled)
+        HWZC_OnZcDetected(&garudaData);
     _AD2CMP1IF = 0;
 }
 
@@ -929,8 +1022,13 @@ void __attribute__((__interrupt__, no_auto_psv)) _AD2CMP1Interrupt(void)
  */
 void __attribute__((__interrupt__, no_auto_psv)) _CCT1Interrupt(void)
 {
-    /* disableRequested is checked inside OnCommDeadline/OnTimeout
-     * AFTER commutation fires — never mid-step (avoids lost-comm jerk). */
+    if (!garudaData.hwzc.enabled)
+    {
+        /* HWZC was disabled (fault, button stop, throttle-zero shutdown)
+         * while a timer event was pending. Discard — do not commutate. */
+        _CCT1IF = 0;
+        return;
+    }
 
     switch (garudaData.hwzc.phase)
     {

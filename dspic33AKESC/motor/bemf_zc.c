@@ -676,6 +676,7 @@ void BEMF_INTEG_ObserverOnComm(volatile GARUDA_DATA_T *pData, uint16_t stepPerio
         if (peak < 10) peak = 10;
 
         uint16_t sp = stepPeriod;
+        if (sp < 1) sp = 1;  /* Guard: HWZC_SCCP2_TO_ADC can truncate to 0 */
 #if FEATURE_TIMING_ADVANCE
         uint32_t eRPM = ERPM_FROM_ADC_STEP_NUM / sp;
         uint16_t advDeg;

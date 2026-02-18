@@ -84,4 +84,29 @@ uint32_t HAL_SCCP2_ReadTimestamp(void)
     return CCP2TMR;
 }
 
+/**
+ * @brief Initialize SCCP3 as a periodic timer for high-speed ADC triggering.
+ * Output drives TRG1SRC=14 (SCCP3 Trigger out) on ADC channels.
+ * @param periodTicks  FCY ticks per trigger (e.g. 100 = 1 MHz at 100 MHz FCY).
+ */
+void HAL_SCCP3_InitPeriodic(uint32_t periodTicks)
+{
+    CCP3CON1 = 0;
+    CCP3CON1bits.T32 = 1;        /* 32-bit mode */
+    CCP3CON1bits.MOD = 0b0000;   /* Timer mode (output disabled) */
+    CCP3CON1bits.TMRPS = 0b00;   /* Prescaler 1:1 */
+    CCP3CON1bits.CLKSEL = 0b000; /* FCY clock (100 MHz) */
+    CCP3PR = periodTicks;
+    CCP3TMR = 0;
+    CCP3CON1bits.ON = 1;
+}
+
+/**
+ * @brief Stop SCCP3 periodic timer.
+ */
+void HAL_SCCP3_Stop(void)
+{
+    CCP3CON1bits.ON = 0;
+}
+
 #endif /* FEATURE_ADC_CMP_ZC */

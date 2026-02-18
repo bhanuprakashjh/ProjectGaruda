@@ -51,6 +51,35 @@ void InitializeADCs(void)
     AD1CH4CONbits.LEFT = 0;
     AD1CH4CONbits.DIFF = 0;
 
+#if FEATURE_ADC_CMP_ZC
+    /* High-speed BEMF channels configured BEFORE ADC ON.
+     * Datasheet warns configuring channels when ADON=1 is unpredictable
+     * for non-PWM trigger sources. TRG1SRC=14 (SCCP3 Trigger out).
+     * Comparator disabled initially (CMPMOD=0). */
+
+    /* AD1CH5: Phase B high-speed (RB8 = AD1AN11) */
+    AD1CH5CONbits.PINSEL = 11;
+    AD1CH5CONbits.SAMC = HWZC_SAMC;
+    AD1CH5CONbits.LEFT = 0;
+    AD1CH5CONbits.DIFF = 0;
+    AD1CH5CONbits.TRG1SRC = 14;  /* SCCP3 Trigger out */
+    AD1CH5CONbits.TRG2SRC = 0;   /* No secondary trigger */
+    AD1CH5CONbits.CMPMOD = 0;    /* Comparator disabled initially */
+    AD1CH5CMPLO = 0;
+    AD1CH5CMPHI = 0;
+
+    /* AD2CH1: Phase A/C high-speed (initial: RB9 = AD2AN10) */
+    AD2CH1CONbits.PINSEL = 10;
+    AD2CH1CONbits.SAMC = HWZC_SAMC;
+    AD2CH1CONbits.LEFT = 0;
+    AD2CH1CONbits.DIFF = 0;
+    AD2CH1CONbits.TRG1SRC = 14;  /* SCCP3 Trigger out */
+    AD2CH1CONbits.TRG2SRC = 0;   /* No secondary trigger */
+    AD2CH1CONbits.CMPMOD = 0;    /* Comparator disabled initially */
+    AD2CH1CMPLO = 0;
+    AD2CH1CMPHI = 0;
+#endif
+
     /* Turn on ADC Core 1 */
     AD1CONbits.ON = 1;
     while (AD1CONbits.ADRDY == 0);
@@ -106,42 +135,19 @@ bool HAL_ADC_SelectBEMFChannel(uint8_t floatingPhase)
 #if FEATURE_ADC_CMP_ZC
 
 /**
- * @brief Initialize high-speed BEMF channels for back-to-back conversion.
- * AD1CH5: Phase B (RB8, PINSEL=11, fixed).
- * AD2CH1: Phase A/C (RB9/RA10, PINSEL muxed per step).
- * Both use PWM1 trigger (24kHz) — adequate for Hurst motor at 20K eRPM.
- * Comparator disabled initially (CMPMOD=0).
+ * @brief Post-ON setup for high-speed BEMF comparator channels.
+ * Channel configuration (PINSEL, SAMC, TRG1SRC=14) is done in
+ * InitializeADCs() BEFORE ADC ON — required for non-PWM trigger
+ * sources per datasheet.  This function just clears interrupt
+ * flags and leaves comparator interrupts disabled.
  *
- * For FPV motors (>120K eRPM), switch to RPTCNT repeat timer
- * (TRG1SRC=3, RPTCNT=0) for continuous ~5.9 Msps conversion.
+ * Trigger: TRG1SRC=14 (SCCP3 Trigger out) at HWZC_ADC_SAMPLE_HZ.
+ * Previous attempts with TRG1SRC=3 (RPTCNT, RESERVED on this silicon)
+ * and TRG1SRC=1+TRG2SRC=2 (SW+immediate, ignored in MODE=00)
+ * both produced ADC=0.
  */
 void HAL_ADC_InitHighSpeedBEMF(void)
 {
-    /* AD1CH5: Phase B high-speed (RB8 = AD1AN11)
-     * Uses PWM1 trigger (same as existing channels) — 24kHz sample rate.
-     * For Hurst motor at 20K eRPM, that's ~12 samples/step — adequate.
-     * Comparator checks each sample and fires ISR on crossing. */
-    AD1CH5CONbits.PINSEL = 11;
-    AD1CH5CONbits.SAMC = HWZC_SAMC;
-    AD1CH5CONbits.LEFT = 0;
-    AD1CH5CONbits.DIFF = 0;
-    AD1CH5CONbits.TRG1SRC = 4;   /* PWM1 ADC Trigger 1 (24kHz) */
-    AD1CH5CONbits.TRG2SRC = 0;   /* No secondary trigger */
-    AD1CH5CONbits.CMPMOD = 0;    /* Comparator disabled initially */
-    AD1CH5CMPLO = 0;
-    AD1CH5CMPHI = 0;
-
-    /* AD2CH1: Phase A/C high-speed (initial: RB9 = AD2AN10) */
-    AD2CH1CONbits.PINSEL = 10;
-    AD2CH1CONbits.SAMC = HWZC_SAMC;
-    AD2CH1CONbits.LEFT = 0;
-    AD2CH1CONbits.DIFF = 0;
-    AD2CH1CONbits.TRG1SRC = 4;   /* PWM1 ADC Trigger 1 (24kHz) */
-    AD2CH1CONbits.TRG2SRC = 0;   /* No secondary trigger */
-    AD2CH1CONbits.CMPMOD = 0;    /* Comparator disabled initially */
-    AD2CH1CMPLO = 0;
-    AD2CH1CMPHI = 0;
-
     /* Comparator interrupts: clear and leave disabled */
     _AD1CMP5IF = 0;
     _AD1CMP5IE = 0;
@@ -225,16 +231,6 @@ void HAL_ADC_ClearComparatorFlag(uint8_t adcCore)
 void HAL_ADC_SetHighSpeedPinsel(uint8_t pinsel)
 {
     AD2CH1CONbits.PINSEL = pinsel;
-}
-
-/**
- * @brief Fire software trigger on both high-speed channels to start
- * back-to-back continuous conversion. TRG2SRC=immediate keeps them running.
- */
-void HAL_ADC_StartHighSpeedConversion(void)
-{
-    AD1SWTRGbits.CH5TRG = 1;
-    AD2SWTRGbits.CH1TRG = 1;
 }
 
 #endif /* FEATURE_ADC_CMP_ZC */

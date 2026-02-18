@@ -57,7 +57,6 @@ void HAL_ADC_EnableComparatorIE(uint8_t adcCore);
 void HAL_ADC_DisableComparatorIE(uint8_t adcCore);
 void HAL_ADC_ClearComparatorFlag(uint8_t adcCore);
 void HAL_ADC_SetHighSpeedPinsel(uint8_t pinsel);
-void HAL_ADC_StartHighSpeedConversion(void);
 #endif
 
 #ifdef __cplusplus
