@@ -250,9 +250,48 @@ hwzc.dbgAdvanceDeg  = 12                     // 12° timing advance (auto-scaled
 
 **Zero misses across 41,714 total HW ZC detections.** Perfect detection.
 
+#### x14 Series — 4x Oversampling Enabled (MODE=11, ACCNUM=00)
+
+After enabling 4-sample hardware oversampling on the comparator channels,
+re-tested across the speed range. Each SCCP3 trigger at 1 MHz now produces
+a burst of 4 conversions (820ns), averaged via right-shift by 2 bits.
+Comparator fires on the averaged result. +6 dB noise immunity.
+
+**x14mid.csv — Mid Speed (~10,000 eRPM)**
+```
+hwzc.enabled        = true
+hwzc.totalZcCount   = 0x00004575 (17,781)    // 17,781 HW ZC detections
+hwzc.totalMissCount = 0x00000000             // ZERO misses
+hwzc.totalCommCount = 0x00004575 (17,781)    // All comms from HW ZC
+hwzc.missCount      = 0                      // Current streak: 0 misses
+hwzc.stepPeriodHR   = 0x00018426 (99,366 SCCP2 ticks = 994us)
+hwzc.dbgAdvanceDeg  = 6                      // 6° timing advance
+```
+
+**x14high.csv — Full Speed (~18,650 eRPM)**
+```
+hwzc.enabled        = true
+hwzc.totalZcCount   = 0x00005105 (20,741)    // 20,741 HW ZC detections
+hwzc.totalMissCount = 0x00000000             // ZERO misses
+hwzc.totalCommCount = 0x00005105 (20,741)    // All comms from HW ZC
+hwzc.missCount      = 0                      // Current streak: 0 misses
+hwzc.stepPeriodHR   = 0x0000D146 (53,574 SCCP2 ticks = 536us)
+hwzc.dbgAdvanceDeg  = 13                     // 13° timing advance
+potRaw              = 0x0FFF                  // Full throttle
+```
+
+| Test | Mode | eRPM | HW ZC Count | Misses | Timing Advance |
+|------|------|------|-------------|--------|----------------|
+| x13 series | Single sample (MODE=00) | 4K-16K | 41,714 | 0 | 2-12° |
+| x14mid | 4x oversample (MODE=11) | ~10,000 | 17,781 | 0 | 6° |
+| x14high | 4x oversample (MODE=11) | ~18,650 | 20,741 | 0 | 13° |
+
+**Zero misses across 80,236 total HW ZC detections (single-sample + oversampled).**
+4x oversampling introduces zero regression while adding +6 dB noise immunity.
+
 ### Theoretical eRPM Capability
 
-At 1 MHz sample rate with single-sample comparator detection:
+At 1 MHz trigger rate with 4x oversampling (1 averaged result per trigger):
 
 | eRPM | Step Period | Samples/Step | Sufficient? |
 |------|------------|--------------|-------------|

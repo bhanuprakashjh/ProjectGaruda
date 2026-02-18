@@ -262,8 +262,9 @@ Crossover between modes is automatic with hysteresis. See Phase F plan for detai
 2. ~~Add ADC channel digital comparator for threshold events.~~ **DONE** — Phase F implemented.
    AD1CH5 (Phase B) and AD2CH1 (Phase A/C) with SCCP3 trigger at 1 MHz. Zero misses
    across 40K+ detections on Hurst motor.
-3. Add oversampling (`MODE=11`, `ACCNUM=00`, 4 samples) for BEMF channels — ready to
-   enable for production noise immunity (+6 dB). See investigation doc.
+3. ~~Add oversampling (`MODE=11`, `ACCNUM=00`, 4 samples) for BEMF channels.~~ **DONE** —
+   Enabled on AD1CH5 and AD2CH1. TRG2SRC=2 (immediate re-trigger), ACCBRST=1.
+   38,522 HW ZC detections with zero misses (x14 series). +6 dB noise immunity.
 4. Evaluate `EIEN` only if ISR latency budget becomes tight.
 
 ## 5) Implementation cautions

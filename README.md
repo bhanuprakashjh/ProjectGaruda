@@ -8,16 +8,16 @@
 
 ## Current Status
 
-**Motor runs stable closed-loop across the full speed range (1,300 - 18,500 eRPM) with zero desyncs and zero timeout-forced commutations. Smooth sine startup eliminates alignment jerk and stepping noise.**
+**Motor runs stable closed-loop across the full speed range (1,300 - 18,500 eRPM) with zero desyncs. Hardware-accelerated ZC detection via ADC digital comparator at 1 MHz with 4x oversampling — 80,000+ HW ZC detections with zero misses. Smooth sine startup eliminates alignment jerk.**
 
 | Metric | Value |
 |--------|-------|
-| **Program flash** | ~16 KB (12%) of 128 KB |
-| **Data RAM** | ~264 bytes (1.6%) of 16 KB |
-| **Source files** | 22 source, 25 headers |
+| **Program flash** | ~20 KB (15%) of 128 KB |
+| **Data RAM** | ~338 bytes (2%) of 16 KB |
+| **Source files** | 24 source, 27 headers |
 | **Speed range** | 1,300 - 18,500 eRPM (pot-controlled) |
+| **HW ZC detections** | 80,236 total, 0 misses (0.000%) |
 | **Desyncs in testing** | 0 |
-| **Timeout-forced comms** | 0 |
 | **Motor** | Hurst DMB0224C10002 (10-pole, 24V) |
 | **Dev board** | MCLV-48V-300W (Microchip) |
 
@@ -32,6 +32,7 @@
 | **Phase C** | Dynamic blanking, Vbus sag power limiting | HW verified |
 | **Phase D** | Sinusoidal V/f startup (replaces trap align+ramp) | HW verified |
 | **Phase E** | BEMF integration shadow estimator (validation mode) | HW verified |
+| **Phase F** | ADC digital comparator high-speed ZC (1 MHz, 4x oversampling) | HW verified |
 
 ---
 
@@ -139,6 +140,59 @@ A **shadow-only** integration-based commutation estimator that runs alongside th
 
 All 5 test points pass criteria: **hit rate >90%** and **noFire rate <5%**.
 
+### Phase F — ADC Digital Comparator High-Speed ZC Detection
+
+Adds a hardware-accelerated zero-crossing detection path using the dsPIC33AK's per-channel ADC digital comparator. At high eRPM, the 24 kHz software ZC polling becomes bandwidth-limited (only 2 samples per step at 20K eRPM). Phase F solves this by running dedicated ADC channels at **1 MHz** via an SCCP3 peripheral trigger, with the digital comparator checking each conversion result in hardware — firing an interrupt only when the BEMF threshold is crossed.
+
+**Dual-mode architecture:**
+- **Below 5,000 eRPM**: Software ZC in the 24 kHz ADC ISR (unchanged from Phase 2)
+- **Above 5,000 eRPM**: Hardware comparator ZC via dedicated 1 MHz ADC channels. The 24 kHz ISR continues running for threshold computation, pot, Vbus, and duty control — but does not drive commutation.
+
+Crossover is automatic with hysteresis (500 eRPM band). Once hardware ZC activates, it stays active for the entire run. Fallback to software ZC occurs only on miss-limit (error condition).
+
+**ADC channel allocation:**
+| Channel | Pin | Rate | Purpose |
+|---------|-----|------|---------|
+| AD1CH5 | RB8 (Phase B) | 1 MHz | Hardware comparator ZC (fixed PINSEL) |
+| AD2CH1 | RB9/RA10 (Phase A/C) | 1 MHz | Hardware comparator ZC (muxed per step) |
+| AD1CH0, AD2CH0, AD1CH1, AD1CH4 | Various | 24 kHz | Software ZC, pot, Vbus (unchanged) |
+
+**4x hardware oversampling** (MODE=11, ACCNUM=00): Each SCCP3 trigger produces a burst of 4 conversions (820 ns), hardware-averaged via right-shift by 2 bits. The comparator fires on the averaged result, providing **+6 dB noise immunity** without reducing the effective 1 MHz detection rate. `ACCBRST=1` prevents 24 kHz channels from splitting the burst.
+
+**SCCP timer state machine:**
+- **SCCP1** (32-bit one-shot): Drives the per-step ZC detection cycle — blanking delay → comparator watch with timeout → commutation delay. Three states, one timer.
+- **SCCP2** (32-bit free-running): High-resolution timestamps (10 ns resolution) for ZC interval measurement and step period tracking via IIR filter.
+- **SCCP3** (periodic): 1 MHz trigger source for the comparator ADC channels (`TRG1SRC=14`).
+
+**ISR priority scheme** (when Phase F enabled):
+| Priority | ISRs | Purpose |
+|----------|------|---------|
+| 7 (highest) | `_AD1CMP5Interrupt`, `_AD2CMP1Interrupt`, `_CCT1Interrupt` | ZC detection + commutation timing |
+| 6 | `_AD1CH0Interrupt` | 24 kHz BEMF/threshold/duty (lowered from 7) |
+| 5 | `_T1Interrupt` | Heartbeat, state machine, V/f ramp |
+
+**Safety features:**
+- `HWZC_Disable()` called on all exit-CL paths (faults, button stop, throttle-zero shutdown)
+- ISR guards prevent stale timer/comparator events from commutating after disable
+- `fallbackPending` flag enables clean software ZC re-seed from the ADC ISR
+- Seqlock on `stepPeriodHR` (uint32_t) for tear-free reads across ISR priorities
+- Throttle-zero shutdown: if pot returns to zero after being raised, motor stops gracefully
+
+**Hardware verification results (Hurst DMB0224C10002, MCLV-48V-300W):**
+
+| Test | Mode | eRPM | HW ZC Count | Misses | Timing Advance |
+|------|------|------|-------------|--------|----------------|
+| x13min | N/A (SW ZC) | ~4,138 | 0 | N/A | 2° |
+| x13mid | Single sample | ~8,300 | 10,306 | 0 | 5° |
+| x13midplus | Single sample | ~8,700 | 9,003 | 0 | 5° |
+| x13max | Single sample | ~16,460 | 22,405 | 0 | 12° |
+| x14mid | 4x oversample | ~10,000 | 17,781 | 0 | 6° |
+| x14high | 4x oversample | ~18,650 | 20,741 | 0 | 13° |
+
+**80,236 total HW ZC detections with zero misses (0.000%).** Theoretical capability: 300K+ eRPM (33 averaged results per step at 1 MHz).
+
+**Feature flag**: `FEATURE_ADC_CMP_ZC`. Setting to 0 removes all hardware ZC code. Requires `FEATURE_BEMF_CLOSED_LOOP`.
+
 ---
 
 ## Feature Flags
@@ -153,13 +207,15 @@ All features are individually toggleable via compile-time flags in `garuda_confi
 #define FEATURE_TIMING_ADVANCE   1  /* Phase B3: Linear timing advance */
 #define FEATURE_DYNAMIC_BLANKING 1  /* Phase C1: Speed+duty blanking */
 #define FEATURE_VBUS_SAG_LIMIT   1  /* Phase C2: Vbus sag power limit */
-#define FEATURE_BEMF_INTEGRATION 1  /* Phase E: Shadow integration */
 #define FEATURE_SINE_STARTUP     1  /* Phase D: Sine startup */
+#define FEATURE_BEMF_INTEGRATION 1  /* Phase E: Shadow integration */
+#define FEATURE_ADC_CMP_ZC       1  /* Phase F: ADC comparator high-speed ZC */
 ```
 
 Setting any flag to 0 completely removes that feature from the build (dead code elimination). Compile-time guards enforce dependencies:
 - `FEATURE_SINE_STARTUP` requires `FEATURE_BEMF_CLOSED_LOOP` (needs ZC for closed-loop transition)
 - `FEATURE_SINE_STARTUP` is incompatible with `DIAGNOSTIC_MANUAL_STEP` (conflicting PWM writes)
+- `FEATURE_ADC_CMP_ZC` requires `FEATURE_BEMF_CLOSED_LOOP` (hardware ZC extends the closed-loop path)
 
 ---
 
@@ -170,7 +226,7 @@ Setting any flag to 0 completely removes that feature from the build (dead code 
 | **MCU** | dsPIC33AK128MC106 (32-bit, hardware FPU) |
 | **Core** | 200 MHz DSP |
 | **Flash / RAM** | 128 KB / 16 KB |
-| **ADC** | Dual-core, 12-bit, 24 kHz sample rate (PWM-triggered) |
+| **ADC** | Dual-core, 12-bit: 24 kHz PWM-triggered (control) + 1 MHz SCCP3-triggered (ZC comparator, 4x oversampled) |
 | **PWM** | 3 generators, 400 MHz timebase, complementary with dead-time |
 | **Dev Board** | MCLV-48V-300W (Microchip) |
 | **Motor** | Hurst DMB0224C10002 (10-pole, 24 V, 1.0 A rated) |
@@ -197,7 +253,9 @@ dspic33AKESC/
 │   ├── port_config.c/.h          GPIO mapping: PWM, BEMF, LED, buttons, UART, DShot
 │   ├── hal_pwm.c/.h              24kHz center-aligned PWM, 6-step override control,
 │   │                             3-phase sine duty writes, override release
-│   ├── hal_adc.c/.h              BEMF/Vbus/Pot ADC channels, floating phase muxing
+│   ├── hal_adc.c/.h              BEMF/Vbus/Pot ADC channels, floating phase muxing,
+│   │                             high-speed comparator channels (4x oversampled)
+│   ├── hal_timer.c/.h            SCCP1 (one-shot), SCCP2 (timestamp), SCCP3 (1MHz trigger)
 │   ├── hal_comparator.c/.h       CMP1/2/3 with DAC (initialized, not in control loop)
 │   ├── board_service.c/.h        Peripheral init, button debounce, PWM enable/disable
 │   ├── timer1.c/.h               100us tick timer (prescaler 1:8, 100MHz clock)
@@ -208,6 +266,7 @@ dspic33AKESC/
 │   ├── commutation.c/.h          6-step commutation table, step advance, ApplyStep
 │   ├── startup.c/.h              Trap align+ramp, sine align+V/f ramp, transition
 │   ├── bemf_zc.c/.h              BEMF zero-crossing detection + integration shadow
+│   ├── hwzc.c/.h                 Hardware ZC state machine (comparator + SCCP1 timer)
 │   └── pi.c/.h                   PI controller (from AN1292 reference)
 │
 └── learn/                        Self-learning modules (disabled, future use)
@@ -355,6 +414,10 @@ EOF
 - Sine startup — verified: smooth alignment, V/f ramp, transition to closed-loop
 - Sine direction — verified: CW and CCW sine rotation matches commutation direction
 - Sine-to-trap transition — verified with SINE_PHASE_OFFSET_DEG=60 on Hurst motor
+- Hardware ZC (single-sample) — 41,714 detections, zero misses across full speed range
+- Hardware ZC (4x oversampled) — 38,522 detections, zero misses across full speed range
+- SW-to-HW ZC crossover at 5,000 eRPM — seamless transition in both directions
+- Throttle-zero shutdown — verified: motor stops gracefully when pot returns to zero
 
 ### Tests Recommended
 
@@ -383,11 +446,12 @@ EOF
 - **Phase C**: Dynamic blanking, Vbus sag power limiting
 - **Phase D**: Sinusoidal V/f startup (smooth 3-phase drive, eliminates alignment jerk)
 - **Phase E**: BEMF integration shadow estimator (validated, >99% accuracy at high speed)
+- **Phase F**: ADC digital comparator high-speed ZC (1 MHz SCCP3 trigger, 4x oversampling, 80K+ detections with zero misses)
 
 ### Future
 
+- **Hybrid Commutation** — Combine all 3 ZC methods: comparator triggers, integration validates, software ZC as fallback. "Comparator fires, integration confirms" architecture.
 - **DShot Protocol** (Phase 3) — DShot150/300/600/1200 decoding via Input Capture (ICM1 pin already mapped). Auto-rate detection, full command set (CMD 0-47), bidirectional DShot with GCR encoding.
-- **Hybrid Commutation** — Promote integration estimator from shadow to active commutation (requires further validation on production motor/board). Threshold ZC as fallback.
 - **Garuda Serial Protocol (GSP)** — UART-based configuration and telemetry protocol. Web-based configurator using WebSerial API.
 - **64-byte EEPROM Config** — Persistent configuration storage with CRC-16 integrity check.
 - **Thermal Monitoring** — Linear duty derating based on temperature.
@@ -401,11 +465,16 @@ EOF
 
 ### ISR Map
 
-| ISR | Source | Rate | Purpose |
-|-----|--------|------|---------|
-| `_AD1CH0Interrupt` | ADC1 CH0 complete | 24 kHz | BEMF sampling, ZC detection, integration, commutation, sine waveform generation, Vbus/pot reads |
-| `_T1Interrupt` | Timer1 | 10 kHz (100 us) | Heartbeat, button debounce, state machine (arm/align/ramp), duty slew, V/f profile, systemTick |
-| `_PWM1Interrupt` | PWM fault PCI | On fault | Immediate PWM shutdown, set ESC_FAULT |
+| ISR | Source | Priority | Rate | Purpose |
+|-----|--------|----------|------|---------|
+| `_AD1CMP5Interrupt` | ADC1 CH5 comparator | 7 | On ZC event | Phase B hardware ZC detection (Phase F) |
+| `_AD2CMP1Interrupt` | ADC2 CH1 comparator | 7 | On ZC event | Phase A/C hardware ZC detection (Phase F) |
+| `_CCT1Interrupt` | SCCP1 timer | 7 | Per step | Blanking expiry, commutation deadline, ZC timeout (Phase F) |
+| `_AD1CH0Interrupt` | ADC1 CH0 complete | 6* | 24 kHz | BEMF sampling, SW ZC, integration, sine waveform, Vbus/pot |
+| `_T1Interrupt` | Timer1 | 5 | 10 kHz | Heartbeat, button debounce, state machine, duty slew, V/f ramp |
+| `_PWM1Interrupt` | PWM fault PCI | 4 | On fault | Immediate PWM shutdown, set ESC_FAULT |
+
+*Priority 6 when `FEATURE_ADC_CMP_ZC=1`; priority 7 when disabled. Phase F ISRs are only enabled above the crossover speed — below crossover, the ADC ISR is effectively highest priority.
 
 ### Clock Domains
 
@@ -421,7 +490,7 @@ CLK8 = 100 MHz  |  UART clock
 
 ### Key Design Decisions
 
-- **ADC-based ZC, not comparator-based**: The MCLV-48V-300W DIM board's phase voltage divider pins are not routable to comparator inputs. ADC threshold detection is used instead, with software deadband and majority filter.
+- **ADC digital comparator ZC**: The MCLV-48V-300W DIM board's phase voltage divider pins are not routable to analog comparator (CMP) inputs. Instead, the ADC's per-channel digital comparator checks each conversion result against a threshold in hardware — achieving analog-comparator-like event-driven detection using the digital domain. At 1 MHz with 4x oversampling, this provides 33+ averaged results per step even at 300K eRPM.
 - **Native float math**: The dsPIC33AK has a hardware FPU. No fixed-point (Q8.8) used — all runtime calculations use native `float` where needed.
 - **Shadow-first integration**: The BEMF integration estimator runs as a shadow alongside threshold ZC, validating its accuracy before any future promotion to active control.
 - **Feature flags everywhere**: Every phase is gated behind `#if FEATURE_*` flags. Setting a flag to 0 dead-code-eliminates the entire feature with zero overhead.
