@@ -669,6 +669,10 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                 uint32_t cap = garudaData.timing.zcSynced ? MAX_DUTY : RAMP_DUTY_CAP;
                 uint32_t mappedDuty;
 
+#if FEATURE_DUTY_SLEW
+                static uint16_t postSyncCounter = 0;
+#endif
+
                 if (!garudaData.timing.zcSynced)
                 {
                     /* Pre-sync: hold duty at CL entry level.
@@ -676,9 +680,16 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                      * commutation is trying to lock ZC — changing duty
                      * shifts the threshold and confuses detection. */
                     mappedDuty = garudaData.duty;
+#if FEATURE_DUTY_SLEW
+                    postSyncCounter = 0;
+#endif
                 }
                 else
                 {
+#if FEATURE_DUTY_SLEW
+                    if (postSyncCounter < POST_SYNC_SETTLE_TICKS)
+                        postSyncCounter++;
+#endif
                     mappedDuty = MIN_DUTY +
                         ((uint32_t)garudaData.potRaw * (cap - MIN_DUTY)) / 4096;
                 }
@@ -691,11 +702,20 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                     if (prevAdcState != ESC_CLOSED_LOOP)
                         prevDuty = garudaData.duty;
 
+                    /* Post-sync settle: use reduced slew-up rate for
+                     * POST_SYNC_SETTLE_MS after ZC lock. This prevents
+                     * the motor from accelerating faster than the
+                     * stepPeriod IIR can track on low-inertia motors.
+                     * Normal rate: 2%/ms. Settle rate: 0.25%/ms (1/8). */
+                    uint32_t upRate = DUTY_SLEW_UP_RATE;
+                    if (postSyncCounter < POST_SYNC_SETTLE_TICKS)
+                        upRate = DUTY_SLEW_UP_RATE / POST_SYNC_SLEW_DIVISOR;
+
                     int32_t delta = (int32_t)mappedDuty - (int32_t)prevDuty;
                     if (delta > 0)
                     {
-                        if ((uint32_t)delta > DUTY_SLEW_UP_RATE)
-                            mappedDuty = prevDuty + DUTY_SLEW_UP_RATE;
+                        if ((uint32_t)delta > upRate)
+                            mappedDuty = prevDuty + upRate;
                     }
                     else if (delta < 0)
                     {
@@ -852,32 +872,58 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
             break;
 #elif FEATURE_SINE_STARTUP
         case ESC_OL_RAMP:
+        {
+            static uint8_t sineCoastCount = 0;
+
+            if (sineCoastCount > 0)
+            {
+                /* Coast gap: motor coasts on inertia while winding
+                 * currents decay. All phases at center duty = zero
+                 * net voltage. After L/R decay, transition to trap. */
+                sineCoastCount--;
+                if (sineCoastCount == 0)
+                {
+                    /* Coast complete — transition to trap */
+                    uint8_t step = STARTUP_SineGetTransitionStep(&garudaData);
+                    COMMUTATION_ApplyStep(&garudaData, step);
+
+                    garudaData.duty = garudaData.sine.amplitude;
+                    if (garudaData.duty < MIN_DUTY)
+                        garudaData.duty = MIN_DUTY;
+                    if (garudaData.duty > RAMP_DUTY_CAP)
+                        garudaData.duty = RAMP_DUTY_CAP;
+                    HAL_PWM_SetDutyCycle(garudaData.duty);
+
+                    garudaData.rampStepPeriod = MIN_STEP_PERIOD;
+                    garudaData.state = ESC_CLOSED_LOOP;
+                }
+                break;
+            }
+
             if (STARTUP_SineRamp(&garudaData))
             {
-                /* 1. Stop sine in ADC ISR FIRST */
+                /* Target speed reached — begin coast gap.
+                 * De-energize all phases (center duty = zero net voltage).
+                 * Motor coasts on inertia while winding currents decay
+                 * through the L/R time constant (~1.14ms for Hurst).
+                 * Eliminates current discontinuity at sine->trap transition. */
                 garudaData.sine.active = false;
+                HAL_PWM_SetDutyCycle3Phase(SINE_CENTER_DUTY,
+                                           SINE_CENTER_DUTY,
+                                           SINE_CENTER_DUTY);
 
-                /* 2. Map angle to step (direction-aware, safe 0-5) */
-                uint8_t step = STARTUP_SineGetTransitionStep(&garudaData);
+                /* Pre-advance sine angle to account for rotor movement
+                 * during coast. Motor continues at ~RAMP_TARGET_ERPM
+                 * under inertia. Without this, the step mapping would
+                 * be wrong by coast_time * eRPM degrees. */
+                uint32_t coastAngle = ((uint32_t)garudaData.sine.angleIncrement
+                    * SINE_COAST_GAP_TICKS * PWMFREQUENCY_HZ) / 10000;
+                garudaData.sine.angle += (uint16_t)coastAngle;
 
-                /* 3. Apply step: PWM overrides + ADC mux + settle count */
-                COMMUTATION_ApplyStep(&garudaData, step);
-
-                /* 4. Set 6-step duty — 1:1 amplitude match */
-                garudaData.duty = garudaData.sine.amplitude;
-                if (garudaData.duty < MIN_DUTY)
-                    garudaData.duty = MIN_DUTY;
-                if (garudaData.duty > RAMP_DUTY_CAP)
-                    garudaData.duty = RAMP_DUTY_CAP;
-                HAL_PWM_SetDutyCycle(garudaData.duty);
-
-                /* 5. Seed rampStepPeriod for CL entry */
-                garudaData.rampStepPeriod = MIN_STEP_PERIOD;
-
-                /* 6. Transition to closed-loop */
-                garudaData.state = ESC_CLOSED_LOOP;
+                sineCoastCount = SINE_COAST_GAP_TICKS;
             }
             break;
+        }
 #else
         case ESC_OL_RAMP:
             if (STARTUP_OpenLoopRamp(&garudaData))

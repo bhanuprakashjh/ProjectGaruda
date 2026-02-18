@@ -136,6 +136,8 @@ _Static_assert(ZC_FILTER_MAX >= ZC_FILTER_MIN, "ZC_FILTER_MAX must be >= ZC_FILT
 #define DUTY_SLEW_DOWN_RATE (uint32_t)( \
     (uint64_t)MAX_DUTY * DUTY_SLEW_DOWN_PERCENT_PER_MS / 100 \
     / (PWMFREQUENCY_HZ / 1000))
+/* Post-sync duty settle period in ADC ISR ticks */
+#define POST_SYNC_SETTLE_TICKS ((uint16_t)(POST_SYNC_SETTLE_MS * PWMFREQUENCY_HZ / 1000))
 #endif
 
 /* Phase B2: Desync recovery coast-down counts (Timer1 = 100us ticks) */
@@ -220,6 +222,11 @@ _Static_assert(INTEG_HIT_DIVISOR >= 2 && INTEG_HIT_DIVISOR <= 16,
 /* Alignment angle: 90 deg = Phase A peak (d-axis toward A) = 16384 Q16 */
 #define SINE_ALIGN_ANGLE_Q16   ((uint16_t)16384)
 
+/* Sine coast gap in Timer1 ticks (100us/tick) */
+#define SINE_COAST_GAP_TICKS    ((uint8_t)(SINE_COAST_GAP_MS * 10))
+
+_Static_assert(SINE_COAST_GAP_TICKS >= 1 && SINE_COAST_GAP_TICKS <= 100,
+               "SINE_COAST_GAP_TICKS out of range (0.1-10ms)");
 _Static_assert(RAMP_TARGET_ERPM > INITIAL_ERPM,
                "RAMP_TARGET_ERPM must be > INITIAL_ERPM (sine V/f ramp denominator)");
 _Static_assert(SINE_ALIGN_MODULATION_PCT >= 5 && SINE_ALIGN_MODULATION_PCT <= 50,

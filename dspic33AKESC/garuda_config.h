@@ -83,6 +83,11 @@ extern "C" {
 #if FEATURE_DUTY_SLEW
 #define DUTY_SLEW_UP_PERCENT_PER_MS     2   /* Max duty increase: 2%/ms (~50ms full scale) */
 #define DUTY_SLEW_DOWN_PERCENT_PER_MS   5   /* Max duty decrease: 5%/ms (~20ms full scale) */
+#define POST_SYNC_SETTLE_MS           2000  /* Reduced slew-up rate period after ZC sync (ms).
+                                             * During this window, duty ramps at 1/DIVISOR of
+                                             * normal rate to prevent over-acceleration on
+                                             * low-inertia motors. */
+#define POST_SYNC_SLEW_DIVISOR           8  /* Slew-up rate divisor during settle (8 = 0.25%/ms) */
 #endif
 
 /* Desync Recovery (Phase B2) */
@@ -124,6 +129,16 @@ extern "C" {
 #define SINE_RAMP_MODULATION_PCT    35  /* Modulation depth % at target speed */
 #define SINE_PHASE_OFFSET_DEG       60  /* Sector->step offset. Calibrate in 60 deg increments
                                          * (0,60,120,180,240,300) until transition is smooth. */
+#define SINE_COAST_GAP_MS            4  /* De-energization gap before sine->trap transition (ms).
+                                         * Motor coasts on inertia while winding currents decay
+                                         * (L/R=1.14ms for Hurst). Eliminates current discontinuity.
+                                         * 4ms = ~3.5 time constants = 97% current decay. */
+#define SINE_TRAP_DUTY_NUM           6  /* Sine->trap duty scale factor numerator. */
+#define SINE_TRAP_DUTY_DEN           5  /* Sine->trap duty scale factor denominator.
+                                         * 6/5 = 1.2x compensates for the sine-to-trap L-L
+                                         * voltage conversion at RAMP_TARGET_ERPM.
+                                         * Tune: increase NUM if motor brakes at transition,
+                                         *        decrease NUM if motor surges forward. */
 #endif
 
 /* ADC Comparator ZC (Phase F) */
