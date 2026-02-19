@@ -42,6 +42,13 @@ extern "C" {
 /* Ramp duty cap in PWM counts */
 #define RAMP_DUTY_CAP               (uint32_t)((RAMP_DUTY_PERCENT / 100.0f) * LOOPTIME_TCY)
 
+/* Closed-loop idle duty floor (minimum duty at pot=0 to maintain ZC-capable speed) */
+#if CL_IDLE_DUTY_PERCENT > 0
+#define CL_IDLE_DUTY                (uint32_t)((CL_IDLE_DUTY_PERCENT / 100.0f) * LOOPTIME_TCY)
+#else
+#define CL_IDLE_DUTY                MIN_DUTY
+#endif
+
 /* Timer1 period = 100us, so alignment time in Timer1 ticks */
 #define ALIGN_TIME_COUNTS           (uint32_t)(ALIGN_TIME_MS * 10)
 
@@ -84,7 +91,8 @@ extern "C" {
 #define INITIAL_ADC_STEP_PERIOD     TIMER1_TO_ADC_TICKS(INITIAL_STEP_PERIOD)   /* ~800 ticks at 300 eRPM */
 #define MIN_ADC_STEP_PERIOD         TIMER1_TO_ADC_TICKS(MIN_STEP_PERIOD)       /* ~120 ticks at 2000 eRPM (ramp handoff) */
 /* Closed-loop speed limit — decoupled from ramp target */
-#define MAX_CL_STEP_PERIOD_T1      ERPM_TO_STEP_TICKS(MAX_CLOSED_LOOP_ERPM)
+#define MAX_CL_STEP_PERIOD_T1  ((ERPM_TO_STEP_TICKS(MAX_CLOSED_LOOP_ERPM) > 0) ? \
+                                 ERPM_TO_STEP_TICKS(MAX_CLOSED_LOOP_ERPM) : 1)
 #define MIN_CL_ADC_STEP_PERIOD     TIMER1_TO_ADC_TICKS(MAX_CL_STEP_PERIOD_T1) /* ~24 ticks at 10000 eRPM */
 
 /* eRPM from adcIsrTick stepPeriod: eRPM = 60 / (stepPeriod * 6 / PWMFREQUENCY_HZ)
@@ -229,9 +237,9 @@ _Static_assert(SINE_COAST_GAP_TICKS >= 1 && SINE_COAST_GAP_TICKS <= 100,
                "SINE_COAST_GAP_TICKS out of range (0.1-10ms)");
 _Static_assert(RAMP_TARGET_ERPM > INITIAL_ERPM,
                "RAMP_TARGET_ERPM must be > INITIAL_ERPM (sine V/f ramp denominator)");
-_Static_assert(SINE_ALIGN_MODULATION_PCT >= 5 && SINE_ALIGN_MODULATION_PCT <= 50,
+_Static_assert(SINE_ALIGN_MODULATION_PCT >= 2 && SINE_ALIGN_MODULATION_PCT <= 50,
                "SINE_ALIGN_MODULATION_PCT out of range");
-_Static_assert(SINE_RAMP_MODULATION_PCT >= 10 && SINE_RAMP_MODULATION_PCT <= 80,
+_Static_assert(SINE_RAMP_MODULATION_PCT >= 5 && SINE_RAMP_MODULATION_PCT <= 80,
                "SINE_RAMP_MODULATION_PCT out of range");
 _Static_assert(SINE_PHASE_OFFSET_DEG < 360,
                "SINE_PHASE_OFFSET_DEG must be 0-359");
@@ -274,13 +282,67 @@ _Static_assert(SINE_PHASE_OFFSET_DEG < 360,
 
 _Static_assert(HWZC_SCCP3_PERIOD >= 21,
                "SCCP3 period too short (ADC needs ~205ns = 21 ticks at 100MHz)");
-_Static_assert(HWZC_CROSSOVER_ERPM > RAMP_TARGET_ERPM,
-               "HW ZC crossover must be above ramp target");
+_Static_assert(HWZC_CROSSOVER_ERPM > 0,
+               "HW ZC crossover must be positive");
 _Static_assert(HWZC_CROSSOVER_ERPM <= MAX_CLOSED_LOOP_ERPM,
                "HW ZC crossover must be within CL range");
 _Static_assert(HWZC_BLANKING_PERCENT >= 1 && HWZC_BLANKING_PERCENT <= 20,
                "HWZC_BLANKING_PERCENT out of range");
 #endif
+
+/* Phase G: Hardware Overcurrent Protection derived constants */
+#if FEATURE_HW_OVERCURRENT
+
+/* Integer threshold math — milliamp inputs (no float, XC-DSC safe for _Static_assert):
+ * V_trip_mV = VREF_mV + (mA * SHUNT_mOHM * GAIN_x100 / 100000)
+ * DAC_counts = V_trip_mV * 4096 / VADC_mV
+ * Max safe input: 22000 mA (22A) → 22000*3*2495 = 164.67M < 2^32 */
+#define OC_TRIP_MV(ma)      (OC_VREF_MV + \
+    ((uint32_t)(ma) * OC_SHUNT_MOHM * OC_GAIN_X100 / 100000))
+#define OC_MV_TO_COUNTS(mv) ((uint16_t)((uint32_t)(mv) * 4096 / OC_VADC_MV))
+#define OC_BIAS_COUNTS       OC_MV_TO_COUNTS(OC_VREF_MV)
+
+/* CMP3/DAC3 operational threshold — active after ZC sync.
+ * Mode only changes which PCI target CMP3 drives (CLPCI vs FPCI). */
+#define OC_CMP3_DAC_VAL     OC_MV_TO_COUNTS(OC_TRIP_MV(OC_LIMIT_MA))
+
+/* CMP3/DAC3 startup threshold — used during alignment + ramp.
+ * High to survive PWM switching noise/ringing. Lowered to OC_CMP3_DAC_VAL
+ * when ZC sync is achieved. Raised back on fault/recovery/idle. */
+#define OC_CMP3_STARTUP_DAC OC_MV_TO_COUNTS(OC_TRIP_MV(OC_STARTUP_MA))
+
+/* Software thresholds (ADC readback comparison): */
+#define OC_SW_LIMIT_ADC     OC_MV_TO_COUNTS(OC_TRIP_MV(OC_SW_LIMIT_MA))
+#define OC_FAULT_ADC_VAL    OC_MV_TO_COUNTS(OC_TRIP_MV(OC_FAULT_MA))
+
+/* Static asserts — all integer constant expressions */
+_Static_assert(OC_CMP3_DAC_VAL < 4096, "CMP3 operational threshold exceeds 12-bit DAC range");
+_Static_assert(OC_CMP3_STARTUP_DAC < 4096, "CMP3 startup threshold exceeds 12-bit DAC range");
+_Static_assert(OC_FAULT_ADC_VAL < 4096, "Software fault threshold exceeds ADC range");
+_Static_assert(OC_SW_LIMIT_ADC < OC_CMP3_DAC_VAL,
+               "Software soft limit must be below CMP3 operational threshold");
+_Static_assert(OC_CMP3_DAC_VAL <= OC_CMP3_STARTUP_DAC,
+               "Operational threshold must be <= startup threshold");
+#if OC_PROTECT_MODE == 2
+_Static_assert(OC_CMP3_DAC_VAL < OC_FAULT_ADC_VAL,
+               "Mode 2: CMP3 threshold must be below software fault threshold");
+#endif
+
+/* Numeric verification (integer truncation at each division):
+ * OC_TRIP_MV(1500)  = 1650 + 1500*3*2495/100000 = 1762 mV -> 2187 counts (soft limit)
+ * OC_TRIP_MV(1800)  = 1650 + 1800*3*2495/100000 = 1784 mV -> 2214 counts (CLPCI)
+ * OC_TRIP_MV(3000)  = 1650 + 3000*3*2495/100000 = 1874 mV -> 2326 counts (SW fault)
+ * OC_TRIP_MV(18000) = 1650 + 18000*3*2495/100000 = 2997 mV -> 3719 counts (startup)
+ * OC_TRIP_MV(5000)  = 1650 + 5000*3*2495/100000  = 2024 mV -> 2512 counts (ramp gate) */
+
+/* Current-gated ramp threshold (0 = disabled, >0 = hold accel when ibus exceeds) */
+#if RAMP_CURRENT_GATE_MA > 0
+#define RAMP_CURRENT_GATE_ADC   OC_MV_TO_COUNTS(OC_TRIP_MV(RAMP_CURRENT_GATE_MA))
+_Static_assert(RAMP_CURRENT_GATE_ADC < OC_CMP3_DAC_VAL,
+               "Ramp current gate must be below CMP3 operational threshold");
+#endif
+
+#endif /* FEATURE_HW_OVERCURRENT */
 
 #ifdef __cplusplus
 }

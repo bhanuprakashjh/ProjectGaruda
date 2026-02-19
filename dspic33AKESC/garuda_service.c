@@ -38,6 +38,8 @@
 #include "learn/learn_service.h"
 #endif
 
+#include "x2cscope/diagnostics.h"
+
 /* Global ESC runtime data — volatile: shared between ISRs and main loop */
 volatile GARUDA_DATA_T garudaData;
 
@@ -73,6 +75,12 @@ void GARUDA_ServiceInit(void)
     garudaData.runCommandActive = false;
     garudaData.desyncRestartAttempts = 0;
     garudaData.recoveryCounter = 0;
+
+#if FEATURE_HW_OVERCURRENT
+    garudaData.ibusRaw = 0;
+    garudaData.ibusMax = 0;
+    garudaData.clpciTripCount = 0;
+#endif
 
     garudaData.bemf.bemfRaw = 0;
     garudaData.bemf.zcThreshold = 0;
@@ -235,6 +243,9 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                         HWZC_Disable(&garudaData);
                     garudaData.hwzc.fallbackPending = false;
 #endif
+#if FEATURE_HW_OVERCURRENT
+                    HAL_CMP3_SetThreshold(OC_CMP3_STARTUP_DAC);
+#endif
                     HAL_MC1PWMDisableOutputs();
                     garudaData.state = ESC_FAULT;
                     garudaData.faultCode = FAULT_OVERVOLTAGE;
@@ -244,7 +255,19 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
             }
             else { vbusOvCount = 0; }
 
-            if (garudaData.vbusRaw < VBUS_UNDERVOLTAGE_ADC)
+            {
+                /* Determine UV threshold: relaxed during pre-sync startup to
+                 * tolerate bus sag from CC-limited bench supply. Normal
+                 * threshold resumes after ZC sync is achieved. */
+                uint16_t uvThreshold = VBUS_UNDERVOLTAGE_ADC;
+#if FEATURE_PRESYNC_RAMP
+                if (garudaData.state <= ESC_OL_RAMP
+                    || (garudaData.state == ESC_CLOSED_LOOP
+                        && !garudaData.timing.zcSynced))
+                    uvThreshold = VBUS_UV_STARTUP_ADC;
+#endif
+
+            if (garudaData.vbusRaw < uvThreshold)
             {
                 if (++vbusUvCount >= VBUS_FAULT_FILTER)
                 {
@@ -252,6 +275,9 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                     if (garudaData.hwzc.enabled)
                         HWZC_Disable(&garudaData);
                     garudaData.hwzc.fallbackPending = false;
+#endif
+#if FEATURE_HW_OVERCURRENT
+                    HAL_CMP3_SetThreshold(OC_CMP3_STARTUP_DAC);
 #endif
                     HAL_MC1PWMDisableOutputs();
                     garudaData.state = ESC_FAULT;
@@ -261,6 +287,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                 }
             }
             else { vbusUvCount = 0; }
+            } /* uvThreshold scope */
         }
         else
         {
@@ -269,6 +296,50 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
         }
     }
 #endif
+
+    /* Bus current sensing and overcurrent protection */
+#if FEATURE_HW_OVERCURRENT
+    /* Read AD1CH2DATA — clears data-ready (mandatory on dsPIC33AK) */
+    garudaData.ibusRaw = ADCBUF_IBUS;
+
+    /* Track peak for diagnostics */
+    if (garudaData.ibusRaw > garudaData.ibusMax)
+        garudaData.ibusMax = garudaData.ibusRaw;
+
+    /* Count CLPCI activity via CLEVT latched event flags.
+     * Poll all 3 generators — active PWM phase rotates with commutation.
+     * Coarse counter: one 41.7us ADC tick may collapse multiple chop events. */
+#if OC_PROTECT_MODE == 0 || OC_PROTECT_MODE == 2
+    if (PCI_CLIMIT_EVT_PG1 || PCI_CLIMIT_EVT_PG2 || PCI_CLIMIT_EVT_PG3)
+    {
+        garudaData.clpciTripCount++;
+        /* Clear W1C event flags via direct register write (not bitfield RMW)
+         * to avoid accidentally clearing other W1C bits in PGxSTAT. */
+        PG1STAT = PCI_CLIMIT_EVT_MASK;
+        PG2STAT = PCI_CLIMIT_EVT_MASK;
+        PG3STAT = PCI_CLIMIT_EVT_MASK;
+    }
+#endif
+
+    /* Software hard fault — immediate shutdown (Mode 2 only) */
+#if OC_PROTECT_MODE == 2
+    if (garudaData.ibusRaw > OC_FAULT_ADC_VAL
+        && garudaData.state >= ESC_ALIGN
+        && garudaData.state <= ESC_CLOSED_LOOP)
+    {
+#if FEATURE_ADC_CMP_ZC
+        if (garudaData.hwzc.enabled)
+            HWZC_Disable(&garudaData);
+        garudaData.hwzc.fallbackPending = false;
+#endif
+        HAL_MC1PWMDisableOutputs();
+        garudaData.state = ESC_FAULT;
+        garudaData.faultCode = FAULT_OVERCURRENT;
+        garudaData.runCommandActive = false;
+        LED2 = 0;
+    }
+#endif
+#endif /* FEATURE_HW_OVERCURRENT */
 
     /* State machine */
     switch (garudaData.state)
@@ -331,6 +402,9 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                             HWZC_Disable(&garudaData);
                         garudaData.hwzc.fallbackPending = false;
 #endif
+#if FEATURE_HW_OVERCURRENT
+                        HAL_CMP3_SetThreshold(OC_CMP3_STARTUP_DAC);
+#endif
                         HAL_MC1PWMDisableOutputs();
                         garudaData.runCommandActive = false;
                         garudaData.state = ESC_IDLE;
@@ -361,6 +435,27 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                 garudaData.hwzc.fallbackPending = false;
                 garudaData.hwzc.enablePending = false;
                 garudaData.hwzc.dbgLatchDisable = false;
+
+#if FEATURE_PRESYNC_RAMP
+                /* Defensively disable HWZC: stale hwzc.enabled=true from a
+                 * prior run (e.g. desync recovery) would skip the entire SW
+                 * pre-sync block (line ~479 gates on !hwzc.enabled). Force
+                 * HWZC off so pre-sync runs. Clear fallbackPending to prevent
+                 * stale HWZC state from re-seeding SW ZC. */
+                if (garudaData.hwzc.enabled)
+                    HWZC_Disable(&garudaData);
+                garudaData.hwzc.fallbackPending = false;
+#else
+                /* Immediate HWZC enable for motors with reliable OL ramp
+                 * delivery speed (non-presync-ramp path). */
+                {
+                    uint32_t curErpm = ERPM_FROM_ADC_STEP_NUM / initPeriod;
+                    if (curErpm >= HWZC_CROSSOVER_ERPM)
+                    {
+                        HWZC_Enable(&garudaData);
+                    }
+                }
+#endif
 #endif
             }
 
@@ -388,6 +483,10 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                     garudaData.timing.goodZcCount = ZC_SYNC_THRESHOLD;
                     garudaData.timing.forcedCountdown =
                         swPeriod * ZC_TIMEOUT_MULT;
+#if FEATURE_HW_OVERCURRENT
+                    /* Lower CMP3 from startup to operational threshold */
+                    HAL_CMP3_SetThreshold(OC_CMP3_DAC_VAL);
+#endif
                 }
                 else
                 {
@@ -412,9 +511,60 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                 {
                     COMMUTATION_AdvanceStep(&garudaData);
                     BEMF_ZC_OnCommutation(&garudaData, adcIsrTick);
+
+#if FEATURE_PRESYNC_RAMP
+                    /* Feedback-gated pre-sync ramp: accelerate forced commutation
+                     * only when ZC evidence is strong. Requires goodZcCount >= 3
+                     * AND risingZcWorks — not a single noisy edge. If motor is
+                     * stale (no recent ZC), hold current speed until motor catches
+                     * up and ZC resumes. Same eRPM formula as OL_RAMP. */
+                    if (garudaData.timing.stepPeriod > MIN_ADC_STEP_PERIOD
+                        && garudaData.timing.goodZcCount >= 3
+                        && garudaData.timing.risingZcWorks
+                        && garudaData.timing.stepsSinceLastZc <= ZC_STALENESS_LIMIT)
+                    {
+                        uint32_t sp = garudaData.timing.stepPeriod;
+                        uint32_t curErpm = ERPM_FROM_ADC_STEP_NUM / sp;
+                        uint32_t deltaErpm = ((uint32_t)RAMP_ACCEL_ERPM_PER_S * sp)
+                                             / PWMFREQUENCY_HZ;
+                        if (deltaErpm < 1) deltaErpm = 1;
+                        uint32_t newErpm = curErpm + deltaErpm;
+                        uint32_t newPeriod = ERPM_FROM_ADC_STEP_NUM / newErpm;
+                        if (newPeriod < MIN_ADC_STEP_PERIOD)
+                            newPeriod = MIN_ADC_STEP_PERIOD;
+                        garudaData.timing.stepPeriod = (uint16_t)newPeriod;
+                    }
+#endif
+
                     garudaData.timing.forcedCountdown = garudaData.timing.stepPeriod;
                     garudaData.zcDiag.forcedStepPresyncCount++;
                 }
+
+#if FEATURE_PRESYNC_RAMP
+                /* Pre-sync timeout: fault if ZC never achieved */
+                {
+                    static uint32_t presyncEntryTick = 0;
+                    if (prevAdcState != ESC_CLOSED_LOOP)
+                        presyncEntryTick = garudaData.systemTick;
+
+                    if ((garudaData.systemTick - presyncEntryTick) > PRESYNC_TIMEOUT_MS)
+                    {
+#if FEATURE_ADC_CMP_ZC
+                        if (garudaData.hwzc.enabled)
+                            HWZC_Disable(&garudaData);
+                        garudaData.hwzc.fallbackPending = false;
+#endif
+#if FEATURE_HW_OVERCURRENT
+                        HAL_CMP3_SetThreshold(OC_CMP3_STARTUP_DAC);
+#endif
+                        HAL_MC1PWMDisableOutputs();
+                        garudaData.state = ESC_FAULT;
+                        garudaData.faultCode = FAULT_STARTUP_TIMEOUT;
+                        garudaData.runCommandActive = false;
+                        LED2 = 0;
+                    }
+                }
+#endif
 
                 /* Passive ZC detection (builds goodZcCount, no commutation trigger) */
                 BEMF_ZC_Poll(&garudaData, adcIsrTick);
@@ -427,6 +577,10 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                 {
                     garudaData.timing.zcSynced = true;
                     garudaData.desyncRestartAttempts = 0;
+#if FEATURE_HW_OVERCURRENT
+                    /* Lower CMP3 from startup to operational threshold */
+                    HAL_CMP3_SetThreshold(OC_CMP3_DAC_VAL);
+#endif
 #if FEATURE_BEMF_INTEGRATION
                     garudaData.integ.bemfPeakSmooth = 0;
                     garudaData.integ.integral = 0;
@@ -567,6 +721,9 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                 if (toResult == ZC_TIMEOUT_DESYNC)
                 {
                     garudaData.zcDiag.zcDesyncCount++;
+#if FEATURE_HW_OVERCURRENT
+                    HAL_CMP3_SetThreshold(OC_CMP3_STARTUP_DAC);
+#endif
 #if FEATURE_DESYNC_RECOVERY
                     if (garudaData.runCommandActive)
                     {
@@ -613,6 +770,14 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                             initPeriod = MIN_ADC_STEP_PERIOD;
                         garudaData.timing.stepPeriod = initPeriod;
                         garudaData.timing.forcedCountdown = initPeriod;
+#if FEATURE_PRESYNC_RAMP
+                        /* Reset duty to ramp level to prevent ratchet:
+                         * post-sync CL_IDLE floor inflates duty, and pre-sync
+                         * holds mappedDuty=garudaData.duty. Without reset,
+                         * each sync→unsync cycle pumps duty higher, driving
+                         * massive current through low-R motor. */
+                        garudaData.duty = RAMP_DUTY_CAP;
+#endif
                     }
                 }
             }
@@ -629,6 +794,19 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                  * eRPM (24kHz samples → plenty per step). Only miss-limit
                  * triggers fallback (error condition). This eliminates the
                  * HW→SW transition jerk during normal deceleration. */
+
+                /* Promote zcSynced once HWZC has confirmed good ZCs.
+                 * This unlocks pot-mapped duty (CL_IDLE_DUTY floor)
+                 * and MAX_DUTY cap instead of RAMP_DUTY_CAP. */
+                if (!garudaData.timing.zcSynced
+                    && garudaData.hwzc.goodZcCount >= ZC_SYNC_THRESHOLD)
+                {
+                    garudaData.timing.zcSynced = true;
+                    garudaData.desyncRestartAttempts = 0;
+#if FEATURE_HW_OVERCURRENT
+                    HAL_CMP3_SetThreshold(OC_CMP3_DAC_VAL);
+#endif
+                }
 
 #if FEATURE_BEMF_INTEGRATION
                 /* Read-only observer: keep shadow integration warm (Rule 11) */
@@ -690,8 +868,8 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                     if (postSyncCounter < POST_SYNC_SETTLE_TICKS)
                         postSyncCounter++;
 #endif
-                    mappedDuty = MIN_DUTY +
-                        ((uint32_t)garudaData.potRaw * (cap - MIN_DUTY)) / 4096;
+                    mappedDuty = CL_IDLE_DUTY +
+                        ((uint32_t)garudaData.potRaw * (cap - CL_IDLE_DUTY)) / 4096;
                 }
                 if (mappedDuty < MIN_DUTY) mappedDuty = MIN_DUTY;
                 if (mappedDuty > cap) mappedDuty = cap;
@@ -742,9 +920,19 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                         vbusSagActive = false;
                     }
 
+                    /* IIR filter always runs (keeps filter warm during pre-sync) */
                     vbusFiltered = (uint16_t)(
                         ((uint32_t)vbusFiltered * 7 + garudaData.vbusRaw) >> 3);
 
+#if FEATURE_PRESYNC_RAMP
+                    /* Bypass sag limiter during pre-sync: at 12V CC-limited supply,
+                     * vbus sags to ~636 ADC (8.9V) under startup load. With
+                     * VBUS_SAG_THRESHOLD_ADC=900, the sag limiter would reduce
+                     * RAMP_DUTY_CAP by ~26%, killing startup torque. Allow full
+                     * startup duty until ZC sync is achieved. */
+                    if (garudaData.timing.zcSynced)
+                    {
+#endif
                     if (!vbusSagActive && vbusFiltered < VBUS_SAG_THRESHOLD_ADC)
                         vbusSagActive = true;
                     else if (vbusSagActive && vbusFiltered > VBUS_SAG_RECOVERY_ADC)
@@ -760,9 +948,32 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                         else
                             mappedDuty -= reduction;
                     }
+#if FEATURE_PRESYNC_RAMP
+                    }
+                    else
+                    {
+                        vbusSagActive = false;  /* Reset so it re-evaluates on sync */
+                    }
+#endif
 
                     if (mappedDuty < MIN_DUTY)
                         mappedDuty = MIN_DUTY;
+                }
+#endif
+
+#if FEATURE_HW_OVERCURRENT
+                /* Software bus current soft limiter — proportional duty reduction.
+                 * Ramps down duty smoothly BEFORE CMP3/CLPCI hardware trips. */
+                if (garudaData.ibusRaw > OC_SW_LIMIT_ADC)
+                {
+                    uint16_t excess = garudaData.ibusRaw - OC_SW_LIMIT_ADC;
+                    uint16_t range = OC_CMP3_DAC_VAL - OC_SW_LIMIT_ADC;
+                    if (range == 0) range = 1;
+                    uint32_t reduction = ((uint32_t)excess * (mappedDuty - MIN_DUTY)) / range;
+                    if (reduction >= mappedDuty - MIN_DUTY)
+                        mappedDuty = MIN_DUTY;
+                    else
+                        mappedDuty -= reduction;
                 }
 #endif
 
@@ -792,6 +1003,11 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
 #if FEATURE_BEMF_CLOSED_LOOP
     /* Track state for transition detection (must be last before flag clear) */
     prevAdcState = garudaData.state;
+#endif
+
+    /* X2CScope: sample variables at ADC rate (24kHz) */
+#ifdef ENABLE_DIAGNOSTICS
+    DiagnosticsStepIsr();
 #endif
 
     /* Clear interrupt flag AFTER reading all buffers (matches reference) */
@@ -926,10 +1142,18 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
         }
 #else
         case ESC_OL_RAMP:
+#if FEATURE_PRESYNC_RAMP
+            /* Skip blind forced ramp. Enter CL directly with slow initial
+             * step period. ADC ISR pre-sync handles feedback-gated
+             * acceleration with ZC detection in parallel. */
+            garudaData.duty = RAMP_DUTY_CAP;
+            garudaData.state = ESC_CLOSED_LOOP;
+#else
             if (STARTUP_OpenLoopRamp(&garudaData))
             {
                 garudaData.state = ESC_CLOSED_LOOP;
             }
+#endif
             break;
 #endif
 
@@ -1018,15 +1242,20 @@ void __attribute__((__interrupt__, no_auto_psv)) _PWMInterrupt(void)
 {
     if (PCI_FAULT_ACTIVE_STATUS)
     {
-        /* Fault detected — disable outputs and set fault state */
+        /* Board-level FPCI fault via PCI8R (RP28/DIM040).
+         * Source: U25A (overvoltage) + U25B (overcurrent) → U27 AND gate.
+         * This is a combined OC+OV signal — cannot distinguish which triggered. */
 #if FEATURE_ADC_CMP_ZC
         if (garudaData.hwzc.enabled)
             HWZC_Disable(&garudaData);
 #endif
+#if FEATURE_HW_OVERCURRENT
+        HAL_CMP3_SetThreshold(OC_CMP3_STARTUP_DAC);
+#endif
         HAL_MC1ClearPWMPCIFault();
         HAL_MC1PWMDisableOutputs();
         garudaData.state = ESC_FAULT;
-        garudaData.faultCode = FAULT_OVERCURRENT;
+        garudaData.faultCode = FAULT_BOARD_PCI;
         garudaData.runCommandActive = false;
 #if FEATURE_ADC_CMP_ZC
         garudaData.hwzc.fallbackPending = false;

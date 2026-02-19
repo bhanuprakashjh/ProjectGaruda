@@ -433,9 +433,11 @@ typedef enum
     FAULT_NONE = 0,
     FAULT_OVERVOLTAGE,
     FAULT_UNDERVOLTAGE,
-    FAULT_OVERCURRENT,
+    FAULT_OVERCURRENT,     /* Software ADC-based overcurrent (Mode 2) */
+    FAULT_BOARD_PCI,       /* Board-level FPCI: combined OC+OV via U25A/U25B/U27 (PCI8R) */
     FAULT_STALL,
-    FAULT_DESYNC
+    FAULT_DESYNC,
+    FAULT_STARTUP_TIMEOUT   /* Pre-sync timeout: ZC never achieved within PRESYNC_TIMEOUT_MS */
 } FAULT_CODE_T;
 
 /* Main ESC runtime data */
@@ -480,6 +482,14 @@ typedef struct
 
 #if FEATURE_ADC_CMP_ZC
     HWZC_STATE_T hwzc;
+#endif
+
+#if FEATURE_HW_OVERCURRENT
+    uint16_t ibusRaw;             /* Bus current ADC (biased ~2048, ~93 counts/A) */
+    uint16_t ibusMax;             /* Peak bus current since last clear */
+    uint32_t clpciTripCount;      /* Coarse CLPCI activity counter via CLEVT polling.
+                                   * One ADC tick (41.7us) may collapse multiple chop
+                                   * events into one increment. Telemetry only. */
 #endif
 
 #if FEATURE_LEARN_MODULES

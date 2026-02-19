@@ -125,6 +125,15 @@ bool STARTUP_OpenLoopRamp(volatile GARUDA_DATA_T *pData)
     {
         COMMUTATION_AdvanceStep(pData);
 
+        /* Current-gated acceleration: only decrease step period (speed up)
+         * when bus current is below the gate threshold. High forward current
+         * means the rotor is lagging — accelerating further will brake it.
+         * Low/zero current (ibusRaw near or below 2048 bias) is normal at
+         * low duty — ADC mostly samples during PWM OFF time. Allow accel. */
+#if RAMP_CURRENT_GATE_MA > 0 && FEATURE_HW_OVERCURRENT
+        if (pData->ibusRaw < RAMP_CURRENT_GATE_ADC)
+        {
+#endif
         /* Compute new step period from RAMP_ACCEL_ERPM_PER_S */
         uint32_t curPeriod = pData->rampStepPeriod;
         if (curPeriod == 0) curPeriod = INITIAL_STEP_PERIOD;
@@ -136,6 +145,9 @@ bool STARTUP_OpenLoopRamp(volatile GARUDA_DATA_T *pData)
         if (newPeriod < MIN_STEP_PERIOD)
             newPeriod = MIN_STEP_PERIOD;
         pData->rampStepPeriod = newPeriod;
+#if RAMP_CURRENT_GATE_MA > 0 && FEATURE_HW_OVERCURRENT
+        }
+#endif
 
         pData->rampCounter = pData->rampStepPeriod;
 
