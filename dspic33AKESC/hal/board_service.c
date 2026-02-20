@@ -17,6 +17,11 @@
 #include <stdbool.h>
 
 #include "board_service.h"
+#include "../garuda_config.h"
+#if FEATURE_HW_OVERCURRENT
+#include "port_config.h"
+#include "hal_comparator.h"
+#endif
 
 BUTTON_T buttonStartStop;
 BUTTON_T buttonDirectionChange;
@@ -129,14 +134,17 @@ static void ButtonGroupInitialize(void)
 
 /**
  * @brief Initialize all peripherals (ADC, PWM, Timer1).
- * No op-amp or CMP init — ZC uses ADC threshold, not hardware comparators.
+ * When FEATURE_HW_OVERCURRENT: OA3→CMP3→CLPCI armed BEFORE PWM outputs exist.
  */
 void HAL_InitPeripherals(void)
 {
-    InitializeADCs();
+#if FEATURE_HW_OVERCURRENT
+    HAL_OA3_Init();                 /* 1. Op-amp on (~10us settling) */
+    InitializeCMPs();               /* 2. CMP3 + DAC3 threshold configured */
+    HAL_CMP3_EnableOvercurrent();   /* 3. CMP3 enabled — analog protection armed */
+#endif
 
-    /* TODO: Re-add InitializeCMPs() + HAL_CMP_SetReference() here if PCI fault
-     * is switched from RPn source (PSS=0b01000) to CMP3 source (PSS=0b11101) */
+    InitializeADCs();
 
     /* Make sure ADC does not generate interrupt while initializing */
     GARUDA_DisableADCInterrupt();

@@ -18,6 +18,7 @@
 #include <xc.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include "../garuda_config.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -35,6 +36,10 @@ extern "C" {
 #define ADCBUF_POT          (uint16_t)AD1CH1DATA
 #define ADCBUF_VBUS         (uint16_t)AD1CH4DATA
 
+#if FEATURE_HW_OVERCURRENT
+#define ADCBUF_IBUS         (uint16_t)AD1CH2DATA
+#endif
+
 /* Phase B completion (AD1CH0) is the ADC interrupt source */
 #define GARUDA_EnableADCInterrupt()     _AD1CH0IE = 1
 #define GARUDA_DisableADCInterrupt()    _AD1CH0IE = 0
@@ -50,7 +55,6 @@ void InitializeADCs(void);
 bool HAL_ADC_SelectBEMFChannel(uint8_t floatingPhase);
 
 #if FEATURE_ADC_CMP_ZC
-#include "../garuda_config.h"
 void HAL_ADC_InitHighSpeedBEMF(void);
 void HAL_ADC_ConfigComparator(uint8_t adcCore, uint16_t threshold, bool risingZc);
 void HAL_ADC_EnableComparatorIE(uint8_t adcCore);

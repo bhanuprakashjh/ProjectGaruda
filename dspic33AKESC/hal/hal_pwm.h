@@ -45,6 +45,17 @@ extern "C" {
 #define EnablePWMIF()               _PWM1IE = 1
 #define DisablePWMIF()              _PWM1IE = 0
 
+#if FEATURE_HW_OVERCURRENT
+/* CLEVT = Current Limit Event flag (W1C latch, bit 13 = 0x2000).
+ * Set by hardware when CLPCI transitions to active. Independent of CLIEN.
+ * Read via bitfield (safe for reads). Clear via direct register write
+ * PGnSTAT = PCI_CLIMIT_EVT_MASK to avoid RMW on other W1C bits. */
+#define PCI_CLIMIT_EVT_PG1    PG1STATbits.CLEVT
+#define PCI_CLIMIT_EVT_PG2    PG2STATbits.CLEVT
+#define PCI_CLIMIT_EVT_PG3    PG3STATbits.CLEVT
+#define PCI_CLIMIT_EVT_MASK   0x2000u
+#endif
+
 void InitPWMGenerators(void);
 void InitPWMGenerator1(void);
 void InitPWMGenerator2(void);

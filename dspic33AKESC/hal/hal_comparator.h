@@ -20,6 +20,7 @@
 #include <xc.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include "../garuda_config.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -29,6 +30,11 @@ void InitializeCMPs(void);
 void HAL_CMP_EnableFloatingPhase(uint8_t phase);
 void HAL_CMP_SetReference(uint16_t vbusHalf);
 uint8_t HAL_CMP_ReadStatus(uint8_t phase);
+
+#if FEATURE_HW_OVERCURRENT
+void HAL_CMP3_EnableOvercurrent(void);
+void HAL_CMP3_SetThreshold(uint16_t dacVal);
+#endif
 
 #ifdef __cplusplus
 }

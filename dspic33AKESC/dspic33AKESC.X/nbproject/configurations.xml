@@ -31,6 +31,10 @@
         <itemPath>../motor/bemf_zc.h</itemPath>
         <itemPath>../motor/hwzc.h</itemPath>
       </logicalFolder>
+      <logicalFolder name="x2cscope" displayName="x2cscope" projectFiles="true">
+        <itemPath>../x2cscope/X2CScope.h</itemPath>
+        <itemPath>../x2cscope/diagnostics.h</itemPath>
+      </logicalFolder>
       <itemPath>../hal/eeprom.h</itemPath>
       <itemPath>../garuda_types.h</itemPath>
       <itemPath>../garuda_config.h</itemPath>
@@ -77,6 +81,9 @@
         <itemPath>../motor/bemf_zc.c</itemPath>
         <itemPath>../motor/hwzc.c</itemPath>
       </logicalFolder>
+      <logicalFolder name="x2cscope" displayName="x2cscope" projectFiles="true">
+        <itemPath>../x2cscope/diagnostics.c</itemPath>
+      </logicalFolder>
       <itemPath>../hal/eeprom.c</itemPath>
       <itemPath>../garuda_service.c</itemPath>
       <itemPath>../main.c</itemPath>
@@ -112,7 +119,7 @@
         </archiverTool>
         <loading>
           <useAlternateLoadableFile>false</useAlternateLoadableFile>
-          <parseOnProdLoad>true</parseOnProdLoad>
+          <parseOnProdLoad>false</parseOnProdLoad>
           <alternateLoadableFile></alternateLoadableFile>
         </loading>
         <subordinates>
@@ -209,7 +216,7 @@
         <property key="enable-vtable-1" value="false"/>
         <property key="enable-vtable-2" value="false"/>
         <property key="enable-vtable-3" value="false"/>
-        <property key="extra-lib-directories" value=""/>
+        <property key="extra-lib-directories" value="../x2cscope"/>
         <property key="fill-flash-options-addr" value=""/>
         <property key="fill-flash-options-const" value=""/>
         <property key="fill-flash-options-how" value="0"/>
@@ -227,7 +234,7 @@
         <property key="linker-symbols" value=""/>
         <property key="map-file" value="${DISTDIR}/${PROJECTNAME}.${IMAGE_TYPE}.map"/>
         <property key="no-ivt" value="false"/>
-        <property key="oXC16ld-extra-opts" value=""/>
+        <property key="oXC16ld-extra-opts" value="../x2cscope/X2CScopeLib.X.a"/>
         <property key="oXC16ld-fill-upper" value=""/>
         <property key="oXC16ld-force-link" value="false"/>
         <property key="oXC16ld-no-smart-io" value="false"/>

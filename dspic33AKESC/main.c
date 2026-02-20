@@ -33,6 +33,8 @@
 #if FEATURE_LEARN_MODULES
 #include "learn/learn_service.h"
 #endif
+
+#include "x2cscope/diagnostics.h"
 #if FEATURE_COMMISSION
 #include "learn/commission.h"
 #endif
@@ -57,9 +59,18 @@ int main(void)
     /* Initialize ESC state machine and enable ADC interrupt */
     GARUDA_ServiceInit();
 
+    /* Initialize X2CScope diagnostics (UART1 at 115200 baud via PKoB4) */
+#ifdef ENABLE_DIAGNOSTICS
+    DiagnosticsInit();
+#endif
+
     /* Main loop — all real work happens in ISRs */
     while (1)
     {
+#ifdef ENABLE_DIAGNOSTICS
+        DiagnosticsStepMain();  /* X2CScope serial communication */
+#endif
+
         /* Board service — button debounce at 1ms rate */
         BoardService();
 

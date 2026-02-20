@@ -51,6 +51,15 @@ void InitializeADCs(void)
     AD1CH4CONbits.LEFT = 0;
     AD1CH4CONbits.DIFF = 0;
 
+#if FEATURE_HW_OVERCURRENT
+    /* Bus current on AD1CH2: RA5 = OA3OUT = AD1AN3, PINSEL=3 */
+    AD1CH2CONbits.PINSEL = 3;
+    AD1CH2CONbits.SAMC = 3;        /* Fast sample (low Z from OA3 output) */
+    AD1CH2CONbits.LEFT = 0;
+    AD1CH2CONbits.DIFF = 0;
+    AD1CH2CONbits.TRG1SRC = 4;     /* PWM1 trigger (24kHz, midpoint sampling) */
+#endif
+
 #if FEATURE_ADC_CMP_ZC
     /* High-speed BEMF channels configured BEFORE ADC ON.
      * Datasheet warns configuring channels when ADON=1 is unpredictable

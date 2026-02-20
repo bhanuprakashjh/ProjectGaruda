@@ -14,6 +14,7 @@
 #define _PORTCONFIG_H
 
 #include <xc.h>
+#include "../garuda_config.h"   /* Feature flags for conditional declarations */
 
 #ifdef __cplusplus
 extern "C" {
@@ -38,6 +39,10 @@ extern "C" {
 
 void SetupGPIOPorts(void);
 void MapGPIOHWFunction(void);
+
+#if FEATURE_HW_OVERCURRENT
+void HAL_OA3_Init(void);
+#endif
 
 #ifdef __cplusplus
 }

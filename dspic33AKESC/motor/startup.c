@@ -69,6 +69,18 @@ void STARTUP_Init(volatile GARUDA_DATA_T *pData)
     pData->rampCounter = INITIAL_STEP_PERIOD;
     pData->duty = ALIGN_DUTY;
 
+    /* Clear stale timing state from any previous run. STARTUP_Init is called
+     * at every ESC_ALIGN entry (including desync recovery restarts). Without
+     * this, zcSynced/goodZcCount survive from a prior run and can trigger
+     * stale hot-handoff paths or bypass pre-sync. */
+    pData->timing.zcSynced = false;
+    pData->timing.goodZcCount = 0;
+    pData->timing.risingZcWorks = false;
+    pData->timing.fallingZcWorks = false;
+    pData->timing.deadlineActive = false;
+    pData->timing.stepsSinceLastZc = 0;
+    pData->timing.hasPrevZc = false;
+
 #if FEATURE_SINE_STARTUP
     STARTUP_SineInit(pData);
 #endif
@@ -338,5 +350,116 @@ uint8_t STARTUP_SineGetTransitionStep(volatile GARUDA_DATA_T *pData)
         rawStep = (6 - rawStep) % 6;
 
     return rawStep;
+}
+
+/**
+ * @brief Initialize morph state for sine->trap transition.
+ * Called on OL_RAMP → MORPH transition.
+ * Syncs rampStepPeriod from the sine ramp's actual eRPM.
+ */
+void STARTUP_MorphInit(volatile GARUDA_DATA_T *pData)
+{
+    pData->morph.subPhase = MORPH_CONVERGE;
+    pData->morph.alpha = 0;
+    pData->morph.sectorCount = 0;
+    pData->morph.entryTick = pData->systemTick;
+    pData->morph.lastZcTick = 0;
+    pData->morph.morphZcCount = 0;
+
+    /* Sync rampStepPeriod from the sine ramp's actual eRPM.
+     * STARTUP_SineRamp() uses sine.erpmFrac (Q16) internally and never
+     * touches rampStepPeriod — it's still at INITIAL_STEP_PERIOD.
+     * Without this, TIMER1_TO_ADC_TICKS(rampStepPeriod) would produce
+     * a 10× too-slow forced commutation period → instant desync. */
+    uint32_t currentErpm = pData->sine.erpmFrac >> 16;
+    if (currentErpm < INITIAL_ERPM) currentErpm = INITIAL_ERPM;
+    if (currentErpm > RAMP_TARGET_ERPM) currentErpm = RAMP_TARGET_ERPM;
+    pData->rampStepPeriod = (uint16_t)((100000UL + currentErpm / 2) / currentErpm);
+
+    uint8_t step = STARTUP_SineGetTransitionStep(pData);
+    pData->morph.morphStep = step;
+    pData->morph.prevMorphStep = step;
+    /* sine.active stays true — angle keeps advancing in SineComputeDuties */
+}
+
+/**
+ * @brief Detect 60° sector boundary crossing.
+ * Called each ADC ISR tick during morph sub-phase A.
+ * Recomputes α from sectorCount with rounding.
+ *
+ * @return true on boundary crossing
+ */
+bool STARTUP_MorphCheckSectorBoundary(volatile GARUDA_DATA_T *pData)
+{
+    uint8_t newStep = STARTUP_SineGetTransitionStep(pData);
+    if (newStep != pData->morph.morphStep)
+    {
+        pData->morph.prevMorphStep = pData->morph.morphStep;
+        pData->morph.morphStep = newStep;
+        pData->morph.sectorCount++;
+
+        /* Compute α from sectorCount with rounding (not repeated add).
+         * This guarantees α=256 exactly at MORPH_CONVERGE_SECTORS. */
+        uint16_t sc = pData->morph.sectorCount;
+        uint16_t a = (uint16_t)((sc * 256u + (MORPH_CONVERGE_SECTORS / 2))
+                                / MORPH_CONVERGE_SECTORS);
+        if (a > 256) a = 256;
+        pData->morph.alpha = a;
+
+        return true;
+    }
+    return false;
+}
+
+/**
+ * @brief Compute blended sine/6-step duties during morph convergence.
+ * Called at 24kHz during sub-phase A. Direction-aware.
+ * Uses sector-coherent trap targets from current sine angle.
+ */
+void STARTUP_MorphComputeDuties(volatile GARUDA_DATA_T *pData,
+                                 uint32_t *dutyA, uint32_t *dutyB, uint32_t *dutyC)
+{
+    /* Pure sine duties (advances angle normally) */
+    uint32_t sineA, sineB, sineC;
+    STARTUP_SineComputeDuties(pData, &sineA, &sineB, &sineC);
+
+    /* Get sector from CURRENT angle (after advance by SineComputeDuties).
+     * This ensures trap targets are coherent with the sine angle on
+     * boundary-crossing ticks. */
+    uint8_t stepNow = STARTUP_SineGetTransitionStep(pData);
+
+    /* 6-step target duties for current sector */
+    uint32_t trapDuty = ((uint32_t)pData->sine.amplitude
+                         * SINE_TRAP_DUTY_NUM + SINE_TRAP_DUTY_DEN / 2)
+                        / SINE_TRAP_DUTY_DEN;
+    if (trapDuty < MIN_DUTY)    trapDuty = MIN_DUTY;
+    if (trapDuty > RAMP_DUTY_CAP) trapDuty = RAMP_DUTY_CAP;
+
+    const COMMUTATION_STEP_T *s = &commutationTable[stepNow];
+
+    uint32_t trapA = (s->phaseA == PHASE_PWM_ACTIVE) ? trapDuty :
+                     (s->phaseA == PHASE_LOW) ? MIN_DUTY : SINE_CENTER_DUTY;
+    uint32_t trapB = (s->phaseB == PHASE_PWM_ACTIVE) ? trapDuty :
+                     (s->phaseB == PHASE_LOW) ? MIN_DUTY : SINE_CENTER_DUTY;
+    uint32_t trapC = (s->phaseC == PHASE_PWM_ACTIVE) ? trapDuty :
+                     (s->phaseC == PHASE_LOW) ? MIN_DUTY : SINE_CENTER_DUTY;
+
+    /* Blend: duty = sine*(256-α)/256 + trap*α/256 */
+    uint16_t a = pData->morph.alpha;
+    if (a > 256) a = 256;
+    uint16_t inv = 256 - a;
+
+    /* +128 rounding reduces limit-cycle noise at partial α */
+    *dutyA = ((sineA * inv + 128) >> 8) + ((trapA * a + 128) >> 8);
+    *dutyB = ((sineB * inv + 128) >> 8) + ((trapB * a + 128) >> 8);
+    *dutyC = ((sineC * inv + 128) >> 8) + ((trapC * a + 128) >> 8);
+
+    /* Clamp */
+    if (*dutyA < MIN_DUTY) *dutyA = MIN_DUTY;
+    if (*dutyB < MIN_DUTY) *dutyB = MIN_DUTY;
+    if (*dutyC < MIN_DUTY) *dutyC = MIN_DUTY;
+    if (*dutyA > MAX_DUTY) *dutyA = MAX_DUTY;
+    if (*dutyB > MAX_DUTY) *dutyB = MAX_DUTY;
+    if (*dutyC > MAX_DUTY) *dutyC = MAX_DUTY;
 }
 #endif /* FEATURE_SINE_STARTUP */

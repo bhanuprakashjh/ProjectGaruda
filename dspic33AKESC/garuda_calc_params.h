@@ -230,11 +230,8 @@ _Static_assert(INTEG_HIT_DIVISOR >= 2 && INTEG_HIT_DIVISOR <= 16,
 /* Alignment angle: 90 deg = Phase A peak (d-axis toward A) = 16384 Q16 */
 #define SINE_ALIGN_ANGLE_Q16   ((uint16_t)16384)
 
-/* Sine coast gap in Timer1 ticks (100us/tick) */
-#define SINE_COAST_GAP_TICKS    ((uint8_t)(SINE_COAST_GAP_MS * 10))
-
-_Static_assert(SINE_COAST_GAP_TICKS >= 1 && SINE_COAST_GAP_TICKS <= 100,
-               "SINE_COAST_GAP_TICKS out of range (0.1-10ms)");
+_Static_assert(MORPH_ZC_THRESHOLD <= ZC_SYNC_THRESHOLD,
+               "MORPH_ZC_THRESHOLD cannot exceed goodZcCount cap (ZC_SYNC_THRESHOLD)");
 _Static_assert(RAMP_TARGET_ERPM > INITIAL_ERPM,
                "RAMP_TARGET_ERPM must be > INITIAL_ERPM (sine V/f ramp denominator)");
 _Static_assert(SINE_ALIGN_MODULATION_PCT >= 2 && SINE_ALIGN_MODULATION_PCT <= 50,

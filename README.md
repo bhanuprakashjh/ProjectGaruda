@@ -8,17 +8,18 @@
 
 ## Current Status
 
-**Motor runs stable closed-loop across the full speed range (1,300 - 18,500 eRPM) with zero desyncs. Hardware-accelerated ZC detection via ADC digital comparator at 1 MHz with 4x oversampling — 80,000+ HW ZC detections with zero misses. Smooth sine startup eliminates alignment jerk.**
+**Motor runs stable closed-loop across the full speed range with zero desyncs. Sinusoidal V/f startup with waveform morphing enables reliable prop-loaded startup on the A2212 1400KV drone motor. Hardware-accelerated ZC detection via ADC digital comparator at 1 MHz with 4x oversampling. Three-level hardware overcurrent protection via CMP3 CLPCI chopping + software soft limiter + board FPCI backup.**
 
 | Metric | Value |
 |--------|-------|
 | **Program flash** | ~20 KB (15%) of 128 KB |
 | **Data RAM** | ~338 bytes (2%) of 16 KB |
 | **Source files** | 24 source, 27 headers |
-| **Speed range** | 1,300 - 18,500 eRPM (pot-controlled) |
-| **HW ZC detections** | 80,236 total, 0 misses (0.000%) |
+| **Speed range** | 1,300 - 18,500 eRPM (Hurst), idle - 120,000 eRPM (A2212) |
+| **HW ZC detections** | 80,000+ total, 0 misses (0.000%) |
 | **Desyncs in testing** | 0 |
-| **Motor** | Hurst DMB0224C10002 (10-pole, 24V) |
+| **Motors tested** | Hurst DMB0224C10002 (10-pole, 24V), A2212 1400KV (14-pole, 12V) |
+| **Prop-loaded startup** | Verified: A2212 + 8x4.5 prop at 12V, 5A supply |
 | **Dev board** | MCLV-48V-300W (Microchip) |
 
 ### Implemented Phases
@@ -30,9 +31,10 @@
 | **Phase A** | Safety baseline (arming gate, fault protection, Vbus OV/UV) | HW verified |
 | **Phase B** | Control improvements (duty slew, desync recovery, timing advance) | HW verified |
 | **Phase C** | Dynamic blanking, Vbus sag power limiting | HW verified |
-| **Phase D** | Sinusoidal V/f startup (replaces trap align+ramp) | HW verified |
+| **Phase D** | Sinusoidal V/f startup with waveform morph transition | HW verified (Hurst + A2212 w/ prop) |
 | **Phase E** | BEMF integration shadow estimator (validation mode) | HW verified |
 | **Phase F** | ADC digital comparator high-speed ZC (1 MHz, 4x oversampling) | HW verified |
+| **Phase G** | Hardware overcurrent protection (CMP3 CLPCI + SW soft limiter) | HW verified |
 
 ---
 
@@ -82,25 +84,46 @@
 - **C1: Dynamic blanking** — blanking window scales with speed (3% of step period base) plus extra blanking at high duty (>70%) to suppress demagnetization noise. Hard cap at 25% of step period.
 - **C2: Vbus sag power limiting** — monitors bus voltage and proportionally reduces duty when Vbus dips below threshold (900 ADC). Hysteresis band prevents oscillation. Protects against brown-out under load.
 
-### Phase D — Sinusoidal V/f Startup
+### Phase D — Sinusoidal V/f Startup with Waveform Morph Transition
 
-Replaces the trapezoidal forced-commutation startup (which produces an audible clunk during alignment and stepping noise during the low-speed ramp) with a smooth sinusoidal 3-phase drive. The motor is driven by a rotating magnetic field at 120-degree phase offsets, eliminating alignment jerk, reducing acoustic noise, and delivering smoother low-speed torque.
+Replaces the trapezoidal forced-commutation startup with a smooth sinusoidal 3-phase drive and a two-phase waveform morph that transitions from sine to 6-step commutation without any coast gap or voltage discontinuity. The rotating field is inherently load-tolerant (like a stepper motor), enabling reliable startup under prop load where blind forced commutation stalls.
 
-**How it works:**
+**The problem this solves**: On the A2212 1400KV with an 8x4.5 propeller at 12V, the standard forced 6-step open-loop ramp stalls — blind commutation outpaces the rotor under load. Even the original sine startup with a coast gap (2-4 ms of zero voltage) caused a torque discontinuity and phase alignment error at the sine-to-trap boundary, leading to ZC sync failure.
 
-1. **Sine Alignment** (replaces trap alignment): All three phases are driven sinusoidally at a fixed electrical angle (90 degrees = Phase A peak). The rotor locks smoothly to a known position without the mechanical snap of single-phase energization. Duration: 500 ms (`ALIGN_TIME_MS`).
+**How it works — 5-stage startup sequence:**
 
-2. **Sine V/f Ramp** (replaces trap forced ramp): The electrical angle advances at increasing frequency from 300 eRPM (`INITIAL_ERPM`) to 2,000 eRPM (`RAMP_TARGET_ERPM`). Voltage amplitude scales linearly with frequency (constant V/f ratio) to maintain constant flux. A low-frequency boost (the alignment voltage) overcomes static friction. Acceleration: 1,000 eRPM/s.
+1. **Sine Alignment** (ESC_ALIGN, 500 ms): All three phases driven sinusoidally at a fixed electrical angle (90 degrees = Phase A peak). The rotor locks smoothly to a known position without the mechanical snap of single-phase energization.
 
-3. **Coast gap**: At target speed, all three phases are set to center duty (zero net voltage) for 4 ms (`SINE_COAST_GAP_MS`). The motor coasts on inertia while winding currents decay via the L/R time constant (1.14 ms for Hurst motor). 4 ms = ~3.5 time constants = 97% current decay. The sine angle is pre-advanced during the coast to compensate for rotor movement on inertia.
+2. **Sine V/f Ramp** (ESC_OL_RAMP): The electrical angle advances at increasing frequency from `INITIAL_ERPM` to `RAMP_TARGET_ERPM`. Voltage amplitude scales linearly with frequency (constant V/f ratio) to maintain constant flux. A low-frequency boost overcomes static friction. Current-gated acceleration pauses the ramp when `ibusRaw > RAMP_CURRENT_GATE_MA`, preventing overdrive stall under prop load.
 
-4. **Transition to 6-step**: After the coast gap, the pre-advanced electrical angle is mapped to the nearest 60-degree sector, which selects the corresponding commutation step. PWM switches from 3-phase sine (all phases active in complementary mode) to 6-step trap (1 PWM, 1 LOW, 1 FLOAT). The ESC enters closed-loop with BEMF ZC detection taking over within a few electrical cycles.
+3. **Waveform Morph — Sub-phase A: Duty Convergence** (ESC_MORPH, ~30 ms): All 3 phases remain driven via `HAL_PWM_SetDutyCycle3Phase()` (no Hi-Z yet). Sine duties are smoothly blended toward the 6-step duty pattern using a Q8 blend factor alpha (0 to 256):
 
-5. **Post-sync slow slew**: After ZC sync is declared, the duty slew-up rate is reduced to 1/8th of normal (0.25%/ms instead of 2%/ms) for 2 seconds (`POST_SYNC_SETTLE_MS`). This prevents low-inertia motors from accelerating faster than the stepPeriod IIR filter can track, which would cause late commutation and desync.
+   ```
+   dutyX = sine_dutyX * (256 - alpha) / 256 + trap_targetX * alpha / 256
+   ```
+
+   For each 60-degree sector (tracked from the sine angle), the 6-step trap targets are: active phase = trap duty, low phase = MIN_DUTY, float phase = SINE_CENTER_DUTY (50%, near zero net current). Alpha is computed from sector count with rounding (not repeated addition) to guarantee alpha = 256 exactly at `MORPH_CONVERGE_SECTORS` (6 sectors = 1 electrical cycle). Software overcurrent limiting proportionally scales all 3 duties when `ibusRaw > OC_SW_LIMIT_ADC`.
+
+4. **Waveform Morph — Sub-phase B: Progressive Hi-Z** (ESC_MORPH, ~5-36 sectors): The critical transition — switches from 3-phase PWM to actual 6-step commutation overrides:
+   - **Float phase** → Hi-Z (OVRENH=1, OVRENL=1, OVRDAT=0b00 = both FETs off)
+   - **Active phase** → PWM (OVRENH=0, OVRENL=0 = complementary mode)
+   - **Low phase** → Sink (OVRENH=1, OVRENL=1, OVRDAT=0b01 = L-FET on)
+
+   BEMF zero-crossing detection starts on the floating phase. `BEMF_ZC_Poll()` runs unchanged. Commutation is **forced** (open-loop timing from `rampStepPeriod`), NOT ZC-driven — the ZC detector runs as an observer only. An IIR filter adapts `stepPeriod` from measured ZC-to-ZC intervals (single-step spans only — multi-step spans are rejected to prevent the forced-step inflation death spiral).
+
+   **Exit condition**: `goodZcCount >= MORPH_ZC_THRESHOLD && risingZcWorks && fallingZcWorks && newZcThisTick` — the motor transitions to ESC_CLOSED_LOOP with a hot handoff that preserves all ZC state (no re-initialization). The first CL commutation deadline is seeded from the last confirmed ZC timestamp.
+
+   **Partial-lock fallback**: If the exit gate isn't satisfied but `goodZcCount >= 3` at the sector timeout (36 sectors = 6 electrical cycles), the motor enters CL anyway — the hardware ZC detector (HWZC) takes over at higher speed and compensates for incomplete SW ZC lock.
+
+   **Fault**: If `goodZcCount < 3` at timeout or `MORPH_TIMEOUT_MS` (2000 ms) elapses → `FAULT_MORPH_TIMEOUT`, PWM disabled.
+
+   **Staleness decay**: If `stepsSinceLastZc > ZC_STALENESS_LIMIT`, goodZcCount and polarity flags are reset to zero — preventing stale ZC history from satisfying the exit gate.
+
+5. **Post-sync slow slew**: After ZC sync is declared, the duty slew-up rate is reduced to 1/4th of normal (0.5%/ms instead of 2%/ms) for 1000 ms (`POST_SYNC_SETTLE_MS`). This prevents low-inertia motors from accelerating faster than the stepPeriod IIR filter can track.
 
 **ISR architecture:**
-- **ADC ISR (24 kHz)** owns the sine waveform: `STARTUP_SineComputeDuties()` advances the angle, looks up the sine table for 3 phases at 120-degree offsets, and writes per-phase duties via `HAL_PWM_SetDutyCycle3Phase()`. This gives ~720 updates per electrical cycle at 2,000 eRPM — very smooth waveform.
-- **Timer1 ISR (10 kHz)** owns the V/f profile: `STARTUP_SineRamp()` manages the eRPM ramp and amplitude scaling. Same structural role as the existing trapezoidal ramp.
+- **ADC ISR (24 kHz)** owns the sine waveform (stages 1-2) and the morph state machine (stages 3-4): duty blending, sector tracking, ZC polling, forced commutation countdown, exit gate evaluation.
+- **Timer1 ISR (10 kHz)** owns the V/f ramp profile (stage 2) and triggers the OL_RAMP → MORPH transition when `STARTUP_SineRamp()` returns true.
 
 **Key implementation details:**
 - **256-entry Q15 sine lookup table** (512 bytes flash) — power-of-2 for shift-based indexing
@@ -109,17 +132,23 @@ Replaces the trapezoidal forced-commutation startup (which produces an audible c
 - **Direction-aware**: angle advances forward for CW, backward for CCW; sector mapping mirrors for CCW
 - **Phase ordering A->C->B** matches the commutation table CW sequence (not the intuitive A->B->C)
 - **Safe sector mapping**: `((uint32_t)adj * 6) >> 16` always produces 0-5 (never 6)
-- **Race-free transition**: `sine.active` flag is cleared before PWM override changes, preventing the ADC ISR from overwriting 6-step overrides with sine duties
-- **`COMMUTATION_ApplyStep()`**: extracted helper that sets PWM overrides + ADC mux + settle count in one call — used for the sine-to-trap transition and internally by `AdvanceStep()`
+- **Sector-coherent trap targets**: `MorphComputeDuties()` re-reads the sector from the current sine angle (after `SineComputeDuties()` advances it) rather than using the cached `morphStep` — prevents a one-tick mismatch at 60-degree boundaries
+- **rampStepPeriod sync**: `MorphInit()` computes `rampStepPeriod` from the actual sine eRPM (`erpmFrac >> 16`) because `SineRamp()` never touches `rampStepPeriod` — without this, forced commutation in Hi-Z would run 10x too slowly
+- **prevAdcState race fix**: `entryState` is captured at ADC ISR start, saved to `prevAdcState` at ISR end (not `garudaData.state`). Without this, the morph→CL transition would be invisible to the next tick's entry-detection checks
+- **Hot handoff guard**: CL entry gates on `prevAdcState == ESC_MORPH && zcSynced` (not just `zcSynced`) to prevent stale state from a previous run triggering the hot-handoff path after a stop→restart cycle
 
 **Tuning parameters** (in `garuda_config.h`):
-- `SINE_ALIGN_MODULATION_PCT` (15%) — modulation depth during alignment
-- `SINE_RAMP_MODULATION_PCT` (35%) — modulation depth at target speed
-- `SINE_PHASE_OFFSET_DEG` (60 degrees) — sector-to-step calibration offset for the Hurst motor. Adjustable in 60-degree increments (0, 60, 120, 180, 240, 300) until the sine-to-trap transition is smooth.
-- `SINE_COAST_GAP_MS` (4 ms) — de-energization gap before sine-to-trap transition. Motor coasts on inertia while winding currents decay. Eliminates current discontinuity jerk.
-- `SINE_TRAP_DUTY_NUM` / `SINE_TRAP_DUTY_DEN` (6/5) — sine-to-trap duty scale factor (tuning knobs, 1:1 mapping currently active)
-- `POST_SYNC_SETTLE_MS` (2000 ms) — reduced slew-up rate period after ZC sync declaration
-- `POST_SYNC_SLEW_DIVISOR` (8) — slew-up rate divisor during settle period (8 = 0.25%/ms)
+- `SINE_ALIGN_MODULATION_PCT` — modulation depth during alignment (Hurst: 15%, A2212: 4%)
+- `SINE_RAMP_MODULATION_PCT` — modulation depth at target speed (Hurst: 35%, A2212: 8%)
+- `SINE_PHASE_OFFSET_DEG` (60 degrees) — sector-to-step calibration offset
+- `SINE_TRAP_DUTY_NUM` / `SINE_TRAP_DUTY_DEN` (6/5) — sine-to-trap duty scale factor, compensates for sine-to-trap L-L voltage conversion
+- `MORPH_CONVERGE_SECTORS` (6) — sectors for duty convergence (1 electrical cycle, ~30 ms at 2000 eRPM)
+- `MORPH_HIZ_MAX_SECTORS` (36) — max sectors in Hi-Z before timeout (6 electrical cycles)
+- `MORPH_TIMEOUT_MS` (2000) — absolute morph timeout
+- `MORPH_ZC_THRESHOLD` (4) — goodZcCount required to exit morph
+- `POST_SYNC_SETTLE_MS` (1000 ms) — reduced slew-up rate period after ZC sync
+- `POST_SYNC_SLEW_DIVISOR` (4) — slew-up rate divisor during settle (4 = 0.5%/ms)
+- `RAMP_CURRENT_GATE_MA` (5000 for A2212) — current gate pauses ramp acceleration under load
 
 **Feature flag**: `FEATURE_SINE_STARTUP`. Setting to 0 reverts to trapezoidal alignment + forced ramp with zero code overhead.
 
@@ -201,6 +230,46 @@ Crossover is automatic with hysteresis (500 eRPM band). Once hardware ZC activat
 
 **Feature flag**: `FEATURE_ADC_CMP_ZC`. Setting to 0 removes all hardware ZC code. Requires `FEATURE_BEMF_CLOSED_LOOP`.
 
+### Phase G — Hardware Overcurrent Protection
+
+Three-level overcurrent protection using the on-board CMP3 comparator, OA3 current sense amplifier, and software monitoring. Protects against overcurrent at all operating points — startup, morph transition, and closed-loop.
+
+**Protection levels:**
+
+1. **CMP3 CLPCI Cycle-by-Cycle Chopping** (hardware, <100 ns response): CMP3 monitors the amplified bus current (OA3 output on RA5). When current exceeds the DAC threshold, CMP3 triggers the PWM current-limit PCI (CLPCI) which truncates the active PWM pulse for that cycle. The motor continues running — this is non-destructive current clamping. Two DAC thresholds:
+   - **Startup threshold** (`OC_STARTUP_MA`): High during alignment and ramp — lets the power supply's CC limit be the primary limiter (e.g., 22A for A2212, letting a 10A supply CC-limit naturally)
+   - **Operational threshold** (`OC_LIMIT_MA`): Lowered at morph entry or CL entry (e.g., 12A for A2212). Restored to startup threshold on fault paths.
+
+2. **Software Soft Limiter** (24 kHz ADC ISR): Proportionally reduces duty when `ibusRaw > OC_SW_LIMIT_ADC`. The reduction is linear: at the SW limit threshold, duty is unchanged; at the CMP3 threshold, duty is zero. Runs in ESC_MORPH (both sub-phases) and ESC_CLOSED_LOOP. In MORPH_CONVERGE, all 3 phase duties are scaled proportionally.
+
+3. **Software Hard Fault** (`OC_PROTECT_MODE=2`): If `ibusRaw > OC_FAULT_ADC_VAL`, immediate PWM shutdown and `FAULT_OVERCURRENT`. This catches sustained overcurrent that the CLPCI chopping cannot control.
+
+4. **Board FPCI Backup**: The MCLV-48V-300W DIM has a fixed analog overcurrent circuit (~15A) on the PCI8R pin. This triggers a PWM fault PCI (FPCI) interrupt → immediate shutdown → `FAULT_BOARD_PCI`. Independent of all software — works even if firmware hangs.
+
+**CMP3 configuration:**
+- Input: OA3OUT (RA5) — bus current amplified by on-board op-amp (0.003 ohm shunt, 24.95x gain, 1.65V bias)
+- DAC: 12-bit, updated at runtime via `HAL_CMP3_SetThreshold()`
+- Hysteresis: 45 mV (maximum, for noise immunity)
+- Digital filter: enabled for glitch rejection
+- CLPCI event source: `PSS = 0b11101` (CMP3 output, not RPn pin)
+
+**ADC current sensing:**
+- `ibusRaw`: Read from AD1CH4 (RA5/OA3OUT) every 24 kHz ADC cycle
+- `ibusMax`: Running maximum, never cleared (diagnostic)
+- `clpciTripCount`: Accumulated from PG1/PG2/PG3 CLPCI event flags (diagnostic)
+
+**Tuning parameters** (per motor profile in `garuda_config.h`):
+
+| Parameter | Hurst (24V) | A2212 (12V) |
+|-----------|-------------|-------------|
+| `OC_LIMIT_MA` | 1,800 | 12,000 |
+| `OC_STARTUP_MA` | 18,000 | 22,000 |
+| `OC_FAULT_MA` | 3,000 | 18,000 |
+| `OC_SW_LIMIT_MA` | 1,500 | 8,000 |
+| `RAMP_CURRENT_GATE_MA` | 0 (disabled) | 5,000 |
+
+**Feature flag**: `FEATURE_HW_OVERCURRENT`. Setting to 0 removes all CMP3/OC code. Board FPCI backup remains active regardless.
+
 ---
 
 ## Feature Flags
@@ -215,9 +284,10 @@ All features are individually toggleable via compile-time flags in `garuda_confi
 #define FEATURE_TIMING_ADVANCE   1  /* Phase B3: Linear timing advance */
 #define FEATURE_DYNAMIC_BLANKING 1  /* Phase C1: Speed+duty blanking */
 #define FEATURE_VBUS_SAG_LIMIT   1  /* Phase C2: Vbus sag power limit */
-#define FEATURE_SINE_STARTUP     1  /* Phase D: Sine startup */
+#define FEATURE_SINE_STARTUP     1  /* Phase D: Sine startup + waveform morph */
 #define FEATURE_BEMF_INTEGRATION 1  /* Phase E: Shadow integration */
 #define FEATURE_ADC_CMP_ZC       1  /* Phase F: ADC comparator high-speed ZC */
+#define FEATURE_HW_OVERCURRENT  1  /* Phase G: CMP3 CLPCI + SW OC protection */
 ```
 
 Setting any flag to 0 completely removes that feature from the build (dead code elimination). Compile-time guards enforce dependencies:
@@ -237,7 +307,7 @@ Setting any flag to 0 completely removes that feature from the build (dead code 
 | **ADC** | Dual-core, 12-bit: 24 kHz PWM-triggered (control) + 1 MHz SCCP3-triggered (ZC comparator, 4x oversampled) |
 | **PWM** | 3 generators, 400 MHz timebase, complementary with dead-time |
 | **Dev Board** | MCLV-48V-300W (Microchip) |
-| **Motor** | Hurst DMB0224C10002 (10-pole, 24 V, 1.0 A rated) |
+| **Motors** | Hurst DMB0224C10002 (10-pole, 24V), A2212 1400KV (14-pole, 12V) |
 | **Compiler** | XC-DSC v3.30 |
 | **IDE** | MPLAB X v6.30 |
 | **DFP** | dsPIC33AK-MC_DFP v1.4.172 |
@@ -294,14 +364,18 @@ dspic33AKESC/
     ^                    |
     |                    | throttle < 200 ADC for 500ms
     |                    v
-    |               [ALIGN]       sine: 3-phase lock at 90deg / trap: step 0 at 20% duty
+    |               [ALIGN]       sine: 3-phase lock at 90deg / trap: step 0 at duty%
     |                    |        duration: 500ms
     |                    v
-    |              [OL_RAMP]      sine: V/f ramp 300->2000 eRPM / trap: forced commutation
-    |                    |
-    |                    | sine: target speed reached / trap: ZC sync lock
+    |              [OL_RAMP]      sine: V/f ramp to RAMP_TARGET_ERPM
+    |                    |        (trap: forced commutation when SINE_STARTUP=0)
     |                    v
-    |            [CLOSED_LOOP]    ADC-based BEMF ZC commutation
+    |              [MORPH]        sub-A: duty blend (sine→trap, alpha 0→256)
+    |                    |        sub-B: Hi-Z + BEMF ZC observer (forced comms)
+    |                    |
+    |                    | ZC lock OR partial-lock timeout
+    |                    v
+    |            [CLOSED_LOOP]    BEMF ZC commutation (SW or HWZC)
     |                    |
     | SW1 press          |
     +--------------------+
@@ -310,7 +384,7 @@ dspic33AKESC/
     |                    v
     |             [RECOVERY]      200ms coast, then auto-restart (max 3x)
     |                    |
-    |  overcurrent/OV/UV |  3x restart fail
+    |  overcurrent/OV/UV |  3x restart fail / morph timeout
     +----[FAULT]<--------+
          SW1 clears fault -> [IDLE]
 ```
@@ -412,6 +486,7 @@ EOF
 
 ### Tests Completed
 
+**Hurst DMB0224C10002 (10-pole, 24V, no load):**
 - Full speed range pot sweep (min to max) — stable, zero desyncs
 - Rapid pot transients (short bursts) — IIR threshold smoothing handles well
 - Shadow integration estimator at 5 speed points — all pass >90% hit rate
@@ -419,14 +494,33 @@ EOF
 - Direction change restriction — verified: blocked outside IDLE state
 - Board fault PCI — active, no false triggers (injection not tested)
 - Vbus OV/UV — active, no false triggers (injection not tested)
-- Sine startup — verified: smooth alignment, V/f ramp, transition to closed-loop
-- Sine direction — verified: CW and CCW sine rotation matches commutation direction
-- Sine-to-trap transition — verified with 4 ms coast gap and SINE_PHASE_OFFSET_DEG=60 on Hurst motor
-- Post-sync slow slew — verified: prevents pot ramp stall on low-inertia motor across full pot range
-- Hardware ZC (single-sample) — 41,714 detections, zero misses across full speed range
-- Hardware ZC (4x oversampled) — 38,522 detections, zero misses across full speed range
-- SW-to-HW ZC crossover at 5,000 eRPM — seamless transition in both directions
-- Throttle-zero shutdown — verified: motor stops gracefully when pot returns to zero
+- Sine startup — verified: smooth alignment, V/f ramp, morph transition
+- Hardware ZC (4x oversampled) — 80,000+ detections, zero misses
+- SW-to-HW ZC crossover at 5,000 eRPM — seamless transition
+
+**A2212 1400KV (14-pole, 12V, no prop):**
+- Sine startup + morph → CL — reliable, zero faults
+- Morph waveform morph — full ZC lock in 9-15 HIZ sectors (no-load), partial-lock fallback when needed
+- Full speed range (idle to max) — stable via HWZC, zero desyncs
+- CMP3 CLPCI overcurrent chopping — active and functional across all speeds
+- SW overcurrent soft limiter — proportional duty reduction verified
+
+**A2212 1400KV (14-pole, 12V, 8x4.5 propeller):**
+- Prop-loaded startup — **reliable**, sine ramp completes under load
+- Morph full ZC lock in 5-13 HIZ sectors (prop load gives cleaner BEMF than no-load)
+- Idle with prop — stable, HWZC running, zero misses, 44K+ commutations
+- Min speed with prop — stable, zero misses, 31K+ commutations
+- Mid speed with prop — stable, partial-lock→HWZC rescue, 81K+ commutations, zero misses
+- Zero desyncs, zero faults across all prop test runs
+- CMP3 CLPCI chopping active (1.3-3.3M trips per run, expected for low-impedance motor)
+
+**A2212 prop-loaded test results (X2CScope captures):**
+
+| Test | Morph Sectors | Exit Path | HWZC Comms | HWZC Misses | ibusMax | Desyncs |
+|------|--------------|-----------|------------|-------------|---------|---------|
+| Idle + prop | 5 | Full ZC lock | 44,534 | 0 | 2,020 | 0 |
+| Min speed + prop | 13 | Full ZC lock | 31,749 | 0 | 2,042 | 0 |
+| Mid speed + prop | 36 | Partial → HWZC | 81,892 | 0 | 2,041 | 0 |
 
 ### Tests Recommended
 
@@ -453,9 +547,10 @@ EOF
 - **Phase A**: Safety baseline (arming, fault protection, Vbus monitoring)
 - **Phase B**: Control improvements (duty slew, desync recovery, timing advance)
 - **Phase C**: Dynamic blanking, Vbus sag power limiting
-- **Phase D**: Sinusoidal V/f startup (smooth 3-phase drive, eliminates alignment jerk)
+- **Phase D**: Sinusoidal V/f startup with waveform morph (smooth sine→trap transition, prop-loaded startup verified)
 - **Phase E**: BEMF integration shadow estimator (validated, >99% accuracy at high speed)
 - **Phase F**: ADC digital comparator high-speed ZC (1 MHz SCCP3 trigger, 4x oversampling, 80K+ detections with zero misses)
+- **Phase G**: Hardware overcurrent protection (CMP3 CLPCI chopping + SW soft limiter + board FPCI backup)
 
 ### Future
 

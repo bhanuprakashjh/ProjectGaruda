@@ -16,10 +16,18 @@
 #include <stdbool.h>
 
 #include "hal_comparator.h"
+#include "../garuda_config.h"
+#if FEATURE_HW_OVERCURRENT
+#include "../garuda_calc_params.h"
+#endif
 
 static void CMP1_Initialize(void);
 static void CMP2_Initialize(void);
+#if FEATURE_HW_OVERCURRENT
+static void CMP3_InitOvercurrent(void);
+#else
 static void CMP3_Initialize(void);
+#endif
 
 /**
  * @brief Initialize all comparator modules with DAC calibration.
@@ -52,7 +60,11 @@ void InitializeCMPs(void)
     /* Initialize all 3 comparators */
     CMP1_Initialize();
     CMP2_Initialize();
+#if FEATURE_HW_OVERCURRENT
+    CMP3_InitOvercurrent();
+#else
     CMP3_Initialize();
+#endif
 }
 
 /**
@@ -115,9 +127,11 @@ static void CMP2_Initialize(void)
     DAC2SLPDAT = 0;
 }
 
+#if !FEATURE_HW_OVERCURRENT
 /**
  * @brief Configure CMP3 for Phase C BEMF zero-crossing.
  * Input: CMP3B = RB5 (INSEL=1), DAC3 reference
+ * Not used when FEATURE_HW_OVERCURRENT — CMP3_InitOvercurrent() replaces it.
  */
 static void CMP3_Initialize(void)
 {
@@ -148,6 +162,59 @@ static void CMP3_Initialize(void)
 
     DAC3SLPDAT = 0;
 }
+#endif /* !FEATURE_HW_OVERCURRENT */
+
+#if FEATURE_HW_OVERCURRENT
+/**
+ * @brief Configure CMP3 for bus overcurrent detection via OA3.
+ * Input: CMP3A = RA5 = OA3OUT (INSEL=0).
+ *
+ * All modes start with elevated startup threshold (OC_CMP3_STARTUP_DAC).
+ * On low-R motors (A2212: 0.065 ohm), stall current during align/ramp
+ * easily exceeds the operational threshold, causing CLPCI chopping that
+ * robs the motor of startup torque.
+ * Lowered to OC_CMP3_DAC_VAL after ZC sync via HAL_CMP3_SetThreshold().
+ *
+ * Called from InitializeCMPs() after DAC factory calibration is applied.
+ */
+static void CMP3_InitOvercurrent(void)
+{
+    DAC3CON = 0;
+    DAC3CONbits.FLTREN = OC_CMP_FILTER_EN;
+    DAC3CONbits.CMPPOL = 0;         /* Non-inverted: HIGH when OA3OUT > DAC */
+    DAC3CONbits.INSEL = 0;          /* CMP3A = RA5 = OA3OUT */
+    DAC3CONbits.HYSPOL = 0;         /* Hysteresis on rising edge */
+    DAC3CONbits.HYSSEL = OC_CMP_HYSTERESIS;
+
+    /* All modes start with elevated startup threshold. On low-R motors
+     * (A2212: 0.065 ohm), stall current during align/ramp easily exceeds
+     * the operational threshold, causing CLPCI to chop away startup torque.
+     * Lowered to OC_CMP3_DAC_VAL after ZC sync via HAL_CMP3_SetThreshold(). */
+    DAC3DATbits.DACDAT = OC_CMP3_STARTUP_DAC;
+
+    DAC3SLPCON = 0;
+    DAC3SLPDAT = 0;
+}
+
+/**
+ * @brief Enable CMP3 and DAC module for overcurrent protection.
+ * Call after CMP3_InitOvercurrent() has configured the threshold.
+ */
+void HAL_CMP3_EnableOvercurrent(void)
+{
+    DACCTRL1bits.ON = 1;
+    DAC3CONbits.DACEN = 1;
+}
+
+/**
+ * @brief Update CMP3/DAC3 threshold at runtime.
+ * @param dacVal 12-bit DAC value (0-4095)
+ */
+void HAL_CMP3_SetThreshold(uint16_t dacVal)
+{
+    DAC3DATbits.DACDAT = dacVal;
+}
+#endif /* FEATURE_HW_OVERCURRENT */
 
 /**
  * @brief Enable only the comparator for the current floating phase.

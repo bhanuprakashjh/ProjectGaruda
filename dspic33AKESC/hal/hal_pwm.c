@@ -18,6 +18,7 @@
 
 #include "hal_pwm.h"
 #include "../garuda_types.h"
+#include "../garuda_config.h"
 
 /* External commutation table defined in commutation.c */
 extern const COMMUTATION_STEP_T commutationTable[6];
@@ -249,11 +250,26 @@ void InitPWMGenerator1(void)
     PG1FPCIbits.LATMOD = 0;
     PG1FPCIbits.TQPS = 0;
     PG1FPCIbits.TQSS = 0;
+#if FEATURE_HW_OVERCURRENT && OC_PROTECT_MODE == 1
+    PG1FPCIbits.PSS = 0b11101;     /* CMP3 (replaces RPn/PCI8R) */
+    PG1FPCIbits.PPS = 0;           /* Non-inverted */
+#endif
 #else
     PG1FPCI     = 0x0000;
 #endif
 
+#if FEATURE_HW_OVERCURRENT && (OC_PROTECT_MODE == 0 || OC_PROTECT_MODE == 2)
     PG1CLPCI    = 0x0000;
+    PG1CLPCIbits.PSS = 0b11101;    /* Comparator 3 output */
+    PG1CLPCIbits.PPS = 0;          /* Non-inverted (CMP3 high = overcurrent) */
+    PG1CLPCIbits.TERM = 1;         /* Auto-terminate when PCI source goes inactive */
+    PG1CLPCIbits.ACP = 0;          /* Level-sensitive (not latched) */
+    PG1CLPCIbits.PSYNC = 0;
+    /* CLIEN stays 0 — no ISR. CLPCI protection is pure hardware.
+     * Trip counting uses CLEVT polling in ADC ISR. */
+#else
+    PG1CLPCI    = 0x0000;
+#endif
     PG1FFPCI    = 0x0000;
     PG1SPCI     = 0x0000;
     PG1LEB      = 0x0000;
@@ -344,11 +360,24 @@ void InitPWMGenerator2(void)
     PG2FPCIbits.LATMOD = 0;
     PG2FPCIbits.TQPS = 0;
     PG2FPCIbits.TQSS = 0;
+#if FEATURE_HW_OVERCURRENT && OC_PROTECT_MODE == 1
+    PG2FPCIbits.PSS = 0b11101;     /* CMP3 (replaces RPn/PCI8R) */
+    PG2FPCIbits.PPS = 0;           /* Non-inverted */
+#endif
 #else
     PG2FPCI     = 0x0000;
 #endif
 
+#if FEATURE_HW_OVERCURRENT && (OC_PROTECT_MODE == 0 || OC_PROTECT_MODE == 2)
     PG2CLPCI    = 0x0000;
+    PG2CLPCIbits.PSS = 0b11101;    /* Comparator 3 output */
+    PG2CLPCIbits.PPS = 0;
+    PG2CLPCIbits.TERM = 1;
+    PG2CLPCIbits.ACP = 0;
+    PG2CLPCIbits.PSYNC = 0;
+#else
+    PG2CLPCI    = 0x0000;
+#endif
     PG2FFPCI    = 0x0000;
     PG2SPCI     = 0x0000;
     PG2LEB      = 0x0000;
@@ -438,11 +467,24 @@ void InitPWMGenerator3(void)
     PG3FPCIbits.LATMOD = 0;
     PG3FPCIbits.TQPS = 0;
     PG3FPCIbits.TQSS = 0;
+#if FEATURE_HW_OVERCURRENT && OC_PROTECT_MODE == 1
+    PG3FPCIbits.PSS = 0b11101;     /* CMP3 (replaces RPn/PCI8R) */
+    PG3FPCIbits.PPS = 0;           /* Non-inverted */
+#endif
 #else
     PG3FPCI     = 0x0000;
 #endif
 
+#if FEATURE_HW_OVERCURRENT && (OC_PROTECT_MODE == 0 || OC_PROTECT_MODE == 2)
     PG3CLPCI    = 0x0000;
+    PG3CLPCIbits.PSS = 0b11101;    /* Comparator 3 output */
+    PG3CLPCIbits.PPS = 0;
+    PG3CLPCIbits.TERM = 1;
+    PG3CLPCIbits.ACP = 0;
+    PG3CLPCIbits.PSYNC = 0;
+#else
+    PG3CLPCI    = 0x0000;
+#endif
     PG3FFPCI    = 0x0000;
     PG3SPCI     = 0x0000;
     PG3LEB      = 0x0000;

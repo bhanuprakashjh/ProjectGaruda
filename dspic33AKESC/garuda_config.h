@@ -23,7 +23,11 @@ extern "C" {
 #define FEATURE_DYNAMIC_BLANKING 1  /* Phase C1: Speed+duty-aware blanking (extra blank at high duty/demag) */
 #define FEATURE_VBUS_SAG_LIMIT   1  /* Phase C2: Bus voltage sag power limiting (reduce duty on Vbus dip) */
 #define FEATURE_BEMF_INTEGRATION 1  /* Phase E: Shadow integration estimator (shadow-only, no control) */
-#define FEATURE_SINE_STARTUP     0  /* Disabled for A2212: sine->trap transition unreliable */
+#define FEATURE_SINE_STARTUP     1  /* Sine ramp + waveform morph transition.
+                                     * Global: replaces coast gap for ALL motor
+                                     * profiles. Per-motor tuning via existing
+                                     * per-profile defines (SINE_*_MODULATION_PCT,
+                                     * SINE_PHASE_OFFSET_DEG, etc). */
 #define FEATURE_ADC_CMP_ZC       1  /* Phase F: ADC comparator-based high-speed ZC */
 #define FEATURE_HW_OVERCURRENT  1  /* Phase G: Hardware overcurrent protection via CMP3+OA3 */
 #define FEATURE_LEARN_MODULES    0  /* master: ring buffer + quality + health */
@@ -100,15 +104,22 @@ extern "C" {
 #define ALIGN_DUTY_PERCENT           8     /* 12V*8%/0.065=14.8A stall (supply CC limits) */
 #define RAMP_DUTY_PERCENT           10     /* More torque to push prop through ramp */
 #define INITIAL_ERPM               200     /* Very slow start: 50ms per step — prop can follow */
-#define RAMP_TARGET_ERPM          2000     /* Low target for loaded start, HWZC takes over */
+#define RAMP_TARGET_ERPM          2000     /* Reverted to 2000: less jerk at morph→CL handoff.
+                                            * SW ZC lock relies on HWZC_CROSSOVER=3500 +
+                                            * MORPH_ZC_THRESHOLD=4 instead of higher BEMF. */
 #define MAX_CLOSED_LOOP_ERPM    120000     /* 1400KV * 12V * 7pp */
 #define RAMP_ACCEL_ERPM_PER_S      300     /* Gentle ramp — each step must physically complete */
 #define SINE_ALIGN_MODULATION_PCT    4     /* Limit alignment current */
 #define SINE_RAMP_MODULATION_PCT     8     /* Limit ramp current */
 #define ZC_DEMAG_DUTY_THRESH        40     /* Low-L = more demag */
 #define ZC_DEMAG_BLANK_EXTRA_PERCENT 18    /* Aggressive demag blanking */
-#define HWZC_CROSSOVER_ERPM       1500     /* HWZC activates after zcSynced when eRPM exceeds this */
-#define CL_IDLE_DUTY_PERCENT        20     /* Min CL duty at pot=0; sustains prop at idle speed */
+#define HWZC_CROSSOVER_ERPM       1500     /* Reverted: SW ZC can't lock at 2000 eRPM on A2212.
+                                            * Partial-lock morph exit needs HWZC to take over
+                                            * immediately in CL. 1500 < RAMP_TARGET ensures
+                                            * HWZC activates as soon as zcSynced is set. */
+#define CL_IDLE_DUTY_PERCENT         8     /* Min CL duty at pot=0. Lowered from 12 to reduce
+                                            * CLPCI chopping at idle and minimize duty jump at
+                                            * morph→CL (morph exits at ~10% RAMP_DUTY_PERCENT). */
 #define SINE_PHASE_OFFSET_DEG       60     /* Sine-to-trap offset (unused when sine disabled) */
 #define OC_LIMIT_MA              12000     /* CMP3 CLPCI chopping (12A) */
 #define OC_STARTUP_MA            22000     /* High: let 10A supply CC be the limiter, not CMP3 */
@@ -155,13 +166,12 @@ extern "C" {
 #if FEATURE_DUTY_SLEW
 #define DUTY_SLEW_UP_PERCENT_PER_MS     2   /* Max duty increase: 2%/ms (~50ms full scale) */
 #define DUTY_SLEW_DOWN_PERCENT_PER_MS   5   /* Max duty decrease: 5%/ms (~20ms full scale) */
-#define POST_SYNC_SETTLE_MS            500  /* Reduced slew-up rate period after ZC sync (ms).
+#define POST_SYNC_SETTLE_MS           1000  /* Longer settle window after ZC sync (ms).
+                                             * Raised from 500 to smooth morph→CL jerk.
                                              * During this window, duty ramps at 1/DIVISOR of
-                                             * normal rate to prevent over-acceleration on
-                                             * low-inertia motors. Was 2000 for Hurst; A2212
-                                             * decelerates too fast at 2000ms. */
-#define POST_SYNC_SLEW_DIVISOR           2  /* Slew-up rate divisor during settle (2 = 1%/ms).
-                                             * Was 8 for Hurst; A2212 needs faster response. */
+                                             * normal rate to prevent over-acceleration. */
+#define POST_SYNC_SLEW_DIVISOR           4  /* Slew-up rate divisor during settle (4 = 0.5%/ms).
+                                             * Raised from 2 for gentler CL entry ramp. */
 #endif
 
 /* Desync Recovery (Phase B2) */
@@ -196,16 +206,20 @@ extern "C" {
 /* Sine Startup (Phase D) — modulation params in motor profile above */
 #if FEATURE_SINE_STARTUP
 /* SINE_PHASE_OFFSET_DEG is now per-motor-profile (above) */
-#define SINE_COAST_GAP_MS            2  /* De-energization gap before sine->trap transition (ms).
-                                         * Motor coasts on inertia while winding currents decay.
-                                         * Hurst L/R=1.14ms, A2212 L/R=0.46ms.
-                                         * 2ms = 4.3 tau for A2212 (98.6% decay). */
 #define SINE_TRAP_DUTY_NUM           6  /* Sine->trap duty scale factor numerator. */
 #define SINE_TRAP_DUTY_DEN           5  /* Sine->trap duty scale factor denominator.
                                          * 6/5 = 1.2x compensates for the sine-to-trap L-L
                                          * voltage conversion at RAMP_TARGET_ERPM.
                                          * Tune: increase NUM if motor brakes at transition,
                                          *        decrease NUM if motor surges forward. */
+
+/* Waveform Morph: sine-to-trap transition (replaces coast gap) */
+#define MORPH_CONVERGE_SECTORS    6   /* Sectors for duty convergence (1 e-cycle).
+                                       * At 2000 eRPM: 6 sectors × 5ms = 30ms. */
+#define MORPH_HIZ_MAX_SECTORS    36   /* Max sectors in Hi-Z before fault (6 e-cycles). */
+#define MORPH_TIMEOUT_MS       2000   /* Absolute morph timeout (ms). */
+#define MORPH_ZC_THRESHOLD        4   /* goodZcCount to exit morph → CL. Lowered from 6
+                                       * for easier SW ZC lock during morph. */
 #endif
 
 /* ADC Comparator ZC (Phase F) — crossover eRPM in motor profile above */

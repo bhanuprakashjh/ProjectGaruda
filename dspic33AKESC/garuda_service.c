@@ -157,6 +157,10 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
     garudaData.throttle = garudaData.potRaw;
 
 #if FEATURE_BEMF_CLOSED_LOOP
+    /* Capture entry state for transition detection. Must be saved before
+     * any state changes (morph→CL etc.) so the NEXT tick sees the transition. */
+    ESC_STATE_T entryState = garudaData.state;
+
     /* Duty-proportional ZC threshold = virtual neutral point.
      * neutral = Vbus * duty / (2 * LOOPTIME_TCY)
      * Approximated as (vbusRaw * duty) >> 18 for 24kHz PWM.
@@ -170,9 +174,20 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
         uint16_t rawThresh = (uint16_t)(
             ((uint32_t)garudaData.vbusRaw * garudaData.duty) >> ZC_DUTY_THRESHOLD_SHIFT);
 
-        if (garudaData.state == ESC_CLOSED_LOOP)
+        if (garudaData.state == ESC_CLOSED_LOOP
+#if FEATURE_SINE_STARTUP
+            || (garudaData.state == ESC_MORPH
+                && garudaData.morph.subPhase == MORPH_HIZ)
+#endif
+           )
         {
-            if (prevAdcState != ESC_CLOSED_LOOP)
+            if (prevAdcState != ESC_CLOSED_LOOP
+#if FEATURE_SINE_STARTUP
+                && !(garudaData.state == ESC_MORPH
+                     && garudaData.morph.subPhase == MORPH_HIZ
+                     && prevAdcState == ESC_MORPH)
+#endif
+               )
             {
                 zcThreshSmooth = rawThresh;  /* Seed on CL entry */
             }
@@ -358,6 +373,240 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                 HAL_PWM_SetDutyCycle3Phase(dA, dB, dC);
             }
             break;
+
+        case ESC_MORPH:
+        {
+            if (garudaData.morph.subPhase == MORPH_CONVERGE)
+            {
+                /* Sub-phase A: blended duties, all 3 phases driven */
+                uint32_t dA, dB, dC;
+                STARTUP_MorphComputeDuties(&garudaData, &dA, &dB, &dC);
+
+#if FEATURE_HW_OVERCURRENT
+                /* Current-proportional duty reduction during convergence.
+                 * Same logic as CL SW OC limiter but applied to all 3 phases. */
+                if (garudaData.ibusRaw > OC_SW_LIMIT_ADC)
+                {
+                    uint16_t excess = garudaData.ibusRaw - OC_SW_LIMIT_ADC;
+                    uint16_t range = OC_CMP3_DAC_VAL - OC_SW_LIMIT_ADC;
+                    if (range == 0) range = 1;
+                    /* Scale factor: 256 = no reduction, 0 = full cut */
+                    uint32_t scale = 256;
+                    uint32_t reduction = ((uint32_t)excess * 256u) / range;
+                    if (reduction >= scale)
+                        scale = 0;
+                    else
+                        scale -= reduction;
+                    dA = (dA * scale) >> 8;
+                    dB = (dB * scale) >> 8;
+                    dC = (dC * scale) >> 8;
+                    if (dA < MIN_DUTY) dA = MIN_DUTY;
+                    if (dB < MIN_DUTY) dB = MIN_DUTY;
+                    if (dC < MIN_DUTY) dC = MIN_DUTY;
+                }
+#endif
+                HAL_PWM_SetDutyCycle3Phase(dA, dB, dC);
+
+                if (STARTUP_MorphCheckSectorBoundary(&garudaData))
+                {
+                    if (garudaData.morph.alpha >= 256)
+                    {
+                        /* Convergence complete → enter Hi-Z sub-phase */
+                        garudaData.morph.alpha = 256;
+                        garudaData.morph.subPhase = MORPH_HIZ;
+                        garudaData.morph.sectorCount = 0;
+                        garudaData.sine.active = false;
+
+                        /* Apply 6-step overrides */
+                        COMMUTATION_ApplyStep(&garudaData,
+                                              garudaData.morph.morphStep);
+
+                        /* Set trap duty */
+                        uint32_t td = ((uint32_t)garudaData.sine.amplitude
+                            * SINE_TRAP_DUTY_NUM + SINE_TRAP_DUTY_DEN / 2)
+                            / SINE_TRAP_DUTY_DEN;
+                        if (td < MIN_DUTY) td = MIN_DUTY;
+                        if (td > RAMP_DUTY_CAP) td = RAMP_DUTY_CAP;
+                        garudaData.duty = td;
+                        HAL_PWM_SetDutyCycle(garudaData.duty);
+
+                        /* Initialize timing for forced commutation in Hi-Z.
+                         * Dynamic bounds from actual rampStepPeriod. */
+                        uint16_t handoff =
+                            TIMER1_TO_ADC_TICKS(garudaData.rampStepPeriod);
+                        uint16_t initPeriod = handoff;
+                        garudaData.timing.stepPeriod = initPeriod;
+                        garudaData.timing.forcedCountdown = initPeriod;
+
+                        /* Initialize ZC detection */
+                        BEMF_ZC_Init(&garudaData, initPeriod);
+                        BEMF_ZC_OnCommutation(&garudaData, adcIsrTick);
+                        garudaData.bemf.ad2SettleCount = ZC_AD2_SETTLE_SAMPLES;
+                    }
+                }
+            }
+            else /* MORPH_HIZ */
+            {
+                /* Sub-phase B: real 6-step, BEMF on float phase */
+                bool wasDetected = garudaData.bemf.zeroCrossDetected;
+                uint8_t spacing = garudaData.timing.stepsSinceLastZc;
+                BEMF_ZC_Poll(&garudaData, adcIsrTick);
+
+                /* Latch "ZC confirmed this tick" BEFORE any forced
+                 * commutation runs — immune to stepsSinceLastZc race. */
+                bool newZcThisTick = (!wasDetected
+                    && garudaData.bemf.zeroCrossDetected);
+
+                /* Track ZC timestamps for IIR period adaptation.
+                 * Guard: only trust single-step intervals (spacing==1). */
+                if (newZcThisTick)
+                {
+                    garudaData.morph.morphZcCount++;
+                    if (garudaData.morph.morphZcCount >= 2 && spacing == 1)
+                    {
+                        uint16_t measured = (uint16_t)(adcIsrTick
+                            - garudaData.morph.lastZcTick);
+                        uint16_t mHandoff =
+                            TIMER1_TO_ADC_TICKS(garudaData.rampStepPeriod);
+                        /* Clamp to [handoff, 1.5× handoff] */
+                        if (measured < mHandoff)
+                            measured = mHandoff;
+                        uint16_t maxMeasured = mHandoff + (mHandoff >> 1);
+                        if (measured > maxMeasured)
+                            measured = maxMeasured;
+                        /* IIR: 7/8 old + 1/8 measured */
+                        int32_t delta = (int32_t)measured
+                            - (int32_t)garudaData.timing.stepPeriod;
+                        garudaData.timing.stepPeriod = (uint16_t)(
+                            (int32_t)garudaData.timing.stepPeriod
+                            + (delta >> 3));
+                    }
+                    garudaData.morph.lastZcTick = adcIsrTick;
+                }
+
+                /* Forced commutation (open-loop timing) */
+                bool forcedStepThisTick = false;
+                if (garudaData.timing.forcedCountdown > 0)
+                    garudaData.timing.forcedCountdown--;
+
+                if (garudaData.timing.forcedCountdown == 0)
+                {
+                    COMMUTATION_AdvanceStep(&garudaData);
+                    BEMF_ZC_OnCommutation(&garudaData, adcIsrTick);
+                    garudaData.timing.forcedCountdown =
+                        garudaData.timing.stepPeriod;
+                    garudaData.morph.sectorCount++;
+                    forcedStepThisTick = true;
+                }
+
+                /* Staleness decay: mirror pre-sync pattern */
+                if (garudaData.timing.stepsSinceLastZc > ZC_STALENESS_LIMIT)
+                {
+                    garudaData.timing.goodZcCount = 0;
+                    garudaData.timing.risingZcWorks = false;
+                    garudaData.timing.fallingZcWorks = false;
+                }
+
+                /* ZC confidence gate → exit morph */
+                if (garudaData.timing.goodZcCount >= MORPH_ZC_THRESHOLD
+                    && garudaData.timing.risingZcWorks
+                    && garudaData.timing.fallingZcWorks
+                    && newZcThisTick)
+                {
+                    garudaData.timing.zcSynced = true;
+
+                    /* Seed first post-sync commutation deadline */
+                    if (forcedStepThisTick)
+                    {
+                        garudaData.timing.commDeadline = (uint16_t)(
+                            adcIsrTick + garudaData.timing.stepPeriod);
+                    }
+                    else if (garudaData.morph.morphZcCount >= 1)
+                    {
+                        garudaData.timing.commDeadline = (uint16_t)(
+                            garudaData.morph.lastZcTick
+                            + garudaData.timing.stepPeriod / 2);
+                    }
+                    else
+                    {
+                        garudaData.timing.commDeadline = (uint16_t)(
+                            adcIsrTick + garudaData.timing.stepPeriod);
+                    }
+                    garudaData.timing.deadlineActive = true;
+#if FEATURE_BEMF_INTEGRATION || FEATURE_ADC_CMP_ZC
+                    /* Only mark as ZC-timed when deadline is anchored
+                     * to an actual ZC event (not a forced-step fallback).
+                     * Downstream HWZC handoff gating uses this flag. */
+                    garudaData.timing.deadlineIsZc = !forcedStepThisTick;
+#endif
+
+                    garudaData.state = ESC_CLOSED_LOOP;
+                    break;
+                }
+
+                /* Sector timeout */
+                if (garudaData.morph.sectorCount >= MORPH_HIZ_MAX_SECTORS)
+                {
+                    if (garudaData.timing.goodZcCount >= 3)
+                    {
+                        /* Partial lock — let CL pre-sync finish.
+                         * Sync rampStepPeriod from IIR-adapted stepPeriod
+                         * so CL entry re-init doesn't discard morph's
+                         * speed tracking and jump back to ramp-end rate.
+                         * Inverse of TIMER1_TO_ADC_TICKS: t1 = adc * 5/12 */
+                        garudaData.rampStepPeriod = (uint16_t)(
+                            ((uint32_t)garudaData.timing.stepPeriod * 5 + 6) / 12);
+                        garudaData.state = ESC_CLOSED_LOOP;
+                    }
+                    else
+                    {
+                        HAL_MC1PWMDisableOutputs();
+#if FEATURE_HW_OVERCURRENT
+                        HAL_CMP3_SetThreshold(OC_CMP3_STARTUP_DAC);
+#endif
+                        garudaData.state = ESC_FAULT;
+                        garudaData.faultCode = FAULT_MORPH_TIMEOUT;
+                        garudaData.runCommandActive = false;
+                        LED2 = 0;
+                    }
+                }
+
+
+#if FEATURE_HW_OVERCURRENT
+                /* SW OC soft limiter — same as CL (proportional duty cut) */
+                if (garudaData.ibusRaw > OC_SW_LIMIT_ADC)
+                {
+                    uint16_t excess = garudaData.ibusRaw - OC_SW_LIMIT_ADC;
+                    uint16_t range = OC_CMP3_DAC_VAL - OC_SW_LIMIT_ADC;
+                    if (range == 0) range = 1;
+                    uint32_t reduction = ((uint32_t)excess
+                        * (garudaData.duty - MIN_DUTY)) / range;
+                    if (reduction >= garudaData.duty - MIN_DUTY)
+                        garudaData.duty = MIN_DUTY;
+                    else
+                        garudaData.duty -= reduction;
+                }
+#endif
+                HAL_PWM_SetDutyCycle(garudaData.duty);
+            }
+
+            /* Absolute timeout — covers BOTH sub-phases.
+             * If motor stalls during CONVERGE (e.g. prop overload),
+             * this is the only exit path. */
+            if ((garudaData.systemTick
+                - garudaData.morph.entryTick) > MORPH_TIMEOUT_MS)
+            {
+                HAL_MC1PWMDisableOutputs();
+#if FEATURE_HW_OVERCURRENT
+                HAL_CMP3_SetThreshold(OC_CMP3_STARTUP_DAC);
+#endif
+                garudaData.state = ESC_FAULT;
+                garudaData.faultCode = FAULT_MORPH_TIMEOUT;
+                garudaData.runCommandActive = false;
+                LED2 = 0;
+            }
+            break;
+        }
 #else
         case ESC_ALIGN:
         case ESC_OL_RAMP:
@@ -422,41 +671,64 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
             /* Detect first entry into CLOSED_LOOP (state transition) */
             if (prevAdcState != ESC_CLOSED_LOOP)
             {
-                uint16_t initPeriod = TIMER1_TO_ADC_TICKS(garudaData.rampStepPeriod);
-                if (initPeriod < MIN_ADC_STEP_PERIOD)
-                    initPeriod = MIN_ADC_STEP_PERIOD;
-                if (initPeriod > INITIAL_ADC_STEP_PERIOD)
-                    initPeriod = INITIAL_ADC_STEP_PERIOD;
-                BEMF_ZC_Init(&garudaData, initPeriod);
-                BEMF_ZC_OnCommutation(&garudaData, adcIsrTick);
-                garudaData.bemf.ad2SettleCount = ZC_AD2_SETTLE_SAMPLES;
+#if FEATURE_SINE_STARTUP
+                /* Morph hot handoff: ZC already locked, skip re-init.
+                 * Gate on prevAdcState == ESC_MORPH (not just zcSynced)
+                 * to prevent stale state from a previous run triggering
+                 * the hot-handoff path from OL_RAMP. */
+                if (prevAdcState == ESC_MORPH
+                    && garudaData.timing.zcSynced)
+                {
+                    garudaData.desyncRestartAttempts = 0;
+#if FEATURE_HW_OVERCURRENT
+                    HAL_CMP3_SetThreshold(OC_CMP3_DAC_VAL);
+#endif
 #if FEATURE_ADC_CMP_ZC
-                /* Clear stale HWZC state from any prior run */
-                garudaData.hwzc.fallbackPending = false;
-                garudaData.hwzc.enablePending = false;
-                garudaData.hwzc.dbgLatchDisable = false;
+                    garudaData.hwzc.fallbackPending = false;
+                    garudaData.hwzc.enablePending = false;
+                    garudaData.hwzc.dbgLatchDisable = false;
+#endif
+                }
+                else
+#endif
+                {
+                    /* Normal CL entry (from OL_RAMP or morph without lock) */
+                    uint16_t initPeriod = TIMER1_TO_ADC_TICKS(garudaData.rampStepPeriod);
+                    if (initPeriod < MIN_ADC_STEP_PERIOD)
+                        initPeriod = MIN_ADC_STEP_PERIOD;
+                    if (initPeriod > INITIAL_ADC_STEP_PERIOD)
+                        initPeriod = INITIAL_ADC_STEP_PERIOD;
+                    BEMF_ZC_Init(&garudaData, initPeriod);
+                    BEMF_ZC_OnCommutation(&garudaData, adcIsrTick);
+                    garudaData.bemf.ad2SettleCount = ZC_AD2_SETTLE_SAMPLES;
+#if FEATURE_ADC_CMP_ZC
+                    /* Clear stale HWZC state from any prior run */
+                    garudaData.hwzc.fallbackPending = false;
+                    garudaData.hwzc.enablePending = false;
+                    garudaData.hwzc.dbgLatchDisable = false;
 
 #if FEATURE_PRESYNC_RAMP
-                /* Defensively disable HWZC: stale hwzc.enabled=true from a
-                 * prior run (e.g. desync recovery) would skip the entire SW
-                 * pre-sync block (line ~479 gates on !hwzc.enabled). Force
-                 * HWZC off so pre-sync runs. Clear fallbackPending to prevent
-                 * stale HWZC state from re-seeding SW ZC. */
-                if (garudaData.hwzc.enabled)
-                    HWZC_Disable(&garudaData);
-                garudaData.hwzc.fallbackPending = false;
+                    /* Defensively disable HWZC: stale hwzc.enabled=true from a
+                     * prior run (e.g. desync recovery) would skip the entire SW
+                     * pre-sync block (line ~479 gates on !hwzc.enabled). Force
+                     * HWZC off so pre-sync runs. Clear fallbackPending to prevent
+                     * stale HWZC state from re-seeding SW ZC. */
+                    if (garudaData.hwzc.enabled)
+                        HWZC_Disable(&garudaData);
+                    garudaData.hwzc.fallbackPending = false;
 #else
-                /* Immediate HWZC enable for motors with reliable OL ramp
-                 * delivery speed (non-presync-ramp path). */
-                {
-                    uint32_t curErpm = ERPM_FROM_ADC_STEP_NUM / initPeriod;
-                    if (curErpm >= HWZC_CROSSOVER_ERPM)
+                    /* Immediate HWZC enable for motors with reliable OL ramp
+                     * delivery speed (non-presync-ramp path). */
                     {
-                        HWZC_Enable(&garudaData);
+                        uint32_t curErpm = ERPM_FROM_ADC_STEP_NUM / initPeriod;
+                        if (curErpm >= HWZC_CROSSOVER_ERPM)
+                        {
+                            HWZC_Enable(&garudaData);
+                        }
                     }
+#endif
+#endif
                 }
-#endif
-#endif
             }
 
 #if FEATURE_ADC_CMP_ZC
@@ -1001,8 +1273,10 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
     }
 
 #if FEATURE_BEMF_CLOSED_LOOP
-    /* Track state for transition detection (must be last before flag clear) */
-    prevAdcState = garudaData.state;
+    /* Track state for transition detection (must be last before flag clear).
+     * Use entryState (not garudaData.state) so mid-ISR state changes
+     * (e.g. morph→CL) are visible on the NEXT tick. */
+    prevAdcState = entryState;
 #endif
 
     /* X2CScope: sample variables at ADC rate (24kHz) */
@@ -1088,58 +1362,25 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
             break;
 #elif FEATURE_SINE_STARTUP
         case ESC_OL_RAMP:
-        {
-            static uint8_t sineCoastCount = 0;
-
-            if (sineCoastCount > 0)
-            {
-                /* Coast gap: motor coasts on inertia while winding
-                 * currents decay. All phases at center duty = zero
-                 * net voltage. After L/R decay, transition to trap. */
-                sineCoastCount--;
-                if (sineCoastCount == 0)
-                {
-                    /* Coast complete — transition to trap */
-                    uint8_t step = STARTUP_SineGetTransitionStep(&garudaData);
-                    COMMUTATION_ApplyStep(&garudaData, step);
-
-                    garudaData.duty = garudaData.sine.amplitude;
-                    if (garudaData.duty < MIN_DUTY)
-                        garudaData.duty = MIN_DUTY;
-                    if (garudaData.duty > RAMP_DUTY_CAP)
-                        garudaData.duty = RAMP_DUTY_CAP;
-                    HAL_PWM_SetDutyCycle(garudaData.duty);
-
-                    garudaData.rampStepPeriod = MIN_STEP_PERIOD;
-                    garudaData.state = ESC_CLOSED_LOOP;
-                }
-                break;
-            }
-
             if (STARTUP_SineRamp(&garudaData))
             {
-                /* Target speed reached — begin coast gap.
-                 * De-energize all phases (center duty = zero net voltage).
-                 * Motor coasts on inertia while winding currents decay
-                 * through the L/R time constant (~1.14ms for Hurst).
-                 * Eliminates current discontinuity at sine->trap transition. */
-                garudaData.sine.active = false;
-                HAL_PWM_SetDutyCycle3Phase(SINE_CENTER_DUTY,
-                                           SINE_CENTER_DUTY,
-                                           SINE_CENTER_DUTY);
-
-                /* Pre-advance sine angle to account for rotor movement
-                 * during coast. Motor continues at ~RAMP_TARGET_ERPM
-                 * under inertia. Without this, the step mapping would
-                 * be wrong by coast_time * eRPM degrees. */
-                uint32_t coastAngle = ((uint32_t)garudaData.sine.angleIncrement
-                    * SINE_COAST_GAP_TICKS * PWMFREQUENCY_HZ) / 10000;
-                garudaData.sine.angle += (uint16_t)coastAngle;
-
-                sineCoastCount = SINE_COAST_GAP_TICKS;
+                /* Sine ramp complete → enter waveform morph.
+                 * rampStepPeriod synced from sine eRPM in MorphInit. */
+                STARTUP_MorphInit(&garudaData);
+#if FEATURE_HW_OVERCURRENT
+                /* Lower CMP3 from startup (22A) to operational (12A).
+                 * Morph convergence can spike current above the board PCI
+                 * threshold (~15A) but below CMP3 startup. Without this,
+                 * CMP3 never trips and the board PCI hard-faults. */
+                HAL_CMP3_SetThreshold(OC_CMP3_DAC_VAL);
+#endif
+                garudaData.state = ESC_MORPH;
             }
             break;
-        }
+
+        case ESC_MORPH:
+            /* All morph logic runs in ADC ISR (24kHz). Timer1 is idle. */
+            break;
 #else
         case ESC_OL_RAMP:
 #if FEATURE_PRESYNC_RAMP

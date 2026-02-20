@@ -24,6 +24,7 @@ typedef enum
     ESC_ARMED,
     ESC_ALIGN,
     ESC_OL_RAMP,
+    ESC_MORPH,          /* Sine-to-trap waveform morph */
     ESC_CLOSED_LOOP,
     ESC_BRAKING,
     ESC_RECOVERY,       /* Desync coast-down before restart attempt */
@@ -174,6 +175,22 @@ typedef struct {
     uint32_t erpmFrac;         /* Q16 fractional eRPM accumulator for smooth ramp */
     bool     active;           /* true while sine drive is running in ADC ISR */
 } SINE_STATE_T;
+
+typedef enum {
+    MORPH_CONVERGE = 0,   /* Sub-phase A: duty blend, all 3 phases driven */
+    MORPH_HIZ             /* Sub-phase B: float phase Hi-Z, BEMF active */
+} MORPH_SUBPHASE_T;
+
+typedef struct {
+    MORPH_SUBPHASE_T subPhase;
+    uint8_t  morphStep;        /* Current 6-step sector (0-5) from sine angle */
+    uint8_t  prevMorphStep;    /* Previous sector for boundary detection */
+    uint16_t alpha;            /* Blend factor: 0=sine, 256=6-step (Q8) */
+    uint16_t sectorCount;      /* Sectors elapsed in current sub-phase */
+    uint32_t entryTick;        /* systemTick at morph entry (for timeout) */
+    uint16_t lastZcTick;       /* adcIsrTick of last confirmed ZC in morph */
+    uint16_t morphZcCount;     /* ZC count for IIR gating (need >=2 for interval) */
+} MORPH_STATE_T;
 #endif
 
 #if FEATURE_ADC_CMP_ZC
@@ -437,7 +454,8 @@ typedef enum
     FAULT_BOARD_PCI,       /* Board-level FPCI: combined OC+OV via U25A/U25B/U27 (PCI8R) */
     FAULT_STALL,
     FAULT_DESYNC,
-    FAULT_STARTUP_TIMEOUT   /* Pre-sync timeout: ZC never achieved within PRESYNC_TIMEOUT_MS */
+    FAULT_STARTUP_TIMEOUT,  /* Pre-sync timeout: ZC never achieved within PRESYNC_TIMEOUT_MS */
+    FAULT_MORPH_TIMEOUT     /* Morph did not achieve ZC lock */
 } FAULT_CODE_T;
 
 /* Main ESC runtime data */
@@ -478,6 +496,7 @@ typedef struct
 
 #if FEATURE_SINE_STARTUP
     SINE_STATE_T sine;
+    MORPH_STATE_T morph;
 #endif
 
 #if FEATURE_ADC_CMP_ZC

@@ -4,8 +4,9 @@
  * @brief GPIO pin initialization for Project Garuda ESC.
  * Adapted from AN1292 reference:
  *   - Keeps: PWM outputs, LEDs, buttons, UART PPS, PCI8 fault
- *   - Removes: Op-amp configuration (OA1/OA2/OA3 not used)
+ *   - Removes: Op-amp configuration for OA1/OA2 (not used)
  *   - Adds: Phase voltage ADC pins (RB9, RB8, RA10), DShot IC1 pin (RD8)
+ *   - Adds: OA3 bus current sensing (when FEATURE_HW_OVERCURRENT enabled)
  *
  * Definitions in this file are for dsPIC33AK128MC106
  *
@@ -15,6 +16,7 @@
 #include <xc.h>
 
 #include "port_config.h"
+#include "../garuda_config.h"
 
 /**
  * @brief Initialize all ports as input/digital, then map hardware functions.
@@ -146,4 +148,36 @@ void MapGPIOHWFunction(void)
      * ================================================================ */
     TRISDbits.TRISD8 = 1;      /* Input */
     _ICM1R = 57;                /* Map RP57 to IC1 input */
+
+#if FEATURE_HW_OVERCURRENT
+    /* ================================================================
+     * Bus Current Sensing via OA3 (Internal Op-Amp)
+     * OA3IN+ : DIM:029 - RB5  (M1_SHUNT_IBUS_P)
+     * OA3IN- : DIM:031 - RA6  (M1_SHUNT_IBUS_N)
+     * OA3OUT : RA5 → CMP3A (analog comparator) + AD1AN3 (ADC readback)
+     * TRISA5=0 correct for internal op-amp output mode (reference line 157).
+     * CMP3A and AD1AN3 read the internal analog bus regardless of TRIS.
+     * ================================================================ */
+    ANSELBbits.ANSELB5 = 1;  TRISBbits.TRISB5 = 1;   /* OA3IN+ = RB5 */
+    ANSELAbits.ANSELA6 = 1;  TRISAbits.TRISA6 = 1;    /* OA3IN- = RA6 */
+    ANSELAbits.ANSELA5 = 1;  TRISAbits.TRISA5 = 0;    /* OA3OUT = RA5 (output) */
+#endif
 }
+
+#if FEATURE_HW_OVERCURRENT
+/**
+ * @brief Initialize OA3 internal op-amp for bus current sensing.
+ * External gain resistors on MCLV-48V-300W provide gain = 24.95.
+ * OA3OUT (RA5) feeds CMP3A for hardware overcurrent and AD1AN3 for readback.
+ * Adapted from reference OpampConfig() lines 285-322.
+ */
+void HAL_OA3_Init(void)
+{
+    AMP3CON1 = 0x0000;
+    AMP3CON1bits.HPEN = 1;       /* High-power mode (high bandwidth) */
+    AMP3CON1bits.UGE = 0;        /* External resistor gain (not unity) */
+    AMP3CON1bits.DIFFCON = 0;    /* Both differential pairs active */
+    AMP3CON1bits.OMONEN = 1;     /* Internal ADC connection enabled */
+    AMP3CON1bits.AMPEN = 1;      /* Enable op-amp — begins settling (~10us) */
+}
+#endif
