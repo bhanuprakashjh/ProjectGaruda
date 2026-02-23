@@ -520,6 +520,9 @@ typedef struct
     uint32_t clpciTripCount;      /* Coarse CLPCI activity counter via CLEVT polling.
                                    * One ADC tick (41.7us) may collapse multiple chop
                                    * events into one increment. Telemetry only. */
+    uint32_t fpciTripCount;       /* Transient FPCI trip counter via FLTEVT polling.
+                                   * Detects auto-terminated board FPCI trips that
+                                   * FLTACT misses. Non-zero = duty being chopped. */
 #endif
 
 #if FEATURE_LEARN_MODULES

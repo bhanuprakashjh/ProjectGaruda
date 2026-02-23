@@ -257,6 +257,12 @@ extern "C" {
 #define HWZC_SYNC_THRESHOLD      6   /* Consecutive HW ZCs to declare sync */
 #define HWZC_MISS_LIMIT          3   /* Missed HW ZCs before fallback to software ZC (low for debug) */
 #define HWZC_CMP_DEADBAND        4   /* ADC counts deadband for comparator sanity check */
+#define HWZC_MIN_INTERVAL_PCT   70   /* Reject ZC if interval < this % of stepPeriodHR.
+                                      * Noise floor: commDelay + blanking = 30-55% of step,
+                                      * so noise intervals are always < 55%. 70% rejects all
+                                      * noise while allowing real acceleration (max ~10%/step).
+                                      * Rejected noise → timeout → stepsSinceLastHwZc=2 →
+                                      * next accepted event can't update IIR (guard==1). */
 #define HWZC_SAMC               3    /* Sample time for high-speed channels (~205ns conversion) */
 #define HWZC_ADC_SAMPLE_HZ   1000000  /* High-speed ADC trigger rate (SCCP3). Max ~4.9 MHz. */
 #define HWZC_STALL_DUTY_PCT     30   /* % of MAX_DUTY below which floor-speed is implausible.

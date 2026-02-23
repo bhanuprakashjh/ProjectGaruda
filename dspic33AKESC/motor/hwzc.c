@@ -84,6 +84,7 @@ void HWZC_Enable(volatile GARUDA_DATA_T *pData)
     pData->hwzc.enablePending = false;
     pData->hwzc.goodZcCount = 0;
     pData->hwzc.missCount = 0;
+    pData->hwzc.noiseRejectCount = 0;
     pData->hwzc.stepsSinceLastHwZc = 1;  /* First step: IIR valid with seeded lastZcStamp */
 
     /* Seed stepPeriodHR from software ZC step period */
@@ -211,6 +212,25 @@ void HWZC_OnZcDetected(volatile GARUDA_DATA_T *pData)
 {
     uint32_t zcStamp = HAL_SCCP2_ReadTimestamp();
 
+    /* Noise rejection: motor inertia prevents >50% speed change per step.
+     * Any shorter interval is PWM switching noise, not a real BEMF crossing.
+     * Check BEFORE cancelling timeout — noise must not eat the timeout. */
+    uint32_t interval = zcStamp - pData->hwzc.lastZcStamp;
+    uint32_t minInterval = pData->hwzc.stepPeriodHR
+                           * HWZC_MIN_INTERVAL_PCT / 100;
+    if (minInterval < HWZC_NOISE_FLOOR_TICKS)
+        minInterval = HWZC_NOISE_FLOOR_TICKS;
+
+    if (interval < minInterval)
+    {
+        /* Noise — re-arm comparator, keep timeout running */
+        pData->hwzc.noiseRejectCount++;
+        uint8_t core = pData->hwzc.activeCore;
+        HAL_ADC_ClearComparatorFlag(core);
+        HAL_ADC_EnableComparatorIE(core);
+        return;
+    }
+
     /* Cancel the timeout timer */
     HAL_SCCP1_Stop();
 
@@ -218,7 +238,6 @@ void HWZC_OnZcDetected(volatile GARUDA_DATA_T *pData)
      * Guard: only update IIR when this ZC follows exactly one commutation
      * (consecutive detection). Multi-step intervals include timeout periods,
      * not real motor periods — they contaminate the estimator. */
-    uint32_t interval = zcStamp - pData->hwzc.lastZcStamp;
     if (pData->hwzc.stepsSinceLastHwZc == 1)
     {
         pData->hwzc.writeSeq++;  /* odd = write in progress */

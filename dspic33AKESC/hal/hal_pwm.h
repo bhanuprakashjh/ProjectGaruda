@@ -56,6 +56,16 @@ extern "C" {
 #define PCI_CLIMIT_EVT_MASK   0x2000u
 #endif
 
+/* FLTEVT = Fault PCI Event flag (W1C latch, bit 14 = 0x4000).
+ * Set by hardware when FPCI transitions to active (even transiently).
+ * With TERM=1 (auto-terminate), FLTACT clears before ISR runs —
+ * but FLTEVT latches the event. Poll in ADC ISR to detect transient
+ * board-level FPCI trips that auto-release within one PWM cycle. */
+#define PCI_FAULT_EVT_PG1     PG1STATbits.FLTEVT
+#define PCI_FAULT_EVT_PG2     PG2STATbits.FLTEVT
+#define PCI_FAULT_EVT_PG3     PG3STATbits.FLTEVT
+#define PCI_FAULT_EVT_MASK    0x4000u
+
 void InitPWMGenerators(void);
 void InitPWMGenerator1(void);
 void InitPWMGenerator2(void);

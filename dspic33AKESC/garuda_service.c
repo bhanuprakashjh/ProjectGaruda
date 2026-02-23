@@ -96,6 +96,7 @@ void GARUDA_ServiceInit(void)
     garudaData.ibusRaw = 0;
     garudaData.ibusMax = 0;
     garudaData.clpciTripCount = 0;
+    garudaData.fpciTripCount = 0;
 #endif
 
     garudaData.bemf.bemfRaw = 0;
@@ -364,6 +365,18 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
         PG3STAT = PCI_CLIMIT_EVT_MASK;
     }
 #endif
+
+    /* Count transient FPCI trips via FLTEVT latched event flags.
+     * With TERM=1 (auto-terminate), board FPCI trips that resolve within
+     * one PWM cycle never set FLTACT by the time the ISR runs — but
+     * FLTEVT latches the event. Non-zero count = duty being chopped. */
+    if (PCI_FAULT_EVT_PG1 || PCI_FAULT_EVT_PG2 || PCI_FAULT_EVT_PG3)
+    {
+        garudaData.fpciTripCount++;
+        PG1STAT = PCI_FAULT_EVT_MASK;
+        PG2STAT = PCI_FAULT_EVT_MASK;
+        PG3STAT = PCI_FAULT_EVT_MASK;
+    }
 
     /* Software hard fault — immediate shutdown (Mode 2 only) */
 #if OC_PROTECT_MODE == 2
