@@ -162,6 +162,11 @@ _Static_assert(MIN_ADC_STEP_PERIOD > MIN_CL_ADC_STEP_PERIOD,
                "Timing advance interpolation range must be non-zero");
 #endif
 
+/* UART1 mutual exclusion: X2CScope and GSP cannot coexist */
+#if FEATURE_X2CSCOPE && FEATURE_GSP
+#error "FEATURE_X2CSCOPE and FEATURE_GSP are mutually exclusive (both use UART1)"
+#endif
+
 /* Feature dependency guards */
 #if FEATURE_TIMING_ADVANCE && !FEATURE_BEMF_CLOSED_LOOP
 #error "Timing advance requires FEATURE_BEMF_CLOSED_LOOP"

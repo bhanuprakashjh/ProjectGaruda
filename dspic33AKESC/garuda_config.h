@@ -34,6 +34,8 @@ extern "C" {
 #define FEATURE_ADAPTATION       0  /* requires FEATURE_LEARN_MODULES */
 #define FEATURE_COMMISSION       0  /* requires FEATURE_LEARN_MODULES */
 #define FEATURE_EEPROM_V2        0  /* requires at least one above */
+#define FEATURE_X2CSCOPE         1  /* X2CScope via UART1 (bring-up debug) */
+#define FEATURE_GSP              0  /* Garuda Serial Protocol via UART1 */
 
 /* Diagnostic: Manual step mode (1=enabled)
  * SW1: Start motor → align to step 0

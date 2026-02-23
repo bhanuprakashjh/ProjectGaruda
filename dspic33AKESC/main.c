@@ -35,6 +35,9 @@
 #endif
 
 #include "x2cscope/diagnostics.h"
+#if FEATURE_GSP
+#include "gsp/gsp.h"
+#endif
 #if FEATURE_COMMISSION
 #include "learn/commission.h"
 #endif
@@ -59,9 +62,12 @@ int main(void)
     /* Initialize ESC state machine and enable ADC interrupt */
     GARUDA_ServiceInit();
 
-    /* Initialize X2CScope diagnostics (UART1 at 115200 baud via PKoB4) */
+    /* Initialize UART1-based diagnostics (mutually exclusive) */
 #ifdef ENABLE_DIAGNOSTICS
     DiagnosticsInit();
+#endif
+#if FEATURE_GSP
+    GSP_Init();
 #endif
 
     /* Main loop — all real work happens in ISRs */
@@ -69,6 +75,9 @@ int main(void)
     {
 #ifdef ENABLE_DIAGNOSTICS
         DiagnosticsStepMain();  /* X2CScope serial communication */
+#endif
+#if FEATURE_GSP
+        GSP_Service();
 #endif
 
         /* Board service — button debounce at 1ms rate */
