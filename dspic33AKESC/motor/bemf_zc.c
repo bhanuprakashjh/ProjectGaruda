@@ -49,20 +49,20 @@ static inline uint16_t computeBlankTicks(volatile GARUDA_DATA_T *pData)
 {
     uint16_t sp = pData->timing.stepPeriod;
 #if FEATURE_DYNAMIC_BLANKING
-    uint16_t blankBase = (uint16_t)((uint32_t)sp * ZC_BLANKING_PERCENT / 100);
+    uint16_t blankBase = (uint16_t)((uint32_t)sp * RT_ZC_BLANKING_PERCENT / 100);
     uint8_t dutyPct = (uint8_t)((uint32_t)pData->duty * 100 / LOOPTIME_TCY);
     uint16_t blankDutyBoost = 0;
-    if (dutyPct > ZC_DEMAG_DUTY_THRESH)
+    if (dutyPct > RT_ZC_DEMAG_DUTY_THRESH)
     {
-        blankDutyBoost = (uint16_t)((uint32_t)sp * ZC_DEMAG_BLANK_EXTRA_PERCENT
-                         * (dutyPct - ZC_DEMAG_DUTY_THRESH)
-                         / (100 * (100 - ZC_DEMAG_DUTY_THRESH)));
+        blankDutyBoost = (uint16_t)((uint32_t)sp * RT_ZC_DEMAG_BLANK_EXTRA_PERCENT
+                         * (dutyPct - RT_ZC_DEMAG_DUTY_THRESH)
+                         / (100 * (100 - RT_ZC_DEMAG_DUTY_THRESH)));
     }
     uint16_t bt = blankBase + blankDutyBoost;
     uint16_t blankMax = sp / 4;
     if (bt > blankMax) bt = blankMax;
 #else
-    uint16_t bt = (uint16_t)((uint32_t)sp * ZC_BLANKING_PERCENT / 100);
+    uint16_t bt = (uint16_t)((uint32_t)sp * RT_ZC_BLANKING_PERCENT / 100);
 #endif
     if (bt < 1) bt = 1;
     return bt;
@@ -208,11 +208,11 @@ void BEMF_ZC_OnCommutation(volatile GARUDA_DATA_T *pData, uint16_t now)
         uint16_t advDeg;
         if (eRPM <= RT_RAMP_TARGET_ERPM)
             advDeg = TIMING_ADVANCE_MIN_DEG;
-        else if (eRPM >= MAX_CLOSED_LOOP_ERPM)
+        else if (eRPM >= RT_MAX_CLOSED_LOOP_ERPM)
             advDeg = RT_TIMING_ADV_MAX_DEG;
         else
         {
-            uint32_t range = MAX_CLOSED_LOOP_ERPM - RT_RAMP_TARGET_ERPM;
+            uint32_t range = RT_MAX_CLOSED_LOOP_ERPM - RT_RAMP_TARGET_ERPM;
             uint32_t pos = eRPM - RT_RAMP_TARGET_ERPM;
             advDeg = TIMING_ADVANCE_MIN_DEG +
                 (uint16_t)((uint32_t)(RT_TIMING_ADV_MAX_DEG - TIMING_ADVANCE_MIN_DEG)
@@ -314,9 +314,9 @@ bool BEMF_ZC_Poll(volatile GARUDA_DATA_T *pData, uint16_t now)
     int32_t vCorrected = computeVCorrected(vFloat, floatPhase);
 
     uint8_t cmpNow;
-    if ((uint16_t)vCorrected > zcThresh + ZC_ADC_DEADBAND)
+    if ((uint16_t)vCorrected > zcThresh + RT_ZC_ADC_DEADBAND)
         cmpNow = 1;
-    else if ((uint16_t)vCorrected < (zcThresh > ZC_ADC_DEADBAND ? zcThresh - ZC_ADC_DEADBAND : 0))
+    else if ((uint16_t)vCorrected < (zcThresh > RT_ZC_ADC_DEADBAND ? zcThresh - RT_ZC_ADC_DEADBAND : 0))
         cmpNow = 0;
     else
     {
@@ -434,14 +434,14 @@ bool BEMF_ZC_Poll(volatile GARUDA_DATA_T *pData, uint16_t now)
     uint8_t threshold = (pData->timing.stepPeriod <= ZC_FILTER_SPEED_THRESH)
                         ? ZC_FILTER_MIN : ZC_FILTER_MAX;
 #else
-    uint8_t threshold = ZC_FILTER_THRESHOLD;
+    uint8_t threshold = RT_ZC_FILTER_THRESHOLD;
 #endif
 
     /* Check if ZC is confirmed (ONLY after blanking ends) */
     if (pData->bemf.filterCount >= threshold)
     {
         /* ZC confirmed */
-        if (pData->timing.goodZcCount < (uint16_t)ZC_SYNC_THRESHOLD)
+        if (pData->timing.goodZcCount < (uint16_t)RT_ZC_SYNC_THRESHOLD)
             pData->timing.goodZcCount++;
 
         pData->timing.consecutiveMissedSteps = 0;
@@ -490,10 +490,10 @@ bool BEMF_ZC_Poll(volatile GARUDA_DATA_T *pData, uint16_t now)
                 /* spacing > 1: keep current stepPeriod unchanged */
 
                 /* Clamp step period (use CL limit, decoupled from ramp) */
-                if (pData->timing.stepPeriod < MIN_CL_ADC_STEP_PERIOD)
-                    pData->timing.stepPeriod = MIN_CL_ADC_STEP_PERIOD;
-                if (pData->timing.stepPeriod > INITIAL_ADC_STEP_PERIOD)
-                    pData->timing.stepPeriod = INITIAL_ADC_STEP_PERIOD;
+                if (pData->timing.stepPeriod < RT_MIN_CL_ADC_STEP_PERIOD)
+                    pData->timing.stepPeriod = RT_MIN_CL_ADC_STEP_PERIOD;
+                if (pData->timing.stepPeriod > RT_INITIAL_ADC_STEP_PERIOD)
+                    pData->timing.stepPeriod = RT_INITIAL_ADC_STEP_PERIOD;
             }
             else
             {
@@ -511,11 +511,11 @@ bool BEMF_ZC_Poll(volatile GARUDA_DATA_T *pData, uint16_t now)
             uint16_t advDeg;
             if (eRPM <= RT_RAMP_TARGET_ERPM)
                 advDeg = TIMING_ADVANCE_MIN_DEG;
-            else if (eRPM >= MAX_CLOSED_LOOP_ERPM)
+            else if (eRPM >= RT_MAX_CLOSED_LOOP_ERPM)
                 advDeg = RT_TIMING_ADV_MAX_DEG;
             else
             {
-                uint32_t range = MAX_CLOSED_LOOP_ERPM - RT_RAMP_TARGET_ERPM;
+                uint32_t range = RT_MAX_CLOSED_LOOP_ERPM - RT_RAMP_TARGET_ERPM;
                 uint32_t pos = eRPM - RT_RAMP_TARGET_ERPM;
                 advDeg = TIMING_ADVANCE_MIN_DEG +
                     (uint16_t)((uint32_t)(RT_TIMING_ADV_MAX_DEG - TIMING_ADVANCE_MIN_DEG)
@@ -682,11 +682,11 @@ void BEMF_INTEG_ObserverOnComm(volatile GARUDA_DATA_T *pData, uint16_t stepPerio
         uint16_t advDeg;
         if (eRPM <= RT_RAMP_TARGET_ERPM)
             advDeg = TIMING_ADVANCE_MIN_DEG;
-        else if (eRPM >= MAX_CLOSED_LOOP_ERPM)
+        else if (eRPM >= RT_MAX_CLOSED_LOOP_ERPM)
             advDeg = RT_TIMING_ADV_MAX_DEG;
         else
         {
-            uint32_t range = MAX_CLOSED_LOOP_ERPM - RT_RAMP_TARGET_ERPM;
+            uint32_t range = RT_MAX_CLOSED_LOOP_ERPM - RT_RAMP_TARGET_ERPM;
             uint32_t pos = eRPM - RT_RAMP_TARGET_ERPM;
             advDeg = TIMING_ADVANCE_MIN_DEG +
                 (uint16_t)((uint32_t)(RT_TIMING_ADV_MAX_DEG - TIMING_ADVANCE_MIN_DEG)
@@ -726,21 +726,21 @@ void BEMF_INTEG_ObserverTick(volatile GARUDA_DATA_T *pData, uint16_t now,
     uint16_t blankTicks;
 #if FEATURE_DYNAMIC_BLANKING
     {
-        uint16_t blankBase = (uint16_t)((uint32_t)obsStepPeriod * ZC_BLANKING_PERCENT / 100);
+        uint16_t blankBase = (uint16_t)((uint32_t)obsStepPeriod * RT_ZC_BLANKING_PERCENT / 100);
         uint8_t dutyPct = (uint8_t)((uint32_t)pData->duty * 100 / LOOPTIME_TCY);
         uint16_t blankDutyBoost = 0;
-        if (dutyPct > ZC_DEMAG_DUTY_THRESH)
+        if (dutyPct > RT_ZC_DEMAG_DUTY_THRESH)
         {
-            blankDutyBoost = (uint16_t)((uint32_t)obsStepPeriod * ZC_DEMAG_BLANK_EXTRA_PERCENT
-                             * (dutyPct - ZC_DEMAG_DUTY_THRESH)
-                             / (100 * (100 - ZC_DEMAG_DUTY_THRESH)));
+            blankDutyBoost = (uint16_t)((uint32_t)obsStepPeriod * RT_ZC_DEMAG_BLANK_EXTRA_PERCENT
+                             * (dutyPct - RT_ZC_DEMAG_DUTY_THRESH)
+                             / (100 * (100 - RT_ZC_DEMAG_DUTY_THRESH)));
         }
         blankTicks = blankBase + blankDutyBoost;
         uint16_t blankMax = obsStepPeriod / 4;
         if (blankTicks > blankMax) blankTicks = blankMax;
     }
 #else
-    blankTicks = (uint16_t)((uint32_t)obsStepPeriod * ZC_BLANKING_PERCENT / 100);
+    blankTicks = (uint16_t)((uint32_t)obsStepPeriod * RT_ZC_BLANKING_PERCENT / 100);
 #endif
     if (blankTicks < 1) blankTicks = 1;
 

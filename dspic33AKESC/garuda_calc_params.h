@@ -400,30 +400,92 @@ _Static_assert(RAMP_CURRENT_GATE_ADC < OC_CMP3_DAC_VAL,
 #if FEATURE_GSP
   #include "gsp/gsp_params.h"
   /* Raw param reads (ISR-safe: 8/16-bit atomic on dsPIC33AK) */
-  #define RT_RAMP_TARGET_ERPM         gspParams.rampTargetErpm
-  #define RT_RAMP_ACCEL_ERPM_PER_S    gspParams.rampAccelErpmPerS
-  #define RT_TIMING_ADV_MAX_DEG       gspParams.timingAdvMaxDeg
-  #define RT_HWZC_CROSSOVER_ERPM      gspParams.hwzcCrossoverErpm
+  #define RT_RAMP_TARGET_ERPM             gspParams.rampTargetErpm
+  #define RT_RAMP_ACCEL_ERPM_PER_S        gspParams.rampAccelErpmPerS
+  #define RT_TIMING_ADV_MAX_DEG           gspParams.timingAdvMaxDeg
+  #define RT_HWZC_CROSSOVER_ERPM          gspParams.hwzcCrossoverErpm
+  #define RT_MOTOR_POLE_PAIRS             gspParams.motorPolePairs
+  #define RT_INITIAL_ERPM                 gspParams.initialErpm
+  #define RT_MAX_CLOSED_LOOP_ERPM         gspParams.maxClosedLoopErpm
+  #define RT_ZC_BLANKING_PERCENT          gspParams.zcBlankingPercent
+  #define RT_ZC_ADC_DEADBAND              gspParams.zcAdcDeadband
+  #define RT_ZC_FILTER_THRESHOLD          gspParams.zcFilterThreshold
+  #define RT_ZC_SYNC_THRESHOLD            gspParams.zcSyncThreshold
+  #define RT_ZC_DEMAG_DUTY_THRESH         gspParams.zcDemagDutyThresh
+  #define RT_ZC_DEMAG_BLANK_EXTRA_PERCENT gspParams.zcDemagBlankExtraPct
+  #define RT_POST_SYNC_SLEW_DIVISOR       gspParams.postSyncSlewDivisor
+  #define RT_DESYNC_MAX_RESTARTS          gspParams.desyncMaxRestarts
+  #define RT_VBUS_OVERVOLTAGE_ADC         gspParams.vbusOvAdc
+  #define RT_VBUS_UNDERVOLTAGE_ADC        gspParams.vbusUvAdc
   /* Precomputed derived (set from main context only) */
-  #define RT_RAMP_DUTY_CAP            gspDerived.rampDutyCap
-  #define RT_CL_IDLE_DUTY             gspDerived.clIdleDuty
-  #define RT_SINE_ERPM_RAMP_RATE_Q16  gspDerived.sineErpmRampRateQ16
-  #define RT_MIN_STEP_PERIOD          gspDerived.minStepPeriod
-  #define RT_MIN_ADC_STEP_PERIOD      gspDerived.minAdcStepPeriod
-  #define RT_OC_SW_LIMIT_ADC          gspDerived.ocSwLimitAdc
-  #define RT_OC_FAULT_ADC_VAL         gspDerived.ocFaultAdcVal
+  #define RT_RAMP_DUTY_CAP                gspDerived.rampDutyCap
+  #define RT_CL_IDLE_DUTY                 gspDerived.clIdleDuty
+  #define RT_SINE_ERPM_RAMP_RATE_Q16      gspDerived.sineErpmRampRateQ16
+  #define RT_MIN_STEP_PERIOD              gspDerived.minStepPeriod
+  #define RT_MIN_ADC_STEP_PERIOD          gspDerived.minAdcStepPeriod
+  #define RT_OC_SW_LIMIT_ADC              gspDerived.ocSwLimitAdc
+  #define RT_OC_FAULT_ADC_VAL             gspDerived.ocFaultAdcVal
+  #define RT_ALIGN_DUTY                   gspDerived.alignDuty
+  #define RT_INITIAL_STEP_PERIOD          gspDerived.initialStepPeriod
+  #define RT_INITIAL_ADC_STEP_PERIOD      gspDerived.initialAdcStepPeriod
+  #define RT_MIN_CL_ADC_STEP_PERIOD       gspDerived.minClAdcStepPeriod
+  #define RT_SINE_MIN_AMPLITUDE           gspDerived.sineMinAmplitude
+  #define RT_SINE_MAX_AMPLITUDE           gspDerived.sineMaxAmplitude
+  #define RT_DUTY_SLEW_UP_RATE            gspDerived.dutySlewUpRate
+  #define RT_DUTY_SLEW_DOWN_RATE          gspDerived.dutySlewDownRate
+  #define RT_POST_SYNC_SETTLE_TICKS       gspDerived.postSyncSettleTicks
+  #define RT_OC_CMP3_DAC_VAL              gspDerived.ocCmp3DacVal
+  #define RT_OC_CMP3_STARTUP_DAC          gspDerived.ocCmp3StartupDac
+  #define RT_RAMP_CURRENT_GATE_ADC        gspDerived.rampCurrentGateAdc
+  #define RT_DESYNC_COAST_COUNTS          gspDerived.desyncCoastCounts
+  #define RT_HWZC_MIN_STEP_TICKS          gspDerived.hwzcMinStepTicks
+  #define RT_HWZC_NOISE_FLOOR_TICKS       gspDerived.hwzcNoiseFloorTicks
+  #define RT_VBUS_UV_STARTUP_ADC          gspDerived.vbusUvStartupAdc
 #else
-  #define RT_RAMP_TARGET_ERPM         RAMP_TARGET_ERPM
-  #define RT_RAMP_ACCEL_ERPM_PER_S    RAMP_ACCEL_ERPM_PER_S
-  #define RT_TIMING_ADV_MAX_DEG       TIMING_ADVANCE_MAX_DEG
-  #define RT_HWZC_CROSSOVER_ERPM      HWZC_CROSSOVER_ERPM
-  #define RT_RAMP_DUTY_CAP            RAMP_DUTY_CAP
-  #define RT_CL_IDLE_DUTY             CL_IDLE_DUTY
-  #define RT_SINE_ERPM_RAMP_RATE_Q16  SINE_ERPM_RAMP_RATE_Q16
-  #define RT_MIN_STEP_PERIOD          MIN_STEP_PERIOD
-  #define RT_MIN_ADC_STEP_PERIOD      MIN_ADC_STEP_PERIOD
-  #define RT_OC_SW_LIMIT_ADC          OC_SW_LIMIT_ADC
-  #define RT_OC_FAULT_ADC_VAL         OC_FAULT_ADC_VAL
+  #define RT_RAMP_TARGET_ERPM             RAMP_TARGET_ERPM
+  #define RT_RAMP_ACCEL_ERPM_PER_S        RAMP_ACCEL_ERPM_PER_S
+  #define RT_TIMING_ADV_MAX_DEG           TIMING_ADVANCE_MAX_DEG
+  #define RT_HWZC_CROSSOVER_ERPM          HWZC_CROSSOVER_ERPM
+  #define RT_MOTOR_POLE_PAIRS             MOTOR_POLE_PAIRS
+  #define RT_INITIAL_ERPM                 INITIAL_ERPM
+  #define RT_MAX_CLOSED_LOOP_ERPM         MAX_CLOSED_LOOP_ERPM
+  #define RT_ZC_BLANKING_PERCENT          ZC_BLANKING_PERCENT
+  #define RT_ZC_ADC_DEADBAND              ZC_ADC_DEADBAND
+  #define RT_ZC_FILTER_THRESHOLD          ZC_FILTER_THRESHOLD
+  #define RT_ZC_SYNC_THRESHOLD            ZC_SYNC_THRESHOLD
+  #define RT_ZC_DEMAG_DUTY_THRESH         ZC_DEMAG_DUTY_THRESH
+  #define RT_ZC_DEMAG_BLANK_EXTRA_PERCENT ZC_DEMAG_BLANK_EXTRA_PERCENT
+  #define RT_POST_SYNC_SLEW_DIVISOR       POST_SYNC_SLEW_DIVISOR
+  #define RT_DESYNC_MAX_RESTARTS          DESYNC_MAX_RESTARTS
+  #define RT_VBUS_OVERVOLTAGE_ADC         VBUS_OVERVOLTAGE_ADC
+  #define RT_VBUS_UNDERVOLTAGE_ADC        VBUS_UNDERVOLTAGE_ADC
+  #define RT_RAMP_DUTY_CAP                RAMP_DUTY_CAP
+  #define RT_CL_IDLE_DUTY                 CL_IDLE_DUTY
+  #define RT_SINE_ERPM_RAMP_RATE_Q16      SINE_ERPM_RAMP_RATE_Q16
+  #define RT_MIN_STEP_PERIOD              MIN_STEP_PERIOD
+  #define RT_MIN_ADC_STEP_PERIOD          MIN_ADC_STEP_PERIOD
+  #define RT_OC_SW_LIMIT_ADC              OC_SW_LIMIT_ADC
+  #define RT_OC_FAULT_ADC_VAL             OC_FAULT_ADC_VAL
+  #define RT_ALIGN_DUTY                   ALIGN_DUTY
+  #define RT_INITIAL_STEP_PERIOD          INITIAL_STEP_PERIOD
+  #define RT_INITIAL_ADC_STEP_PERIOD      INITIAL_ADC_STEP_PERIOD
+  #define RT_MIN_CL_ADC_STEP_PERIOD       MIN_CL_ADC_STEP_PERIOD
+  #define RT_SINE_MIN_AMPLITUDE           SINE_MIN_AMPLITUDE
+  #define RT_SINE_MAX_AMPLITUDE           SINE_MAX_AMPLITUDE
+  #define RT_DUTY_SLEW_UP_RATE            DUTY_SLEW_UP_RATE
+  #define RT_DUTY_SLEW_DOWN_RATE          DUTY_SLEW_DOWN_RATE
+  #define RT_POST_SYNC_SETTLE_TICKS       POST_SYNC_SETTLE_TICKS
+  #define RT_OC_CMP3_DAC_VAL              OC_CMP3_DAC_VAL
+  #define RT_OC_CMP3_STARTUP_DAC          OC_CMP3_STARTUP_DAC
+  #if RAMP_CURRENT_GATE_MA > 0
+    #define RT_RAMP_CURRENT_GATE_ADC      RAMP_CURRENT_GATE_ADC
+  #else
+    #define RT_RAMP_CURRENT_GATE_ADC      0
+  #endif
+  #define RT_DESYNC_COAST_COUNTS          DESYNC_COAST_COUNTS
+  #define RT_HWZC_MIN_STEP_TICKS          HWZC_MIN_STEP_TICKS
+  #define RT_HWZC_NOISE_FLOOR_TICKS       HWZC_NOISE_FLOOR_TICKS
+  #define RT_VBUS_UV_STARTUP_ADC          VBUS_UV_STARTUP_ADC
 #endif
 
 #ifdef __cplusplus

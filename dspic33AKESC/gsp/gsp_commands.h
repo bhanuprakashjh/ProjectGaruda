@@ -1,7 +1,7 @@
 /**
  * @file gsp_commands.h
  *
- * @brief GSP v1 command IDs, error codes, and wire-format structures.
+ * @brief GSP v2 command IDs, error codes, and wire-format structures.
  *
  * All structs are little-endian packed (dsPIC33AK native byte order).
  * Wire sizes are verified with _Static_assert.
@@ -24,7 +24,7 @@ extern "C" {
 #define GSP_FW_PATCH    0
 
 /* GSP protocol version */
-#define GSP_PROTOCOL_VERSION  1
+#define GSP_PROTOCOL_VERSION  2
 
 /* Board IDs */
 #define GSP_BOARD_MCLV48V300W  0x0001
@@ -50,6 +50,8 @@ typedef enum {
     GSP_CMD_TELEM_START     = 0x14,
     GSP_CMD_TELEM_STOP      = 0x15,
     GSP_CMD_GET_PARAM_LIST  = 0x16,
+    /* Phase 1.5: profiles */
+    GSP_CMD_LOAD_PROFILE    = 0x17,
     /* Unsolicited stream frame */
     GSP_CMD_TELEM_FRAME     = 0x80,
     /* Error response */
@@ -79,8 +81,7 @@ typedef struct __attribute__((packed)) {
     uint8_t  motorPolePairs;
     uint32_t featureFlags;
     uint32_t pwmFrequency;
-    uint16_t maxErpm;
-    uint16_t reserved;
+    uint32_t maxErpm;           /* V2: widened from u16+reserved to u32 */
 } GSP_INFO_T;
 
 _Static_assert(sizeof(GSP_INFO_T) == 20, "GSP_INFO_T wire size mismatch");

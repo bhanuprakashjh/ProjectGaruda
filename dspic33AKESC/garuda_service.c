@@ -84,7 +84,7 @@ void GARUDA_ServiceInit(void)
     garudaData.potRaw = 0;
     garudaData.faultCode = FAULT_NONE;
     garudaData.alignCounter = 0;
-    garudaData.rampStepPeriod = INITIAL_STEP_PERIOD;
+    garudaData.rampStepPeriod = RT_INITIAL_STEP_PERIOD;
     garudaData.rampCounter = 0;
     garudaData.systemTick = 0;
     garudaData.armCounter = 0;
@@ -287,7 +287,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
 
         if (garudaData.state >= ESC_ALIGN && garudaData.state <= ESC_CLOSED_LOOP)
         {
-            if (garudaData.vbusRaw > VBUS_OVERVOLTAGE_ADC)
+            if (garudaData.vbusRaw > RT_VBUS_OVERVOLTAGE_ADC)
             {
                 if (++vbusOvCount >= VBUS_FAULT_FILTER)
                 {
@@ -297,7 +297,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                     garudaData.hwzc.fallbackPending = false;
 #endif
 #if FEATURE_HW_OVERCURRENT
-                    HAL_CMP3_SetThreshold(OC_CMP3_STARTUP_DAC);
+                    HAL_CMP3_SetThreshold(RT_OC_CMP3_STARTUP_DAC);
 #endif
                     HAL_MC1PWMDisableOutputs();
                     garudaData.state = ESC_FAULT;
@@ -312,12 +312,12 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                 /* Determine UV threshold: relaxed during pre-sync startup to
                  * tolerate bus sag from CC-limited bench supply. Normal
                  * threshold resumes after ZC sync is achieved. */
-                uint16_t uvThreshold = VBUS_UNDERVOLTAGE_ADC;
+                uint16_t uvThreshold = RT_VBUS_UNDERVOLTAGE_ADC;
 #if FEATURE_PRESYNC_RAMP
                 if (garudaData.state <= ESC_OL_RAMP
                     || (garudaData.state == ESC_CLOSED_LOOP
                         && !garudaData.timing.zcSynced))
-                    uvThreshold = VBUS_UV_STARTUP_ADC;
+                    uvThreshold = RT_VBUS_UV_STARTUP_ADC;
 #endif
 
             if (garudaData.vbusRaw < uvThreshold)
@@ -330,7 +330,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                     garudaData.hwzc.fallbackPending = false;
 #endif
 #if FEATURE_HW_OVERCURRENT
-                    HAL_CMP3_SetThreshold(OC_CMP3_STARTUP_DAC);
+                    HAL_CMP3_SetThreshold(RT_OC_CMP3_STARTUP_DAC);
 #endif
                     HAL_MC1PWMDisableOutputs();
                     garudaData.state = ESC_FAULT;
@@ -438,7 +438,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                 if (garudaData.ibusRaw > OC_SW_LIMIT_ADC)
                 {
                     uint16_t excess = garudaData.ibusRaw - OC_SW_LIMIT_ADC;
-                    uint16_t range = OC_CMP3_DAC_VAL - OC_SW_LIMIT_ADC;
+                    uint16_t range = RT_OC_CMP3_DAC_VAL - OC_SW_LIMIT_ADC;
                     if (range == 0) range = 1;
                     /* Scale factor: 256 = no reduction, 0 = full cut */
                     uint32_t scale = 256;
@@ -559,7 +559,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                 if (garudaData.ibusRaw > OC_SW_LIMIT_ADC)
                 {
                     uint16_t excess = garudaData.ibusRaw - OC_SW_LIMIT_ADC;
-                    uint16_t range = OC_CMP3_DAC_VAL - OC_SW_LIMIT_ADC;
+                    uint16_t range = RT_OC_CMP3_DAC_VAL - OC_SW_LIMIT_ADC;
                     if (range == 0) range = 1;
                     uint32_t reduction = ((uint32_t)excess
                         * (garudaData.duty - MIN_DUTY)) / range;
@@ -778,7 +778,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                     {
                         HAL_MC1PWMDisableOutputs();
 #if FEATURE_HW_OVERCURRENT
-                        HAL_CMP3_SetThreshold(OC_CMP3_STARTUP_DAC);
+                        HAL_CMP3_SetThreshold(RT_OC_CMP3_STARTUP_DAC);
 #endif
                         garudaData.state = ESC_FAULT;
                         garudaData.faultCode = FAULT_MORPH_TIMEOUT;
@@ -793,7 +793,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                 if (garudaData.ibusRaw > OC_SW_LIMIT_ADC)
                 {
                     uint16_t excess = garudaData.ibusRaw - OC_SW_LIMIT_ADC;
-                    uint16_t range = OC_CMP3_DAC_VAL - OC_SW_LIMIT_ADC;
+                    uint16_t range = RT_OC_CMP3_DAC_VAL - OC_SW_LIMIT_ADC;
                     if (range == 0) range = 1;
                     uint32_t reduction = ((uint32_t)excess
                         * (garudaData.duty - MIN_DUTY)) / range;
@@ -814,7 +814,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
             {
                 HAL_MC1PWMDisableOutputs();
 #if FEATURE_HW_OVERCURRENT
-                HAL_CMP3_SetThreshold(OC_CMP3_STARTUP_DAC);
+                HAL_CMP3_SetThreshold(RT_OC_CMP3_STARTUP_DAC);
 #endif
                 garudaData.state = ESC_FAULT;
                 garudaData.faultCode = FAULT_MORPH_TIMEOUT;
@@ -868,7 +868,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                         garudaData.hwzc.fallbackPending = false;
 #endif
 #if FEATURE_HW_OVERCURRENT
-                        HAL_CMP3_SetThreshold(OC_CMP3_STARTUP_DAC);
+                        HAL_CMP3_SetThreshold(RT_OC_CMP3_STARTUP_DAC);
 #endif
                         HAL_MC1PWMDisableOutputs();
                         garudaData.runCommandActive = false;
@@ -897,7 +897,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                 {
                     garudaData.desyncRestartAttempts = 0;
 #if FEATURE_HW_OVERCURRENT
-                    HAL_CMP3_SetThreshold(OC_CMP3_DAC_VAL);
+                    HAL_CMP3_SetThreshold(RT_OC_CMP3_DAC_VAL);
 #endif
 #if FEATURE_ADC_CMP_ZC
                     garudaData.hwzc.fallbackPending = false;
@@ -912,8 +912,8 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                     uint16_t initPeriod = TIMER1_TO_ADC_TICKS(garudaData.rampStepPeriod);
                     if (initPeriod < MIN_ADC_STEP_PERIOD)
                         initPeriod = MIN_ADC_STEP_PERIOD;
-                    if (initPeriod > INITIAL_ADC_STEP_PERIOD)
-                        initPeriod = INITIAL_ADC_STEP_PERIOD;
+                    if (initPeriod > RT_INITIAL_ADC_STEP_PERIOD)
+                        initPeriod = RT_INITIAL_ADC_STEP_PERIOD;
                     BEMF_ZC_Init(&garudaData, initPeriod);
                     BEMF_ZC_OnCommutation(&garudaData, adcIsrTick);
                     garudaData.bemf.ad2SettleCount = ZC_AD2_SETTLE_SAMPLES;
@@ -957,23 +957,23 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                     garudaData.hwzc.stepPeriodHR);
                 if (swPeriod < MIN_ADC_STEP_PERIOD)
                     swPeriod = MIN_ADC_STEP_PERIOD;
-                if (swPeriod > INITIAL_ADC_STEP_PERIOD)
-                    swPeriod = INITIAL_ADC_STEP_PERIOD;
+                if (swPeriod > RT_INITIAL_ADC_STEP_PERIOD)
+                    swPeriod = RT_INITIAL_ADC_STEP_PERIOD;
                 BEMF_ZC_Init(&garudaData, swPeriod);
                 BEMF_ZC_OnCommutation(&garudaData, adcIsrTick);
                 garudaData.bemf.ad2SettleCount = ZC_AD2_SETTLE_SAMPLES;
 
-                if (garudaData.hwzc.goodZcCount >= ZC_SYNC_THRESHOLD)
+                if (garudaData.hwzc.goodZcCount >= RT_ZC_SYNC_THRESHOLD)
                 {
                     /* HW ZC had good lock — seed as synced to avoid
                      * pre-sync forced-commutation jerk at transition */
                     garudaData.timing.zcSynced = true;
-                    garudaData.timing.goodZcCount = ZC_SYNC_THRESHOLD;
+                    garudaData.timing.goodZcCount = RT_ZC_SYNC_THRESHOLD;
                     garudaData.timing.forcedCountdown =
                         swPeriod * ZC_TIMEOUT_MULT;
 #if FEATURE_HW_OVERCURRENT
                     /* Lower CMP3 from startup to operational threshold */
-                    HAL_CMP3_SetThreshold(OC_CMP3_DAC_VAL);
+                    HAL_CMP3_SetThreshold(RT_OC_CMP3_DAC_VAL);
 #endif
                 }
                 else
@@ -1043,7 +1043,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                         garudaData.hwzc.fallbackPending = false;
 #endif
 #if FEATURE_HW_OVERCURRENT
-                        HAL_CMP3_SetThreshold(OC_CMP3_STARTUP_DAC);
+                        HAL_CMP3_SetThreshold(RT_OC_CMP3_STARTUP_DAC);
 #endif
                         HAL_MC1PWMDisableOutputs();
                         garudaData.state = ESC_FAULT;
@@ -1060,14 +1060,14 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                 if (garudaData.timing.stepsSinceLastZc > ZC_STALENESS_LIMIT)
                     garudaData.timing.goodZcCount = 0;
 
-                if (garudaData.timing.goodZcCount >= (uint16_t)ZC_SYNC_THRESHOLD
+                if (garudaData.timing.goodZcCount >= (uint16_t)RT_ZC_SYNC_THRESHOLD
                     && garudaData.timing.risingZcWorks)
                 {
                     garudaData.timing.zcSynced = true;
                     garudaData.desyncRestartAttempts = 0;
 #if FEATURE_HW_OVERCURRENT
                     /* Lower CMP3 from startup to operational threshold */
-                    HAL_CMP3_SetThreshold(OC_CMP3_DAC_VAL);
+                    HAL_CMP3_SetThreshold(RT_OC_CMP3_DAC_VAL);
 #endif
 #if FEATURE_BEMF_INTEGRATION
                     garudaData.integ.bemfPeakSmooth = 0;
@@ -1083,11 +1083,11 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                         uint16_t adv0;
                         if (eRPM0 <= RT_RAMP_TARGET_ERPM)
                             adv0 = TIMING_ADVANCE_MIN_DEG;
-                        else if (eRPM0 >= MAX_CLOSED_LOOP_ERPM)
+                        else if (eRPM0 >= RT_MAX_CLOSED_LOOP_ERPM)
                             adv0 = RT_TIMING_ADV_MAX_DEG;
                         else
                         {
-                            uint32_t r0 = MAX_CLOSED_LOOP_ERPM - RT_RAMP_TARGET_ERPM;
+                            uint32_t r0 = RT_MAX_CLOSED_LOOP_ERPM - RT_RAMP_TARGET_ERPM;
                             uint32_t p0 = eRPM0 - RT_RAMP_TARGET_ERPM;
                             adv0 = TIMING_ADVANCE_MIN_DEG +
                                 (uint16_t)((uint32_t)(RT_TIMING_ADV_MAX_DEG - TIMING_ADVANCE_MIN_DEG)
@@ -1210,14 +1210,14 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                 {
                     garudaData.zcDiag.zcDesyncCount++;
 #if FEATURE_HW_OVERCURRENT
-                    HAL_CMP3_SetThreshold(OC_CMP3_STARTUP_DAC);
+                    HAL_CMP3_SetThreshold(RT_OC_CMP3_STARTUP_DAC);
 #endif
 #if FEATURE_DESYNC_RECOVERY
                     if (garudaData.runCommandActive)
                     {
                         HAL_MC1PWMDisableOutputs();
                         garudaData.state = ESC_RECOVERY;
-                        garudaData.recoveryCounter = DESYNC_COAST_COUNTS;
+                        garudaData.recoveryCounter = RT_DESYNC_COAST_COUNTS;
                         LED2 = 0;
                     }
                     else
@@ -1287,12 +1287,12 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                  * This unlocks pot-mapped duty (CL_IDLE_DUTY floor)
                  * and MAX_DUTY cap instead of RAMP_DUTY_CAP. */
                 if (!garudaData.timing.zcSynced
-                    && garudaData.hwzc.goodZcCount >= ZC_SYNC_THRESHOLD)
+                    && garudaData.hwzc.goodZcCount >= RT_ZC_SYNC_THRESHOLD)
                 {
                     garudaData.timing.zcSynced = true;
                     garudaData.desyncRestartAttempts = 0;
 #if FEATURE_HW_OVERCURRENT
-                    HAL_CMP3_SetThreshold(OC_CMP3_DAC_VAL);
+                    HAL_CMP3_SetThreshold(RT_OC_CMP3_DAC_VAL);
 #endif
                 }
 
@@ -1306,7 +1306,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                     if (prevAdcState != ESC_CLOSED_LOOP)
                         hwzcStallCount = 0;
 
-                    if (garudaData.hwzc.stepPeriodHR <= HWZC_MIN_STEP_TICKS
+                    if (garudaData.hwzc.stepPeriodHR <= RT_HWZC_MIN_STEP_TICKS
                         && garudaData.duty < HWZC_STALL_DUTY_LIMIT
                         && garudaData.timing.zcSynced)
                     {
@@ -1381,7 +1381,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                 else
                 {
 #if FEATURE_DUTY_SLEW
-                    if (postSyncCounter < POST_SYNC_SETTLE_TICKS)
+                    if (postSyncCounter < RT_POST_SYNC_SETTLE_TICKS)
                         postSyncCounter++;
 #endif
                     mappedDuty = RT_CL_IDLE_DUTY +
@@ -1401,9 +1401,9 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                      * the motor from accelerating faster than the
                      * stepPeriod IIR can track on low-inertia motors.
                      * Normal rate: 2%/ms. Settle rate: 0.25%/ms (1/8). */
-                    uint32_t upRate = DUTY_SLEW_UP_RATE;
-                    if (postSyncCounter < POST_SYNC_SETTLE_TICKS)
-                        upRate = DUTY_SLEW_UP_RATE / POST_SYNC_SLEW_DIVISOR;
+                    uint32_t upRate = RT_DUTY_SLEW_UP_RATE;
+                    if (postSyncCounter < RT_POST_SYNC_SETTLE_TICKS)
+                        upRate = RT_DUTY_SLEW_UP_RATE / RT_POST_SYNC_SLEW_DIVISOR;
 
                     int32_t delta = (int32_t)mappedDuty - (int32_t)prevDuty;
                     if (delta > 0)
@@ -1413,13 +1413,13 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                     }
                     else if (delta < 0)
                     {
-                        if ((uint32_t)(-delta) > DUTY_SLEW_DOWN_RATE)
-                            mappedDuty = prevDuty - DUTY_SLEW_DOWN_RATE;
+                        if ((uint32_t)(-delta) > RT_DUTY_SLEW_DOWN_RATE)
+                            mappedDuty = prevDuty - RT_DUTY_SLEW_DOWN_RATE;
                     }
                     prevDuty = mappedDuty;
                 }
 #endif
-                if (garudaData.timing.stepPeriod <= MIN_CL_ADC_STEP_PERIOD
+                if (garudaData.timing.stepPeriod <= RT_MIN_CL_ADC_STEP_PERIOD
                     && mappedDuty > garudaData.duty)
                 {
                     mappedDuty = garudaData.duty;
@@ -1483,7 +1483,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                 if (garudaData.ibusRaw > OC_SW_LIMIT_ADC)
                 {
                     uint16_t excess = garudaData.ibusRaw - OC_SW_LIMIT_ADC;
-                    uint16_t range = OC_CMP3_DAC_VAL - OC_SW_LIMIT_ADC;
+                    uint16_t range = RT_OC_CMP3_DAC_VAL - OC_SW_LIMIT_ADC;
                     if (range == 0) range = 1;
                     uint32_t reduction = ((uint32_t)excess * (mappedDuty - MIN_DUTY)) / range;
                     if (reduction >= mappedDuty - MIN_DUTY)
@@ -1618,7 +1618,7 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
                  * Morph convergence can spike current above the board PCI
                  * threshold (~15A) but below CMP3 startup. Without this,
                  * CMP3 never trips and the board PCI hard-faults. */
-                HAL_CMP3_SetThreshold(OC_CMP3_DAC_VAL);
+                HAL_CMP3_SetThreshold(RT_OC_CMP3_DAC_VAL);
 #endif
                 garudaData.state = ESC_MORPH;
             }
@@ -1679,7 +1679,7 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
             else
             {
                 if (garudaData.runCommandActive &&
-                    garudaData.desyncRestartAttempts < DESYNC_MAX_RESTARTS &&
+                    garudaData.desyncRestartAttempts < RT_DESYNC_MAX_RESTARTS &&
                     garudaData.throttle >= ARM_THROTTLE_ZERO_ADC)
                 {
                     garudaData.desyncRestartAttempts++;
@@ -1737,7 +1737,7 @@ void __attribute__((__interrupt__, no_auto_psv)) _PWMInterrupt(void)
             HWZC_Disable(&garudaData);
 #endif
 #if FEATURE_HW_OVERCURRENT
-        HAL_CMP3_SetThreshold(OC_CMP3_STARTUP_DAC);
+        HAL_CMP3_SetThreshold(RT_OC_CMP3_STARTUP_DAC);
 #endif
         HAL_MC1ClearPWMPCIFault();
         HAL_MC1PWMDisableOutputs();

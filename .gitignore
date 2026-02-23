@@ -28,8 +28,8 @@ debug/
 .idea/
 .vscode/
 *.code-workspace
-nbproject/private/
-nbproject/Makefile-local-*.mk
+**/nbproject/private/
+**/nbproject/Makefile-local-*.mk
 
 # OS files
 .DS_Store
@@ -43,4 +43,40 @@ reference/
 
 # Large binary files (datasheets)
 *.pdf
+
+# Debug data / trace captures
+*.csv
+*.xwatch
+*.mdb
+*.sce
+*.m
+queuelogs/
+x2cscope/
+
+# Session artifacts and planning docs
+SESSION_CONTEXT_*.md
+*_PLAN.md
+*_GUIDE.md
+*_DIAGNOSIS.md
+*_FEATURES_*.md
+MASTER_*.md
+
+# Datasheet text dumps
+ds33ak_ds.txt
+mclv48_userguide.txt
+zc_dump.txt
+
+# Archives
+*.zip
+
+# Python cache
+__pycache__/
+
+# Node.js
+node_modules/
+package-lock.json
+
+# MPLAB X trace logs
+*.log
+*.log.inx
 

@@ -1,12 +1,13 @@
 /**
  * @file gsp_commands.c
  *
- * @brief GSP v1 command handlers, dispatch table, and telemetry streaming.
+ * @brief GSP v2 command handlers, dispatch table, and telemetry streaming.
  *
  * Phase 0: PING, GET_INFO, GET_SNAPSHOT
  * Phase 1: Motor control (START/STOP/CLEAR_FAULT/SET_THROTTLE/SET_THROTTLE_SRC/HEARTBEAT)
  *          Parameter system (GET/SET_PARAM, SAVE_CONFIG, LOAD_DEFAULTS, GET_PARAM_LIST)
  *          Telemetry streaming (TELEM_START/STOP, TELEM_FRAME)
+ * Phase 1.5: LOAD_PROFILE, paginated V2 GET_PARAM_LIST, u32 maxErpm
  *
  * Component: GSP
  */
@@ -59,6 +60,8 @@ static uint32_t BuildFeatureFlags(void)
     if (FEATURE_EEPROM_V2)        f |= (1UL << 14);
     if (FEATURE_X2CSCOPE)         f |= (1UL << 15);
     if (FEATURE_GSP)              f |= (1UL << 16);
+    if (OC_CLPCI_ENABLE)          f |= (1UL << 17);
+    if (FEATURE_PRESYNC_RAMP)     f |= (1UL << 18);
     return f;
 }
 
@@ -91,13 +94,11 @@ static void HandleGetInfo(const uint8_t *payload, uint8_t payloadLen)
     info.fwMinor         = GSP_FW_MINOR;
     info.fwPatch         = GSP_FW_PATCH;
     info.boardId         = GSP_BOARD_MCLV48V300W;
-    info.motorProfile    = MOTOR_PROFILE;
-    info.motorPolePairs  = MOTOR_POLE_PAIRS;
+    info.motorProfile    = GSP_ParamsGetActiveProfile();
+    info.motorPolePairs  = gspParams.motorPolePairs;
     info.featureFlags    = BuildFeatureFlags();
     info.pwmFrequency    = PWMFREQUENCY_HZ;
-    info.maxErpm         = (MAX_CLOSED_LOOP_ERPM > 65535)
-                           ? 65535 : (uint16_t)MAX_CLOSED_LOOP_ERPM;
-    info.reserved        = 0;
+    info.maxErpm         = gspParams.maxClosedLoopErpm;
 
     GSP_SendResponse(GSP_CMD_GET_INFO, (const uint8_t *)&info, sizeof(info));
 }
@@ -177,17 +178,14 @@ static void HandleSetThrottleSrc(const uint8_t *payload, uint8_t payloadLen)
     uint8_t src = payload[0];
 
     if (src == (uint8_t)THROTTLE_SRC_GSP) {
-        /* GSP source: only allowed from IDLE */
         if (garudaData.state != ESC_IDLE) {
             SendError(GSP_ERR_WRONG_STATE);
             return;
         }
         garudaData.throttleSource = THROTTLE_SRC_GSP;
         garudaData.gspThrottle = 0;
-        /* Refresh heartbeat timer so watchdog doesn't trip during arming */
         garudaData.lastGspPacketTick = garudaData.systemTick;
     } else if (src == (uint8_t)THROTTLE_SRC_ADC) {
-        /* ADC revert: allowed from any state (safety) */
         garudaData.throttleSource = THROTTLE_SRC_ADC;
         garudaData.gspThrottle = 0;
     } else {
@@ -202,9 +200,6 @@ static void HandleHeartbeat(const uint8_t *payload, uint8_t payloadLen)
 {
     (void)payload;
     (void)payloadLen;
-
-    /* lastGspPacketTick is already updated by the parser on valid CRC.
-     * Just ACK. */
     GSP_SendResponse(GSP_CMD_HEARTBEAT, NULL, 0);
 }
 
@@ -233,7 +228,6 @@ static void HandleSetParam(const uint8_t *payload, uint8_t payloadLen)
 {
     (void)payloadLen;
 
-    /* SET_PARAM only in ESC_IDLE — race with Timer1 ARMED→ALIGN */
     if (garudaData.state != ESC_IDLE) {
         SendError(GSP_ERR_WRONG_STATE);
         return;
@@ -248,7 +242,6 @@ static void HandleSetParam(const uint8_t *payload, uint8_t payloadLen)
 
     switch (result) {
     case PARAM_OK: {
-        /* Echo back the set value */
         uint8_t resp[6];
         memcpy(&resp[0], &paramId, 2);
         memcpy(&resp[2], &value, 4);
@@ -275,15 +268,13 @@ static void HandleSaveConfig(const uint8_t *payload, uint8_t payloadLen)
 #if FEATURE_EEPROM_V2
     uint32_t remaining = EEPROM_GetCooldownRemainingMs(garudaData.systemTick);
     if (remaining > 0) {
-        /* Return throttle error with remaining seconds */
         uint8_t resp[2];
         resp[0] = GSP_ERR_EEPROM_THROTTLED;
-        resp[1] = (uint8_t)((remaining + 999) / 1000); /* round up to seconds */
+        resp[1] = (uint8_t)((remaining + 999) / 1000);
         GSP_SendResponse(GSP_CMD_ERROR, resp, 2);
         return;
     }
 
-    /* Pack params into config reserved bytes and save */
     GARUDA_CONFIG_T cfg;
     EEPROM_LoadConfig(&cfg);
     GSP_ParamsSaveToConfig(&cfg);
@@ -295,7 +286,6 @@ static void HandleSaveConfig(const uint8_t *payload, uint8_t payloadLen)
 
     GSP_SendResponse(GSP_CMD_SAVE_CONFIG, NULL, 0);
 #else
-    /* No EEPROM — acknowledge but don't persist */
     GSP_SendResponse(GSP_CMD_SAVE_CONFIG, NULL, 0);
 #endif
 }
@@ -305,32 +295,96 @@ static void HandleLoadDefaults(const uint8_t *payload, uint8_t payloadLen)
     (void)payload;
     (void)payloadLen;
 
-    GSP_ParamsInitDefaults();
-    GSP_RecomputeDerived();
+    if (garudaData.state != ESC_IDLE) {
+        SendError(GSP_ERR_WRONG_STATE);
+        return;
+    }
+
+    uint8_t profile = GSP_ParamsGetActiveProfile();
+
+    if (profile < GSP_PROFILE_COUNT) {
+        /* Built-in profile: reload from profile defaults */
+        GSP_ParamsLoadProfile(profile);
+    } else {
+        /* Custom profile: reload from EEPROM V2 if available */
+#if FEATURE_EEPROM_V2
+        GARUDA_CONFIG_T cfg;
+        EEPROM_LoadConfig(&cfg);
+        /* Re-init defaults then overlay from EEPROM */
+        GSP_ParamsInitDefaults();
+        GSP_ParamsLoadFromConfig(&cfg);
+        GSP_RecomputeDerived();
+#else
+        /* No EEPROM — can't restore custom profile */
+        SendError(GSP_ERR_WRONG_STATE);
+        return;
+#endif
+    }
+
     GSP_SendResponse(GSP_CMD_LOAD_DEFAULTS, NULL, 0);
 }
 
+/* ── Phase 1.5: V2 GET_PARAM_LIST (paginated, u32 min/max) ──────────── */
+
 static void HandleGetParamList(const uint8_t *payload, uint8_t payloadLen)
 {
-    (void)payload;
-    (void)payloadLen;
+    if (payloadLen > 1) {
+        SendError(GSP_ERR_BAD_LENGTH);
+        return;
+    }
 
-    uint8_t count = GSP_ParamGetCount();
-    /* 8 bytes per entry: id(u16), type(u8), group(u8), min(u16), max(u16) */
-    uint8_t buf[8 * 8]; /* max 8 params * 8 bytes = 64 bytes */
-    uint8_t idx = 0;
+    uint8_t startIndex = (payloadLen == 1) ? payload[0] : 0;
+    uint8_t totalCount = GSP_ParamGetCount();
 
-    for (uint8_t i = 0; i < count && i < 8; i++) {
+    if (startIndex >= totalCount) {
+        SendError(GSP_ERR_OUT_OF_RANGE);
+        return;
+    }
+
+    /* 12 bytes/entry: id(u16) type(u8) group(u8) min(u32) max(u32)
+     * 3-byte header + max 20 entries × 12 = 243 bytes (< 249 payload max) */
+    uint8_t buf[3 + 20 * 12];
+    uint8_t entryCount = 0;
+    uint8_t idx = 3; /* skip header */
+
+    for (uint8_t i = startIndex; i < totalCount && entryCount < 20; i++) {
         const PARAM_DESCRIPTOR_T *d = GSP_ParamGetDescriptor(i);
-        if (d == NULL) break;
+        if (!d) break;
         memcpy(&buf[idx], &d->id, 2);      idx += 2;
         buf[idx++] = d->type;
         buf[idx++] = d->group;
-        memcpy(&buf[idx], &d->minVal, 2);  idx += 2;
-        memcpy(&buf[idx], &d->maxVal, 2);  idx += 2;
+        memcpy(&buf[idx], &d->minVal, 4);  idx += 4;
+        memcpy(&buf[idx], &d->maxVal, 4);  idx += 4;
+        entryCount++;
     }
 
+    buf[0] = totalCount;
+    buf[1] = startIndex;
+    buf[2] = entryCount;
     GSP_SendResponse(GSP_CMD_GET_PARAM_LIST, buf, idx);
+}
+
+/* ── Phase 1.5: LOAD_PROFILE ────────────────────────────────────────── */
+
+static void HandleLoadProfile(const uint8_t *payload, uint8_t payloadLen)
+{
+    (void)payloadLen;
+
+    if (garudaData.state != ESC_IDLE) {
+        SendError(GSP_ERR_WRONG_STATE);
+        return;
+    }
+
+    uint8_t profileId = payload[0];
+
+    if (!GSP_ParamsLoadProfile(profileId)) {
+        SendError(GSP_ERR_OUT_OF_RANGE);
+        return;
+    }
+
+    /* Respond with ACK + profile ID */
+    uint8_t resp = profileId;
+    GSP_SendResponse(GSP_CMD_LOAD_PROFILE, &resp, 1);
 }
 
 /* ── Phase 1: Telemetry streaming ────────────────────────────────────── */
@@ -348,7 +402,6 @@ static void HandleTelemStart(const uint8_t *payload, uint8_t payloadLen)
     lastTelemTick = garudaData.systemTick;
     telemSeq = 0;
 
-    /* Respond with actual rate */
     uint8_t actualRate = (uint8_t)(1000 / telemIntervalMs);
     GSP_SendResponse(GSP_CMD_TELEM_START, &actualRate, 1);
 }
@@ -374,7 +427,6 @@ void GSP_TelemTick(void)
     lastTelemTick = now;
     telemSeq++;
 
-    /* Frame = seqCounter(u16) + GSP_SNAPSHOT_T(68B) = 70B */
     uint8_t buf[70];
     buf[0] = (uint8_t)(telemSeq & 0xFF);
     buf[1] = (uint8_t)(telemSeq >> 8);
@@ -409,7 +461,9 @@ static const CMD_ENTRY_T cmdTable[] = {
     { GSP_CMD_LOAD_DEFAULTS,   0, HandleLoadDefaults   },
     { GSP_CMD_TELEM_START,     1, HandleTelemStart     },
     { GSP_CMD_TELEM_STOP,      0, HandleTelemStop      },
-    { GSP_CMD_GET_PARAM_LIST,  0, HandleGetParamList   },
+    { GSP_CMD_GET_PARAM_LIST,  0xFF, HandleGetParamList },
+    /* Phase 1.5: profiles */
+    { GSP_CMD_LOAD_PROFILE,    1, HandleLoadProfile    },
 };
 
 #define CMD_TABLE_SIZE (sizeof(cmdTable) / sizeof(cmdTable[0]))

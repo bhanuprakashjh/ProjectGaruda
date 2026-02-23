@@ -220,8 +220,8 @@ void HWZC_OnZcDetected(volatile GARUDA_DATA_T *pData)
     uint32_t interval = zcStamp - pData->hwzc.lastZcStamp;
     uint32_t minInterval = pData->hwzc.stepPeriodHR
                            * HWZC_MIN_INTERVAL_PCT / 100;
-    if (minInterval < HWZC_NOISE_FLOOR_TICKS)
-        minInterval = HWZC_NOISE_FLOOR_TICKS;
+    if (minInterval < RT_HWZC_NOISE_FLOOR_TICKS)
+        minInterval = RT_HWZC_NOISE_FLOOR_TICKS;
 
     if (interval < minInterval)
     {
@@ -245,8 +245,8 @@ void HWZC_OnZcDetected(volatile GARUDA_DATA_T *pData)
     {
         pData->hwzc.writeSeq++;  /* odd = write in progress */
         uint32_t newPeriod = (3 * pData->hwzc.stepPeriodHR + interval) / 4;
-        if (newPeriod < HWZC_MIN_STEP_TICKS)
-            newPeriod = HWZC_MIN_STEP_TICKS;
+        if (newPeriod < RT_HWZC_MIN_STEP_TICKS)
+            newPeriod = RT_HWZC_MIN_STEP_TICKS;
         pData->hwzc.stepPeriodHR = newPeriod;
         pData->hwzc.writeSeq++;  /* even = stable */
     }
@@ -269,11 +269,11 @@ void HWZC_OnZcDetected(volatile GARUDA_DATA_T *pData)
         uint16_t advDeg;
         if (eRPM <= RT_RAMP_TARGET_ERPM)
             advDeg = TIMING_ADVANCE_MIN_DEG;
-        else if (eRPM >= MAX_CLOSED_LOOP_ERPM)
+        else if (eRPM >= RT_MAX_CLOSED_LOOP_ERPM)
             advDeg = RT_TIMING_ADV_MAX_DEG;
         else
         {
-            uint32_t range = MAX_CLOSED_LOOP_ERPM - RT_RAMP_TARGET_ERPM;
+            uint32_t range = RT_MAX_CLOSED_LOOP_ERPM - RT_RAMP_TARGET_ERPM;
             uint32_t pos = eRPM - RT_RAMP_TARGET_ERPM;
             advDeg = TIMING_ADVANCE_MIN_DEG +
                 (uint16_t)((uint32_t)(RT_TIMING_ADV_MAX_DEG - TIMING_ADVANCE_MIN_DEG)

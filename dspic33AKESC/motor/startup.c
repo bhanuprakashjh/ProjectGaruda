@@ -65,9 +65,9 @@ void STARTUP_Init(volatile GARUDA_DATA_T *pData)
 {
     pData->currentStep = 0;
     pData->alignCounter = ALIGN_TIME_COUNTS;
-    pData->rampStepPeriod = INITIAL_STEP_PERIOD;
-    pData->rampCounter = INITIAL_STEP_PERIOD;
-    pData->duty = ALIGN_DUTY;
+    pData->rampStepPeriod = RT_INITIAL_STEP_PERIOD;
+    pData->rampCounter = RT_INITIAL_STEP_PERIOD;
+    pData->duty = RT_ALIGN_DUTY;
 
     /* Clear stale timing state from any previous run. STARTUP_Init is called
      * at every ESC_ALIGN entry (including desync recovery restarts). Without
@@ -112,7 +112,7 @@ bool STARTUP_Align(volatile GARUDA_DATA_T *pData)
     {
         /* First call — apply step 0 and set duty */
         HAL_PWM_SetCommutationStep(0);
-        HAL_PWM_SetDutyCycle(ALIGN_DUTY);
+        HAL_PWM_SetDutyCycle(RT_ALIGN_DUTY);
     }
 
     if (pData->alignCounter > 0)
@@ -156,13 +156,11 @@ bool STARTUP_OpenLoopRamp(volatile GARUDA_DATA_T *pData)
          * means the rotor is lagging — accelerating further will brake it.
          * Low/zero current (ibusRaw near or below 2048 bias) is normal at
          * low duty — ADC mostly samples during PWM OFF time. Allow accel. */
-#if RAMP_CURRENT_GATE_MA > 0 && FEATURE_HW_OVERCURRENT
-        if (pData->ibusRaw < RAMP_CURRENT_GATE_ADC)
+        if (RT_RAMP_CURRENT_GATE_ADC == 0 || pData->ibusRaw < RT_RAMP_CURRENT_GATE_ADC)
         {
-#endif
         /* Compute new step period from RAMP_ACCEL_ERPM_PER_S */
         uint32_t curPeriod = pData->rampStepPeriod;
-        if (curPeriod == 0) curPeriod = INITIAL_STEP_PERIOD;
+        if (curPeriod == 0) curPeriod = RT_INITIAL_STEP_PERIOD;
         uint32_t curErpm = 100000UL / curPeriod;
         uint32_t deltaErpm = ((uint32_t)RT_RAMP_ACCEL_ERPM_PER_S * curPeriod) / 10000UL;
         if (deltaErpm < 1) deltaErpm = 1;
@@ -171,9 +169,7 @@ bool STARTUP_OpenLoopRamp(volatile GARUDA_DATA_T *pData)
         if (newPeriod < RT_MIN_STEP_PERIOD)
             newPeriod = RT_MIN_STEP_PERIOD;
         pData->rampStepPeriod = newPeriod;
-#if RAMP_CURRENT_GATE_MA > 0 && FEATURE_HW_OVERCURRENT
         }
-#endif
 
         pData->rampCounter = pData->rampStepPeriod;
 
@@ -220,8 +216,8 @@ void STARTUP_SineInit(volatile GARUDA_DATA_T *pData)
 {
     pData->sine.angle = SINE_ALIGN_ANGLE_Q16;
     pData->sine.angleIncrement = 0;
-    pData->sine.amplitude = SINE_MIN_AMPLITUDE;
-    pData->sine.erpmFrac = (uint32_t)INITIAL_ERPM << 16;
+    pData->sine.amplitude = RT_SINE_MIN_AMPLITUDE;
+    pData->sine.erpmFrac = (uint32_t)RT_INITIAL_ERPM << 16;
 
     /* Pre-compute and write 3-phase duties before releasing overrides */
     uint32_t dA, dB, dC;
@@ -253,7 +249,7 @@ bool STARTUP_SineAlign(volatile GARUDA_DATA_T *pData)
 
     /* Alignment done — seed initial rotation speed */
     pData->sine.angleIncrement =
-        (uint16_t)(((uint32_t)INITIAL_ERPM * SINE_ERPM_TO_ANGLE_Q16) >> 16);
+        (uint16_t)(((uint32_t)RT_INITIAL_ERPM * SINE_ERPM_TO_ANGLE_Q16) >> 16);
 
     return true;
 }
@@ -281,20 +277,20 @@ bool STARTUP_SineRamp(volatile GARUDA_DATA_T *pData)
         (uint16_t)(((uint32_t)currentErpm * SINE_ERPM_TO_ANGLE_Q16) >> 16);
 
     /* V/f amplitude ramp: linear interpolation from MIN to MAX */
-    if (currentErpm <= INITIAL_ERPM)
+    if (currentErpm <= RT_INITIAL_ERPM)
     {
-        pData->sine.amplitude = SINE_MIN_AMPLITUDE;
+        pData->sine.amplitude = RT_SINE_MIN_AMPLITUDE;
     }
     else if (currentErpm >= RT_RAMP_TARGET_ERPM)
     {
-        pData->sine.amplitude = SINE_MAX_AMPLITUDE;
+        pData->sine.amplitude = RT_SINE_MAX_AMPLITUDE;
     }
     else
     {
-        uint32_t range = RT_RAMP_TARGET_ERPM - INITIAL_ERPM;
-        uint32_t progress = currentErpm - INITIAL_ERPM;
-        pData->sine.amplitude = (uint16_t)(SINE_MIN_AMPLITUDE +
-            ((uint32_t)(SINE_MAX_AMPLITUDE - SINE_MIN_AMPLITUDE) * progress) / range);
+        uint32_t range = RT_RAMP_TARGET_ERPM - RT_INITIAL_ERPM;
+        uint32_t progress = currentErpm - RT_INITIAL_ERPM;
+        pData->sine.amplitude = (uint16_t)(RT_SINE_MIN_AMPLITUDE +
+            ((uint32_t)(RT_SINE_MAX_AMPLITUDE - RT_SINE_MIN_AMPLITUDE) * progress) / range);
     }
 
     return (currentErpm >= RT_RAMP_TARGET_ERPM);
@@ -390,7 +386,7 @@ void STARTUP_MorphInit(volatile GARUDA_DATA_T *pData)
      * Without this, TIMER1_TO_ADC_TICKS(rampStepPeriod) would produce
      * a 10× too-slow forced commutation period → instant desync. */
     uint32_t currentErpm = pData->sine.erpmFrac >> 16;
-    if (currentErpm < INITIAL_ERPM) currentErpm = INITIAL_ERPM;
+    if (currentErpm < RT_INITIAL_ERPM) currentErpm = RT_INITIAL_ERPM;
     if (currentErpm > RT_RAMP_TARGET_ERPM) currentErpm = RT_RAMP_TARGET_ERPM;
     pData->rampStepPeriod = (uint16_t)((100000UL + currentErpm / 2) / currentErpm);
 
