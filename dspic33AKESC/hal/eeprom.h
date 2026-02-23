@@ -71,6 +71,17 @@ bool EEPROM_Save(const EEPROM_IMAGE_T *image, uint32_t now);
 bool EEPROM_SaveLearned(const LEARNED_PARAMS_T *learned, uint32_t now);
 
 /**
+ * @brief Save user config block (bytes 0-63).
+ *
+ * Convenience wrapper: updates config in current image and saves.
+ *
+ * @param config  Pointer to config to save
+ * @param now     Current systemTick (1ms)
+ * @return true if written, false if throttled or write failed
+ */
+bool EEPROM_SaveConfig(const GARUDA_CONFIG_T *config, uint32_t now);
+
+/**
  * @brief Load user config from EEPROM image.
  * @param config  Pointer to destination config struct
  * @return true if loaded successfully
@@ -97,6 +108,13 @@ bool EEPROM_FactoryReset(void);
  * @return CRC-16 value
  */
 uint16_t EEPROM_ComputeCRC16(const uint8_t *data, uint16_t len);
+
+/**
+ * @brief Get remaining write cooldown time.
+ * @param now  Current systemTick (1ms)
+ * @return 0 if write allowed, else remaining cooldown in ms
+ */
+uint32_t EEPROM_GetCooldownRemainingMs(uint32_t now);
 
 #endif /* FEATURE_EEPROM_V2 */
 

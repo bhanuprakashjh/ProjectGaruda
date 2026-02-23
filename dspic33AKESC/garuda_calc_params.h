@@ -392,6 +392,40 @@ _Static_assert(RAMP_CURRENT_GATE_ADC < OC_CMP3_DAC_VAL,
 
 #endif /* FEATURE_HW_OVERCURRENT */
 
+/* ── Runtime parameter macros ────────────────────────────────────────── *
+ * When FEATURE_GSP=1, these read from the GSP runtime param system
+ * (gspParams for raw values, gspDerived for precomputed ISR values).
+ * When FEATURE_GSP=0, they resolve to compile-time constants.
+ * All raw param reads are 8/16-bit: atomic on dsPIC33AK (no lock needed). */
+#if FEATURE_GSP
+  #include "gsp/gsp_params.h"
+  /* Raw param reads (ISR-safe: 8/16-bit atomic on dsPIC33AK) */
+  #define RT_RAMP_TARGET_ERPM         gspParams.rampTargetErpm
+  #define RT_RAMP_ACCEL_ERPM_PER_S    gspParams.rampAccelErpmPerS
+  #define RT_TIMING_ADV_MAX_DEG       gspParams.timingAdvMaxDeg
+  #define RT_HWZC_CROSSOVER_ERPM      gspParams.hwzcCrossoverErpm
+  /* Precomputed derived (set from main context only) */
+  #define RT_RAMP_DUTY_CAP            gspDerived.rampDutyCap
+  #define RT_CL_IDLE_DUTY             gspDerived.clIdleDuty
+  #define RT_SINE_ERPM_RAMP_RATE_Q16  gspDerived.sineErpmRampRateQ16
+  #define RT_MIN_STEP_PERIOD          gspDerived.minStepPeriod
+  #define RT_MIN_ADC_STEP_PERIOD      gspDerived.minAdcStepPeriod
+  #define RT_OC_SW_LIMIT_ADC          gspDerived.ocSwLimitAdc
+  #define RT_OC_FAULT_ADC_VAL         gspDerived.ocFaultAdcVal
+#else
+  #define RT_RAMP_TARGET_ERPM         RAMP_TARGET_ERPM
+  #define RT_RAMP_ACCEL_ERPM_PER_S    RAMP_ACCEL_ERPM_PER_S
+  #define RT_TIMING_ADV_MAX_DEG       TIMING_ADVANCE_MAX_DEG
+  #define RT_HWZC_CROSSOVER_ERPM      HWZC_CROSSOVER_ERPM
+  #define RT_RAMP_DUTY_CAP            RAMP_DUTY_CAP
+  #define RT_CL_IDLE_DUTY             CL_IDLE_DUTY
+  #define RT_SINE_ERPM_RAMP_RATE_Q16  SINE_ERPM_RAMP_RATE_Q16
+  #define RT_MIN_STEP_PERIOD          MIN_STEP_PERIOD
+  #define RT_MIN_ADC_STEP_PERIOD      MIN_ADC_STEP_PERIOD
+  #define RT_OC_SW_LIMIT_ADC          OC_SW_LIMIT_ADC
+  #define RT_OC_FAULT_ADC_VAL         OC_FAULT_ADC_VAL
+#endif
+
 #ifdef __cplusplus
 }
 #endif

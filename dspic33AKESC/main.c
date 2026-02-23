@@ -7,8 +7,9 @@
  *   1. InitOscillator() — 200MHz system clock, 400MHz PWM, 100MHz ADC
  *   2. SetupGPIOPorts() — PWM, BEMF, LED, button, UART, DShot pins
  *   3. HAL_InitPeripherals() — ADC, PWM, Timer1
- *   4. GARUDA_ServiceInit() — state machine data, enable ADC ISR
- *   5. Main loop — button polling, board service (all real work in ISRs)
+ *   4. (GSP) GSP_ParamsInitDefaults + LoadFromConfig + RecomputeDerived
+ *   5. GARUDA_ServiceInit() — state machine data, enable ADC ISR
+ *   6. Main loop — button polling, GSP intents, heartbeat, board service
  *
  * Component: MAIN
  */
@@ -37,6 +38,10 @@
 #include "x2cscope/diagnostics.h"
 #if FEATURE_GSP
 #include "gsp/gsp.h"
+#include "gsp/gsp_params.h"
+#endif
+#if FEATURE_EEPROM_V2
+#include "hal/eeprom.h"
 #endif
 #if FEATURE_COMMISSION
 #include "learn/commission.h"
@@ -44,6 +49,8 @@
 #if FEATURE_ADAPTATION
 #include "learn/adaptation.h"
 #endif
+
+#define GSP_HEARTBEAT_TIMEOUT_MS 500
 
 int main(void)
 {
@@ -58,6 +65,22 @@ int main(void)
 
     /* Initialize board service (buttons, counters) */
     BoardServiceInit();
+
+    /* GSP runtime params — BEFORE GARUDA_ServiceInit so RT_* reads are valid
+     * from the first ISR tick. */
+#if FEATURE_GSP
+    GSP_ParamsInitDefaults();       /* compile-time defaults */
+#if FEATURE_EEPROM_V2
+    {
+        EEPROM_IMAGE_T eepromImage;
+        EEPROM_Init(&eepromImage);
+        GARUDA_CONFIG_T cfg;
+        EEPROM_LoadConfig(&cfg);
+        GSP_ParamsLoadFromConfig(&cfg);  /* overlay persisted values */
+    }
+#endif
+    GSP_RecomputeDerived();         /* precompute ISR values */
+#endif
 
     /* Initialize ESC state machine and enable ADC interrupt */
     GARUDA_ServiceInit();
@@ -162,6 +185,72 @@ int main(void)
             }
         }
 #endif
+
+#if FEATURE_GSP
+        /* GSP intent flags — process in main loop (not ISR).
+         * Same logic as SW1 button but triggered by GSP commands. */
+        if (garudaData.gspStartIntent)
+        {
+            garudaData.gspStartIntent = false;
+            if (garudaData.state == ESC_IDLE)
+            {
+                garudaData.runCommandActive = true;
+                garudaData.desyncRestartAttempts = 0;
+                garudaData.armCounter = 0;
+                garudaData.state = ESC_ARMED;
+            }
+        }
+        if (garudaData.gspStopIntent)
+        {
+            garudaData.gspStopIntent = false;
+            if (garudaData.state != ESC_IDLE && garudaData.state != ESC_FAULT)
+            {
+                garudaData.state = ESC_IDLE;
+                garudaData.runCommandActive = false;
+                garudaData.desyncRestartAttempts = 0;
+#if FEATURE_ADC_CMP_ZC
+                if (garudaData.hwzc.enabled)
+                    HWZC_Disable(&garudaData);
+                garudaData.hwzc.fallbackPending = false;
+#endif
+                HAL_MC1PWMDisableOutputs();
+                LED2 = 0;
+            }
+        }
+        if (garudaData.gspFaultClearIntent)
+        {
+            garudaData.gspFaultClearIntent = false;
+            if (garudaData.state == ESC_FAULT)
+            {
+                garudaData.state = ESC_IDLE;
+                garudaData.runCommandActive = false;
+                garudaData.desyncRestartAttempts = 0;
+                garudaData.faultCode = FAULT_NONE;
+#if FEATURE_ADC_CMP_ZC
+                if (garudaData.hwzc.enabled)
+                    HWZC_Disable(&garudaData);
+                garudaData.hwzc.fallbackPending = false;
+#endif
+                HAL_MC1ClearPWMPCIFault();
+                HAL_MC1PWMDisableOutputs();
+                LED2 = 0;
+            }
+        }
+
+        /* Heartbeat watchdog — only when GSP throttle + motor active */
+        if (garudaData.throttleSource == THROTTLE_SRC_GSP
+            && garudaData.runCommandActive)
+        {
+            uint32_t elapsed = garudaData.systemTick - garudaData.lastGspPacketTick;
+            if (elapsed > GSP_HEARTBEAT_TIMEOUT_MS)
+            {
+                /* Lost connection — safe stop */
+                garudaData.throttleSource = THROTTLE_SRC_ADC;
+                garudaData.gspThrottle = 0;
+                garudaData.gspStopIntent = true;
+            }
+        }
+#endif /* FEATURE_GSP */
 
 #if FEATURE_LEARN_MODULES
         /* Learning modules dispatcher (quality/health/adaptation) */

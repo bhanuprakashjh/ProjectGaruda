@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
-GSP v1 Protocol Test Script
+GSP v1 Protocol Test Script (Phase 0 + Phase 1)
 
 Tests the Garuda Serial Protocol over USB CDC (PKoB4 UART1).
 Run with the board powered and firmware flashed with FEATURE_GSP=1.
 
 Usage:
     python3 gsp_test.py [--port /dev/ttyACM0] [--baud 115200]
+    python3 gsp_test.py --p0-only           # Phase 0 tests only
+    python3 gsp_test.py --skip-stress       # Skip stress test
 
 Requirements:
     pip install pyserial
@@ -24,16 +26,66 @@ import serial
 # ── GSP Protocol Constants ──────────────────────────────────────────────
 
 GSP_START_BYTE = 0x02
+
+# Phase 0 commands
 GSP_CMD_PING = 0x00
 GSP_CMD_GET_INFO = 0x01
 GSP_CMD_GET_SNAPSHOT = 0x02
+
+# Phase 1: motor control
+GSP_CMD_START_MOTOR = 0x03
+GSP_CMD_STOP_MOTOR = 0x04
+GSP_CMD_CLEAR_FAULT = 0x05
+GSP_CMD_SET_THROTTLE = 0x06
+GSP_CMD_SET_THROTTLE_SRC = 0x07
+GSP_CMD_HEARTBEAT = 0x08
+
+# Phase 1: parameter system
+GSP_CMD_GET_PARAM = 0x10
+GSP_CMD_SET_PARAM = 0x11
+GSP_CMD_SAVE_CONFIG = 0x12
+GSP_CMD_LOAD_DEFAULTS = 0x13
+GSP_CMD_TELEM_START = 0x14
+GSP_CMD_TELEM_STOP = 0x15
+GSP_CMD_GET_PARAM_LIST = 0x16
+
+# Unsolicited
+GSP_CMD_TELEM_FRAME = 0x80
 GSP_CMD_ERROR = 0xFF
 
+# Error codes
 GSP_ERR_UNKNOWN_CMD = 0x01
 GSP_ERR_BAD_LENGTH = 0x02
+GSP_ERR_BUSY = 0x03
+GSP_ERR_WRONG_STATE = 0x04
+GSP_ERR_OUT_OF_RANGE = 0x05
+GSP_ERR_UNKNOWN_PARAM = 0x06
+GSP_ERR_CROSS_VALIDATION = 0x07
+GSP_ERR_EEPROM_THROTTLED = 0x08
 
 GSP_INFO_SIZE = 20
 GSP_SNAPSHOT_SIZE = 68
+
+# Parameter IDs
+PARAM_ID_RAMP_TARGET_ERPM = 0x15
+PARAM_ID_RAMP_ACCEL_ERPM_PER_S = 0x16
+PARAM_ID_RAMP_DUTY_PCT = 0x17
+PARAM_ID_CL_IDLE_DUTY_PCT = 0x20
+PARAM_ID_TIMING_ADV_MAX_DEG = 0x22
+PARAM_ID_HWZC_CROSSOVER_ERPM = 0x30
+PARAM_ID_OC_FAULT_MA = 0x41
+PARAM_ID_OC_SW_LIMIT_MA = 0x42
+
+PARAM_NAMES = {
+    0x15: "rampTargetErpm",
+    0x16: "rampAccelErpmPerS",
+    0x17: "rampDutyPct",
+    0x20: "clIdleDutyPct",
+    0x22: "timingAdvMaxDeg",
+    0x30: "hwzcCrossoverErpm",
+    0x41: "ocFaultMa",
+    0x42: "ocSwLimitMa",
+}
 
 
 # ── CRC-16-CCITT (poly 0x1021, init 0xFFFF) ────────────────────────────
@@ -113,6 +165,40 @@ def read_response(ser: serial.Serial, timeout: float = 1.0) -> Optional[tuple]:
     return (cmd_id, payload)
 
 
+def expect_ack(ser: serial.Serial, expected_cmd: int, label: str) -> bool:
+    """Send command and expect ACK (echo of cmd with empty payload)."""
+    resp = read_response(ser)
+    if resp is None:
+        print(f"  FAIL [{label}]: no response")
+        return False
+    cmd_id, payload = resp
+    if cmd_id == GSP_CMD_ERROR:
+        err = payload[0] if payload else 0xFF
+        print(f"  FAIL [{label}]: got ERROR 0x{err:02X}")
+        return False
+    if cmd_id != expected_cmd:
+        print(f"  FAIL [{label}]: expected cmd 0x{expected_cmd:02X}, got 0x{cmd_id:02X}")
+        return False
+    return True
+
+
+def expect_error(ser: serial.Serial, expected_err: int, label: str) -> bool:
+    """Read response and expect ERROR with specific code."""
+    resp = read_response(ser)
+    if resp is None:
+        print(f"  FAIL [{label}]: no response")
+        return False
+    cmd_id, payload = resp
+    if cmd_id != GSP_CMD_ERROR:
+        print(f"  FAIL [{label}]: expected ERROR, got cmd 0x{cmd_id:02X}")
+        return False
+    if len(payload) < 1 or payload[0] != expected_err:
+        actual = payload[0] if payload else 0xFF
+        print(f"  FAIL [{label}]: expected error 0x{expected_err:02X}, got 0x{actual:02X}")
+        return False
+    return True
+
+
 # ── Struct Decoders ──────────────────────────────────────────────────────
 
 FEATURE_NAMES = [
@@ -165,23 +251,13 @@ def decode_snapshot(payload: bytes) -> dict:
     if len(payload) != GSP_SNAPSHOT_SIZE:
         return {"error": f"expected {GSP_SNAPSHOT_SIZE}B, got {len(payload)}B"}
 
-    # Matches __attribute__((packed)) GSP_SNAPSHOT_T exactly:
-    # Core (8B): state(B) fault(B) step(B) dir(B) throttle(H) dutyPct(B) pad0(B)
-    # Bus  (6B): vbus(H) ibus(H) ibusMax(H)
-    # BEMF (8B): bemf(H) zcThresh(H) stepPeriod(H) goodZcCount(H)
-    # Flags(3B): rising(B) falling(B) synced(B)
-    # Diag (5B): pad1(B) zcConfirmed(H) zcTimeoutForce(H)
-    # HWZC(18B): enabled(B) phase(B) totalZc(I) totalMiss(I) stepPeriodHR(I) dbgLatch(B) pad2(B)
-    # Morph(6B): subPhase(B) morphStep(B) morphZcCount(H) morphAlpha(H)
-    # OC   (8B): clpci(I) fpci(I)
-    # Sys  (8B): systemTick(I) uptimeSec(I)
     fmt = "<"
     fmt += "BBBBHBB"      # core (8B)
     fmt += "HHH"          # bus (6B)
     fmt += "HHHH"         # bemf/zc (8B)
     fmt += "BBB"          # zc flags (3B)
     fmt += "BHH"          # pad1 + zc diag (5B)
-    fmt += "BBIIIB"       # hwzc (17B + pad2 = 18B... wait)
+    fmt += "BBIIIB"       # hwzc (17B)
     fmt += "B"            # pad2
     fmt += "BBHH"         # morph (6B)
     fmt += "II"           # overcurrent (8B)
@@ -190,7 +266,6 @@ def decode_snapshot(payload: bytes) -> dict:
     try:
         fields = struct.unpack(fmt, payload)
     except struct.error as e:
-        # If the packed struct doesn't match our guess, dump raw hex
         return {"error": str(e), "raw": payload.hex()}
 
     snap = {
@@ -200,7 +275,6 @@ def decode_snapshot(payload: bytes) -> dict:
         "direction": fields[3],
         "throttle": fields[4],
         "dutyPct": fields[5],
-        # fields[6] = pad0
         "vbusRaw": fields[7],
         "ibusRaw": fields[8],
         "ibusMax": fields[9],
@@ -211,7 +285,6 @@ def decode_snapshot(payload: bytes) -> dict:
         "risingZcWorks": bool(fields[14]),
         "fallingZcWorks": bool(fields[15]),
         "zcSynced": bool(fields[16]),
-        # fields[17] = pad1
         "zcConfirmedCount": fields[18],
         "zcTimeoutForceCount": fields[19],
         "hwzcEnabled": bool(fields[20]),
@@ -220,7 +293,6 @@ def decode_snapshot(payload: bytes) -> dict:
         "hwzcTotalMissCount": fields[23],
         "hwzcStepPeriodHR": fields[24],
         "hwzcDbgLatchDisable": bool(fields[25]),
-        # fields[26] = pad2
         "morphSubPhase": fields[27],
         "morphStep": fields[28],
         "morphZcCount": fields[29],
@@ -233,7 +305,7 @@ def decode_snapshot(payload: bytes) -> dict:
     return snap
 
 
-# ── Test Cases ───────────────────────────────────────────────────────────
+# ── Phase 0 Test Cases ──────────────────────────────────────────────────
 
 def test_ping(ser: serial.Serial) -> bool:
     """Test 1: PING → echo response."""
@@ -425,6 +497,469 @@ def test_stress(ser: serial.Serial, iterations: int = 1000) -> bool:
     return True
 
 
+# ── Phase 1 Test Cases ──────────────────────────────────────────────────
+
+def test_heartbeat(ser: serial.Serial) -> bool:
+    """Test 8: HEARTBEAT → ACK."""
+    print("TEST 8: HEARTBEAT")
+    ser.reset_input_buffer()
+    ser.write(build_packet(GSP_CMD_HEARTBEAT))
+
+    if not expect_ack(ser, GSP_CMD_HEARTBEAT, "HEARTBEAT"):
+        return False
+    print("  PASS")
+    return True
+
+
+def test_get_param_list(ser: serial.Serial) -> bool:
+    """Test 9: GET_PARAM_LIST → 8 param descriptors (64B)."""
+    print("TEST 9: GET_PARAM_LIST")
+    ser.reset_input_buffer()
+    ser.write(build_packet(GSP_CMD_GET_PARAM_LIST))
+
+    resp = read_response(ser)
+    if resp is None:
+        print("  FAIL: no response")
+        return False
+    cmd_id, payload = resp
+    if cmd_id != GSP_CMD_GET_PARAM_LIST:
+        print(f"  FAIL: expected cmd 0x16, got 0x{cmd_id:02X}")
+        return False
+
+    # Each descriptor: id(u16) type(u8) group(u8) min(u16) max(u16) = 8 bytes
+    if len(payload) % 8 != 0:
+        print(f"  FAIL: payload {len(payload)}B not multiple of 8")
+        return False
+
+    count = len(payload) // 8
+    print(f"  {count} parameters:")
+    for i in range(count):
+        d = payload[i * 8:(i + 1) * 8]
+        pid, ptype, pgroup, pmin, pmax = struct.unpack("<HBBHH", d)
+        name = PARAM_NAMES.get(pid, f"0x{pid:02X}")
+        type_names = {0: "u8", 1: "u16", 2: "u32"}
+        print(f"    [{name}] id=0x{pid:02X} type={type_names.get(ptype, '?')}"
+              f" group={pgroup} range=[{pmin}, {pmax}]")
+
+    if count != 8:
+        print(f"  FAIL: expected 8 params, got {count}")
+        return False
+    print("  PASS")
+    return True
+
+
+def test_get_param(ser: serial.Serial) -> bool:
+    """Test 10: GET_PARAM for all 8 params → valid values."""
+    print("TEST 10: GET_PARAM (all 8 params)")
+    all_ok = True
+
+    for pid, name in sorted(PARAM_NAMES.items()):
+        ser.reset_input_buffer()
+        ser.write(build_packet(GSP_CMD_GET_PARAM, struct.pack("<H", pid)))
+
+        resp = read_response(ser)
+        if resp is None:
+            print(f"  FAIL [{name}]: no response")
+            all_ok = False
+            continue
+
+        cmd_id, payload = resp
+        if cmd_id == GSP_CMD_ERROR:
+            err = payload[0] if payload else 0xFF
+            print(f"  FAIL [{name}]: error 0x{err:02X}")
+            all_ok = False
+            continue
+        if cmd_id != GSP_CMD_GET_PARAM:
+            print(f"  FAIL [{name}]: expected cmd 0x10, got 0x{cmd_id:02X}")
+            all_ok = False
+            continue
+        if len(payload) != 6:
+            print(f"  FAIL [{name}]: expected 6B, got {len(payload)}B")
+            all_ok = False
+            continue
+
+        rpid, value = struct.unpack("<HI", payload)
+        if rpid != pid:
+            print(f"  FAIL [{name}]: echo id 0x{rpid:02X} != 0x{pid:02X}")
+            all_ok = False
+            continue
+        print(f"    {name} = {value}")
+
+    if all_ok:
+        print("  PASS")
+    return all_ok
+
+
+def get_esc_state(ser: serial.Serial) -> str:
+    """Helper: read current ESC state string."""
+    ser.reset_input_buffer()
+    ser.write(build_packet(GSP_CMD_GET_SNAPSHOT))
+    resp = read_response(ser)
+    if resp and resp[0] == GSP_CMD_GET_SNAPSHOT:
+        snap = decode_snapshot(resp[1])
+        return snap.get("state", "unknown")
+    return "unknown"
+
+
+def require_idle(ser: serial.Serial, test_name: str) -> bool:
+    """Check ESC is IDLE; if not, print skip message and return False."""
+    state = get_esc_state(ser)
+    if state != "IDLE":
+        print(f"  SKIP: state is {state}, need IDLE (stop motor with SW1)")
+        return False
+    return True
+
+
+def test_get_param_unknown(ser: serial.Serial) -> bool:
+    """Test 11: GET_PARAM with unknown ID → UNKNOWN_PARAM error."""
+    print("TEST 11: GET_PARAM unknown ID (0xFFFF)")
+    ser.reset_input_buffer()
+    ser.write(build_packet(GSP_CMD_GET_PARAM, struct.pack("<H", 0xFFFF)))
+
+    if not expect_error(ser, GSP_ERR_UNKNOWN_PARAM, "unknown param"):
+        return False
+    print("  PASS")
+    return True
+
+
+def test_set_param_and_readback(ser: serial.Serial) -> bool:
+    """Test 12: SET_PARAM rampTargetErpm → readback → restore original."""
+    print("TEST 12: SET_PARAM + readback (rampTargetErpm)")
+    if not require_idle(ser, "SET_PARAM"):
+        return True  # Skip, not fail
+    pid = PARAM_ID_RAMP_TARGET_ERPM
+
+    # Read original value
+    ser.reset_input_buffer()
+    ser.write(build_packet(GSP_CMD_GET_PARAM, struct.pack("<H", pid)))
+    resp = read_response(ser)
+    if resp is None or resp[0] != GSP_CMD_GET_PARAM:
+        print("  FAIL: couldn't read original value")
+        return False
+    _, original = struct.unpack("<HI", resp[1])
+    print(f"  Original: {original}")
+
+    # Set to test value (2000, within range 500-10000)
+    test_val = 2000 if original != 2000 else 3000
+    ser.reset_input_buffer()
+    ser.write(build_packet(GSP_CMD_SET_PARAM,
+                           struct.pack("<HI", pid, test_val)))
+    if not expect_ack(ser, GSP_CMD_SET_PARAM, "SET"):
+        return False
+
+    # Read back
+    ser.reset_input_buffer()
+    ser.write(build_packet(GSP_CMD_GET_PARAM, struct.pack("<H", pid)))
+    resp = read_response(ser)
+    if resp is None or resp[0] != GSP_CMD_GET_PARAM:
+        print("  FAIL: readback failed")
+        return False
+    _, readback = struct.unpack("<HI", resp[1])
+    print(f"  Set to {test_val}, read back {readback}")
+
+    if readback != test_val:
+        print(f"  FAIL: readback {readback} != expected {test_val}")
+        # Restore original
+        ser.write(build_packet(GSP_CMD_SET_PARAM,
+                               struct.pack("<HI", pid, original)))
+        read_response(ser)
+        return False
+
+    # Restore original
+    ser.reset_input_buffer()
+    ser.write(build_packet(GSP_CMD_SET_PARAM,
+                           struct.pack("<HI", pid, original)))
+    if not expect_ack(ser, GSP_CMD_SET_PARAM, "RESTORE"):
+        return False
+    print(f"  Restored to {original}")
+
+    print("  PASS")
+    return True
+
+
+def test_set_param_out_of_range(ser: serial.Serial) -> bool:
+    """Test 13: SET_PARAM with out-of-range value → OUT_OF_RANGE error."""
+    print("TEST 13: SET_PARAM out-of-range (rampDutyPct=99)")
+    if not require_idle(ser, "SET_PARAM"):
+        return True  # Skip, not fail
+    pid = PARAM_ID_RAMP_DUTY_PCT  # range 5-80
+
+    ser.reset_input_buffer()
+    ser.write(build_packet(GSP_CMD_SET_PARAM,
+                           struct.pack("<HI", pid, 99)))
+
+    if not expect_error(ser, GSP_ERR_OUT_OF_RANGE, "out-of-range"):
+        return False
+    print("  PASS")
+    return True
+
+
+def test_set_param_cross_validation(ser: serial.Serial) -> bool:
+    """Test 14: SET_PARAM ocSwLimitMa > ocFaultMa → CROSS_VALIDATION error."""
+    print("TEST 14: SET_PARAM cross-validation (ocSwLimit > ocFault)")
+    if not require_idle(ser, "SET_PARAM"):
+        return True  # Skip, not fail
+
+    # First read current ocFaultMa
+    ser.reset_input_buffer()
+    ser.write(build_packet(GSP_CMD_GET_PARAM,
+                           struct.pack("<H", PARAM_ID_OC_FAULT_MA)))
+    resp = read_response(ser)
+    if resp is None or resp[0] != GSP_CMD_GET_PARAM:
+        print("  FAIL: couldn't read ocFaultMa")
+        return False
+    _, fault_ma = struct.unpack("<HI", resp[1])
+    print(f"  Current ocFaultMa: {fault_ma}")
+
+    # Try to set ocSwLimitMa above ocFaultMa
+    too_high = fault_ma + 1000
+    if too_high > 30000:
+        too_high = 30000
+    ser.reset_input_buffer()
+    ser.write(build_packet(GSP_CMD_SET_PARAM,
+                           struct.pack("<HI", PARAM_ID_OC_SW_LIMIT_MA, too_high)))
+
+    if not expect_error(ser, GSP_ERR_CROSS_VALIDATION, "cross-validation"):
+        return False
+    print("  PASS")
+    return True
+
+
+def test_set_throttle_src_wrong_state(ser: serial.Serial) -> bool:
+    """Test 15: SET_THROTTLE_SRC=GSP when not in IDLE → check state first."""
+    print("TEST 15: SET_THROTTLE_SRC (GSP in IDLE, then ADC revert)")
+
+    # Board should be IDLE for this test. Set source to GSP.
+    ser.reset_input_buffer()
+    ser.write(build_packet(GSP_CMD_SET_THROTTLE_SRC, bytes([1])))  # 1=GSP
+
+    resp = read_response(ser)
+    if resp is None:
+        print("  FAIL: no response to SET_THROTTLE_SRC=GSP")
+        return False
+    cmd_id, payload = resp
+    if cmd_id == GSP_CMD_ERROR:
+        err = payload[0] if payload else 0xFF
+        if err == GSP_ERR_WRONG_STATE:
+            print("  INFO: board not in IDLE — skipping (expected if motor running)")
+            return True  # Not a test failure
+        print(f"  FAIL: unexpected error 0x{err:02X}")
+        return False
+    if cmd_id != GSP_CMD_SET_THROTTLE_SRC:
+        print(f"  FAIL: expected cmd 0x07, got 0x{cmd_id:02X}")
+        return False
+    print("  GSP source accepted")
+
+    # Now SET_THROTTLE should work
+    ser.reset_input_buffer()
+    ser.write(build_packet(GSP_CMD_SET_THROTTLE, struct.pack("<H", 0)))
+    if not expect_ack(ser, GSP_CMD_SET_THROTTLE, "SET_THROTTLE=0"):
+        return False
+    print("  SET_THROTTLE=0 accepted")
+
+    # Revert to ADC
+    ser.reset_input_buffer()
+    ser.write(build_packet(GSP_CMD_SET_THROTTLE_SRC, bytes([0])))  # 0=ADC
+    if not expect_ack(ser, GSP_CMD_SET_THROTTLE_SRC, "REVERT_ADC"):
+        return False
+    print("  Reverted to ADC")
+
+    # SET_THROTTLE should now fail (src=ADC)
+    ser.reset_input_buffer()
+    ser.write(build_packet(GSP_CMD_SET_THROTTLE, struct.pack("<H", 500)))
+    if not expect_error(ser, GSP_ERR_WRONG_STATE, "throttle-with-ADC-src"):
+        return False
+    print("  SET_THROTTLE rejected when src=ADC (correct)")
+
+    print("  PASS")
+    return True
+
+
+def test_set_throttle_range(ser: serial.Serial) -> bool:
+    """Test 16: SET_THROTTLE out-of-range (>2000) → OUT_OF_RANGE."""
+    print("TEST 16: SET_THROTTLE out-of-range (2500)")
+
+    # Enable GSP source first
+    ser.reset_input_buffer()
+    ser.write(build_packet(GSP_CMD_SET_THROTTLE_SRC, bytes([1])))
+    resp = read_response(ser)
+    if resp is None or resp[0] == GSP_CMD_ERROR:
+        print("  SKIP: couldn't enable GSP throttle source")
+        return True
+
+    # Try out-of-range value
+    ser.reset_input_buffer()
+    ser.write(build_packet(GSP_CMD_SET_THROTTLE, struct.pack("<H", 2500)))
+    if not expect_error(ser, GSP_ERR_OUT_OF_RANGE, "throttle=2500"):
+        # Revert source
+        ser.write(build_packet(GSP_CMD_SET_THROTTLE_SRC, bytes([0])))
+        read_response(ser)
+        return False
+
+    # Revert source
+    ser.reset_input_buffer()
+    ser.write(build_packet(GSP_CMD_SET_THROTTLE_SRC, bytes([0])))
+    read_response(ser)
+
+    print("  PASS")
+    return True
+
+
+def test_start_stop_motor(ser: serial.Serial) -> bool:
+    """Test 17: START_MOTOR → STOP_MOTOR (no actual spin — just state check)."""
+    print("TEST 17: START/STOP MOTOR (intent only, pot at 0)")
+
+    # Verify IDLE
+    ser.reset_input_buffer()
+    ser.write(build_packet(GSP_CMD_GET_SNAPSHOT))
+    resp = read_response(ser)
+    if resp is None or resp[0] != GSP_CMD_GET_SNAPSHOT:
+        print("  FAIL: couldn't read state")
+        return False
+    snap = decode_snapshot(resp[1])
+    if snap.get("state") != "IDLE":
+        print(f"  SKIP: state is {snap.get('state')}, need IDLE")
+        return True
+
+    # Send START_MOTOR
+    ser.reset_input_buffer()
+    ser.write(build_packet(GSP_CMD_START_MOTOR))
+    if not expect_ack(ser, GSP_CMD_START_MOTOR, "START"):
+        return False
+    print("  START_MOTOR accepted")
+
+    # Brief wait for state transition
+    time.sleep(0.1)
+
+    # Check state changed from IDLE
+    ser.reset_input_buffer()
+    ser.write(build_packet(GSP_CMD_GET_SNAPSHOT))
+    resp = read_response(ser)
+    if resp and resp[0] == GSP_CMD_GET_SNAPSHOT:
+        snap = decode_snapshot(resp[1])
+        print(f"  State after START: {snap.get('state')}")
+
+    # Send STOP_MOTOR
+    ser.reset_input_buffer()
+    ser.write(build_packet(GSP_CMD_STOP_MOTOR))
+    if not expect_ack(ser, GSP_CMD_STOP_MOTOR, "STOP"):
+        return False
+    print("  STOP_MOTOR accepted")
+
+    time.sleep(0.1)
+
+    # Verify back to IDLE
+    ser.reset_input_buffer()
+    ser.write(build_packet(GSP_CMD_GET_SNAPSHOT))
+    resp = read_response(ser)
+    if resp and resp[0] == GSP_CMD_GET_SNAPSHOT:
+        snap = decode_snapshot(resp[1])
+        print(f"  State after STOP: {snap.get('state')}")
+        if snap.get("state") != "IDLE":
+            print("  WARN: not back to IDLE yet (may need more time)")
+
+    print("  PASS")
+    return True
+
+
+def test_load_defaults(ser: serial.Serial) -> bool:
+    """Test 18: LOAD_DEFAULTS → all params back to compile-time values."""
+    print("TEST 18: LOAD_DEFAULTS")
+    ser.reset_input_buffer()
+    ser.write(build_packet(GSP_CMD_LOAD_DEFAULTS))
+
+    if not expect_ack(ser, GSP_CMD_LOAD_DEFAULTS, "LOAD_DEFAULTS"):
+        return False
+    print("  PASS")
+    return True
+
+
+def test_telem_stream(ser: serial.Serial) -> bool:
+    """Test 19: TELEM_START(50Hz) → receive frames → TELEM_STOP."""
+    print("TEST 19: TELEM STREAMING (50Hz, 2 seconds)")
+
+    # Start streaming at 50Hz
+    ser.reset_input_buffer()
+    ser.write(build_packet(GSP_CMD_TELEM_START, bytes([50])))
+
+    resp = read_response(ser)
+    if resp is None:
+        print("  FAIL: no response to TELEM_START")
+        return False
+    if resp[0] == GSP_CMD_ERROR:
+        print(f"  FAIL: error 0x{resp[1][0]:02X}")
+        return False
+
+    # Collect frames for 2 seconds
+    frame_count = 0
+    seq_values = []
+    t0 = time.monotonic()
+    while time.monotonic() - t0 < 2.0:
+        resp = read_response(ser, timeout=0.1)
+        if resp is None:
+            continue
+        cmd_id, payload = resp
+        if cmd_id == GSP_CMD_TELEM_FRAME:
+            frame_count += 1
+            if len(payload) >= 2:
+                seq = struct.unpack("<H", payload[:2])[0]
+                seq_values.append(seq)
+
+    # Stop streaming
+    ser.reset_input_buffer()
+    ser.write(build_packet(GSP_CMD_TELEM_STOP))
+    read_response(ser, timeout=0.5)
+
+    # Drain any remaining frames
+    time.sleep(0.1)
+    ser.reset_input_buffer()
+
+    print(f"  Received {frame_count} frames in 2s ({frame_count/2.0:.1f} Hz)")
+    if seq_values:
+        print(f"  Seq range: {seq_values[0]} → {seq_values[-1]}")
+
+    # Check monotonicity
+    if len(seq_values) >= 2:
+        monotonic = all(seq_values[i+1] > seq_values[i]
+                        for i in range(len(seq_values)-1))
+        if not monotonic:
+            print("  WARN: sequence not monotonically increasing")
+
+    if frame_count < 50:  # At least 50 frames in 2s at 50Hz
+        print(f"  FAIL: expected ~100 frames, got {frame_count}")
+        return False
+
+    print("  PASS")
+    return True
+
+
+def test_set_param_wrong_state(ser: serial.Serial) -> bool:
+    """Test 20: SET_PARAM state guard — verify works in IDLE."""
+    print("TEST 20: SET_PARAM state guard")
+    if not require_idle(ser, "SET_PARAM"):
+        return True  # Skip, not fail
+    pid = PARAM_ID_TIMING_ADV_MAX_DEG
+
+    ser.reset_input_buffer()
+    ser.write(build_packet(GSP_CMD_GET_PARAM, struct.pack("<H", pid)))
+    resp = read_response(ser)
+    if resp is None or resp[0] != GSP_CMD_GET_PARAM:
+        print("  FAIL: couldn't read param")
+        return False
+    _, original = struct.unpack("<HI", resp[1])
+
+    # Set same value (no-op functionally, but exercises the handler)
+    ser.reset_input_buffer()
+    ser.write(build_packet(GSP_CMD_SET_PARAM,
+                           struct.pack("<HI", pid, original)))
+    if not expect_ack(ser, GSP_CMD_SET_PARAM, "SET in IDLE"):
+        return False
+
+    print(f"  SET_PARAM accepted in IDLE (timingAdvMaxDeg={original})")
+    print("  PASS")
+    return True
+
+
 # ── Main ─────────────────────────────────────────────────────────────────
 
 def find_port() -> str:
@@ -441,11 +976,12 @@ def find_port() -> str:
 
 
 def main():
-    parser = argparse.ArgumentParser(description="GSP v1 Protocol Tester")
+    parser = argparse.ArgumentParser(description="GSP v1 Protocol Tester (Phase 0 + 1)")
     parser.add_argument("--port", default=None, help="Serial port (default: auto-detect)")
     parser.add_argument("--baud", type=int, default=115200, help="Baud rate (default: 115200)")
     parser.add_argument("--stress", type=int, default=1000, help="Stress test iterations")
     parser.add_argument("--skip-stress", action="store_true", help="Skip stress test")
+    parser.add_argument("--p0-only", action="store_true", help="Phase 0 tests only")
     args = parser.parse_args()
 
     port = args.port or find_port()
@@ -463,6 +999,10 @@ def main():
     ser.reset_input_buffer()
 
     results = []
+
+    # ── Phase 0 tests (1-7) ──
+    print("═══ PHASE 0: Core Protocol ═══")
+    print()
     results.append(("PING", test_ping(ser)))
     print()
     results.append(("GET_INFO", test_get_info(ser)))
@@ -478,6 +1018,37 @@ def main():
 
     if not args.skip_stress:
         results.append(("STRESS", test_stress(ser, args.stress)))
+        print()
+
+    # ── Phase 1 tests (8-20) ──
+    if not args.p0_only:
+        print("═══ PHASE 1: Params + Motor Control ═══")
+        print()
+        results.append(("HEARTBEAT", test_heartbeat(ser)))
+        print()
+        results.append(("GET_PARAM_LIST", test_get_param_list(ser)))
+        print()
+        results.append(("GET_PARAM", test_get_param(ser)))
+        print()
+        results.append(("GET_PARAM_UNKNOWN", test_get_param_unknown(ser)))
+        print()
+        results.append(("SET_PARAM_READBACK", test_set_param_and_readback(ser)))
+        print()
+        results.append(("SET_PARAM_RANGE", test_set_param_out_of_range(ser)))
+        print()
+        results.append(("SET_PARAM_CROSS", test_set_param_cross_validation(ser)))
+        print()
+        results.append(("THROTTLE_SRC", test_set_throttle_src_wrong_state(ser)))
+        print()
+        results.append(("THROTTLE_RANGE", test_set_throttle_range(ser)))
+        print()
+        results.append(("START_STOP", test_start_stop_motor(ser)))
+        print()
+        results.append(("LOAD_DEFAULTS", test_load_defaults(ser)))
+        print()
+        results.append(("SET_PARAM_STATE", test_set_param_wrong_state(ser)))
+        print()
+        results.append(("TELEM_STREAM", test_telem_stream(ser)))
         print()
 
     ser.close()

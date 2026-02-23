@@ -456,6 +456,13 @@ typedef struct __attribute__((packed))
 
 _Static_assert(sizeof(EEPROM_IMAGE_T) == 128, "EEPROM_IMAGE_T must be 128 bytes");
 
+/* Throttle source (ADC pot vs GSP remote) */
+typedef enum
+{
+    THROTTLE_SRC_ADC = 0,   /* Hardware pot (default) */
+    THROTTLE_SRC_GSP = 1    /* Remote GSP command */
+} THROTTLE_SOURCE_T;
+
 /* Fault codes */
 typedef enum
 {
@@ -533,6 +540,18 @@ typedef struct
 #endif
 #if FEATURE_COMMISSION
     COMMISSION_DATA_T commission;
+#endif
+
+#if FEATURE_GSP
+    /* Throttle source mux */
+    THROTTLE_SOURCE_T throttleSource;  /* default THROTTLE_SRC_ADC */
+    uint16_t gspThrottle;              /* GSP-provided throttle [0-2000] */
+    uint32_t lastGspPacketTick;        /* systemTick of last GSP RX — heartbeat */
+
+    /* Intent flags (GSP handler sets, main loop processes) */
+    bool gspStartIntent;
+    bool gspStopIntent;
+    bool gspFaultClearIntent;
 #endif
 } GARUDA_DATA_T;
 

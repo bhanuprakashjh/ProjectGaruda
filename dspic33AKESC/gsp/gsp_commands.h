@@ -31,17 +31,41 @@ extern "C" {
 
 /* Command IDs */
 typedef enum {
-    GSP_CMD_PING         = 0x00,
-    GSP_CMD_GET_INFO     = 0x01,
-    GSP_CMD_GET_SNAPSHOT = 0x02,
-    GSP_CMD_ERROR        = 0xFF
+    /* Phase 0: telemetry */
+    GSP_CMD_PING            = 0x00,
+    GSP_CMD_GET_INFO        = 0x01,
+    GSP_CMD_GET_SNAPSHOT    = 0x02,
+    /* Phase 1: motor control */
+    GSP_CMD_START_MOTOR     = 0x03,
+    GSP_CMD_STOP_MOTOR      = 0x04,
+    GSP_CMD_CLEAR_FAULT     = 0x05,
+    GSP_CMD_SET_THROTTLE    = 0x06,
+    GSP_CMD_SET_THROTTLE_SRC= 0x07,
+    GSP_CMD_HEARTBEAT       = 0x08,
+    /* Phase 1: parameter system */
+    GSP_CMD_GET_PARAM       = 0x10,
+    GSP_CMD_SET_PARAM       = 0x11,
+    GSP_CMD_SAVE_CONFIG     = 0x12,
+    GSP_CMD_LOAD_DEFAULTS   = 0x13,
+    GSP_CMD_TELEM_START     = 0x14,
+    GSP_CMD_TELEM_STOP      = 0x15,
+    GSP_CMD_GET_PARAM_LIST  = 0x16,
+    /* Unsolicited stream frame */
+    GSP_CMD_TELEM_FRAME     = 0x80,
+    /* Error response */
+    GSP_CMD_ERROR           = 0xFF
 } GSP_CMD_ID_T;
 
 /* Error codes (payload of GSP_CMD_ERROR response) */
 typedef enum {
-    GSP_ERR_UNKNOWN_CMD  = 0x01,
-    GSP_ERR_BAD_LENGTH   = 0x02,
-    GSP_ERR_BUSY         = 0x03
+    GSP_ERR_UNKNOWN_CMD      = 0x01,
+    GSP_ERR_BAD_LENGTH       = 0x02,
+    GSP_ERR_BUSY             = 0x03,
+    GSP_ERR_WRONG_STATE      = 0x04,
+    GSP_ERR_OUT_OF_RANGE     = 0x05,
+    GSP_ERR_UNKNOWN_PARAM    = 0x06,
+    GSP_ERR_CROSS_VALIDATION = 0x07,
+    GSP_ERR_EEPROM_THROTTLED = 0x08
 } GSP_ERR_CODE_T;
 
 /* GSP_INFO_T — 20 bytes, returned by GET_INFO */
@@ -124,6 +148,9 @@ typedef void (*GSP_CMD_HANDLER_T)(const uint8_t *payload, uint8_t payloadLen);
 
 /* Dispatch a received command (called by parser) */
 void GSP_DispatchCommand(uint8_t cmdId, const uint8_t *payload, uint8_t payloadLen);
+
+/* Telemetry streaming tick — called from GSP_Service() */
+void GSP_TelemTick(void);
 
 #ifdef __cplusplus
 }

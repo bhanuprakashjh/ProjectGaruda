@@ -248,7 +248,10 @@ static void ParserProcess(void)
                                    | parser.crcBuf[1];
 
                     if (crc == rxCrc) {
-                        /* Valid packet — dispatch */
+                        /* Valid packet — update heartbeat timer */
+                        garudaData.lastGspPacketTick = garudaData.systemTick;
+
+                        /* Dispatch */
                         uint8_t cmdId = parser.pktBuf[0];
                         uint8_t payloadLen = parser.pktLen - 1;
                         const uint8_t *payload = (payloadLen > 0)
@@ -335,6 +338,7 @@ void GSP_Service(void)
 {
     PumpRx();
     ParserProcess();
+    GSP_TelemTick();
     PumpTx();
 }
 

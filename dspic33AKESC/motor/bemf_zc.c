@@ -206,16 +206,16 @@ void BEMF_ZC_OnCommutation(volatile GARUDA_DATA_T *pData, uint16_t now)
 #if FEATURE_TIMING_ADVANCE
         uint32_t eRPM = ERPM_FROM_ADC_STEP_NUM / sp;
         uint16_t advDeg;
-        if (eRPM <= RAMP_TARGET_ERPM)
+        if (eRPM <= RT_RAMP_TARGET_ERPM)
             advDeg = TIMING_ADVANCE_MIN_DEG;
         else if (eRPM >= MAX_CLOSED_LOOP_ERPM)
-            advDeg = TIMING_ADVANCE_MAX_DEG;
+            advDeg = RT_TIMING_ADV_MAX_DEG;
         else
         {
-            uint32_t range = MAX_CLOSED_LOOP_ERPM - RAMP_TARGET_ERPM;
-            uint32_t pos = eRPM - RAMP_TARGET_ERPM;
+            uint32_t range = MAX_CLOSED_LOOP_ERPM - RT_RAMP_TARGET_ERPM;
+            uint32_t pos = eRPM - RT_RAMP_TARGET_ERPM;
             advDeg = TIMING_ADVANCE_MIN_DEG +
-                (uint16_t)((uint32_t)(TIMING_ADVANCE_MAX_DEG - TIMING_ADVANCE_MIN_DEG)
+                (uint16_t)((uint32_t)(RT_TIMING_ADV_MAX_DEG - TIMING_ADVANCE_MIN_DEG)
                            * pos / range);
         }
         uint16_t delayTicks = (uint16_t)((uint32_t)sp * (30 - advDeg) / 60);
@@ -509,16 +509,16 @@ bool BEMF_ZC_Poll(volatile GARUDA_DATA_T *pData, uint16_t now)
             uint16_t sp = pData->timing.stepPeriod;
             uint32_t eRPM = ERPM_FROM_ADC_STEP_NUM / sp;
             uint16_t advDeg;
-            if (eRPM <= RAMP_TARGET_ERPM)
+            if (eRPM <= RT_RAMP_TARGET_ERPM)
                 advDeg = TIMING_ADVANCE_MIN_DEG;
             else if (eRPM >= MAX_CLOSED_LOOP_ERPM)
-                advDeg = TIMING_ADVANCE_MAX_DEG;
+                advDeg = RT_TIMING_ADV_MAX_DEG;
             else
             {
-                uint32_t range = MAX_CLOSED_LOOP_ERPM - RAMP_TARGET_ERPM;
-                uint32_t pos = eRPM - RAMP_TARGET_ERPM;
+                uint32_t range = MAX_CLOSED_LOOP_ERPM - RT_RAMP_TARGET_ERPM;
+                uint32_t pos = eRPM - RT_RAMP_TARGET_ERPM;
                 advDeg = TIMING_ADVANCE_MIN_DEG +
-                    (uint16_t)((uint32_t)(TIMING_ADVANCE_MAX_DEG - TIMING_ADVANCE_MIN_DEG)
+                    (uint16_t)((uint32_t)(RT_TIMING_ADV_MAX_DEG - TIMING_ADVANCE_MIN_DEG)
                                * pos / range);
             }
             uint16_t delay = (uint16_t)((uint32_t)sp * (30 - advDeg) / 60);
@@ -680,16 +680,16 @@ void BEMF_INTEG_ObserverOnComm(volatile GARUDA_DATA_T *pData, uint16_t stepPerio
 #if FEATURE_TIMING_ADVANCE
         uint32_t eRPM = ERPM_FROM_ADC_STEP_NUM / sp;
         uint16_t advDeg;
-        if (eRPM <= RAMP_TARGET_ERPM)
+        if (eRPM <= RT_RAMP_TARGET_ERPM)
             advDeg = TIMING_ADVANCE_MIN_DEG;
         else if (eRPM >= MAX_CLOSED_LOOP_ERPM)
-            advDeg = TIMING_ADVANCE_MAX_DEG;
+            advDeg = RT_TIMING_ADV_MAX_DEG;
         else
         {
-            uint32_t range = MAX_CLOSED_LOOP_ERPM - RAMP_TARGET_ERPM;
-            uint32_t pos = eRPM - RAMP_TARGET_ERPM;
+            uint32_t range = MAX_CLOSED_LOOP_ERPM - RT_RAMP_TARGET_ERPM;
+            uint32_t pos = eRPM - RT_RAMP_TARGET_ERPM;
             advDeg = TIMING_ADVANCE_MIN_DEG +
-                (uint16_t)((uint32_t)(TIMING_ADVANCE_MAX_DEG - TIMING_ADVANCE_MIN_DEG)
+                (uint16_t)((uint32_t)(RT_TIMING_ADV_MAX_DEG - TIMING_ADVANCE_MIN_DEG)
                            * pos / range);
         }
         uint16_t delayTicks = (uint16_t)((uint32_t)sp * (30 - advDeg) / 60);

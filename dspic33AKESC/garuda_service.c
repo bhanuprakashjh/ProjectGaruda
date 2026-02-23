@@ -171,7 +171,15 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
     garudaData.vbusRaw = ADCBUF_VBUS;
     garudaData.potRaw = ADCBUF_POT;
 
+#if FEATURE_GSP
+    if (garudaData.throttleSource == THROTTLE_SRC_GSP) {
+        garudaData.throttle = (uint16_t)((uint32_t)garudaData.gspThrottle * 4095 / 2000);
+    } else {
+        garudaData.throttle = garudaData.potRaw;
+    }
+#else
     garudaData.throttle = garudaData.potRaw;
+#endif
 
 #if FEATURE_BEMF_CLOSED_LOOP
     /* Capture entry state for transition detection. Must be saved before
@@ -473,7 +481,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                             * SINE_TRAP_DUTY_NUM + SINE_TRAP_DUTY_DEN / 2)
                             / SINE_TRAP_DUTY_DEN;
                         if (td < MIN_DUTY) td = MIN_DUTY;
-                        if (td > RAMP_DUTY_CAP) td = RAMP_DUTY_CAP;
+                        if (td > RT_RAMP_DUTY_CAP) td = RT_RAMP_DUTY_CAP;
                         garudaData.duty = td;
 
                         /* Float driven at trapFloat — virtual neutral */
@@ -929,7 +937,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                      * delivery speed (non-presync-ramp path). */
                     {
                         uint32_t curErpm = ERPM_FROM_ADC_STEP_NUM / initPeriod;
-                        if (curErpm >= HWZC_CROSSOVER_ERPM)
+                        if (curErpm >= RT_HWZC_CROSSOVER_ERPM)
                         {
                             HWZC_Enable(&garudaData);
                         }
@@ -998,20 +1006,20 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                      * AND risingZcWorks — not a single noisy edge. If motor is
                      * stale (no recent ZC), hold current speed until motor catches
                      * up and ZC resumes. Same eRPM formula as OL_RAMP. */
-                    if (garudaData.timing.stepPeriod > MIN_ADC_STEP_PERIOD
+                    if (garudaData.timing.stepPeriod > RT_MIN_ADC_STEP_PERIOD
                         && garudaData.timing.goodZcCount >= 3
                         && garudaData.timing.risingZcWorks
                         && garudaData.timing.stepsSinceLastZc <= ZC_STALENESS_LIMIT)
                     {
                         uint32_t sp = garudaData.timing.stepPeriod;
                         uint32_t curErpm = ERPM_FROM_ADC_STEP_NUM / sp;
-                        uint32_t deltaErpm = ((uint32_t)RAMP_ACCEL_ERPM_PER_S * sp)
+                        uint32_t deltaErpm = ((uint32_t)RT_RAMP_ACCEL_ERPM_PER_S * sp)
                                              / PWMFREQUENCY_HZ;
                         if (deltaErpm < 1) deltaErpm = 1;
                         uint32_t newErpm = curErpm + deltaErpm;
                         uint32_t newPeriod = ERPM_FROM_ADC_STEP_NUM / newErpm;
-                        if (newPeriod < MIN_ADC_STEP_PERIOD)
-                            newPeriod = MIN_ADC_STEP_PERIOD;
+                        if (newPeriod < RT_MIN_ADC_STEP_PERIOD)
+                            newPeriod = RT_MIN_ADC_STEP_PERIOD;
                         garudaData.timing.stepPeriod = (uint16_t)newPeriod;
                     }
 #endif
@@ -1073,16 +1081,16 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                         uint16_t sp0 = garudaData.timing.stepPeriod;
                         uint32_t eRPM0 = ERPM_FROM_ADC_STEP_NUM / sp0;
                         uint16_t adv0;
-                        if (eRPM0 <= RAMP_TARGET_ERPM)
+                        if (eRPM0 <= RT_RAMP_TARGET_ERPM)
                             adv0 = TIMING_ADVANCE_MIN_DEG;
                         else if (eRPM0 >= MAX_CLOSED_LOOP_ERPM)
-                            adv0 = TIMING_ADVANCE_MAX_DEG;
+                            adv0 = RT_TIMING_ADV_MAX_DEG;
                         else
                         {
-                            uint32_t r0 = MAX_CLOSED_LOOP_ERPM - RAMP_TARGET_ERPM;
-                            uint32_t p0 = eRPM0 - RAMP_TARGET_ERPM;
+                            uint32_t r0 = MAX_CLOSED_LOOP_ERPM - RT_RAMP_TARGET_ERPM;
+                            uint32_t p0 = eRPM0 - RT_RAMP_TARGET_ERPM;
                             adv0 = TIMING_ADVANCE_MIN_DEG +
-                                (uint16_t)((uint32_t)(TIMING_ADVANCE_MAX_DEG - TIMING_ADVANCE_MIN_DEG)
+                                (uint16_t)((uint32_t)(RT_TIMING_ADV_MAX_DEG - TIMING_ADVANCE_MIN_DEG)
                                            * p0 / r0);
                         }
                         uint16_t d0 = (uint16_t)((uint32_t)sp0 * (30 - adv0) / 60);
@@ -1115,10 +1123,10 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                 {
                     uint32_t curErpm = ERPM_FROM_ADC_STEP_NUM /
                         garudaData.timing.stepPeriod;
-                    if (curErpm >= HWZC_CROSSOVER_ERPM)
+                    if (curErpm >= RT_HWZC_CROSSOVER_ERPM)
                         garudaData.hwzc.enablePending = true;
                     else if (garudaData.hwzc.enablePending
-                             && curErpm < (HWZC_CROSSOVER_ERPM
+                             && curErpm < (RT_HWZC_CROSSOVER_ERPM
                                            - HWZC_HYSTERESIS_ERPM))
                         garudaData.hwzc.enablePending = false;
                 }
@@ -1246,8 +1254,8 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                         garudaData.timing.zcSynced = false;
                         garudaData.timing.hasPrevZc = false;
                         uint16_t initPeriod = TIMER1_TO_ADC_TICKS(garudaData.rampStepPeriod);
-                        if (initPeriod < MIN_ADC_STEP_PERIOD)
-                            initPeriod = MIN_ADC_STEP_PERIOD;
+                        if (initPeriod < RT_MIN_ADC_STEP_PERIOD)
+                            initPeriod = RT_MIN_ADC_STEP_PERIOD;
                         garudaData.timing.stepPeriod = initPeriod;
                         garudaData.timing.forcedCountdown = initPeriod;
 #if FEATURE_PRESYNC_RAMP
@@ -1256,7 +1264,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                          * holds mappedDuty=garudaData.duty. Without reset,
                          * each sync→unsync cycle pumps duty higher, driving
                          * massive current through low-R motor. */
-                        garudaData.duty = RAMP_DUTY_CAP;
+                        garudaData.duty = RT_RAMP_DUTY_CAP;
 #endif
                     }
                 }
@@ -1352,7 +1360,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
 
             /* Duty cycle control. */
             {
-                uint32_t cap = garudaData.timing.zcSynced ? MAX_DUTY : RAMP_DUTY_CAP;
+                uint32_t cap = garudaData.timing.zcSynced ? MAX_DUTY : RT_RAMP_DUTY_CAP;
                 uint32_t mappedDuty;
 
 #if FEATURE_DUTY_SLEW
@@ -1376,8 +1384,8 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                     if (postSyncCounter < POST_SYNC_SETTLE_TICKS)
                         postSyncCounter++;
 #endif
-                    mappedDuty = CL_IDLE_DUTY +
-                        ((uint32_t)garudaData.potRaw * (cap - CL_IDLE_DUTY)) / 4096;
+                    mappedDuty = RT_CL_IDLE_DUTY +
+                        ((uint32_t)garudaData.throttle * (cap - RT_CL_IDLE_DUTY)) / 4096;
                 }
                 if (mappedDuty < MIN_DUTY) mappedDuty = MIN_DUTY;
                 if (mappedDuty > cap) mappedDuty = cap;
@@ -1625,7 +1633,7 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
             /* Skip blind forced ramp. Enter CL directly with slow initial
              * step period. ADC ISR pre-sync handles feedback-gated
              * acceleration with ZC detection in parallel. */
-            garudaData.duty = RAMP_DUTY_CAP;
+            garudaData.duty = RT_RAMP_DUTY_CAP;
             garudaData.state = ESC_CLOSED_LOOP;
 #else
             if (STARTUP_OpenLoopRamp(&garudaData))

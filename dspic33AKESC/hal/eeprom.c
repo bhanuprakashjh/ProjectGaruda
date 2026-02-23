@@ -187,6 +187,12 @@ bool EEPROM_SaveLearned(const LEARNED_PARAMS_T *learned, uint32_t now)
     return EEPROM_Save(&eepromShadow, now);
 }
 
+bool EEPROM_SaveConfig(const GARUDA_CONFIG_T *config, uint32_t now)
+{
+    memcpy(&eepromShadow.config, config, sizeof(GARUDA_CONFIG_T));
+    return EEPROM_Save(&eepromShadow, now);
+}
+
 bool EEPROM_LoadConfig(GARUDA_CONFIG_T *config)
 {
     memcpy(config, &eepromShadow.config, sizeof(GARUDA_CONFIG_T));
@@ -220,6 +226,16 @@ bool EEPROM_FactoryReset(void)
     activePage = 0;
     lastWriteTick = 0;
     return ok;
+}
+
+uint32_t EEPROM_GetCooldownRemainingMs(uint32_t now)
+{
+    if (lastWriteTick == 0)
+        return 0;  /* Never written — no cooldown */
+    uint32_t elapsed = now - lastWriteTick;
+    if (elapsed >= EEPROM_WRITE_THROTTLE_MS)
+        return 0;
+    return EEPROM_WRITE_THROTTLE_MS - elapsed;
 }
 
 #endif /* FEATURE_EEPROM_V2 */

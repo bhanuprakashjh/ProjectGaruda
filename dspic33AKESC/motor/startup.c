@@ -164,12 +164,12 @@ bool STARTUP_OpenLoopRamp(volatile GARUDA_DATA_T *pData)
         uint32_t curPeriod = pData->rampStepPeriod;
         if (curPeriod == 0) curPeriod = INITIAL_STEP_PERIOD;
         uint32_t curErpm = 100000UL / curPeriod;
-        uint32_t deltaErpm = ((uint32_t)RAMP_ACCEL_ERPM_PER_S * curPeriod) / 10000UL;
+        uint32_t deltaErpm = ((uint32_t)RT_RAMP_ACCEL_ERPM_PER_S * curPeriod) / 10000UL;
         if (deltaErpm < 1) deltaErpm = 1;
         uint32_t newErpm = curErpm + deltaErpm;
         uint32_t newPeriod = 100000UL / newErpm;
-        if (newPeriod < MIN_STEP_PERIOD)
-            newPeriod = MIN_STEP_PERIOD;
+        if (newPeriod < RT_MIN_STEP_PERIOD)
+            newPeriod = RT_MIN_STEP_PERIOD;
         pData->rampStepPeriod = newPeriod;
 #if RAMP_CURRENT_GATE_MA > 0 && FEATURE_HW_OVERCURRENT
         }
@@ -179,17 +179,17 @@ bool STARTUP_OpenLoopRamp(volatile GARUDA_DATA_T *pData)
 
         /* Gradually increase duty toward RAMP_DUTY_CAP.
          * Increment ~0.5% of LOOPTIME per step for smooth torque ramp. */
-        if (pData->duty < RAMP_DUTY_CAP)
+        if (pData->duty < RT_RAMP_DUTY_CAP)
         {
             pData->duty += (LOOPTIME_TCY / 200);
-            if (pData->duty > RAMP_DUTY_CAP)
-                pData->duty = RAMP_DUTY_CAP;
+            if (pData->duty > RT_RAMP_DUTY_CAP)
+                pData->duty = RT_RAMP_DUTY_CAP;
         }
         HAL_PWM_SetDutyCycle(pData->duty);
     }
 
     /* Check if we've reached the target speed */
-    if (pData->rampStepPeriod <= MIN_STEP_PERIOD)
+    if (pData->rampStepPeriod <= RT_MIN_STEP_PERIOD)
     {
         return true; /* Ready for closed-loop transition */
     }
@@ -269,12 +269,12 @@ bool STARTUP_SineAlign(volatile GARUDA_DATA_T *pData)
 bool STARTUP_SineRamp(volatile GARUDA_DATA_T *pData)
 {
     /* Accumulate fractional eRPM */
-    pData->sine.erpmFrac += SINE_ERPM_RAMP_RATE_Q16;
+    pData->sine.erpmFrac += RT_SINE_ERPM_RAMP_RATE_Q16;
     uint32_t currentErpm = pData->sine.erpmFrac >> 16;
 
     /* Clamp at target */
-    if (currentErpm >= RAMP_TARGET_ERPM)
-        currentErpm = RAMP_TARGET_ERPM;
+    if (currentErpm >= RT_RAMP_TARGET_ERPM)
+        currentErpm = RT_RAMP_TARGET_ERPM;
 
     /* Update angle increment for current eRPM (keep spinning during fadeout) */
     pData->sine.angleIncrement =
@@ -285,19 +285,19 @@ bool STARTUP_SineRamp(volatile GARUDA_DATA_T *pData)
     {
         pData->sine.amplitude = SINE_MIN_AMPLITUDE;
     }
-    else if (currentErpm >= RAMP_TARGET_ERPM)
+    else if (currentErpm >= RT_RAMP_TARGET_ERPM)
     {
         pData->sine.amplitude = SINE_MAX_AMPLITUDE;
     }
     else
     {
-        uint32_t range = RAMP_TARGET_ERPM - INITIAL_ERPM;
+        uint32_t range = RT_RAMP_TARGET_ERPM - INITIAL_ERPM;
         uint32_t progress = currentErpm - INITIAL_ERPM;
         pData->sine.amplitude = (uint16_t)(SINE_MIN_AMPLITUDE +
             ((uint32_t)(SINE_MAX_AMPLITUDE - SINE_MIN_AMPLITUDE) * progress) / range);
     }
 
-    return (currentErpm >= RAMP_TARGET_ERPM);
+    return (currentErpm >= RT_RAMP_TARGET_ERPM);
 }
 
 /**
@@ -391,7 +391,7 @@ void STARTUP_MorphInit(volatile GARUDA_DATA_T *pData)
      * a 10× too-slow forced commutation period → instant desync. */
     uint32_t currentErpm = pData->sine.erpmFrac >> 16;
     if (currentErpm < INITIAL_ERPM) currentErpm = INITIAL_ERPM;
-    if (currentErpm > RAMP_TARGET_ERPM) currentErpm = RAMP_TARGET_ERPM;
+    if (currentErpm > RT_RAMP_TARGET_ERPM) currentErpm = RT_RAMP_TARGET_ERPM;
     pData->rampStepPeriod = (uint16_t)((100000UL + currentErpm / 2) / currentErpm);
 
     uint8_t step = STARTUP_SineGetTransitionStep(pData);
@@ -451,7 +451,7 @@ void STARTUP_MorphComputeDuties(volatile GARUDA_DATA_T *pData,
                          * SINE_TRAP_DUTY_NUM + SINE_TRAP_DUTY_DEN / 2)
                         / SINE_TRAP_DUTY_DEN;
     if (trapDuty < MIN_DUTY)    trapDuty = MIN_DUTY;
-    if (trapDuty > RAMP_DUTY_CAP) trapDuty = RAMP_DUTY_CAP;
+    if (trapDuty > RT_RAMP_DUTY_CAP) trapDuty = RT_RAMP_DUTY_CAP;
 
     /* Virtual neutral of the trap waveform: midpoint of active and low.
      * The floating phase must converge HERE, not SINE_CENTER_DUTY (50%).

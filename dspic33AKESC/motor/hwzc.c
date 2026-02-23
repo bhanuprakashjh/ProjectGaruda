@@ -267,16 +267,16 @@ void HWZC_OnZcDetected(volatile GARUDA_DATA_T *pData)
     {
         uint32_t eRPM = HWZC_TICKS_TO_ERPM(pData->hwzc.stepPeriodHR);
         uint16_t advDeg;
-        if (eRPM <= RAMP_TARGET_ERPM)
+        if (eRPM <= RT_RAMP_TARGET_ERPM)
             advDeg = TIMING_ADVANCE_MIN_DEG;
         else if (eRPM >= MAX_CLOSED_LOOP_ERPM)
-            advDeg = TIMING_ADVANCE_MAX_DEG;
+            advDeg = RT_TIMING_ADV_MAX_DEG;
         else
         {
-            uint32_t range = MAX_CLOSED_LOOP_ERPM - RAMP_TARGET_ERPM;
-            uint32_t pos = eRPM - RAMP_TARGET_ERPM;
+            uint32_t range = MAX_CLOSED_LOOP_ERPM - RT_RAMP_TARGET_ERPM;
+            uint32_t pos = eRPM - RT_RAMP_TARGET_ERPM;
             advDeg = TIMING_ADVANCE_MIN_DEG +
-                (uint16_t)((uint32_t)(TIMING_ADVANCE_MAX_DEG - TIMING_ADVANCE_MIN_DEG)
+                (uint16_t)((uint32_t)(RT_TIMING_ADV_MAX_DEG - TIMING_ADVANCE_MIN_DEG)
                            * pos / range);
         }
         commDelay = pData->hwzc.stepPeriodHR * (30 - advDeg) / 60;
