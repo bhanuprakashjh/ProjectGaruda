@@ -54,6 +54,7 @@ void HWZC_Init(volatile GARUDA_DATA_T *pData)
     pData->hwzc.totalZcCount = 0;
     pData->hwzc.totalMissCount = 0;
     pData->hwzc.totalCommCount = 0;
+    pData->hwzc.rejectsThisStep = 0;
     pData->hwzc.dbgTimeoutAdcVal = 0;
     pData->hwzc.dbgTimeoutThresh = 0;
     pData->hwzc.dbgTimeoutCmpmod = 0;
@@ -138,6 +139,7 @@ void HWZC_OnCommutation(volatile GARUDA_DATA_T *pData)
 {
     uint32_t now = HAL_SCCP2_ReadTimestamp();
     pData->hwzc.lastCommStamp = now;
+    pData->hwzc.rejectsThisStep = 0;
 
     /* Determine floating phase and comparator for this step */
     uint8_t step = pData->currentStep;
@@ -225,6 +227,7 @@ void HWZC_OnZcDetected(volatile GARUDA_DATA_T *pData)
     {
         /* Noise — re-arm comparator, keep timeout running */
         pData->hwzc.noiseRejectCount++;
+        pData->hwzc.rejectsThisStep++;
         uint8_t core = pData->hwzc.activeCore;
         HAL_ADC_ClearComparatorFlag(core);
         HAL_ADC_EnableComparatorIE(core);

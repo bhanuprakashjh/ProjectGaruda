@@ -226,6 +226,7 @@ typedef struct {
     bool         fallbackPending; /* Set by HWZC_Disable, cleared by ADC ISR re-seed */
     bool         dbgLatchDisable;  /* Debug: after first HW ZC failure, block re-enable permanently */
     uint32_t     noiseRejectCount; /* ZC events rejected by interval filter (diagnostic) */
+    uint8_t      rejectsThisStep; /* Noise rejects since last commutation (diagnostic) */
 
     /* Diagnostics (debugger reads only — tearing acceptable) */
     uint32_t     totalZcCount;    /* Total hardware ZC detections */

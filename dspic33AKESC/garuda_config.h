@@ -63,6 +63,7 @@ extern "C" {
  * Motor Profile Selection
  * 0 = Hurst DMB0224C10002 (10-pole, 24V, 4.03 ohm, 7.24 Vpk/KRPM)
  * 1 = A2212 1400KV (14-pole, 12V, 0.065 ohm, 1400 KV)
+ * 2 = 5010 750KV (14-pole, 4S/14.8V, ~0.1 ohm, 750 KV, 14" prop)
  *
  * All motor-dependent parameters are grouped here for easy swapping.
  * Board-specific and feature-tuning parameters are below.
@@ -141,6 +142,67 @@ extern "C" {
 #define OC_CLPCI_ENABLE            0       /* CLPCI disabled for A2212: OA3 ringing (25x gain)
                                             * causes 54-80% false trip rate, LEB can't fix.
                                             * Protection via software ADC + board FPCI instead. */
+
+#elif MOTOR_PROFILE == 2
+/* === 5010 750KV (heavy-lift drone motor) ===
+ * 14 poles (12N14P), 2S-6S (tuned for 4S = 14.8V), ~0.1 ohm, ~30-50 uH
+ * 750 KV => ~11100 RPM @ 14.8V no-load = 77700 eRPM
+ * Typical prop: 14x4.7 or 14x5.5, frame: 450-850mm multirotor
+ *
+ * NOTE: Phase resistance (~80-120 mΩ) and inductance (~20-50 µH) are
+ * estimates from RCTimer 5010 series data. Measure with milliohm meter
+ * and LCR meter for exact values, then retune OC thresholds.
+ *
+ * At 4S, BEMF per eRPM is ~2x the A2212 at 12V (higher Vbus * lower KV
+ * partially cancel, but 14.8V/750KV has better BEMF/Vbus ratio than
+ * 12V/1400KV). ZC detection should be easier. */
+#define MOTOR_POLE_PAIRS             7
+#define DEADTIME_NS                500     /* Low-L motor, same as A2212 */
+#define ALIGN_DUTY_PERCENT           6     /* 14.8V*6%/0.1Ω = 8.9A stall — safe with 30A ESC.
+                                            * Lower than A2212 (8%) because higher Vbus. */
+#define RAMP_DUTY_PERCENT           12     /* 14.8V*12% = 1.78V applied. At 0.1Ω, stall ~18A.
+                                            * 14" prop has much more inertia than 8" — needs
+                                            * adequate torque but not excessive current. */
+#define INITIAL_ERPM               150     /* Very slow start: 14" prop has high inertia.
+                                            * 67ms per step — prop can follow without skipping. */
+#define RAMP_TARGET_ERPM          2500     /* 750KV at 14.8V: BEMF/Vbus ratio is ~2x A2212.
+                                            * 2500 eRPM gives ~3.3% Vbus BEMF — good ZC margin.
+                                            * Lower than A2212 (3000) because better BEMF/Vbus. */
+#define MAX_CLOSED_LOOP_ERPM     80000     /* 750KV * 14.8V * 7pp ≈ 77700, rounded up */
+#define RAMP_ACCEL_ERPM_PER_S      200     /* Slower than A2212 (300): 14" prop takes longer
+                                            * to accelerate. Each forced step must physically
+                                            * complete before the next commutation. */
+#define SINE_ALIGN_MODULATION_PCT    5     /* Slightly more than A2212 (4%): heavier rotor
+                                            * needs a bit more torque to align. */
+#define SINE_RAMP_MODULATION_PCT    10     /* More conservative than A2212 (12%): higher Vbus
+                                            * means less modulation needed for same torque.
+                                            * 14.8V*10% = 1.48V effective >> 12V*12% = 1.44V. */
+#define ZC_DEMAG_DUTY_THRESH        45     /* Slightly higher than A2212 (40): estimated
+                                            * inductance (~30-50 µH) may be higher. */
+#define ZC_DEMAG_BLANK_EXTRA_PERCENT 16    /* Between A2212 (18) and Hurst (12) */
+#define HWZC_CROSSOVER_ERPM       1500     /* Same strategy as A2212: enable HWZC immediately
+                                            * after morph exit. 1500 < RAMP_TARGET. */
+#define CL_IDLE_DUTY_PERCENT        10     /* Min CL duty at pot=0. Higher Vbus and better
+                                            * BEMF ratio than A2212 → 10% should maintain
+                                            * ZC-capable speed under 14" prop load. */
+#define SINE_PHASE_OFFSET_DEG       60     /* Same as other profiles — tune if needed */
+#define OC_LIMIT_MA              15000     /* CMP3 CLPCI chopping (15A). Board shunt+OA3
+                                            * (3mΩ, 25x) saturates ADC at ~22A. Set chopping
+                                            * well below saturation for headroom. */
+#define OC_STARTUP_MA            22000     /* High: let supply CC be the limiter during startup */
+#define OC_FAULT_MA              20000     /* Software hard fault (20A). Limited by ADC range:
+                                            * OA3 output clips at ~3300mV = ~22A. 20A gives
+                                            * margin before ADC saturation hides real current. */
+#define OC_SW_LIMIT_MA           12000     /* Software soft limit (12A). Reduces duty early to
+                                            * avoid hitting CMP3 threshold. 5010 at 4S with 14"
+                                            * prop typically draws 10-15A at moderate throttle. */
+#define RAMP_CURRENT_GATE_MA      8000     /* Hold ramp accel when ibus > 8A. 14" prop draws
+                                            * significant current during acceleration. At 14.8V
+                                            * and 12% duty, 0.1Ω gives ~18A stall. 8A gate
+                                            * prevents overdrive while allowing strong ramp. */
+#define FEATURE_PRESYNC_RAMP       0       /* Standard forced OL_RAMP */
+#define OC_CLPCI_ENABLE            0       /* CLPCI disabled: same OA3 ringing issue as A2212.
+                                            * Protection via software ADC + board FPCI. */
 
 #else
 #error "Unknown MOTOR_PROFILE — see garuda_config.h"
