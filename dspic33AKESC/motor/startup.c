@@ -82,6 +82,20 @@ void STARTUP_Init(volatile GARUDA_DATA_T *pData)
     pData->timing.hasPrevZc = false;
 
 #if FEATURE_SINE_STARTUP
+    /* Reset ALL morph state so stale values from a prior run don't persist
+     * through IDLE/ARMED/ALIGN/OL_RAMP (visible in X2CScope and could
+     * confuse state-dependent code). MorphInit will set these again at
+     * OL_RAMP→MORPH, but they must be clean from STARTUP_Init onward. */
+    pData->morph.subPhase = MORPH_CONVERGE;
+    pData->morph.alpha = 0;
+    pData->morph.sectorCount = 0;
+    pData->morph.entryTick = 0;
+    pData->morph.lastZcTick = 0;
+    pData->morph.morphZcCount = 0;
+    pData->morph.tickInStep = 0;
+    pData->morph.stepPeriodSnap = 0;
+    pData->morph.floatIsHiZ = false;
+    pData->morph.forceThreshSeed = false;
     STARTUP_SineInit(pData);
 #endif
 }
@@ -365,6 +379,10 @@ void STARTUP_MorphInit(volatile GARUDA_DATA_T *pData)
     pData->morph.entryTick = pData->systemTick;
     pData->morph.lastZcTick = 0;
     pData->morph.morphZcCount = 0;
+    pData->morph.tickInStep = 0;
+    pData->morph.stepPeriodSnap = 0;
+    pData->morph.floatIsHiZ = false;
+    pData->morph.forceThreshSeed = false;
 
     /* Sync rampStepPeriod from the sine ramp's actual eRPM.
      * STARTUP_SineRamp() uses sine.erpmFrac (Q16) internally and never
@@ -435,14 +453,22 @@ void STARTUP_MorphComputeDuties(volatile GARUDA_DATA_T *pData,
     if (trapDuty < MIN_DUTY)    trapDuty = MIN_DUTY;
     if (trapDuty > RAMP_DUTY_CAP) trapDuty = RAMP_DUTY_CAP;
 
+    /* Virtual neutral of the trap waveform: midpoint of active and low.
+     * The floating phase must converge HERE, not SINE_CENTER_DUTY (50%).
+     * At alpha=256 with SINE_CENTER_DUTY, the float phase stays at 50%
+     * while active/low are at ~7%/5% — creating a 5V differential across
+     * 0.13 ohm (39A!) on low-R motors. Virtual neutral keeps the float
+     * near the midpoint, so current is ~1A at Hi-Z disconnection. */
+    uint32_t trapFloat = (trapDuty + MIN_DUTY) / 2;
+
     const COMMUTATION_STEP_T *s = &commutationTable[stepNow];
 
     uint32_t trapA = (s->phaseA == PHASE_PWM_ACTIVE) ? trapDuty :
-                     (s->phaseA == PHASE_LOW) ? MIN_DUTY : SINE_CENTER_DUTY;
+                     (s->phaseA == PHASE_LOW) ? MIN_DUTY : trapFloat;
     uint32_t trapB = (s->phaseB == PHASE_PWM_ACTIVE) ? trapDuty :
-                     (s->phaseB == PHASE_LOW) ? MIN_DUTY : SINE_CENTER_DUTY;
+                     (s->phaseB == PHASE_LOW) ? MIN_DUTY : trapFloat;
     uint32_t trapC = (s->phaseC == PHASE_PWM_ACTIVE) ? trapDuty :
-                     (s->phaseC == PHASE_LOW) ? MIN_DUTY : SINE_CENTER_DUTY;
+                     (s->phaseC == PHASE_LOW) ? MIN_DUTY : trapFloat;
 
     /* Blend: duty = sine*(256-α)/256 + trap*α/256 */
     uint16_t a = pData->morph.alpha;

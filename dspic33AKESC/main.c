@@ -80,11 +80,13 @@ int main(void)
             if (garudaData.state == ESC_IDLE)
             {
                 /* Enter arming — Timer1 ESC_ARMED handler verifies throttle=0
-                 * for ARM_TIME_MS, then transitions to ESC_ALIGN. */
+                 * for ARM_TIME_MS, then transitions to ESC_ALIGN.
+                 * Init before state change: Timer1 ISR (prio 5) can
+                 * preempt main between writes. */
                 garudaData.runCommandActive = true;
                 garudaData.desyncRestartAttempts = 0;
-                garudaData.state = ESC_ARMED;
                 garudaData.armCounter = 0;
+                garudaData.state = ESC_ARMED;
 #if FEATURE_ADAPTATION
                 if (ADAPT_IsSafeBoundary(ESC_ARMED, garudaData.throttle))
                 {
@@ -94,32 +96,36 @@ int main(void)
             }
             else if (garudaData.state == ESC_FAULT)
             {
-                /* Clear fault and return to idle */
+                /* Clear fault and return to idle.
+                 * State first: ADC ISR (prio 6) sees IDLE immediately,
+                 * skips CL case, so HWZC_Disable's fallbackPending=true
+                 * is never consumed by the fallback re-seed path. */
+                garudaData.state = ESC_IDLE;
+                garudaData.runCommandActive = false;
+                garudaData.desyncRestartAttempts = 0;
+                garudaData.faultCode = FAULT_NONE;
 #if FEATURE_ADC_CMP_ZC
                 if (garudaData.hwzc.enabled)
                     HWZC_Disable(&garudaData);
                 garudaData.hwzc.fallbackPending = false;
 #endif
-                garudaData.runCommandActive = false;
-                garudaData.desyncRestartAttempts = 0;
-                garudaData.faultCode = FAULT_NONE;
                 HAL_MC1ClearPWMPCIFault();
                 HAL_MC1PWMDisableOutputs();
-                garudaData.state = ESC_IDLE;
                 LED2 = 0;
             }
             else
             {
-                /* Stop motor (any running state including ESC_RECOVERY) */
+                /* Stop motor (any running state including ESC_RECOVERY).
+                 * State first: same preemption safety as fault-clear. */
+                garudaData.state = ESC_IDLE;
+                garudaData.runCommandActive = false;
+                garudaData.desyncRestartAttempts = 0;
 #if FEATURE_ADC_CMP_ZC
                 if (garudaData.hwzc.enabled)
                     HWZC_Disable(&garudaData);
                 garudaData.hwzc.fallbackPending = false;
 #endif
-                garudaData.runCommandActive = false;
-                garudaData.desyncRestartAttempts = 0;
                 HAL_MC1PWMDisableOutputs();
-                garudaData.state = ESC_IDLE;
                 LED2 = 0;
             }
         }

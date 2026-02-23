@@ -50,6 +50,7 @@ void HWZC_Init(volatile GARUDA_DATA_T *pData)
     pData->hwzc.missCount = 0;
     pData->hwzc.fallbackPending = false;
     pData->hwzc.dbgLatchDisable = false;
+    pData->hwzc.stepsSinceLastHwZc = 0;
     pData->hwzc.totalZcCount = 0;
     pData->hwzc.totalMissCount = 0;
     pData->hwzc.totalCommCount = 0;
@@ -83,6 +84,7 @@ void HWZC_Enable(volatile GARUDA_DATA_T *pData)
     pData->hwzc.enablePending = false;
     pData->hwzc.goodZcCount = 0;
     pData->hwzc.missCount = 0;
+    pData->hwzc.stepsSinceLastHwZc = 1;  /* First step: IIR valid with seeded lastZcStamp */
 
     /* Seed stepPeriodHR from software ZC step period */
     pData->hwzc.dbgEnableStepPeriod = pData->timing.stepPeriod;
@@ -212,19 +214,27 @@ void HWZC_OnZcDetected(volatile GARUDA_DATA_T *pData)
     /* Cancel the timeout timer */
     HAL_SCCP1_Stop();
 
-    /* Update stepPeriodHR with seqlock (Rule 13) */
+    /* Update stepPeriodHR with seqlock (Rule 13).
+     * Guard: only update IIR when this ZC follows exactly one commutation
+     * (consecutive detection). Multi-step intervals include timeout periods,
+     * not real motor periods — they contaminate the estimator. */
     uint32_t interval = zcStamp - pData->hwzc.lastZcStamp;
-    pData->hwzc.writeSeq++;  /* odd = write in progress */
-    uint32_t newPeriod = (3 * pData->hwzc.stepPeriodHR + interval) / 4;
-    if (newPeriod < HWZC_MIN_STEP_TICKS)
-        newPeriod = HWZC_MIN_STEP_TICKS;
-    pData->hwzc.stepPeriodHR = newPeriod;
-    pData->hwzc.writeSeq++;  /* even = stable */
+    if (pData->hwzc.stepsSinceLastHwZc == 1)
+    {
+        pData->hwzc.writeSeq++;  /* odd = write in progress */
+        uint32_t newPeriod = (3 * pData->hwzc.stepPeriodHR + interval) / 4;
+        if (newPeriod < HWZC_MIN_STEP_TICKS)
+            newPeriod = HWZC_MIN_STEP_TICKS;
+        pData->hwzc.stepPeriodHR = newPeriod;
+        pData->hwzc.writeSeq++;  /* even = stable */
+    }
+    pData->hwzc.stepsSinceLastHwZc = 0;
 
     pData->hwzc.lastZcStamp = zcStamp;
 
-    /* Track consecutive good ZCs */
-    pData->hwzc.goodZcCount++;
+    /* Track consecutive good ZCs (saturate to prevent stale re-seed) */
+    if (pData->hwzc.goodZcCount < 0xFFFE)
+        pData->hwzc.goodZcCount++;
     pData->hwzc.missCount = 0;
     pData->hwzc.totalZcCount++;
 
@@ -270,6 +280,7 @@ void HWZC_OnCommDeadline(volatile GARUDA_DATA_T *pData)
     COMMUTATION_AdvanceStep(pData);
     pData->hwzc.totalCommCount++;
     pData->hwzc.commSeq++;  /* 16-bit, atomic for observer (Rule 13) */
+    pData->hwzc.stepsSinceLastHwZc++;
 
     /* Set up ZC detection for the new step */
     HWZC_OnCommutation(pData);
@@ -304,6 +315,7 @@ void HWZC_OnTimeout(volatile GARUDA_DATA_T *pData)
 
     pData->hwzc.missCount++;
     pData->hwzc.totalMissCount++;
+    pData->hwzc.stepsSinceLastHwZc++;
 
     if (pData->hwzc.goodZcCount > 0)
         pData->hwzc.goodZcCount--;
@@ -311,7 +323,9 @@ void HWZC_OnTimeout(volatile GARUDA_DATA_T *pData)
     if (pData->hwzc.missCount >= HWZC_MISS_LIMIT)
     {
         /* Too many misses — fall back to software ZC.
+         * Clear goodZcCount to prevent stale synced re-seed.
          * Latch disable to prevent re-enable cycling (preserves diagnostics). */
+        pData->hwzc.goodZcCount = 0;
         pData->hwzc.dbgLatchDisable = true;
         HWZC_Disable(pData);
         return;

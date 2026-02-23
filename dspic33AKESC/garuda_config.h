@@ -94,6 +94,7 @@ extern "C" {
 #define OC_SW_LIMIT_MA            1500     /* Software soft limit (1.5A) */
 #define RAMP_CURRENT_GATE_MA         0     /* 0=disabled: Hurst starts easily without gating */
 #define FEATURE_PRESYNC_RAMP       0       /* Hurst: standard forced OL_RAMP */
+#define OC_CLPCI_ENABLE            1       /* CMP3 CLPCI chopping enabled for Hurst */
 
 #elif MOTOR_PROFILE == 1
 /* === A2212 1400KV (drone motor) ===
@@ -102,24 +103,29 @@ extern "C" {
 #define MOTOR_POLE_PAIRS             7
 #define DEADTIME_NS                500     /* Less distortion on low-L motor */
 #define ALIGN_DUTY_PERCENT           8     /* 12V*8%/0.065=14.8A stall (supply CC limits) */
-#define RAMP_DUTY_PERCENT           10     /* More torque to push prop through ramp */
+#define RAMP_DUTY_PERCENT           15     /* Increased from 10%: 10% duty at 2000 eRPM gives
+                                            * only 42 ADC BEMF max (phases A/C ≈ 20) — too weak
+                                            * for ZC detection under prop load. 15% provides more
+                                            * torque to reach higher handoff speed. */
 #define INITIAL_ERPM               200     /* Very slow start: 50ms per step — prop can follow */
-#define RAMP_TARGET_ERPM          2000     /* Reverted to 2000: less jerk at morph→CL handoff.
-                                            * SW ZC lock relies on HWZC_CROSSOVER=3500 +
-                                            * MORPH_ZC_THRESHOLD=4 instead of higher BEMF. */
+#define RAMP_TARGET_ERPM          3000     /* Increased from 2000: A2212 BEMF at 2000 eRPM is only
+                                            * ~1.7% of Vbus (floatAdcMax=42 vs threshold=14).
+                                            * 3000 eRPM gives ~2.5% Vbus = ~63 ADC, improving
+                                            * ZC margin from 1.5:1 to ~2.3:1 on weak phases. */
 #define MAX_CLOSED_LOOP_ERPM    120000     /* 1400KV * 12V * 7pp */
 #define RAMP_ACCEL_ERPM_PER_S      300     /* Gentle ramp — each step must physically complete */
 #define SINE_ALIGN_MODULATION_PCT    4     /* Limit alignment current */
-#define SINE_RAMP_MODULATION_PCT     8     /* Limit ramp current */
+#define SINE_RAMP_MODULATION_PCT    12     /* Increased from 8%: more voltage to push prop through
+                                            * sine ramp to 3000 eRPM. 10A supply CC limits current. */
 #define ZC_DEMAG_DUTY_THRESH        40     /* Low-L = more demag */
 #define ZC_DEMAG_BLANK_EXTRA_PERCENT 18    /* Aggressive demag blanking */
 #define HWZC_CROSSOVER_ERPM       1500     /* Reverted: SW ZC can't lock at 2000 eRPM on A2212.
                                             * Partial-lock morph exit needs HWZC to take over
                                             * immediately in CL. 1500 < RAMP_TARGET ensures
                                             * HWZC activates as soon as zcSynced is set. */
-#define CL_IDLE_DUTY_PERCENT         8     /* Min CL duty at pot=0. Lowered from 12 to reduce
-                                            * CLPCI chopping at idle and minimize duty jump at
-                                            * morph→CL (morph exits at ~10% RAMP_DUTY_PERCENT). */
+#define CL_IDLE_DUTY_PERCENT        12     /* Min CL duty at pot=0. Restored from 8 now that
+                                            * CLPCI is disabled (OC_CLPCI_ENABLE=0). 12% keeps
+                                            * BEMF above ZC threshold under prop load at idle. */
 #define SINE_PHASE_OFFSET_DEG       60     /* Sine-to-trap offset (unused when sine disabled) */
 #define OC_LIMIT_MA              12000     /* CMP3 CLPCI chopping (12A) */
 #define OC_STARTUP_MA            22000     /* High: let 10A supply CC be the limiter, not CMP3 */
@@ -132,6 +138,9 @@ extern "C" {
                                             * because lower V/L means slower current rise → less
                                             * braking torque during wrong commutation. */
 #define FEATURE_PRESYNC_RAMP       0       /* Disabled: standard forced OL_RAMP (reliable no-prop) */
+#define OC_CLPCI_ENABLE            0       /* CLPCI disabled for A2212: OA3 ringing (25x gain)
+                                            * causes 54-80% false trip rate, LEB can't fix.
+                                            * Protection via software ADC + board FPCI instead. */
 
 #else
 #error "Unknown MOTOR_PROFILE — see garuda_config.h"
@@ -220,6 +229,25 @@ extern "C" {
 #define MORPH_TIMEOUT_MS       2000   /* Absolute morph timeout (ms). */
 #define MORPH_ZC_THRESHOLD        4   /* goodZcCount to exit morph → CL. Lowered from 6
                                        * for easier SW ZC lock during morph. */
+
+/* Windowed Hi-Z: progressive float-phase Hi-Z acquisition.
+ * Each entry = Hi-Z window as % of step period for that sector.
+ * Window centered at 50% of step (≈30° electrical, expected ZC point).
+ * Start at 10% (not 6%): 4-tick overhead (settle+init+open-skip)
+ * leaves only 3 effective ticks at 6% — too thin for weak phases.
+ * Individual macros so _Static_assert can verify the final entry. */
+#define MORPH_WINDOW_PCT_0        10
+#define MORPH_WINDOW_PCT_1        20
+#define MORPH_WINDOW_PCT_2        35
+#define MORPH_WINDOW_PCT_3        60
+#define MORPH_WINDOW_PCT_4       100
+#define MORPH_WINDOW_SCHEDULE     { MORPH_WINDOW_PCT_0, MORPH_WINDOW_PCT_1, \
+                                    MORPH_WINDOW_PCT_2, MORPH_WINDOW_PCT_3, \
+                                    MORPH_WINDOW_PCT_4 }
+#define MORPH_WINDOW_SECTORS      5
+#define MORPH_WINDOW_MIN_TICKS    8   /* Absolute minimum Hi-Z window width.
+                                       * At 4-tick overhead, guarantees ≥4
+                                       * effective sensing ticks per window. */
 #endif
 
 /* ADC Comparator ZC (Phase F) — crossover eRPM in motor profile above */
@@ -231,6 +259,11 @@ extern "C" {
 #define HWZC_CMP_DEADBAND        4   /* ADC counts deadband for comparator sanity check */
 #define HWZC_SAMC               3    /* Sample time for high-speed channels (~205ns conversion) */
 #define HWZC_ADC_SAMPLE_HZ   1000000  /* High-speed ADC trigger rate (SCCP3). Max ~4.9 MHz. */
+#define HWZC_STALL_DUTY_PCT     30   /* % of MAX_DUTY below which floor-speed is implausible.
+                                      * If stepPeriodHR is at floor (motor apparently at max
+                                      * eRPM) but duty is below this, HWZC is tracking PWM
+                                      * noise from a stalled motor. */
+#define HWZC_STALL_DEBOUNCE_MS  100  /* ms of continuous implausible state before stall disable */
 #endif
 
 /* Hardware Overcurrent Protection (Phase G) — current thresholds in motor profile above */

@@ -178,7 +178,8 @@ typedef struct {
 
 typedef enum {
     MORPH_CONVERGE = 0,   /* Sub-phase A: duty blend, all 3 phases driven */
-    MORPH_HIZ             /* Sub-phase B: float phase Hi-Z, BEMF active */
+    MORPH_WINDOWED_HIZ,   /* Sub-phase B: progressive Hi-Z windows on float */
+    MORPH_HIZ             /* Sub-phase C: full Hi-Z, BEMF active */
 } MORPH_SUBPHASE_T;
 
 typedef struct {
@@ -190,6 +191,10 @@ typedef struct {
     uint32_t entryTick;        /* systemTick at morph entry (for timeout) */
     uint16_t lastZcTick;       /* adcIsrTick of last confirmed ZC in morph */
     uint16_t morphZcCount;     /* ZC count for IIR gating (need >=2 for interval) */
+    uint16_t tickInStep;       /* ADC ticks since last forced commutation */
+    uint16_t stepPeriodSnap;   /* stepPeriod snapshot at commutation */
+    bool     floatIsHiZ;       /* True when float phase override is Hi-Z */
+    bool     forceThreshSeed;  /* One-shot: seed zcThreshSmooth on next threshold pass */
 } MORPH_STATE_T;
 #endif
 
@@ -211,10 +216,16 @@ typedef struct {
     uint32_t     stepPeriodHR;    /* Step period in SCCP2 ticks — seqlocked */
     uint16_t     writeSeq;        /* Seqlock: odd=write-in-progress, even=stable */
     uint16_t     commSeq;         /* Incremented each HW commutation (16-bit, atomic) */
-    uint16_t     goodZcCount;     /* Consecutive confirmed ZC events */
+    uint16_t     goodZcCount;     /* Consecutive confirmed ZC events (saturated at 0xFFFE) */
     uint16_t     missCount;       /* Consecutive missed ZC (forced steps) */
+    uint8_t      stepsSinceLastHwZc; /* Commutations since last HW ZC detection.
+                                     * 1 = consecutive ZC (safe for IIR update).
+                                     * >1 = forced steps in between (skip IIR —
+                                     * interval spans 2× timeout periods, not
+                                     * real motor periods). */
     bool         fallbackPending; /* Set by HWZC_Disable, cleared by ADC ISR re-seed */
     bool         dbgLatchDisable;  /* Debug: after first HW ZC failure, block re-enable permanently */
+    uint32_t     noiseRejectCount; /* ZC events rejected by interval filter (diagnostic) */
 
     /* Diagnostics (debugger reads only — tearing acceptable) */
     uint32_t     totalZcCount;    /* Total hardware ZC detections */

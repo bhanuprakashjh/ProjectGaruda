@@ -258,13 +258,15 @@ void InitPWMGenerator1(void)
     PG1FPCI     = 0x0000;
 #endif
 
-#if FEATURE_HW_OVERCURRENT && (OC_PROTECT_MODE == 0 || OC_PROTECT_MODE == 2)
+#if FEATURE_HW_OVERCURRENT && (OC_PROTECT_MODE == 0 || OC_PROTECT_MODE == 2) && OC_CLPCI_ENABLE
     PG1CLPCI    = 0x0000;
     PG1CLPCIbits.PSS = 0b11101;    /* Comparator 3 output */
     PG1CLPCIbits.PPS = 0;          /* Non-inverted (CMP3 high = overcurrent) */
     PG1CLPCIbits.TERM = 1;         /* Auto-terminate when PCI source goes inactive */
-    PG1CLPCIbits.ACP = 0;          /* Level-sensitive (not latched) */
+    PG1CLPCIbits.ACP = 0b011;     /* Latched acceptance (recommended with LEB) */
     PG1CLPCIbits.PSYNC = 0;
+    PG1CLPCIbits.AQSS = 0b010;    /* LEB active as acceptance qualifier */
+    PG1CLPCIbits.AQPS = 1;        /* Inverted: accept only when LEB inactive */
     /* CLIEN stays 0 — no ISR. CLPCI protection is pure hardware.
      * Trip counting uses CLEVT polling in ADC ISR. */
 #else
@@ -272,7 +274,16 @@ void InitPWMGenerator1(void)
 #endif
     PG1FFPCI    = 0x0000;
     PG1SPCI     = 0x0000;
+#if FEATURE_HW_OVERCURRENT && (OC_PROTECT_MODE == 0 || OC_PROTECT_MODE == 2) && OC_CLPCI_ENABLE
     PG1LEB      = 0x0000;
+    PG1LEBbits.PHR = 1;           /* Blank on rising edge of PWMxH */
+    PG1LEBbits.PHF = 1;           /* Blank on falling edge of PWMxH */
+    PG1LEBbits.PLR = 1;           /* Blank on rising edge of PWMxL */
+    PG1LEBbits.PLF = 1;           /* Blank on falling edge of PWMxL */
+    PG1LEBbits.LEB = OC_LEB_COUNTS;
+#else
+    PG1LEB      = 0x0000;
+#endif
 
     PG1PHASEbits.PHASE = MIN_DUTY;
     PG1DCbits.DC = MIN_DUTY;
@@ -368,19 +379,30 @@ void InitPWMGenerator2(void)
     PG2FPCI     = 0x0000;
 #endif
 
-#if FEATURE_HW_OVERCURRENT && (OC_PROTECT_MODE == 0 || OC_PROTECT_MODE == 2)
+#if FEATURE_HW_OVERCURRENT && (OC_PROTECT_MODE == 0 || OC_PROTECT_MODE == 2) && OC_CLPCI_ENABLE
     PG2CLPCI    = 0x0000;
     PG2CLPCIbits.PSS = 0b11101;    /* Comparator 3 output */
     PG2CLPCIbits.PPS = 0;
     PG2CLPCIbits.TERM = 1;
-    PG2CLPCIbits.ACP = 0;
+    PG2CLPCIbits.ACP = 0b011;     /* Latched acceptance (recommended with LEB) */
     PG2CLPCIbits.PSYNC = 0;
+    PG2CLPCIbits.AQSS = 0b010;    /* LEB active as acceptance qualifier */
+    PG2CLPCIbits.AQPS = 1;        /* Inverted: accept only when LEB inactive */
 #else
     PG2CLPCI    = 0x0000;
 #endif
     PG2FFPCI    = 0x0000;
     PG2SPCI     = 0x0000;
+#if FEATURE_HW_OVERCURRENT && (OC_PROTECT_MODE == 0 || OC_PROTECT_MODE == 2) && OC_CLPCI_ENABLE
     PG2LEB      = 0x0000;
+    PG2LEBbits.PHR = 1;
+    PG2LEBbits.PHF = 1;
+    PG2LEBbits.PLR = 1;
+    PG2LEBbits.PLF = 1;
+    PG2LEBbits.LEB = OC_LEB_COUNTS;
+#else
+    PG2LEB      = 0x0000;
+#endif
 
     PG2PHASEbits.PHASE = MIN_DUTY;
     PG2DCbits.DC = MIN_DUTY;
@@ -475,19 +497,30 @@ void InitPWMGenerator3(void)
     PG3FPCI     = 0x0000;
 #endif
 
-#if FEATURE_HW_OVERCURRENT && (OC_PROTECT_MODE == 0 || OC_PROTECT_MODE == 2)
+#if FEATURE_HW_OVERCURRENT && (OC_PROTECT_MODE == 0 || OC_PROTECT_MODE == 2) && OC_CLPCI_ENABLE
     PG3CLPCI    = 0x0000;
     PG3CLPCIbits.PSS = 0b11101;    /* Comparator 3 output */
     PG3CLPCIbits.PPS = 0;
     PG3CLPCIbits.TERM = 1;
-    PG3CLPCIbits.ACP = 0;
+    PG3CLPCIbits.ACP = 0b011;     /* Latched acceptance (recommended with LEB) */
     PG3CLPCIbits.PSYNC = 0;
+    PG3CLPCIbits.AQSS = 0b010;    /* LEB active as acceptance qualifier */
+    PG3CLPCIbits.AQPS = 1;        /* Inverted: accept only when LEB inactive */
 #else
     PG3CLPCI    = 0x0000;
 #endif
     PG3FFPCI    = 0x0000;
     PG3SPCI     = 0x0000;
+#if FEATURE_HW_OVERCURRENT && (OC_PROTECT_MODE == 0 || OC_PROTECT_MODE == 2) && OC_CLPCI_ENABLE
     PG3LEB      = 0x0000;
+    PG3LEBbits.PHR = 1;
+    PG3LEBbits.PHF = 1;
+    PG3LEBbits.PLR = 1;
+    PG3LEBbits.PLF = 1;
+    PG3LEBbits.LEB = OC_LEB_COUNTS;
+#else
+    PG3LEB      = 0x0000;
+#endif
 
     PG3PHASEbits.PHASE = MIN_DUTY;
     PG3DCbits.DC = MIN_DUTY;
@@ -629,5 +662,31 @@ void HAL_PWM_ReleaseAllOverrides(void)
     PG2IOCONbits.OVRENL = 0;
     PG1IOCONbits.OVRENH = 0;
     PG1IOCONbits.OVRENL = 0;
+}
+
+void HAL_PWM_ReleaseFloatPhase(uint8_t step)
+{
+    switch (commutationTable[step].floatingPhase)
+    {
+        case 0: PG1IOCONbits.OVRENH = 0; PG1IOCONbits.OVRENL = 0; break;
+        case 1: PG2IOCONbits.OVRENH = 0; PG2IOCONbits.OVRENL = 0; break;
+        case 2: PG3IOCONbits.OVRENH = 0; PG3IOCONbits.OVRENL = 0; break;
+    }
+}
+
+void HAL_PWM_FloatPhaseToHiZ(uint8_t step)
+{
+    switch (commutationTable[step].floatingPhase)
+    {
+        case 0:
+            PG1IOCONbits.OVRDAT = 0b00;
+            PG1IOCONbits.OVRENH = 1; PG1IOCONbits.OVRENL = 1; break;
+        case 1:
+            PG2IOCONbits.OVRDAT = 0b00;
+            PG2IOCONbits.OVRENH = 1; PG2IOCONbits.OVRENL = 1; break;
+        case 2:
+            PG3IOCONbits.OVRDAT = 0b00;
+            PG3IOCONbits.OVRENH = 1; PG3IOCONbits.OVRENL = 1; break;
+    }
 }
 #endif

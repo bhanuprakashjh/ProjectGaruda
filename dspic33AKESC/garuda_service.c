@@ -52,6 +52,22 @@ static uint8_t msSubCounter = 0;
 /* File-scope statics for ZC — only accessed from ADC ISR, NOT Timer1 ISR */
 static uint16_t adcIsrTick = 0;
 static ESC_STATE_T prevAdcState = ESC_IDLE;
+
+#if FEATURE_SINE_STARTUP
+/* Helper macro: write trap duties for active/float/low phases.
+ * Uses virtual neutral (midpoint of active and low) for float phase. */
+#define MORPH_WRITE_TRAP_DUTIES(step, activeDuty) do { \
+    uint32_t _tf = ((activeDuty) + MIN_DUTY) / 2; \
+    const COMMUTATION_STEP_T *_s = &commutationTable[(step)]; \
+    uint32_t _dA = (_s->phaseA == PHASE_PWM_ACTIVE) ? (activeDuty) : \
+                   (_s->phaseA == PHASE_FLOAT) ? _tf : MIN_DUTY; \
+    uint32_t _dB = (_s->phaseB == PHASE_PWM_ACTIVE) ? (activeDuty) : \
+                   (_s->phaseB == PHASE_FLOAT) ? _tf : MIN_DUTY; \
+    uint32_t _dC = (_s->phaseC == PHASE_PWM_ACTIVE) ? (activeDuty) : \
+                   (_s->phaseC == PHASE_FLOAT) ? _tf : MIN_DUTY; \
+    HAL_PWM_SetDutyCycle3Phase(_dA, _dB, _dC); \
+} while(0)
+#endif
 #endif
 
 /**
@@ -169,28 +185,41 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
      * rapid duty transients.  Threshold tracks UP fast (motor accelerating,
      * BEMF rising) but DOWN slowly (motor coasting, BEMF stays high).
      * Rise: tau ~0.33ms (8 ticks).  Fall: tau ~10.7ms (256 ticks). */
+    static uint16_t zcThreshSmooth = 0;
     {
-        static uint16_t zcThreshSmooth = 0;
         uint16_t rawThresh = (uint16_t)(
             ((uint32_t)garudaData.vbusRaw * garudaData.duty) >> ZC_DUTY_THRESHOLD_SHIFT);
 
         if (garudaData.state == ESC_CLOSED_LOOP
 #if FEATURE_SINE_STARTUP
             || (garudaData.state == ESC_MORPH
-                && garudaData.morph.subPhase == MORPH_HIZ)
+                && (garudaData.morph.subPhase == MORPH_HIZ
+                    || garudaData.morph.subPhase == MORPH_WINDOWED_HIZ))
 #endif
            )
         {
             if (prevAdcState != ESC_CLOSED_LOOP
 #if FEATURE_SINE_STARTUP
                 && !(garudaData.state == ESC_MORPH
-                     && garudaData.morph.subPhase == MORPH_HIZ
+                     && (garudaData.morph.subPhase == MORPH_HIZ
+                         || garudaData.morph.subPhase == MORPH_WINDOWED_HIZ)
                      && prevAdcState == ESC_MORPH)
 #endif
                )
             {
-                zcThreshSmooth = rawThresh;  /* Seed on CL entry */
+                zcThreshSmooth = rawThresh;
             }
+#if FEATURE_SINE_STARTUP
+            /* Guardrail #7: only consume in windowed context — stale flag
+             * from a prior run can't accidentally reseed during normal CL. */
+            else if (garudaData.morph.forceThreshSeed
+                     && garudaData.state == ESC_MORPH
+                     && garudaData.morph.subPhase == MORPH_WINDOWED_HIZ)
+            {
+                zcThreshSmooth = rawThresh;
+                garudaData.morph.forceThreshSeed = false;
+            }
+#endif
             else if (rawThresh >= zcThreshSmooth)
             {
                 /* Rising — track fast (tau ~8 ticks = 0.33ms) */
@@ -324,7 +353,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
     /* Count CLPCI activity via CLEVT latched event flags.
      * Poll all 3 generators — active PWM phase rotates with commutation.
      * Coarse counter: one 41.7us ADC tick may collapse multiple chop events. */
-#if OC_PROTECT_MODE == 0 || OC_PROTECT_MODE == 2
+#if (OC_PROTECT_MODE == 0 || OC_PROTECT_MODE == 2) && OC_CLPCI_ENABLE
     if (PCI_CLIMIT_EVT_PG1 || PCI_CLIMIT_EVT_PG2 || PCI_CLIMIT_EVT_PG3)
     {
         garudaData.clpciTripCount++;
@@ -411,43 +440,209 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                 {
                     if (garudaData.morph.alpha >= 256)
                     {
-                        /* Convergence complete → enter Hi-Z sub-phase */
+                        /* Convergence complete → enter Windowed Hi-Z */
                         garudaData.morph.alpha = 256;
-                        garudaData.morph.subPhase = MORPH_HIZ;
+                        garudaData.morph.subPhase = MORPH_WINDOWED_HIZ;
                         garudaData.morph.sectorCount = 0;
+                        garudaData.morph.tickInStep = 0;
+                        garudaData.morph.floatIsHiZ = false;
+                        garudaData.morph.morphZcCount = 0;
+                        garudaData.morph.forceThreshSeed = true;
                         garudaData.sine.active = false;
 
-                        /* Apply 6-step overrides */
+                        /* Apply 6-step via commutation module, then release float */
                         COMMUTATION_ApplyStep(&garudaData,
                                               garudaData.morph.morphStep);
+                        HAL_PWM_ReleaseFloatPhase(garudaData.currentStep);
 
-                        /* Set trap duty */
+                        /* Trap duty for active phase */
                         uint32_t td = ((uint32_t)garudaData.sine.amplitude
                             * SINE_TRAP_DUTY_NUM + SINE_TRAP_DUTY_DEN / 2)
                             / SINE_TRAP_DUTY_DEN;
                         if (td < MIN_DUTY) td = MIN_DUTY;
                         if (td > RAMP_DUTY_CAP) td = RAMP_DUTY_CAP;
                         garudaData.duty = td;
-                        HAL_PWM_SetDutyCycle(garudaData.duty);
 
-                        /* Initialize timing for forced commutation in Hi-Z.
-                         * Dynamic bounds from actual rampStepPeriod. */
+                        /* Float driven at trapFloat — virtual neutral */
+                        uint32_t trapFloat = (td + MIN_DUTY) / 2;
+                        const COMMUTATION_STEP_T *s =
+                            &commutationTable[garudaData.currentStep];
+                        uint32_t dA = (s->phaseA == PHASE_PWM_ACTIVE) ? td :
+                                      (s->phaseA == PHASE_FLOAT) ? trapFloat : MIN_DUTY;
+                        uint32_t dB = (s->phaseB == PHASE_PWM_ACTIVE) ? td :
+                                      (s->phaseB == PHASE_FLOAT) ? trapFloat : MIN_DUTY;
+                        uint32_t dC = (s->phaseC == PHASE_PWM_ACTIVE) ? td :
+                                      (s->phaseC == PHASE_FLOAT) ? trapFloat : MIN_DUTY;
+                        HAL_PWM_SetDutyCycle3Phase(dA, dB, dC);
+
+                        /* Seed forced timing + snapshot */
                         uint16_t handoff =
                             TIMER1_TO_ADC_TICKS(garudaData.rampStepPeriod);
-                        uint16_t initPeriod = handoff;
-                        garudaData.timing.stepPeriod = initPeriod;
-                        garudaData.timing.forcedCountdown = initPeriod;
+                        garudaData.timing.stepPeriod = handoff;
+                        garudaData.timing.forcedCountdown = handoff;
+                        garudaData.morph.stepPeriodSnap = handoff;
 
-                        /* Initialize ZC detection */
-                        BEMF_ZC_Init(&garudaData, initPeriod);
+                        BEMF_ZC_Init(&garudaData, handoff);
                         BEMF_ZC_OnCommutation(&garudaData, adcIsrTick);
-                        garudaData.bemf.ad2SettleCount = ZC_AD2_SETTLE_SAMPLES;
                     }
+                }
+            }
+            else if (garudaData.morph.subPhase == MORPH_WINDOWED_HIZ)
+            {
+                static const uint8_t windowSchedule[] = MORPH_WINDOW_SCHEDULE;
+
+                garudaData.morph.tickInStep++;
+
+                /* --- Window bounds from SNAPSHOT period --- */
+                uint8_t schedIdx = garudaData.morph.sectorCount;
+                if (schedIdx >= MORPH_WINDOW_SECTORS)
+                    schedIdx = MORPH_WINDOW_SECTORS - 1;
+                uint8_t pct = windowSchedule[schedIdx];
+                uint16_t sp = garudaData.morph.stepPeriodSnap;
+                uint16_t width = (uint16_t)(((uint32_t)sp * pct + 50) / 100);
+
+                /* fix #4: enforce minimum absolute window width */
+                if (width < MORPH_WINDOW_MIN_TICKS && pct < 100)
+                    width = MORPH_WINDOW_MIN_TICKS;
+                if (width > sp)
+                    width = sp;
+
+                uint16_t winOpen = (sp - width) / 2;
+                uint16_t winClose = winOpen + width;
+
+                /* --- Window state transitions --- */
+                bool inWindow = (garudaData.morph.tickInStep >= winOpen
+                              && garudaData.morph.tickInStep < winClose);
+
+                /* At 100%, keep Hi-Z for entire step — no window-close */
+                if (pct >= 100)
+                    inWindow = true;
+
+                bool justOpenedWindow = false;
+
+                if (inWindow && !garudaData.morph.floatIsHiZ)
+                {
+                    HAL_PWM_FloatPhaseToHiZ(garudaData.currentStep);
+                    garudaData.morph.floatIsHiZ = true;
+                    garudaData.bemf.ad2SettleCount = ZC_AD2_SETTLE_SAMPLES;
+                    justOpenedWindow = true;
+                }
+                else if (!inWindow && garudaData.morph.floatIsHiZ)
+                {
+                    HAL_PWM_ReleaseFloatPhase(garudaData.currentStep);
+                    garudaData.morph.floatIsHiZ = false;
+                }
+
+                /* --- OC limiter BEFORE duty write --- */
+#if FEATURE_HW_OVERCURRENT
+                if (garudaData.ibusRaw > OC_SW_LIMIT_ADC)
+                {
+                    uint16_t excess = garudaData.ibusRaw - OC_SW_LIMIT_ADC;
+                    uint16_t range = OC_CMP3_DAC_VAL - OC_SW_LIMIT_ADC;
+                    if (range == 0) range = 1;
+                    uint32_t reduction = ((uint32_t)excess
+                        * (garudaData.duty - MIN_DUTY)) / range;
+                    if (reduction >= garudaData.duty - MIN_DUTY)
+                        garudaData.duty = MIN_DUTY;
+                    else
+                        garudaData.duty -= reduction;
+                }
+#endif
+
+                /* --- Duty write EVERY tick (after OC) --- */
+                if (garudaData.morph.floatIsHiZ)
+                    HAL_PWM_SetDutyCycle(garudaData.duty);
+                else
+                    MORPH_WRITE_TRAP_DUTIES(garudaData.currentStep, garudaData.duty);
+
+                /* --- BEMF polling inside Hi-Z window (skip open tick) --- */
+                if (garudaData.morph.floatIsHiZ && !justOpenedWindow)
+                {
+                    bool wasDetected = garudaData.bemf.zeroCrossDetected;
+                    uint8_t spacing = garudaData.timing.stepsSinceLastZc;
+                    BEMF_ZC_Poll(&garudaData, adcIsrTick);
+                    bool newZcThisTick = (!wasDetected
+                        && garudaData.bemf.zeroCrossDetected);
+
+                    if (newZcThisTick)
+                    {
+                        garudaData.morph.morphZcCount++;
+                        if (garudaData.morph.morphZcCount >= 2 && spacing == 1)
+                        {
+                            uint16_t measured = (uint16_t)(adcIsrTick
+                                - garudaData.morph.lastZcTick);
+                            uint16_t mHandoff =
+                                TIMER1_TO_ADC_TICKS(garudaData.rampStepPeriod);
+                            if (measured < mHandoff) measured = mHandoff;
+                            uint16_t maxM = mHandoff + (mHandoff >> 1);
+                            if (measured > maxM) measured = maxM;
+                            int32_t delta = (int32_t)measured
+                                - (int32_t)garudaData.timing.stepPeriod;
+                            garudaData.timing.stepPeriod = (uint16_t)(
+                                (int32_t)garudaData.timing.stepPeriod
+                                + (delta >> 3));
+                        }
+                        garudaData.morph.lastZcTick = adcIsrTick;
+                    }
+                }
+
+                /* --- Forced commutation --- */
+                if (garudaData.timing.forcedCountdown > 0)
+                    garudaData.timing.forcedCountdown--;
+
+                if (garudaData.timing.forcedCountdown == 0)
+                {
+                    /* fix #1: detect terminal sector BEFORE touching overrides.
+                     * On terminal step, go straight to MORPH_HIZ with Hi-Z
+                     * intact — no driven→Hi-Z transient on the float phase. */
+                    bool isTerminal =
+                        (garudaData.morph.sectorCount + 1 >= MORPH_WINDOW_SECTORS);
+
+                    COMMUTATION_AdvanceStep(&garudaData);
+                    /* AdvanceStep → ApplyStep sets float to Hi-Z via
+                     * SetCommutationStep. On non-terminal steps: release
+                     * float to driven for next window. On terminal step:
+                     * KEEP Hi-Z (skip release + driven write). */
+
+                    if (!isTerminal)
+                    {
+                        HAL_PWM_ReleaseFloatPhase(garudaData.currentStep);
+                        MORPH_WRITE_TRAP_DUTIES(garudaData.currentStep,
+                                                garudaData.duty);
+                        garudaData.morph.floatIsHiZ = false;
+                    }
+                    /* else: float stays Hi-Z from AdvanceStep → ApplyStep */
+
+                    garudaData.morph.tickInStep = 0;
+                    garudaData.timing.forcedCountdown =
+                        garudaData.timing.stepPeriod;
+                    garudaData.morph.stepPeriodSnap =
+                        garudaData.timing.stepPeriod;
+                    garudaData.morph.sectorCount++;
+
+                    BEMF_ZC_OnCommutation(&garudaData, adcIsrTick);
+
+                    /* --- Schedule complete → enter full MORPH_HIZ --- */
+                    if (garudaData.morph.sectorCount >= MORPH_WINDOW_SECTORS)
+                    {
+                        garudaData.morph.subPhase = MORPH_HIZ;
+                        garudaData.morph.sectorCount = 0;
+                        garudaData.morph.floatIsHiZ = true; /* fix #5 */
+                        HAL_PWM_SetDutyCycle(garudaData.duty);
+                    }
+                }
+
+                /* Staleness decay */
+                if (garudaData.timing.stepsSinceLastZc > ZC_STALENESS_LIMIT)
+                {
+                    garudaData.timing.goodZcCount = 0;
+                    garudaData.timing.risingZcWorks = false;
+                    garudaData.timing.fallingZcWorks = false;
                 }
             }
             else /* MORPH_HIZ */
             {
-                /* Sub-phase B: real 6-step, BEMF on float phase */
+                /* Sub-phase C: real 6-step, BEMF on float phase */
                 bool wasDetected = garudaData.bemf.zeroCrossDetected;
                 uint8_t spacing = garudaData.timing.stepsSinceLastZc;
                 BEMF_ZC_Poll(&garudaData, adcIsrTick);
@@ -1080,6 +1275,34 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
 #endif
                 }
 
+                /* Plausibility stall check: if stepPeriodHR is at the IIR
+                 * floor (motor apparently at max eRPM) but duty is low,
+                 * the motor is physically stalled and HWZC is tracking PWM
+                 * switching noise. Debounced to avoid false triggers during
+                 * brief transients. Gated on zcSynced to skip post-handoff. */
+                {
+                    static uint16_t hwzcStallCount = 0;
+                    if (prevAdcState != ESC_CLOSED_LOOP)
+                        hwzcStallCount = 0;
+
+                    if (garudaData.hwzc.stepPeriodHR <= HWZC_MIN_STEP_TICKS
+                        && garudaData.duty < HWZC_STALL_DUTY_LIMIT
+                        && garudaData.timing.zcSynced)
+                    {
+                        if (++hwzcStallCount >= HWZC_STALL_DEBOUNCE_TICKS)
+                        {
+                            garudaData.hwzc.goodZcCount = 0;
+                            garudaData.hwzc.dbgLatchDisable = true;
+                            HWZC_Disable(&garudaData);
+                            hwzcStallCount = 0;
+                        }
+                    }
+                    else
+                    {
+                        hwzcStallCount = 0;
+                    }
+                }
+
 #if FEATURE_BEMF_INTEGRATION
                 /* Read-only observer: keep shadow integration warm (Rule 11) */
                 {
@@ -1331,9 +1554,11 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
                 garudaData.armCounter++;
                 if (garudaData.armCounter >= ARM_TIME_COUNTS)
                 {
-                    /* Armed successfully — transition to ALIGN */
-                    garudaData.state = ESC_ALIGN;
+                    /* Armed successfully — transition to ALIGN.
+                     * Init before state change: ADC ISR (prio 6) can
+                     * preempt Timer1 (prio 5) between the two lines. */
                     STARTUP_Init(&garudaData);
+                    garudaData.state = ESC_ALIGN;
                     LED2 = 1; /* Motor running indicator */
                 }
             }
@@ -1437,8 +1662,8 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
                     garudaData.throttle >= ARM_THROTTLE_ZERO_ADC)
                 {
                     garudaData.desyncRestartAttempts++;
-                    garudaData.state = ESC_ALIGN;
                     STARTUP_Init(&garudaData);
+                    garudaData.state = ESC_ALIGN;
                     LED2 = 1;
                 }
                 else if (garudaData.throttle < ARM_THROTTLE_ZERO_ADC)

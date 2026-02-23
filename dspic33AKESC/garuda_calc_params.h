@@ -240,6 +240,25 @@ _Static_assert(SINE_RAMP_MODULATION_PCT >= 5 && SINE_RAMP_MODULATION_PCT <= 80,
                "SINE_RAMP_MODULATION_PCT out of range");
 _Static_assert(SINE_PHASE_OFFSET_DEG < 360,
                "SINE_PHASE_OFFSET_DEG must be 0-359");
+
+/* Window schedule validation */
+_Static_assert(MORPH_WINDOW_SECTORS >= 1,
+               "Need at least 1 windowed sector");
+_Static_assert(MORPH_WINDOW_SECTORS < MORPH_HIZ_MAX_SECTORS,
+               "Window sectors must leave room for HIZ confidence gate");
+
+/* Verify schedule array length matches MORPH_WINDOW_SECTORS */
+_Static_assert(sizeof((const uint8_t[])MORPH_WINDOW_SCHEDULE)
+               == MORPH_WINDOW_SECTORS,
+               "MORPH_WINDOW_SCHEDULE length must match MORPH_WINDOW_SECTORS");
+
+/* Final schedule entry must be 100% (full Hi-Z) — validated via named macro */
+_Static_assert(MORPH_WINDOW_PCT_4 == 100,
+               "Last MORPH_WINDOW_PCT entry must be 100 (full Hi-Z)");
+
+/* Min window must leave room for sensing after overhead */
+_Static_assert(MORPH_WINDOW_MIN_TICKS >= 5,
+               "Min window too small for settle+init+open-skip overhead");
 #endif
 
 /* Phase F: ADC Comparator ZC dependency guard and derived constants */
@@ -269,6 +288,20 @@ _Static_assert(SINE_PHASE_OFFSET_DEG < 360,
 /* Minimum step period in SCCP2 ticks at MAX_CLOSED_LOOP_ERPM */
 #define HWZC_MIN_STEP_TICKS     HWZC_ERPM_TO_TICKS(MAX_CLOSED_LOOP_ERPM)
 
+/* Noise rejection stall limit: if noiseRejectCount reaches this value since
+ * HWZC_Enable, the ZC events are dominated by PWM switching noise (stalled
+ * motor). Normal operation produces 0 rejects. Stall produces ~17% reject
+ * rate at ~3k events/sec → 500 rejects in ~1s. Value must be large enough
+ * to survive the morph→CL startup transient (~600 commutations). */
+#define HWZC_NOISE_REJECT_LIMIT 500
+
+/* Absolute floor for interval rejection filter (SCCP2 ticks).
+ * Prevents IIR cascade: even if stepPeriodHR converges to HWZC_MIN_STEP_TICKS,
+ * the interval filter never drops below this floor. Must be between PWM noise
+ * interval (4167 ticks at 24kHz) and HWZC_MIN_STEP_TICKS. 2/3 of min step
+ * rejects PWM noise while still accepting ZCs at MAX_CLOSED_LOOP_ERPM. */
+#define HWZC_NOISE_FLOOR_TICKS  (HWZC_MIN_STEP_TICKS * 2 / 3)
+
 /* Crossover step period threshold (SCCP2 ticks) */
 #define HWZC_CROSSOVER_TICKS    HWZC_ERPM_TO_TICKS(HWZC_CROSSOVER_ERPM)
 
@@ -276,6 +309,10 @@ _Static_assert(SINE_PHASE_OFFSET_DEG < 360,
  * FCY / sample_rate = ticks per trigger pulse.
  * At 1 MHz: 100000000 / 1000000 = 100 ticks = 1us between conversions. */
 #define HWZC_SCCP3_PERIOD       (HWZC_TIMER_HZ / HWZC_ADC_SAMPLE_HZ)
+
+/* Stall plausibility: duty limit and debounce in ADC ISR ticks */
+#define HWZC_STALL_DUTY_LIMIT   (uint32_t)((uint64_t)MAX_DUTY * HWZC_STALL_DUTY_PCT / 100)
+#define HWZC_STALL_DEBOUNCE_TICKS (uint16_t)(HWZC_STALL_DEBOUNCE_MS * PWMFREQUENCY_HZ / 1000)
 
 _Static_assert(HWZC_SCCP3_PERIOD >= 21,
                "SCCP3 period too short (ADC needs ~205ns = 21 ticks at 100MHz)");
@@ -298,6 +335,12 @@ _Static_assert(HWZC_BLANKING_PERCENT >= 1 && HWZC_BLANKING_PERCENT <= 20,
     ((uint32_t)(ma) * OC_SHUNT_MOHM * OC_GAIN_X100 / 100000))
 #define OC_MV_TO_COUNTS(mv) ((uint16_t)((uint32_t)(mv) * 4096 / OC_VADC_MV))
 #define OC_BIAS_COUNTS       OC_MV_TO_COUNTS(OC_VREF_MV)
+
+/* Leading-edge blanking register value for PGxLEBbits.LEB bitfield.
+ * Unlike DTH (full 16-bit register, bits 3:0 unused → formula has *16),
+ * LEB is a 12-bit bitfield (bits 15:4) — compiler positions it, so the
+ * value IS the PWM clock count directly. Max 4095 = 10.2us @ 400MHz. */
+#define OC_LEB_COUNTS       (uint16_t)(OC_LEB_BLANKING_NS / 1000.0f * PWM_CLOCK_MHZ)
 
 /* CMP3/DAC3 operational threshold — active after ZC sync.
  * Mode only changes which PCI target CMP3 drives (CLPCI vs FPCI). */
