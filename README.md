@@ -8,19 +8,23 @@
 
 ## Current Status
 
-**Motor runs stable closed-loop across the full speed range with zero desyncs. Sinusoidal V/f startup with waveform morphing enables reliable prop-loaded startup on the A2212 1400KV drone motor. Hardware-accelerated ZC detection via ADC digital comparator at 1 MHz with 4x oversampling. Three-level hardware overcurrent protection via CMP3 CLPCI chopping + software soft limiter + board FPCI backup.**
+**Motor runs stable closed-loop across the full speed range with zero desyncs. Sinusoidal V/f startup with waveform morphing enables reliable prop-loaded startup on the A2212 1400KV drone motor. Hardware-accelerated ZC detection via ADC digital comparator at 1 MHz with 4x oversampling. Three-level hardware overcurrent protection via CMP3 CLPCI chopping + software soft limiter + board FPCI backup. WebSerial GUI configurator with live telemetry scope, 31 runtime-tunable parameters, and motor profile switching.**
 
 | Metric | Value |
 |--------|-------|
-| **Program flash** | ~20 KB (15%) of 128 KB |
-| **Data RAM** | ~338 bytes (2%) of 16 KB |
-| **Source files** | 24 source, 27 headers |
+| **Program flash** | ~24 KB (19%) of 128 KB |
+| **Data RAM** | ~600 bytes (4%) of 16 KB |
+| **Source files** | 30 source, 33 headers |
 | **Speed range** | 1,300 - 18,500 eRPM (Hurst), idle - 120,000 eRPM (A2212) |
 | **HW ZC detections** | 80,000+ total, 0 misses (0.000%) |
 | **Desyncs in testing** | 0 |
 | **Motors tested** | Hurst DMB0224C10002 (10-pole, 24V), A2212 1400KV (14-pole, 12V) |
 | **Prop-loaded startup** | Verified: A2212 + 8x4.5 prop at 12V, 5A supply |
 | **Dev board** | MCLV-48V-300W (Microchip) |
+| **Runtime parameters** | 31 params, 8 groups, 3 motor profiles + custom |
+| **GUI** | WebSerial (Chrome/Edge), React + TypeScript |
+| **Protocol** | GSP v2, CRC-16-CCITT, 115200 baud |
+| **GSP test suite** | 20/20 tests, 243 cmd/s, 0 failures |
 
 ### Implemented Phases
 
@@ -35,6 +39,9 @@
 | **Phase E** | BEMF integration shadow estimator (validation mode) | HW verified |
 | **Phase F** | ADC digital comparator high-speed ZC (1 MHz, 4x oversampling) | HW verified |
 | **Phase G** | Hardware overcurrent protection (CMP3 CLPCI + SW soft limiter) | HW verified |
+| **GSP P0** | Binary serial protocol over UART1 (ping, info, snapshot) | HW verified |
+| **GSP P1** | Runtime params, motor control, throttle mux, telemetry streaming, WebSerial GUI | HW verified |
+| **GSP P1.5** | 31 params, motor profiles, V2 protocol, profile editor, live scope GUI | HW verified |
 
 ---
 
@@ -270,6 +277,86 @@ Three-level overcurrent protection using the on-board CMP3 comparator, OA3 curre
 
 **Feature flag**: `FEATURE_HW_OVERCURRENT`. Setting to 0 removes all CMP3/OC code. Board FPCI backup remains active regardless.
 
+### GSP — Garuda Serial Protocol & WebSerial GUI
+
+Binary serial protocol over UART1 for real-time telemetry, parameter configuration, motor control, and a browser-based configurator GUI.
+
+**Protocol (GSP v2):**
+- Wire format: `[0x02][LEN][CMD][PAYLOAD][CRC16_H][CRC16_L]`
+- CRC-16-CCITT (poly=0x1021, init=0xFFFF) over LEN+CMD+PAYLOAD
+- 115200 baud, 8N1 over UART1 (polled TX/RX with 256-byte ring buffers)
+- 18 commands: PING, GET_INFO, GET_SNAPSHOT, START/STOP_MOTOR, CLEAR_FAULT, SET_THROTTLE, SET_THROTTLE_SRC, HEARTBEAT, GET/SET_PARAM, SAVE_CONFIG, LOAD_DEFAULTS, TELEM_START/STOP, GET_PARAM_LIST, LOAD_PROFILE
+- Paginated GET_PARAM_LIST: 12 bytes/entry (u16 id, u8 type, u8 group, u32 min, u32 max), 20 entries/page
+- 50 Hz streaming telemetry (68-byte snapshots) with 200 ms heartbeat keepalive
+- Error responses with 8 named error codes (unknown cmd, bad length, busy, wrong state, out of range, unknown param, cross-validation, EEPROM cooldown)
+
+**Runtime Parameters (31 params, 8 groups):**
+
+| Group | Parameters |
+|-------|-----------|
+| Startup & Ramp | rampTargetErpm, rampAccelErpmPerS, rampDutyPct, alignDutyPct, initialErpm, sineAlignModPct, sineRampModPct |
+| Closed-Loop Control | clIdleDutyPct, timingAdvMaxDeg, hwzcCrossoverErpm, maxClosedLoopErpm, zcDemagDutyThresh, zcDemagBlankExtraPct |
+| Current Protection | ocSwLimitMa, ocFaultMa, ocLimitMa, ocStartupMa, rampCurrentGateMa |
+| ZC Detection | zcBlankingPercent, zcAdcDeadband, zcSyncThreshold, zcFilterThreshold |
+| Duty Slew | dutySlewUpPctPerMs, dutySlewDownPctPerMs, postSyncSettleMs, postSyncSlewDivisor |
+| Voltage Protection | vbusOvAdc, vbusUvAdc |
+| Recovery | desyncCoastMs, desyncMaxRestarts |
+| Motor Hardware | motorPolePairs |
+
+**Motor Profiles:**
+- 3 built-in profiles: Hurst DMB0224C10002, A2212 1400KV, 5010 750KV
+- 1 custom profile: user-defined values saved to EEPROM
+- LOAD_PROFILE command atomically loads all 31 params from profile defaults
+- Individual params editable after profile load, SAVE_CONFIG persists to EEPROM V2
+
+**Cross-Validation (10 bilateral checks):**
+All parameter changes are validated at runtime: ramp ordering (initialErpm < rampTargetErpm < maxClosedLoopErpm), OC chain (ocSwLimitMa < ocLimitMa <= ocFaultMa, ocStartupMa >= ocLimitMa), ZC thresholds (zcFilterThreshold < zcSyncThreshold >= 4), voltage ordering (vbusOvAdc > vbusUvAdc), current gate bounds. Invalid values return ERR_CROSS_VALIDATION.
+
+**EEPROM V2 Persistence:**
+48-byte packed struct with schema marker (0xA2), active profile ID, all 31 params. V1 backward compatibility: schema 0xA1 loads 8 Stage 1 params, 23 new params get profile defaults. SanitizeLoadedParams() bounds-checks all values and cross-validates; FallbackToProfileDefaults() on any failure.
+
+**Dual-path RT_* Architecture:**
+26 `RT_*` macros in `garuda_calc_params.h` map to either `gspParams.*` (runtime, when `FEATURE_GSP=1`) or compile-time constants (when `FEATURE_GSP=0`). ~65 ISR sites across garuda_service.c, bemf_zc.c, startup.c, and hwzc.c wired to RT_* macros. FEATURE_GSP=0 build is zero-overhead — identical to pre-GSP firmware.
+
+**Feature flags**: `FEATURE_GSP` (protocol + runtime params), `FEATURE_X2CSCOPE` (Microchip X2CScope — mutually exclusive with GSP, shares UART1).
+
+### WebSerial GUI Configurator
+
+Browser-based ESC configuration and monitoring tool using the WebSerial API (Chrome/Edge).
+
+**Stack:** React 18 + TypeScript + Zustand (state) + Recharts (charts) + Vite (build)
+
+**Features:**
+- **Connection management**: WebSerial connect/disconnect, auto-discovery (PING → GET_INFO → GET_PARAM_LIST → bulk GET_PARAM), stale telemetry cleanup on connect
+- **Live gauges**: eRPM arc gauge, Vbus (V), Ibus (A) with peak tracking, duty %, mechanical RPM from pole pairs
+- **Stale data detection**: gauges dim with STALE badge when telemetry inactive >2s
+- **Live scope** (X2CScope-like): 21 selectable channels in 6 groups (Motor, Power, BEMF & ZC, HWZC, Morph, Protection), color-coded toggles, dual Y-axis, live value readout, LIVE indicator
+- **Motor control**: Start/Stop/Clear Fault buttons, ADC/GSP throttle source toggle, 0-2000 GSP throttle slider
+- **Profile selector**: 4 profile cards (Hurst, A2212, 5010, Custom), click to load + open parameter editor
+- **Parameter editor modal**: full-screen overlay with all 31 params in 3-column grouped grid, inline editing with min/max validation, unsaved change indicators, Save to EEPROM / Restore Defaults
+- **Inline parameter panel**: quick-access parameter view below profiles
+- **Status panel**: color-coded ESC state, fault code, ZC sync/HWZC status, uptime, FW version, active profile
+- **Help & documentation**: collapsible panel with 12 ESC feature sections, hardware platform info, active feature flags display, protocol reference
+- **Toast notifications**: success/error/info with auto-dismiss
+- **Header**: Garuda logo, Microchip dsPIC33AK branding, FW/protocol/PWM info
+- **50 Hz telemetry streaming** with 200 ms heartbeat, 500-point rolling history
+
+**Running the GUI:**
+
+```bash
+cd gui
+npm install
+npm run dev
+# Open http://localhost:5173 in Chrome or Edge
+```
+
+**Python Test Tool:**
+
+```bash
+python3 tools/gsp_test.py /dev/ttyACM0
+# Runs 20 automated tests: protocol, params, profiles, cross-validation, stress
+```
+
 ---
 
 ## Feature Flags
@@ -288,12 +375,16 @@ All features are individually toggleable via compile-time flags in `garuda_confi
 #define FEATURE_BEMF_INTEGRATION 1  /* Phase E: Shadow integration */
 #define FEATURE_ADC_CMP_ZC       1  /* Phase F: ADC comparator high-speed ZC */
 #define FEATURE_HW_OVERCURRENT  1  /* Phase G: CMP3 CLPCI + SW OC protection */
+#define FEATURE_GSP             1  /* GSP: Serial protocol + runtime params (mutually exclusive with X2CSCOPE) */
+#define FEATURE_X2CSCOPE        0  /* Microchip X2CScope debug (mutually exclusive with GSP, shares UART1) */
+#define FEATURE_EEPROM_V2       1  /* EEPROM V2: 48-byte persistent param storage with V1 backward compat */
 ```
 
 Setting any flag to 0 completely removes that feature from the build (dead code elimination). Compile-time guards enforce dependencies:
 - `FEATURE_SINE_STARTUP` requires `FEATURE_BEMF_CLOSED_LOOP` (needs ZC for closed-loop transition)
 - `FEATURE_SINE_STARTUP` is incompatible with `DIAGNOSTIC_MANUAL_STEP` (conflicting PWM writes)
 - `FEATURE_ADC_CMP_ZC` requires `FEATURE_BEMF_CLOSED_LOOP` (hardware ZC extends the closed-loop path)
+- `FEATURE_GSP` and `FEATURE_X2CSCOPE` are mutually exclusive (both use UART1)
 
 ---
 
@@ -337,7 +428,7 @@ dspic33AKESC/
 │   ├── hal_comparator.c/.h       CMP1/2/3 with DAC (initialized, not in control loop)
 │   ├── board_service.c/.h        Peripheral init, button debounce, PWM enable/disable
 │   ├── timer1.c/.h               100us tick timer (prescaler 1:8, 100MHz clock)
-│   ├── uart1.c/.h                UART1 8N1 (for future GSP/debug)
+│   ├── uart1.c/.h                UART1 8N1 115200 baud (GSP protocol / X2CScope)
 │   └── delay.h                   Blocking delay using libpic30
 │
 ├── motor/
@@ -347,11 +438,48 @@ dspic33AKESC/
 │   ├── hwzc.c/.h                 Hardware ZC state machine (comparator + SCCP1 timer)
 │   └── pi.c/.h                   PI controller (from AN1292 reference)
 │
+├── gsp/
+│   ├── gsp.c/.h                  GSP protocol engine (RX parser, TX framer, CRC-16)
+│   ├── gsp_commands.c/.h         Command handlers (18 commands, cmdTable dispatch)
+│   ├── gsp_params.c/.h           31 runtime params, 3 profiles, cross-validation,
+│   │                             EEPROM V2 persistence, derived computation
+│   └── gsp_snapshot.c/.h         68-byte telemetry snapshot builder
+│
 └── learn/                        Self-learning modules (disabled, future use)
     ├── telemetry_ring.c/.h       Ring buffer for runtime telemetry
     ├── quality.c/.h              Signal quality scoring
     ├── health.c/.h               Motor health tracking
     └── adaptation.c/.h           Adaptive parameter tuning
+
+gui/                              WebSerial GUI configurator (React + TypeScript)
+├── src/
+│   ├── App.tsx                   Main layout (header, panels, footer, toasts)
+│   ├── index.css                 CSS variables, dark theme design system
+│   ├── main.tsx                  Entry point
+│   ├── store/useEscStore.ts      Zustand state (snapshot history, params, toasts)
+│   ├── protocol/
+│   │   ├── gsp.ts                Packet builder (buildPacket, CMD enum)
+│   │   ├── decode.ts             Response decoders (info, snapshot, params)
+│   │   ├── serial.ts             WebSerial port wrapper
+│   │   └── types.ts              31 param names/units/tooltips, 8 groups, profiles
+│   └── components/
+│       ├── ConnectionBar.tsx     Connect/disconnect, auto-discovery, telemetry
+│       ├── StatusPanel.tsx       ESC state, fault, ZC status, profile, uptime
+│       ├── GaugePanel.tsx        Arc gauges (eRPM, Vbus, Ibus, duty) + stale detection
+│       ├── ScopePanel.tsx        21-channel live scope (X2CScope-like)
+│       ├── ControlPanel.tsx      Start/Stop, throttle source toggle
+│       ├── ThrottleSlider.tsx    GSP throttle 0-2000 slider
+│       ├── ProfileSelector.tsx   4 profile cards + LOAD_PROFILE
+│       ├── ParamPanel.tsx        Inline grouped param view (8 groups)
+│       ├── ParamModal.tsx        Full-screen param editor modal
+│       └── HelpPanel.tsx         ESC feature docs, HW info, feature flags
+├── index.html
+├── package.json
+├── tsconfig.json
+└── vite.config.ts
+
+tools/
+└── gsp_test.py                   20-test automated GSP protocol test suite
 ```
 
 ---
@@ -551,13 +679,15 @@ EOF
 - **Phase E**: BEMF integration shadow estimator (validated, >99% accuracy at high speed)
 - **Phase F**: ADC digital comparator high-speed ZC (1 MHz SCCP3 trigger, 4x oversampling, 80K+ detections with zero misses)
 - **Phase G**: Hardware overcurrent protection (CMP3 CLPCI chopping + SW soft limiter + board FPCI backup)
+- **GSP P0**: Binary serial protocol over UART1 (ping, info, snapshot, 7/7 HW tests, 243 cmd/s)
+- **GSP P1**: Runtime params, motor control, throttle mux, telemetry streaming, WebSerial GUI
+- **GSP P1.5**: 31 runtime-tunable params, 3 motor profiles + custom, V2 protocol, profile editor, live scope GUI, 20/20 test suite
+- **EEPROM V2**: 48-byte persistent param storage with V1 backward compatibility and sanitization
 
 ### Future
 
 - **Hybrid Commutation** — Combine all 3 ZC methods: comparator triggers, integration validates, software ZC as fallback. "Comparator fires, integration confirms" architecture.
 - **DShot Protocol** (Phase 3) — DShot150/300/600/1200 decoding via Input Capture (ICM1 pin already mapped). Auto-rate detection, full command set (CMD 0-47), bidirectional DShot with GCR encoding.
-- **Garuda Serial Protocol (GSP)** — UART-based configuration and telemetry protocol. Web-based configurator using WebSerial API.
-- **64-byte EEPROM Config** — Persistent configuration storage with CRC-16 integrity check.
 - **Thermal Monitoring** — Linear duty derating based on temperature.
 - **Signal Loss Failsafe** — Auto-disarm on DShot signal loss.
 - **Motor Auto-Detection** — Measure resistance, inductance, and Ke at startup to auto-tune parameters.
