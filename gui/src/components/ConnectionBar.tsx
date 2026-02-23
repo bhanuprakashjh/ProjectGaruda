@@ -3,35 +3,124 @@ import { useEscStore } from '../store/useEscStore';
 import { SerialManager } from '../protocol/serial';
 import { GspParser, buildPacket, CMD } from '../protocol/gsp';
 import { decodeInfo, decodeSnapshot, decodeParamList, decodeParamValue } from '../protocol/decode';
+import type { ParamDescriptor, ParamListPage } from '../protocol/types';
 
 const serial = new SerialManager();
 let parser: GspParser;
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
 export function ConnectionBar() {
-  const { connected, setConnected, setInfo, pushSnapshot, setParams, setParamValue, setTelemActive, reset } = useEscStore();
+  const { connected, setConnected, setInfo, pushSnapshot, setParams, setParamValue, setActiveProfile, setTelemActive, addToast, reset } = useEscStore();
   const connectingRef = useRef(false);
+  const pendingParamPages = useRef<ParamDescriptor[]>([]);
+
+  const ERR_NAMES: Record<number, string> = {
+    0x01: 'Unknown command',
+    0x02: 'Bad length',
+    0x03: 'Busy',
+    0x04: 'Wrong state (motor must be idle)',
+    0x05: 'Value out of range',
+    0x06: 'Unknown parameter',
+    0x07: 'Cross-validation failed',
+    0x08: 'EEPROM cooldown',
+  };
+
+  /** Accumulate param list pages, commit to store only when all received */
+  const handleParamListPage = useCallback(async (page: ParamListPage) => {
+    if (page.startIndex === 0) {
+      pendingParamPages.current = [...page.entries];
+    } else {
+      pendingParamPages.current = [...pendingParamPages.current, ...page.entries];
+    }
+
+    const fetched = page.startIndex + page.entries.length;
+    if (fetched < page.totalCount) {
+      await serial.write(buildPacket(CMD.GET_PARAM_LIST, new Uint8Array([fetched])));
+    } else {
+      setParams(pendingParamPages.current);
+      pendingParamPages.current = [];
+
+      const allParams = useEscStore.getState().params;
+      for (const [id] of allParams) {
+        const buf = new Uint8Array(2);
+        buf[0] = id & 0xFF;
+        buf[1] = (id >> 8) & 0xFF;
+        await serial.write(buildPacket(CMD.GET_PARAM, buf));
+      }
+    }
+  }, [setParams]);
+
+  /** Re-fetch all param values (after profile load or defaults restore) */
+  const refetchAllParams = useCallback(async () => {
+    const allParams = useEscStore.getState().params;
+    for (const [id] of allParams) {
+      const buf = new Uint8Array(2);
+      buf[0] = id & 0xFF;
+      buf[1] = (id >> 8) & 0xFF;
+      await serial.write(buildPacket(CMD.GET_PARAM, buf));
+    }
+  }, []);
 
   const handlePacket = useCallback((cmdId: number, payload: Uint8Array) => {
     switch (cmdId) {
       case CMD.PING: break;
-      case CMD.GET_INFO: setInfo(decodeInfo(payload)); break;
+      case CMD.GET_INFO: {
+        const info = decodeInfo(payload);
+        setInfo(info);
+        break;
+      }
       case CMD.GET_SNAPSHOT: pushSnapshot(decodeSnapshot(payload)); break;
       case CMD.TELEM_FRAME: {
-        // seq(2) + snapshot(68)
         const snapData = payload.slice(2);
         pushSnapshot(decodeSnapshot(snapData));
         break;
       }
-      case CMD.GET_PARAM_LIST: setParams(decodeParamList(payload)); break;
+      case CMD.GET_PARAM_LIST: {
+        const page = decodeParamList(payload);
+        handleParamListPage(page);
+        break;
+      }
       case CMD.GET_PARAM:
       case CMD.SET_PARAM: {
         const { id, value } = decodeParamValue(payload);
         setParamValue(id, value);
+        if (cmdId === CMD.SET_PARAM) addToast(`Parameter updated`, 'success');
+        break;
+      }
+      case CMD.SAVE_CONFIG:
+        addToast('Parameters saved to EEPROM', 'success');
+        break;
+      case CMD.LOAD_DEFAULTS:
+        addToast('Defaults restored', 'info');
+        refetchAllParams();
+        break;
+      case CMD.LOAD_PROFILE: {
+        const profileId = payload.length > 0 ? payload[0] : 0;
+        setActiveProfile(profileId);
+        addToast(`Profile ${profileId} loaded`, 'success');
+        refetchAllParams();
+        break;
+      }
+      case CMD.START_MOTOR:
+        addToast('Motor starting', 'info');
+        break;
+      case CMD.STOP_MOTOR:
+        addToast('Motor stopped', 'info');
+        break;
+      case CMD.CLEAR_FAULT:
+        addToast('Fault cleared', 'info');
+        break;
+      case CMD.ERROR: {
+        const errCode = payload.length > 0 ? payload[0] : 0xFF;
+        let msg = ERR_NAMES[errCode] ?? `Error 0x${errCode.toString(16).toUpperCase()}`;
+        if (errCode === 0x08 && payload.length > 1) {
+          msg += ` (${payload[1]}s remaining)`;
+        }
+        addToast(msg, 'error');
         break;
       }
     }
-  }, [setInfo, pushSnapshot, setParams, setParamValue]);
+  }, [setInfo, pushSnapshot, setParams, setParamValue, setActiveProfile, addToast, handleParamListPage, refetchAllParams]);
 
   const connect = useCallback(async () => {
     if (connectingRef.current) return;
@@ -45,28 +134,21 @@ export function ConnectionBar() {
       await serial.connect();
       setConnected(true);
 
-      // Auto-discover
-      await serial.write(buildPacket(CMD.PING));
-      await serial.write(buildPacket(CMD.GET_INFO));
-      await serial.write(buildPacket(CMD.GET_PARAM_LIST));
-
-      // Read loop
       serial.startReading((data) => parser.feed(data)).catch(() => {
         disconnect();
       });
 
-      // Fetch initial param values after a short delay
-      setTimeout(async () => {
-        const paramIds = [0x15, 0x16, 0x17, 0x20, 0x22, 0x30, 0x42, 0x41];
-        for (const id of paramIds) {
-          const buf = new Uint8Array(2);
-          buf[0] = id & 0xFF;
-          buf[1] = (id >> 8) & 0xFF;
-          await serial.write(buildPacket(CMD.GET_PARAM, buf));
-        }
-      }, 200);
-    } catch (e) {
+      await serial.write(buildPacket(CMD.TELEM_STOP));
+      await new Promise(r => setTimeout(r, 150));
+      parser.reset();
+
+      await serial.write(buildPacket(CMD.PING));
+      await serial.write(buildPacket(CMD.GET_INFO));
+      await new Promise(r => setTimeout(r, 50));
+      await serial.write(buildPacket(CMD.GET_PARAM_LIST));
+    } catch (e: any) {
       console.error('Connect failed:', e);
+      alert('Connect failed: ' + (e?.message || e));
     } finally {
       connectingRef.current = false;
     }
@@ -82,7 +164,6 @@ export function ConnectionBar() {
   const startTelem = useCallback(async () => {
     await serial.write(buildPacket(CMD.TELEM_START, new Uint8Array([50])));
     setTelemActive(true);
-    // Start heartbeat
     if (heartbeatTimer) clearInterval(heartbeatTimer);
     heartbeatTimer = setInterval(async () => {
       try { await serial.write(buildPacket(CMD.HEARTBEAT)); } catch {}
@@ -97,26 +178,47 @@ export function ConnectionBar() {
 
   const telemActive = useEscStore(s => s.telemActive);
 
-  const barStyle: React.CSSProperties = {
-    display: 'flex', alignItems: 'center', gap: 12,
-    padding: '12px 16px', background: '#16213e', borderRadius: 8,
+  const btnBase: React.CSSProperties = {
+    padding: '6px 14px', borderRadius: 'var(--radius-sm)', border: 'none',
+    fontSize: 12, fontWeight: 600, letterSpacing: '0.3px',
   };
 
   return (
-    <div style={barStyle}>
-      <span style={{ fontWeight: 700, fontSize: 18 }}>Garuda ESC</span>
-      <div style={{ flex: 1 }} />
+    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
       {!connected ? (
-        <button onClick={connect}>Connect</button>
+        <button onClick={connect} style={{
+          ...btnBase, background: 'var(--accent-blue)', color: '#fff',
+        }}>
+          Connect
+        </button>
       ) : (
         <>
-          <span style={{ color: '#4ade80' }}>● Connected</span>
+          <div style={{
+            width: 7, height: 7, borderRadius: '50%',
+            background: 'var(--accent-green)',
+            boxShadow: '0 0 6px var(--accent-green)',
+          }} />
           {!telemActive ? (
-            <button onClick={startTelem}>Start Telemetry</button>
+            <button onClick={startTelem} style={{
+              ...btnBase, background: 'var(--accent-green-dim)',
+              color: 'var(--accent-green)', border: '1px solid rgba(34,197,94,0.3)',
+            }}>
+              Telemetry
+            </button>
           ) : (
-            <button onClick={stopTelem}>Stop Telemetry</button>
+            <button onClick={stopTelem} style={{
+              ...btnBase, background: 'var(--accent-red-dim)',
+              color: 'var(--accent-red)', border: '1px solid rgba(239,68,68,0.3)',
+            }}>
+              Stop Telem
+            </button>
           )}
-          <button onClick={disconnect}>Disconnect</button>
+          <button onClick={disconnect} style={{
+            ...btnBase, background: 'transparent',
+            color: 'var(--text-muted)', border: '1px solid var(--border)',
+          }}>
+            Disconnect
+          </button>
         </>
       )}
     </div>

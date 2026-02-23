@@ -116,6 +116,7 @@ export const CMD = {
   TELEM_START: 0x14,
   TELEM_STOP: 0x15,
   GET_PARAM_LIST: 0x16,
+  LOAD_PROFILE: 0x17,
   TELEM_FRAME: 0x80,
   ERROR: 0xFF,
 } as const;

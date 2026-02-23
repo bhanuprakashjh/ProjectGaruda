@@ -18,25 +18,58 @@ export function ControlPanel() {
     setThrottleSource(src);
   };
 
-  const btnStyle: React.CSSProperties = {
-    padding: '8px 16px', borderRadius: 4, border: 'none',
-    cursor: 'pointer', fontWeight: 600,
-  };
+  const btn = (bg: string, color: string, active = true): React.CSSProperties => ({
+    padding: '8px 18px', borderRadius: 'var(--radius-sm)', border: 'none',
+    cursor: active ? 'pointer' : 'default', fontWeight: 600, fontSize: 13,
+    background: active ? bg : 'var(--bg-input)',
+    color: active ? color : 'var(--text-muted)',
+    transition: 'all 0.15s',
+  });
+
+  const srcBtn = (src: 'ADC' | 'GSP'): React.CSSProperties => ({
+    padding: '5px 12px', borderRadius: 'var(--radius-sm)',
+    border: `1px solid ${throttleSource === src ? 'var(--accent-blue)' : 'var(--border)'}`,
+    background: throttleSource === src ? 'var(--accent-blue-dim)' : 'transparent',
+    color: throttleSource === src ? 'var(--accent-blue)' : 'var(--text-muted)',
+    fontSize: 12, fontWeight: 600, cursor: 'pointer',
+  });
 
   return (
-    <div style={{ background: '#16213e', borderRadius: 8, padding: 16, marginTop: 16, display: 'flex', gap: 12, alignItems: 'center', flexWrap: 'wrap' }}>
-      <button style={{ ...btnStyle, background: '#22c55e', color: '#000' }} disabled={!isIdle || !connected}
-        onClick={() => send(CMD.START_MOTOR)}>Start Motor</button>
-      <button style={{ ...btnStyle, background: '#ef4444', color: '#fff' }} disabled={!connected}
-        onClick={() => send(CMD.STOP_MOTOR)}>Stop Motor</button>
-      <button style={{ ...btnStyle, background: '#eab308', color: '#000' }} disabled={!isFault || !connected}
-        onClick={() => send(CMD.CLEAR_FAULT)}>Clear Fault</button>
-      <div style={{ marginLeft: 'auto', display: 'flex', gap: 8, alignItems: 'center' }}>
-        <span>Throttle:</span>
-        <button style={{ ...btnStyle, background: throttleSource === 'ADC' ? '#3b82f6' : '#333' }}
-          onClick={() => setSource('ADC')}>ADC</button>
-        <button style={{ ...btnStyle, background: throttleSource === 'GSP' ? '#3b82f6' : '#333' }}
-          disabled={!isIdle || !connected} onClick={() => setSource('GSP')}>GSP</button>
+    <div style={{
+      background: 'var(--bg-card)', borderRadius: 'var(--radius)',
+      padding: 16, border: '1px solid var(--border)',
+      display: 'flex', flexDirection: 'column', gap: 12,
+    }}>
+      <div style={{
+        fontSize: 13, color: 'var(--text-muted)', textTransform: 'uppercase',
+        letterSpacing: '1px',
+      }}>
+        Motor Control
+      </div>
+      <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+        <button style={btn('var(--accent-green)', '#000', isIdle && connected)}
+          disabled={!isIdle || !connected}
+          onClick={() => send(CMD.START_MOTOR)}>
+          Start
+        </button>
+        <button style={btn('var(--accent-red)', '#fff', connected)}
+          disabled={!connected}
+          onClick={() => send(CMD.STOP_MOTOR)}>
+          Stop
+        </button>
+        <button style={btn('var(--accent-yellow)', '#000', isFault && connected)}
+          disabled={!isFault || !connected}
+          onClick={() => send(CMD.CLEAR_FAULT)}>
+          Clear Fault
+        </button>
+        <div style={{ flex: 1 }} />
+        <div style={{ display: 'flex', gap: 4, alignItems: 'center' }}>
+          <span style={{ fontSize: 11, color: 'var(--text-muted)', marginRight: 4 }}>Throttle Src</span>
+          <button style={srcBtn('ADC')} onClick={() => setSource('ADC')}>ADC</button>
+          <button style={srcBtn('GSP')}
+            disabled={!isIdle || !connected}
+            onClick={() => setSource('GSP')}>GSP</button>
+        </div>
       </div>
     </div>
   );

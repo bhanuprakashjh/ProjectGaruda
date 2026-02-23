@@ -1,24 +1,129 @@
 import { useEscStore } from '../store/useEscStore';
-import { ESC_STATES, FAULT_CODES } from '../protocol/types';
+import { ESC_STATES, FAULT_CODES, PROFILE_NAMES } from '../protocol/types';
+
+const STATE_COLORS: Record<string, string> = {
+  IDLE: 'var(--text-muted)',
+  ARMED: 'var(--accent-yellow)',
+  ALIGN: 'var(--accent-orange)',
+  OL_RAMP: 'var(--accent-orange)',
+  MORPH: 'var(--accent-purple)',
+  CLOSED_LOOP: 'var(--accent-green)',
+  BRAKING: 'var(--accent-yellow)',
+  RECOVERY: 'var(--accent-yellow)',
+  FAULT: 'var(--accent-red)',
+};
 
 export function StatusPanel() {
-  const { snapshot, info } = useEscStore();
-  const state = snapshot ? ESC_STATES[snapshot.state] ?? 'UNKNOWN' : '—';
-  const fault = snapshot ? FAULT_CODES[snapshot.faultCode] ?? 'UNKNOWN' : '—';
+  const { snapshot, info, activeProfile, connected } = useEscStore();
+  const state = snapshot ? (ESC_STATES[snapshot.state] ?? 'UNKNOWN') : '\u2014';
+  const fault = snapshot ? (FAULT_CODES[snapshot.faultCode] ?? 'UNKNOWN') : '\u2014';
   const uptime = snapshot ? snapshot.uptimeSec : 0;
-  const fw = info ? `${info.fwMajor}.${info.fwMinor}.${info.fwPatch}` : '—';
+  const fw = info ? `${info.fwMajor}.${info.fwMinor}.${info.fwPatch}` : '\u2014';
+  const stateColor = STATE_COLORS[state] ?? 'var(--text-secondary)';
+  const isFault = snapshot?.faultCode !== 0 && snapshot?.faultCode !== undefined;
 
-  const panelStyle: React.CSSProperties = {
-    background: '#16213e', borderRadius: 8, padding: 16,
+  const mins = Math.floor(uptime / 60);
+  const secs = uptime % 60;
+  const uptimeStr = mins > 0 ? `${mins}m ${secs}s` : `${secs}s`;
+
+  const row: React.CSSProperties = {
+    display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+    padding: '6px 0', borderBottom: '1px solid var(--border-light)',
   };
 
   return (
-    <div style={panelStyle}>
-      <h3 style={{ marginBottom: 8 }}>Status</h3>
-      <div>State: <strong>{state}</strong></div>
-      <div>Fault: <strong>{fault}</strong></div>
-      <div>Uptime: {uptime}s</div>
-      <div>FW: {fw}</div>
+    <div style={{
+      background: 'var(--bg-card)', borderRadius: 'var(--radius)',
+      padding: 16, border: '1px solid var(--border)',
+    }}>
+      <h3 style={{ fontSize: 13, color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '1px', marginBottom: 12 }}>
+        Status
+      </h3>
+
+      <div style={row}>
+        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>State</span>
+        <span style={{
+          fontSize: 12, fontWeight: 600, color: stateColor,
+          fontFamily: 'var(--font-mono)',
+          ...(state === 'CLOSED_LOOP' || state === 'OL_RAMP' ? { animation: 'pulse 2s infinite' } : {}),
+        }}>
+          {state}
+        </span>
+      </div>
+
+      <div style={row}>
+        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Fault</span>
+        <span style={{
+          fontSize: 12, fontWeight: isFault ? 700 : 400,
+          color: isFault ? 'var(--accent-red)' : 'var(--text-muted)',
+          fontFamily: 'var(--font-mono)',
+        }}>
+          {fault}
+        </span>
+      </div>
+
+      <div style={row}>
+        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Uptime</span>
+        <span style={{ fontSize: 12, color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>
+          {connected ? uptimeStr : '\u2014'}
+        </span>
+      </div>
+
+      <div style={row}>
+        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Firmware</span>
+        <span style={{ fontSize: 12, color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>
+          {fw}
+        </span>
+      </div>
+
+      <div style={{ ...row, borderBottom: 'none' }}>
+        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Profile</span>
+        <span style={{ fontSize: 12, color: 'var(--accent-blue)', fontWeight: 500 }}>
+          {connected ? (PROFILE_NAMES[activeProfile] ?? `#${activeProfile}`) : '\u2014'}
+        </span>
+      </div>
+
+      {/* ZC status indicators when running */}
+      {snapshot && snapshot.state >= 3 && (
+        <div style={{
+          marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)',
+          display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6,
+        }}>
+          <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+            ZC Sync
+            <div style={{
+              fontSize: 11, fontWeight: 600, fontFamily: 'var(--font-mono)',
+              color: snapshot.zcSynced ? 'var(--accent-green)' : 'var(--accent-yellow)',
+            }}>
+              {snapshot.zcSynced ? 'LOCKED' : `${snapshot.goodZcCount}/sync`}
+            </div>
+          </div>
+          <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+            HWZC
+            <div style={{
+              fontSize: 11, fontWeight: 600, fontFamily: 'var(--font-mono)',
+              color: snapshot.hwzcEnabled ? 'var(--accent-cyan)' : 'var(--text-muted)',
+            }}>
+              {snapshot.hwzcEnabled ? 'ACTIVE' : 'SW'}
+            </div>
+          </div>
+          <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+            ZC Count
+            <div style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>
+              {snapshot.hwzcTotalZcCount}
+            </div>
+          </div>
+          <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+            ZC Miss
+            <div style={{
+              fontSize: 11, fontFamily: 'var(--font-mono)',
+              color: snapshot.hwzcTotalMissCount > 0 ? 'var(--accent-yellow)' : 'var(--text-secondary)',
+            }}>
+              {snapshot.hwzcTotalMissCount}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

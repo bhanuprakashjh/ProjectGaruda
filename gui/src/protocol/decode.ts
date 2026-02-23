@@ -1,4 +1,4 @@
-import type { GspInfo, GspSnapshot, ParamDescriptor } from './types';
+import type { GspInfo, GspSnapshot, ParamDescriptor, ParamListPage } from './types';
 
 export function decodeInfo(data: Uint8Array): GspInfo {
   const v = new DataView(data.buffer, data.byteOffset, data.byteLength);
@@ -12,7 +12,7 @@ export function decodeInfo(data: Uint8Array): GspInfo {
     motorPolePairs: v.getUint8(7),
     featureFlags: v.getUint32(8, true),
     pwmFrequency: v.getUint32(12, true),
-    maxErpm: v.getUint16(16, true),
+    maxErpm: v.getUint32(16, true),  // V2: u32 (was u16+reserved)
   };
 }
 
@@ -54,19 +54,24 @@ export function decodeSnapshot(data: Uint8Array): GspSnapshot {
   };
 }
 
-export function decodeParamList(data: Uint8Array): ParamDescriptor[] {
-  const result: ParamDescriptor[] = [];
+/** V2 paginated param list: 3-byte header + 12 bytes/entry (u32 min/max) */
+export function decodeParamList(data: Uint8Array): ParamListPage {
   const v = new DataView(data.buffer, data.byteOffset, data.byteLength);
-  for (let i = 0; i + 8 <= data.length; i += 8) {
-    result.push({
-      id: v.getUint16(i, true),
-      type: v.getUint8(i + 2),
-      group: v.getUint8(i + 3),
-      min: v.getUint16(i + 4, true),
-      max: v.getUint16(i + 6, true),
+  const totalCount = v.getUint8(0);
+  const startIndex = v.getUint8(1);
+  const entryCount = v.getUint8(2);
+  const entries: ParamDescriptor[] = [];
+  for (let i = 0; i < entryCount; i++) {
+    const off = 3 + i * 12;
+    entries.push({
+      id: v.getUint16(off, true),
+      type: v.getUint8(off + 2),
+      group: v.getUint8(off + 3),
+      min: v.getUint32(off + 4, true),
+      max: v.getUint32(off + 8, true),
     });
   }
-  return result;
+  return { totalCount, startIndex, entries };
 }
 
 export function decodeParamValue(data: Uint8Array): { id: number; value: number } {
