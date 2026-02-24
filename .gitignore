@@ -51,7 +51,6 @@ reference/
 *.sce
 *.m
 queuelogs/
-x2cscope/
 
 # Session artifacts and planning docs
 SESSION_CONTEXT_*.md

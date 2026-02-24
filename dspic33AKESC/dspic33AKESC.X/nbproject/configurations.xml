@@ -35,6 +35,12 @@
         <itemPath>../x2cscope/X2CScope.h</itemPath>
         <itemPath>../x2cscope/diagnostics.h</itemPath>
       </logicalFolder>
+      <logicalFolder name="gsp" displayName="gsp" projectFiles="true">
+        <itemPath>../gsp/gsp.h</itemPath>
+        <itemPath>../gsp/gsp_commands.h</itemPath>
+        <itemPath>../gsp/gsp_params.h</itemPath>
+        <itemPath>../gsp/gsp_snapshot.h</itemPath>
+      </logicalFolder>
       <itemPath>../hal/eeprom.h</itemPath>
       <itemPath>../garuda_types.h</itemPath>
       <itemPath>../garuda_config.h</itemPath>
@@ -83,6 +89,12 @@
       </logicalFolder>
       <logicalFolder name="x2cscope" displayName="x2cscope" projectFiles="true">
         <itemPath>../x2cscope/diagnostics.c</itemPath>
+      </logicalFolder>
+      <logicalFolder name="gsp" displayName="gsp" projectFiles="true">
+        <itemPath>../gsp/gsp.c</itemPath>
+        <itemPath>../gsp/gsp_commands.c</itemPath>
+        <itemPath>../gsp/gsp_params.c</itemPath>
+        <itemPath>../gsp/gsp_snapshot.c</itemPath>
       </logicalFolder>
       <itemPath>../hal/eeprom.c</itemPath>
       <itemPath>../garuda_service.c</itemPath>
@@ -152,7 +164,7 @@
         <property key="enable-symbols" value="true"/>
         <property key="enable-unroll-loops" value="false"/>
         <property key="expand-pragma-config" value="false"/>
-        <property key="extra-include-directories" value="../hal;../motor;../learn;.."/>
+        <property key="extra-include-directories" value="../hal;../motor;../learn;../gsp;.."/>
         <property key="isolate-each-function" value="false"/>
         <property key="keep-inline" value="false"/>
         <property key="oXC16gcc-cnsts-mauxflash" value="false"/>
