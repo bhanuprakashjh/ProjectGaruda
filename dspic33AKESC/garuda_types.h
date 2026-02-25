@@ -456,12 +456,35 @@ typedef struct __attribute__((packed))
 
 _Static_assert(sizeof(EEPROM_IMAGE_T) == 128, "EEPROM_IMAGE_T must be 128 bytes");
 
-/* Throttle source (ADC pot vs GSP remote) */
+/* Throttle source selection */
 typedef enum
 {
     THROTTLE_SRC_ADC = 0,   /* Hardware pot (default) */
-    THROTTLE_SRC_GSP = 1    /* Remote GSP command */
+    THROTTLE_SRC_GSP = 1,   /* Remote GSP command */
+    THROTTLE_SRC_PWM = 2,   /* RC PWM capture */
+    THROTTLE_SRC_DSHOT = 3, /* DShot digital protocol */
+    THROTTLE_SRC_AUTO = 4   /* Auto-detect DShot/PWM */
 } THROTTLE_SOURCE_T;
+
+/* RX link state machine (Phase H) */
+typedef enum
+{
+    RX_LINK_UNLOCKED = 0,
+    RX_LINK_DETECTING,
+    RX_LINK_LOCKING,
+    RX_LINK_LOCKED,
+    RX_LINK_LOST
+} RX_LINK_STATE_T;
+
+/* Detected RX protocol */
+typedef enum
+{
+    RX_PROTO_NONE = 0,
+    RX_PROTO_PWM,
+    RX_PROTO_DSHOT150,
+    RX_PROTO_DSHOT300,
+    RX_PROTO_DSHOT600
+} RX_PROTOCOL_T;
 
 /* Fault codes */
 typedef enum
@@ -474,7 +497,8 @@ typedef enum
     FAULT_STALL,
     FAULT_DESYNC,
     FAULT_STARTUP_TIMEOUT,  /* Pre-sync timeout: ZC never achieved within PRESYNC_TIMEOUT_MS */
-    FAULT_MORPH_TIMEOUT     /* Morph did not achieve ZC lock */
+    FAULT_MORPH_TIMEOUT,    /* Morph did not achieve ZC lock */
+    FAULT_RX_LOSS           /* RX signal lost (PWM/DShot/AUTO) — requires CLEAR_FAULT */
 } FAULT_CODE_T;
 
 /* Main ESC runtime data */
@@ -542,9 +566,10 @@ typedef struct
     COMMISSION_DATA_T commission;
 #endif
 
-#if FEATURE_GSP
-    /* Throttle source mux */
+    /* Throttle source mux — unconditional (used by all source types) */
     THROTTLE_SOURCE_T throttleSource;  /* default THROTTLE_SRC_ADC */
+
+#if FEATURE_GSP
     uint16_t gspThrottle;              /* GSP-provided throttle [0-2000] */
     uint32_t lastGspPacketTick;        /* systemTick of last GSP RX — heartbeat */
 
@@ -553,6 +578,14 @@ typedef struct
     bool gspStopIntent;
     bool gspFaultClearIntent;
 #endif
+
+    /* RX input state (Phase H) — unconditional for status reporting */
+    RX_LINK_STATE_T rxLinkState;
+    RX_PROTOCOL_T   rxProtocol;
+    uint16_t rxCrcErrors;
+    uint16_t rxPulseUs;
+    uint8_t  rxDshotRate;       /* 0=none, 150/300/600 */
+    uint16_t rxDroppedFrames;
 } GARUDA_DATA_T;
 
 #ifdef __cplusplus

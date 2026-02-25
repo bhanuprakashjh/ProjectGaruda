@@ -38,6 +38,10 @@
 #include "learn/learn_service.h"
 #endif
 
+#if (FEATURE_RX_PWM || FEATURE_RX_DSHOT || FEATURE_RX_AUTO)
+#include "input/rx_decode.h"
+#endif
+
 #include "x2cscope/diagnostics.h"
 
 /* Global ESC runtime data — volatile: shared between ISRs and main loop */
@@ -91,6 +95,20 @@ void GARUDA_ServiceInit(void)
     garudaData.runCommandActive = false;
     garudaData.desyncRestartAttempts = 0;
     garudaData.recoveryCounter = 0;
+
+    /* Throttle source init — unconditional (Finding 42/54).
+     * Priority: ADC_POT > RX_AUTO > RX_PWM > RX_DSHOT > GSP */
+#if FEATURE_ADC_POT
+    garudaData.throttleSource = THROTTLE_SRC_ADC;
+#elif FEATURE_RX_AUTO
+    garudaData.throttleSource = THROTTLE_SRC_AUTO;
+#elif FEATURE_RX_PWM
+    garudaData.throttleSource = THROTTLE_SRC_PWM;
+#elif FEATURE_RX_DSHOT
+    garudaData.throttleSource = THROTTLE_SRC_DSHOT;
+#elif FEATURE_GSP
+    garudaData.throttleSource = THROTTLE_SRC_GSP;
+#endif
 
 #if FEATURE_HW_OVERCURRENT
     garudaData.ibusRaw = 0;
@@ -171,15 +189,31 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
     garudaData.vbusRaw = ADCBUF_VBUS;
     garudaData.potRaw = ADCBUF_POT;
 
+    /* Throttle source mux — unconditional switch (Finding 53/56) */
+    switch (garudaData.throttleSource) {
 #if FEATURE_GSP
-    if (garudaData.throttleSource == THROTTLE_SRC_GSP) {
-        garudaData.throttle = (uint16_t)((uint32_t)garudaData.gspThrottle * 4095 / 2000);
-    } else {
-        garudaData.throttle = garudaData.potRaw;
-    }
-#else
-    garudaData.throttle = garudaData.potRaw;
+        case THROTTLE_SRC_GSP:
+            garudaData.throttle = (uint16_t)((uint32_t)garudaData.gspThrottle * 4095 / 2000);
+            break;
 #endif
+#if (FEATURE_RX_PWM || FEATURE_RX_DSHOT || FEATURE_RX_AUTO)
+        case THROTTLE_SRC_PWM:
+        case THROTTLE_SRC_DSHOT:
+        case THROTTLE_SRC_AUTO:
+            garudaData.throttle = rxCachedLocked ? rxCachedThrottleAdc : 0;
+            break;
+#endif
+#if FEATURE_ADC_POT
+        case THROTTLE_SRC_ADC:
+            garudaData.throttle = garudaData.potRaw;
+            break;
+#endif
+        default:
+            /* Safety fallback — zero throttle for corrupted enum or disabled source.
+             * Never reads floating ADC. (Finding 56) */
+            garudaData.throttle = 0;
+            break;
+    }
 
 #if FEATURE_BEMF_CLOSED_LOOP
     /* Capture entry state for transition detection. Must be saved before

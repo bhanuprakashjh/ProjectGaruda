@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { GspInfo, GspSnapshot, ParamDescriptor } from '../protocol/types';
+import type { GspInfo, GspSnapshot, GspRxStatus, ParamDescriptor } from '../protocol/types';
 
 interface ParamValue {
   descriptor: ParamDescriptor;
@@ -20,6 +20,7 @@ interface EscStore {
   history: GspSnapshot[];
   params: Map<number, ParamValue>;
   activeProfile: number;
+  rxStatus: GspRxStatus | null;
   throttleSource: 'ADC' | 'GSP';
   telemActive: boolean;
   toasts: Toast[];
@@ -32,6 +33,7 @@ interface EscStore {
   mergeParams: (descriptors: ParamDescriptor[]) => void;
   setParamValue: (id: number, value: number) => void;
   setActiveProfile: (p: number) => void;
+  setRxStatus: (rx: GspRxStatus) => void;
   setThrottleSource: (src: 'ADC' | 'GSP') => void;
   setTelemActive: (v: boolean) => void;
   setParamModalOpen: (v: boolean) => void;
@@ -52,6 +54,7 @@ export const useEscStore = create<EscStore>((set) => ({
   history: [],
   params: new Map(),
   activeProfile: 0,
+  rxStatus: null,
   throttleSource: 'ADC',
   telemActive: false,
   toasts: [],
@@ -84,6 +87,7 @@ export const useEscStore = create<EscStore>((set) => ({
     return { params };
   }),
   setActiveProfile: (p) => set({ activeProfile: p }),
+  setRxStatus: (rx) => set({ rxStatus: rx }),
   setThrottleSource: (src) => set({ throttleSource: src }),
   setTelemActive: (v) => set({ telemActive: v }),
   setParamModalOpen: (v) => set({ paramModalOpen: v }),
@@ -97,7 +101,7 @@ export const useEscStore = create<EscStore>((set) => ({
   removeToast: (id) => set((state) => ({ toasts: state.toasts.filter(t => t.id !== id) })),
   reset: () => set({
     connected: false, info: null, snapshot: null, lastSnapshotMs: 0,
-    history: [], params: new Map(), activeProfile: 0,
+    history: [], params: new Map(), activeProfile: 0, rxStatus: null,
     throttleSource: 'ADC', telemActive: false, toasts: [],
     paramModalOpen: false,
   }),

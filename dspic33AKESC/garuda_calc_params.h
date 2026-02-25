@@ -16,6 +16,9 @@
 extern "C" {
 #endif
 
+/* SCCP peripheral bus clock (FCY = 100 MHz) — shared by all SCCP timers */
+#define SCCP_CLOCK_HZ  100000000UL
+
 /* PWM clock is 400 MHz (from clock.c CLK5 config) */
 #define PWM_CLOCK_MHZ               400
 
@@ -272,8 +275,8 @@ _Static_assert(MORPH_WINDOW_MIN_TICKS >= 5,
 #endif
 
 #if FEATURE_ADC_CMP_ZC
-/* SCCP2 clock: FCY = 100 MHz -> 10ns per tick -> 1e8 ticks/sec */
-#define HWZC_TIMER_HZ           100000000UL
+/* SCCP2 clock = SCCP peripheral bus = 100 MHz */
+#define HWZC_TIMER_HZ           SCCP_CLOCK_HZ
 
 /* eRPM <-> SCCP2 step period conversion.
  * Step freq = eRPM / 10 Hz -> step period = 10 / eRPM seconds.

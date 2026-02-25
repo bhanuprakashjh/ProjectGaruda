@@ -49,6 +49,10 @@
 #if FEATURE_ADAPTATION
 #include "learn/adaptation.h"
 #endif
+#if (FEATURE_RX_PWM || FEATURE_RX_DSHOT || FEATURE_RX_AUTO)
+#include "input/rx_decode.h"
+#include "hal/hal_input_capture.h"
+#endif
 
 #define GSP_HEARTBEAT_TIMEOUT_MS 500
 
@@ -85,6 +89,11 @@ int main(void)
     /* Initialize ESC state machine and enable ADC interrupt */
     GARUDA_ServiceInit();
 
+    /* Initialize RX input capture (Phase H) */
+#if (FEATURE_RX_PWM || FEATURE_RX_DSHOT || FEATURE_RX_AUTO)
+    RX_Init();
+#endif
+
     /* Initialize UART1-based diagnostics (mutually exclusive) */
 #ifdef ENABLE_DIAGNOSTICS
     DiagnosticsInit();
@@ -101,6 +110,10 @@ int main(void)
 #endif
 #if FEATURE_GSP
         GSP_Service();
+#endif
+
+#if (FEATURE_RX_PWM || FEATURE_RX_DSHOT || FEATURE_RX_AUTO)
+        RX_Service();
 #endif
 
         /* Board service — button debounce at 1ms rate */
@@ -244,8 +257,9 @@ int main(void)
             uint32_t elapsed = garudaData.systemTick - garudaData.lastGspPacketTick;
             if (elapsed > GSP_HEARTBEAT_TIMEOUT_MS)
             {
-                /* Lost connection — safe stop */
-                garudaData.throttleSource = THROTTLE_SRC_ADC;
+                /* Lost connection — safe stop via zero throttle + stop intent.
+                 * Do NOT switch throttleSource (Finding 43): with FEATURE_ADC_POT=0,
+                 * ADC source is invalid. Motor stops via zero throttle + gspStopIntent. */
                 garudaData.gspThrottle = 0;
                 garudaData.gspStopIntent = true;
             }

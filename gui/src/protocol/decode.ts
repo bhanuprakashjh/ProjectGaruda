@@ -1,4 +1,4 @@
-import type { GspInfo, GspSnapshot, ParamDescriptor, ParamListPage } from './types';
+import type { GspInfo, GspSnapshot, GspRxStatus, ParamDescriptor, ParamListPage } from './types';
 
 export function decodeInfo(data: Uint8Array): GspInfo {
   const v = new DataView(data.buffer, data.byteOffset, data.byteLength);
@@ -72,6 +72,20 @@ export function decodeParamList(data: Uint8Array): ParamListPage {
     });
   }
   return { totalCount, startIndex, entries };
+}
+
+export function decodeRxStatus(data: Uint8Array): GspRxStatus {
+  const v = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  return {
+    linkState: v.getUint8(0),
+    protocol: v.getUint8(1),
+    dshotRate: v.getUint8(2),
+    // byte 3 = pad
+    throttle: v.getUint16(4, true),
+    pulseUs: v.getUint16(6, true),
+    crcErrors: v.getUint16(8, true),
+    droppedFrames: v.getUint16(10, true),
+  };
 }
 
 export function decodeParamValue(data: Uint8Array): { id: number; value: number } {

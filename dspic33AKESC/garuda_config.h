@@ -37,6 +37,17 @@ extern "C" {
 #define FEATURE_X2CSCOPE         0  /* X2CScope via UART1 (bring-up debug) */
 #define FEATURE_GSP              1  /* Garuda Serial Protocol via UART1 */
 
+/* ADC pot: ON for MCLV-48V-300W bench, OFF for flight boards */
+#define FEATURE_ADC_POT          1
+
+/* RX input features: default OFF (Phase H) */
+#define FEATURE_RX_PWM           0  /* RC PWM capture (1000-2000us) */
+#define FEATURE_RX_DSHOT         0  /* DShot digital protocol */
+#define FEATURE_RX_AUTO          0  /* Auto-detect DShot vs PWM */
+
+/* C.0 DMA gate test (Phase H, Milestone C.0) — default OFF */
+#define C0_DMA_TEST              0
+
 /* Diagnostic: Manual step mode (1=enabled)
  * SW1: Start motor → align to step 0
  * SW2: Manually advance one commutation step
@@ -401,6 +412,60 @@ extern "C" {
 #define ZC_FILTER_SPEED_THRESH  16
 #endif
 #endif /* FEATURE_BEMF_CLOSED_LOOP */
+
+/* ── Phase H: RX Input Configuration ──────────────────────────────── */
+
+/* Static guard: at least one throttle source must be enabled */
+#if !FEATURE_ADC_POT && !FEATURE_GSP && !FEATURE_RX_PWM \
+    && !FEATURE_RX_DSHOT && !FEATURE_RX_AUTO
+#error "No throttle source enabled — enable at least one of FEATURE_ADC_POT, FEATURE_GSP, FEATURE_RX_PWM, FEATURE_RX_DSHOT, or FEATURE_RX_AUTO"
+#endif
+
+/* AUTO requires at least one RX protocol to detect */
+#if FEATURE_RX_AUTO && !FEATURE_RX_PWM && !FEATURE_RX_DSHOT
+#error "FEATURE_RX_AUTO requires FEATURE_RX_PWM or FEATURE_RX_DSHOT"
+#endif
+
+#if (FEATURE_RX_PWM || FEATURE_RX_DSHOT || FEATURE_RX_AUTO)
+#define RX_TIMER_HZ             SCCP_CLOCK_HZ
+#define RX_COUNTS_PER_US        (RX_TIMER_HZ / 1000000UL)
+#define RX_PWM_MIN_US           950
+#define RX_PWM_MAX_US           2050
+#define RX_PWM_DEADBAND_US      25
+#define RX_PWM_PERIOD_MIN_US    2000
+#define RX_PWM_PERIOD_MAX_US    25000
+#define RX_LOCK_COUNT           10
+#define RX_TIMEOUT_MS           200
+#define RX_DSHOT_CMD_MAX        47
+#define RX_DSHOT_EDGES          32   /* wire truth: 16 bits x 2 edges */
+#define RX_DSHOT_DMA_COUNT      RX_DSHOT_EDGES  /* DMA register load;
+    change to (RX_DSHOT_EDGES - 1) if count-1 semantics confirmed in M0 */
+#define RX_ALIGN_MAX_SHIFTS_PER_CALL  4
+#endif
+
+/* C.0 DMA gate test configuration */
+#if C0_DMA_TEST
+#define C0_STARTUP_TIMEOUT_MS   2000
+#define C0_STARTUP_TIMEOUT_COUNTS \
+    ((uint32_t)((uint64_t)C0_STARTUP_TIMEOUT_MS * SCCP_CLOCK_HZ / 1000ULL))
+#define C0_TARGET_FRAMES        370000  /* ~10s at DShot600 37kHz */
+#define C0_MEAS_TIMEOUT_MS      15000   /* 10s + 5s margin */
+#define C0_MEAS_TIMEOUT_COUNTS \
+    ((uint32_t)((uint64_t)C0_MEAS_TIMEOUT_MS * SCCP_CLOCK_HZ / 1000ULL))
+
+/* IFS clear method — MUST be set after Milestone 0 probe */
+/* #define IFS_IS_W1C  1 */  /* W1C: write 1 clears flag */
+/* #define IFS_IS_W1C  0 */  /* Direct: write 0 clears flag */
+#ifndef IFS_IS_W1C
+#error "IFS_IS_W1C not defined — run Milestone 0 probe first"
+#endif
+
+/* C.0 error codes */
+#define C0_ERR_NONE         0
+#define C0_ERR_IC_DRAIN     1  /* ICBNE stuck */
+#define C0_ERR_NO_SIGNAL    2  /* no DMA-TC within startup timeout */
+#define C0_ERR_MEAS_STALL   3  /* c0Done not set within meas timeout */
+#endif /* C0_DMA_TEST */
 
 #ifdef __cplusplus
 }

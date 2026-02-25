@@ -62,6 +62,11 @@ static uint32_t BuildFeatureFlags(void)
     if (FEATURE_GSP)              f |= (1UL << 16);
     if (OC_CLPCI_ENABLE)          f |= (1UL << 17);
     if (FEATURE_PRESYNC_RAMP)     f |= (1UL << 18);
+    /* Phase H: RX input features (bits 19-22) */
+    if (FEATURE_ADC_POT)         f |= (1UL << 19);
+    if (FEATURE_RX_PWM)          f |= (1UL << 20);
+    if (FEATURE_RX_DSHOT)        f |= (1UL << 21);
+    if (FEATURE_RX_AUTO)         f |= (1UL << 22);
     return f;
 }
 
@@ -177,20 +182,64 @@ static void HandleSetThrottleSrc(const uint8_t *payload, uint8_t payloadLen)
 
     uint8_t src = payload[0];
 
-    if (src == (uint8_t)THROTTLE_SRC_GSP) {
-        if (garudaData.state != ESC_IDLE) {
-            SendError(GSP_ERR_WRONG_STATE);
-            return;
-        }
-        garudaData.throttleSource = THROTTLE_SRC_GSP;
-        garudaData.gspThrottle = 0;
-        garudaData.lastGspPacketTick = garudaData.systemTick;
-    } else if (src == (uint8_t)THROTTLE_SRC_ADC) {
-        garudaData.throttleSource = THROTTLE_SRC_ADC;
-        garudaData.gspThrottle = 0;
-    } else {
-        SendError(GSP_ERR_OUT_OF_RANGE);
+    /* ALL transitions are IDLE-only (Finding 39) */
+    if (garudaData.state != ESC_IDLE) {
+        SendError(GSP_ERR_WRONG_STATE);
         return;
+    }
+
+    /* Validate source and check feature availability */
+    switch ((THROTTLE_SOURCE_T)src) {
+        case THROTTLE_SRC_ADC:
+#if FEATURE_ADC_POT
+            garudaData.throttleSource = THROTTLE_SRC_ADC;
+            break;
+#else
+            SendError(GSP_ERR_OUT_OF_RANGE);
+            return;
+#endif
+
+        case THROTTLE_SRC_GSP:
+#if FEATURE_GSP
+            garudaData.throttleSource = THROTTLE_SRC_GSP;
+            garudaData.gspThrottle = 0;
+            garudaData.lastGspPacketTick = garudaData.systemTick;
+            break;
+#else
+            SendError(GSP_ERR_OUT_OF_RANGE);
+            return;
+#endif
+
+        case THROTTLE_SRC_PWM:
+#if FEATURE_RX_PWM
+            garudaData.throttleSource = THROTTLE_SRC_PWM;
+            break;
+#else
+            SendError(GSP_ERR_OUT_OF_RANGE);
+            return;
+#endif
+
+        case THROTTLE_SRC_DSHOT:
+#if FEATURE_RX_DSHOT
+            garudaData.throttleSource = THROTTLE_SRC_DSHOT;
+            break;
+#else
+            SendError(GSP_ERR_OUT_OF_RANGE);
+            return;
+#endif
+
+        case THROTTLE_SRC_AUTO:
+#if FEATURE_RX_AUTO
+            garudaData.throttleSource = THROTTLE_SRC_AUTO;
+            break;
+#else
+            SendError(GSP_ERR_OUT_OF_RANGE);
+            return;
+#endif
+
+        default:
+            SendError(GSP_ERR_OUT_OF_RANGE);
+            return;
     }
 
     GSP_SendResponse(GSP_CMD_SET_THROTTLE_SRC, NULL, 0);
@@ -387,6 +436,28 @@ static void HandleLoadProfile(const uint8_t *payload, uint8_t payloadLen)
     GSP_SendResponse(GSP_CMD_LOAD_PROFILE, &resp, 1);
 }
 
+/* ── Phase H: RX status handler ──────────────────────────────────────── */
+
+static void HandleGetRxStatus(const uint8_t *payload, uint8_t payloadLen)
+{
+    (void)payload;
+    (void)payloadLen;
+
+    GSP_RX_STATUS_T status;
+    memset(&status, 0, sizeof(status));
+
+    status.linkState    = (uint8_t)garudaData.rxLinkState;
+    status.protocol     = (uint8_t)garudaData.rxProtocol;
+    status.dshotRate    = garudaData.rxDshotRate;
+    status.throttle     = garudaData.throttle;
+    status.pulseUs      = garudaData.rxPulseUs;
+    status.crcErrors    = garudaData.rxCrcErrors;
+    status.droppedFrames = garudaData.rxDroppedFrames;
+
+    GSP_SendResponse(GSP_CMD_GET_RX_STATUS, (const uint8_t *)&status,
+                     sizeof(status));
+}
+
 /* ── Phase 1: Telemetry streaming ────────────────────────────────────── */
 
 static void HandleTelemStart(const uint8_t *payload, uint8_t payloadLen)
@@ -464,6 +535,8 @@ static const CMD_ENTRY_T cmdTable[] = {
     { GSP_CMD_GET_PARAM_LIST,  0xFF, HandleGetParamList },
     /* Phase 1.5: profiles */
     { GSP_CMD_LOAD_PROFILE,    1, HandleLoadProfile    },
+    /* Phase H: RX status */
+    { GSP_CMD_GET_RX_STATUS,   0, HandleGetRxStatus    },
 };
 
 #define CMD_TABLE_SIZE (sizeof(cmdTable) / sizeof(cmdTable[0]))

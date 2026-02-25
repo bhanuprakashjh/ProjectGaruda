@@ -52,6 +52,8 @@ typedef enum {
     GSP_CMD_GET_PARAM_LIST  = 0x16,
     /* Phase 1.5: profiles */
     GSP_CMD_LOAD_PROFILE    = 0x17,
+    /* Phase H: RX status */
+    GSP_CMD_GET_RX_STATUS   = 0x26,
     /* Unsolicited stream frame */
     GSP_CMD_TELEM_FRAME     = 0x80,
     /* Error response */
@@ -143,6 +145,20 @@ typedef struct __attribute__((packed)) {
 } GSP_SNAPSHOT_T;
 
 _Static_assert(sizeof(GSP_SNAPSHOT_T) == 68, "GSP_SNAPSHOT_T wire size mismatch");
+
+/* GSP_RX_STATUS_T — 12 bytes, returned by GET_RX_STATUS */
+typedef struct __attribute__((packed)) {
+    uint8_t  linkState;
+    uint8_t  protocol;
+    uint8_t  dshotRate;
+    uint8_t  pad0;
+    uint16_t throttle;
+    uint16_t pulseUs;
+    uint16_t crcErrors;
+    uint16_t droppedFrames;
+} GSP_RX_STATUS_T;
+
+_Static_assert(sizeof(GSP_RX_STATUS_T) == 12, "RX status wire size");
 
 /* Command handler prototype */
 typedef void (*GSP_CMD_HANDLER_T)(const uint8_t *payload, uint8_t payloadLen);

@@ -143,11 +143,11 @@ void MapGPIOHWFunction(void)
     _RP43R = 9;
 
     /* ================================================================
-     * DShot Input Capture (IC1) pin
-     * RD8 = RP57 → IC1 PPS mapping
+     * RX Input Pin (RD8 = RP57)
+     * PPS mapping moved to hal_input_capture.c:HAL_IC4_Init() (Phase H).
+     * TRIS input config stays here (GPIO direction is port_config's job).
      * ================================================================ */
     TRISDbits.TRISD8 = 1;      /* Input */
-    _ICM1R = 57;                /* Map RP57 to IC1 input */
 
 #if FEATURE_HW_OVERCURRENT
     /* ================================================================

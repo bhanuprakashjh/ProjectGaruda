@@ -13,8 +13,13 @@ const STATE_COLORS: Record<string, string> = {
   FAULT: 'var(--accent-red)',
 };
 
+const RX_LINK_STATES = ['UNLOCKED', 'DETECTING', 'LOCKING', 'LOCKED', 'LOST'] as const;
+const RX_PROTOCOLS = ['NONE', 'PWM', 'DSHOT'] as const;
+
 export function StatusPanel() {
-  const { snapshot, info, activeProfile, connected } = useEscStore();
+  const { snapshot, info, activeProfile, connected, rxStatus } = useEscStore();
+  const flags = info?.featureFlags ?? 0;
+  const hasRx = ((flags & (1 << 20)) | (flags & (1 << 21)) | (flags & (1 << 22))) !== 0;
   const state = snapshot ? (ESC_STATES[snapshot.state] ?? 'UNKNOWN') : '\u2014';
   const fault = snapshot ? (FAULT_CODES[snapshot.faultCode] ?? 'UNKNOWN') : '\u2014';
   const uptime = snapshot ? snapshot.uptimeSec : 0;
@@ -120,6 +125,51 @@ export function StatusPanel() {
               color: snapshot.hwzcTotalMissCount > 0 ? 'var(--accent-yellow)' : 'var(--text-secondary)',
             }}>
               {snapshot.hwzcTotalMissCount}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* RX status when RX features are enabled */}
+      {hasRx && connected && rxStatus && (
+        <div style={{
+          marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)',
+          display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6,
+        }}>
+          <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+            RX Link
+            <div style={{
+              fontSize: 11, fontWeight: 600, fontFamily: 'var(--font-mono)',
+              color: rxStatus.linkState === 3 ? 'var(--accent-green)'
+                : rxStatus.linkState === 4 ? 'var(--accent-red)'
+                : 'var(--accent-yellow)',
+            }}>
+              {RX_LINK_STATES[rxStatus.linkState] ?? 'UNKNOWN'}
+            </div>
+          </div>
+          <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+            Protocol
+            <div style={{ fontSize: 11, fontWeight: 600, fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>
+              {RX_PROTOCOLS[rxStatus.protocol] ?? 'UNKNOWN'}
+              {rxStatus.protocol === 2 && rxStatus.dshotRate > 0 ? ` ${rxStatus.dshotRate * 150}` : ''}
+            </div>
+          </div>
+          <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+            CRC Errors
+            <div style={{
+              fontSize: 11, fontFamily: 'var(--font-mono)',
+              color: rxStatus.crcErrors > 0 ? 'var(--accent-yellow)' : 'var(--text-secondary)',
+            }}>
+              {rxStatus.crcErrors}
+            </div>
+          </div>
+          <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+            Dropped
+            <div style={{
+              fontSize: 11, fontFamily: 'var(--font-mono)',
+              color: rxStatus.droppedFrames > 0 ? 'var(--accent-yellow)' : 'var(--text-secondary)',
+            }}>
+              {rxStatus.droppedFrames}
             </div>
           </div>
         </div>

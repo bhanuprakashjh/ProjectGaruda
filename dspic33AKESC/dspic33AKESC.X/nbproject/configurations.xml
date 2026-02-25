@@ -4,6 +4,12 @@
     <logicalFolder name="HeaderFiles"
                    displayName="Header Files"
                    projectFiles="true">
+      <logicalFolder name="gsp" displayName="gsp" projectFiles="true">
+        <itemPath>../gsp/gsp.h</itemPath>
+        <itemPath>../gsp/gsp_commands.h</itemPath>
+        <itemPath>../gsp/gsp_params.h</itemPath>
+        <itemPath>../gsp/gsp_snapshot.h</itemPath>
+      </logicalFolder>
       <logicalFolder name="hal" displayName="hal" projectFiles="true">
         <itemPath>../hal/board_service.h</itemPath>
         <itemPath>../hal/clock.h</itemPath>
@@ -15,6 +21,10 @@
         <itemPath>../hal/timer1.h</itemPath>
         <itemPath>../hal/uart1.h</itemPath>
         <itemPath>../hal/hal_timer.h</itemPath>
+        <itemPath>../hal/hal_input_capture.h</itemPath>
+      </logicalFolder>
+      <logicalFolder name="input" displayName="input" projectFiles="true">
+        <itemPath>../input/rx_decode.h</itemPath>
       </logicalFolder>
       <logicalFolder name="learn" displayName="learn" projectFiles="true">
         <itemPath>../learn/ring_buffer.h</itemPath>
@@ -35,12 +45,6 @@
         <itemPath>../x2cscope/X2CScope.h</itemPath>
         <itemPath>../x2cscope/diagnostics.h</itemPath>
       </logicalFolder>
-      <logicalFolder name="gsp" displayName="gsp" projectFiles="true">
-        <itemPath>../gsp/gsp.h</itemPath>
-        <itemPath>../gsp/gsp_commands.h</itemPath>
-        <itemPath>../gsp/gsp_params.h</itemPath>
-        <itemPath>../gsp/gsp_snapshot.h</itemPath>
-      </logicalFolder>
       <itemPath>../hal/eeprom.h</itemPath>
       <itemPath>../garuda_types.h</itemPath>
       <itemPath>../garuda_config.h</itemPath>
@@ -60,6 +64,12 @@
     <logicalFolder name="SourceFiles"
                    displayName="Source Files"
                    projectFiles="true">
+      <logicalFolder name="gsp" displayName="gsp" projectFiles="true">
+        <itemPath>../gsp/gsp.c</itemPath>
+        <itemPath>../gsp/gsp_commands.c</itemPath>
+        <itemPath>../gsp/gsp_params.c</itemPath>
+        <itemPath>../gsp/gsp_snapshot.c</itemPath>
+      </logicalFolder>
       <logicalFolder name="hal" displayName="hal" projectFiles="true">
         <itemPath>../hal/board_service.c</itemPath>
         <itemPath>../hal/clock.c</itemPath>
@@ -71,6 +81,10 @@
         <itemPath>../hal/timer1.c</itemPath>
         <itemPath>../hal/uart1.c</itemPath>
         <itemPath>../hal/hal_timer.c</itemPath>
+        <itemPath>../hal/hal_input_capture.c</itemPath>
+      </logicalFolder>
+      <logicalFolder name="input" displayName="input" projectFiles="true">
+        <itemPath>../input/rx_decode.c</itemPath>
       </logicalFolder>
       <logicalFolder name="learn" displayName="learn" projectFiles="true">
         <itemPath>../learn/ring_buffer.c</itemPath>
@@ -89,12 +103,6 @@
       </logicalFolder>
       <logicalFolder name="x2cscope" displayName="x2cscope" projectFiles="true">
         <itemPath>../x2cscope/diagnostics.c</itemPath>
-      </logicalFolder>
-      <logicalFolder name="gsp" displayName="gsp" projectFiles="true">
-        <itemPath>../gsp/gsp.c</itemPath>
-        <itemPath>../gsp/gsp_commands.c</itemPath>
-        <itemPath>../gsp/gsp_params.c</itemPath>
-        <itemPath>../gsp/gsp_snapshot.c</itemPath>
       </logicalFolder>
       <itemPath>../hal/eeprom.c</itemPath>
       <itemPath>../garuda_service.c</itemPath>
@@ -164,7 +172,8 @@
         <property key="enable-symbols" value="true"/>
         <property key="enable-unroll-loops" value="false"/>
         <property key="expand-pragma-config" value="false"/>
-        <property key="extra-include-directories" value="../hal;../motor;../learn;../gsp;.."/>
+        <property key="extra-include-directories"
+                  value="../hal;../motor;../learn;../gsp;../input;.."/>
         <property key="isolate-each-function" value="false"/>
         <property key="keep-inline" value="false"/>
         <property key="oXC16gcc-cnsts-mauxflash" value="false"/>

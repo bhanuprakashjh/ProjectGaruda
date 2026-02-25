@@ -299,7 +299,7 @@ export function HelpPanel() {
                 Active Feature Flags
               </h4>
               <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6 }}>
-                {Array.from({ length: 19 }, (_, i) => {
+                {Array.from({ length: 23 }, (_, i) => {
                   const enabled = (info.featureFlags & (1 << i)) !== 0;
                   const name = FEATURE_NAMES[i] ?? `BIT_${i}`;
                   return (
