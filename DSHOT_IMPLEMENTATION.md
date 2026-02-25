@@ -10,6 +10,47 @@ Project Garuda is a drone ESC firmware for the **dsPIC33AK128MC106** microcontro
 
 ---
 
+## Implementation Status at a Glance
+
+### Implemented (Phase H — Complete)
+
+| Feature | Status | Details |
+|---------|--------|---------|
+| DShot150/300/600 frame reception | Done | DMA ping-pong capture, 64-edge ring buffer |
+| DShot CRC-4 validation | Done | XOR nibble check, rolling alignment recovery |
+| DShot throttle decode (48-2047) | Done | 11-bit extraction, mapped to 0-4095 ADC scale |
+| DShot rate auto-detection | Done | Min-delta edge classification (150/300/600) |
+| RC PWM capture (1000-2000 us) | Done | ISR rise/fall pairing, seqlock mailbox |
+| Auto-detect (DShot vs PWM) | Done | Single-pin protocol identification |
+| Signal loss fail-safe | Done | 200 ms timeout → zero throttle + FAULT_RX_LOSS |
+| Lock FSM (detect → lock → lost) | Done | 10 consecutive valid frames to lock |
+| Seqlock mailbox (ISR → main) | Done | Tear-free, lock-free communication |
+| Write-ordered ADC ISR mux | Done | Safe cached volatile consumption |
+| Throttle source transition matrix | Done | All transitions IDLE-only, feature-gated |
+| GSP telemetry (GET_RX_STATUS) | Done | Link state, CRC errors, dropped frames |
+| WebSerial GUI integration | Done | Source selector, RX status panel |
+| CLC hardware deglitch filter | Deferred | Planned if EMI noise causes issues on-target |
+
+### Not Yet Implemented (Future Phases)
+
+| Feature | Priority | Description |
+|---------|----------|-------------|
+| **Bidirectional DShot (EDT)** | High | ESC responds with eRPM on same wire when FC requests telemetry. Required for Betaflight/INAV RPM filtering. Requires pin direction flip + bit-bang response in inter-frame gap. |
+| **DShot commands (1-47)** | Medium | Special throttle values for motor direction, 3D mode, beep, save settings, LED control, ESC info request. Currently all ignored (treated as zero throttle). |
+| **KISS/serial telemetry** | Medium | Separate UART wire sending voltage, current, temperature, eRPM back to FC. Standard on BLHeli_32/AM32 ESCs. Would need a second UART or time-share with GSP. |
+| **DShot extended telemetry (EDT v2)** | Low | Enhanced bidirectional protocol carrying voltage, current, temperature, status in addition to eRPM. Newer Betaflight feature. |
+
+### What This Means for Flight
+
+The current implementation is **sufficient for basic flight controller throttle control** — an FC running Betaflight/INAV can arm and fly a drone using DShot600 with our ESC. The throttle path from FC to motor is complete with full fail-safe protection.
+
+However, for **full FC integration** comparable to BLHeli_32 or AM32:
+- **Bidirectional DShot** is the critical missing piece — without it, the FC cannot read motor RPM for its RPM filter, which significantly impacts flight smoothness and noise rejection
+- **DShot commands** are needed for features like motor direction change, beep-on-lost-model, and 3D (reversible) mode
+- **KISS telemetry** provides the FC with battery voltage, current draw, and ESC temperature for OSD display and battery monitoring
+
+---
+
 ## The Problem
 
 Prior to Phase H, the ESC only accepted throttle from two sources:
@@ -705,6 +746,92 @@ The WebSerial GUI uses these bits to show/hide throttle source selector buttons.
 2. **DShot**: Flight controller or signal generator outputting DShot600
 3. **Signal loss**: Disconnect during motor run → verify zero throttle within 200 ms
 4. **C.0 DMA gate test**: 10s continuous DShot600, logic analyzer edge count must match `frames x 32` exactly
+
+---
+
+## Future: Bidirectional DShot & Command Handling
+
+### Bidirectional DShot (EDT) — How It Works
+
+In standard DShot, the FC sends and the ESC only listens. In **bidirectional DShot**, the ESC responds with telemetry data on the **same wire** after each FC frame:
+
+```
+  FC sends frame        ESC responds          FC sends next frame
+  ───────────┐    ┌─────────────────┐    ┌───────────
+  DShot frame │    │  eRPM telemetry │    │  DShot frame
+  (16 bits)   │    │  (16 bits, inv) │    │  (16 bits)
+  ────────────┘    └─────────────────┘    └───────────
+              │◄──►│                 │◄──►│
+              30us   ~26.7us frame    30us
+              guard    (inverted)     guard
+              time                    time
+```
+
+**Implementation challenges**:
+1. **Pin direction flip**: RD8 must switch from input to output within the ~30 us guard time after receiving a frame. On dsPIC33AK, this means reconfiguring TRIS and disabling IC4 temporarily.
+2. **Bit-bang transmission**: The ESC must generate DShot-encoded edges with precise timing (~1.67 us per bit at DShot600). Options: timer-driven GPIO toggle, or use a PWM output channel.
+3. **Inverted encoding**: Bidirectional DShot uses inverted signal levels — bit-1 is low-duty, bit-0 is high-duty.
+4. **eRPM encoding**: The 16-bit response carries eRPM in a specific format: `(eRPM period in us) / 2`, with its own CRC. The ESC must compute this from commutation timing.
+5. **Timing budget**: At DShot600 37 kHz, the entire receive + flip + transmit + flip-back cycle must complete in ~27 us. This is extremely tight.
+
+**Possible dsPIC33AK approaches**:
+- Use SCCP4 output-compare mode for the response (hardware-timed edges)
+- Use a spare PWM generator to bit-bang the response
+- DMA-driven output from a pre-computed edge buffer
+
+### DShot Commands (Throttle Values 1-47)
+
+When the FC sends throttle values 1-47, these are **special commands**, not throttle requests. The command is repeated multiple times by the FC (typically 10 frames) to ensure reception.
+
+| Command | Value | Description |
+|---------|-------|-------------|
+| DSHOT_CMD_MOTOR_STOP | 0 | Disarm |
+| DSHOT_CMD_BEEP1-5 | 1-5 | Beep sequences (lost model finder) |
+| DSHOT_CMD_ESC_INFO | 6 | Request ESC info (requires bidir) |
+| DSHOT_CMD_SPIN_DIRECTION_1 | 7 | Set rotation CW |
+| DSHOT_CMD_SPIN_DIRECTION_2 | 8 | Set rotation CCW |
+| DSHOT_CMD_3D_MODE_OFF | 9 | Disable 3D (reversible) mode |
+| DSHOT_CMD_3D_MODE_ON | 10 | Enable 3D mode |
+| DSHOT_CMD_SETTINGS_REQUEST | 11 | Request settings (requires bidir) |
+| DSHOT_CMD_SAVE_SETTINGS | 12 | Save settings to EEPROM |
+| DSHOT_CMD_SPIN_DIRECTION_NORMAL | 20 | Normal direction |
+| DSHOT_CMD_SPIN_DIRECTION_REVERSED | 21 | Reversed direction |
+| DSHOT_CMD_LED0-3_ON/OFF | 22-29 | LED control |
+| DSHOT_CMD_AUDIO_STREAM | 30 | Audio stream mode |
+| DSHOT_CMD_SILENT_MODE | 31 | Silent mode |
+| DSHOT_CMD_EDT_ARM | 35 | Arm EDT (extended telemetry) |
+| DSHOT_CMD_EDT_VOLT/TEMP/CURR/DEBUG | 36-43 | EDT channel config |
+
+**Implementation approach**: add a command dispatcher in `rx_decode.c` that counts consecutive identical command frames (require N=6 repetitions), then executes the command. Most commands map to existing Garuda features (direction = `DIRECTION_DEFAULT`, save = EEPROM write, beep = PWM tone generation).
+
+### KISS Telemetry (Separate Wire)
+
+KISS telemetry is a **unidirectional UART stream** from ESC to FC on a dedicated telemetry wire (not the DShot signal wire):
+
+| Byte | Field | Description |
+|------|-------|-------------|
+| 0 | Temperature | ESC temperature in Celsius |
+| 1-2 | Voltage | Battery voltage x 100 |
+| 3-4 | Current | Motor current x 100 |
+| 5-6 | Consumption | mAh consumed |
+| 7-8 | eRPM | Electrical RPM x 100 |
+| 9 | CRC8 | XOR checksum |
+
+**10 bytes at 115200 baud**, sent once per DShot frame (~37 kHz at DShot600, though typically throttled to a lower rate).
+
+This would require either a **second UART** or **time-sharing UART1** with GSP. On the MCLV-48V-300W dev board, UART1 is used for GSP/X2CScope. A production ESC board could dedicate a second UART to telemetry.
+
+### Memory Budget Estimate (Future Features)
+
+| Feature | Flash Estimate | RAM Estimate |
+|---------|---------------|-------------|
+| Current Phase H | 2,696 bytes | 620 bytes |
+| Bidirectional DShot | ~1,500-2,000 bytes | ~128 bytes (response buffer) |
+| DShot commands | ~800-1,200 bytes | ~32 bytes (command state) |
+| KISS telemetry | ~500-800 bytes | ~16 bytes (TX buffer) |
+| **Total projected** | **~5,500-6,700 bytes** | **~800 bytes** |
+
+With 71% flash and 88% RAM free, all future features fit comfortably.
 
 ---
 
