@@ -332,6 +332,102 @@ During auto-detection, the minimum edge-to-edge delta classifies the DShot rate:
 
 ---
 
+## CLC Hardware Signal Conditioning (Planned — Milestone E)
+
+### The Problem: EMI Noise on the RX Pin
+
+During motor commutation, the ESC's MOSFET bridge switches high current at 24 kHz. This generates electromagnetic interference (EMI) that couples into nearby signal traces — including the RX input pin (RD8). At DShot600 bit periods of ~1.67 us, even nanosecond-scale glitches can create false edges that corrupt frame alignment or cause spurious CRC failures.
+
+### The Solution: CLC as a Hardware Deglitch Filter
+
+The dsPIC33AK128MC106 has **Configurable Logic Cells (CLC)** — programmable hardware logic blocks that operate at the peripheral clock rate (100 MHz) with zero CPU involvement. CLC1 can be configured as a **D-flip-flop synchronizer** to filter the raw RX signal before it reaches SCCP4.
+
+### Proposed CLC1 Configuration
+
+```
+            RD8 (raw signal with possible glitches)
+              │
+              ▼
+  ┌───────────────────────┐
+  │       CLC1            │
+  │                       │
+  │  D-FF Sync Filter     │
+  │  ┌─────┐   ┌─────┐   │
+  │  │ D Q ├──►│ D Q ├──►├──── Clean signal
+  │  │   > │   │   > │   │
+  │  └──┬──┘   └──┬──┘   │
+  │     │         │       │
+  │    CLK       CLK      │
+  │   (100 MHz peripheral │
+  │    bus clock)          │
+  └───────────────────────┘
+              │
+              ▼
+         Spare RPn pin (loopback)
+              │
+              ▼
+         ICM4R PPS ── SCCP4 Input Capture
+```
+
+**How it works**:
+1. Raw RX signal enters CLC1 as the D input
+2. Two cascaded D-flip-flops sample the signal at 100 MHz
+3. Glitches shorter than **one clock period (10 ns)** are rejected — they can't propagate through two FF stages
+4. The clean output is routed to a spare RPn pin via internal loopback
+5. SCCP4's PPS is remapped from the raw pin to the CLC-filtered pin
+
+### Why Two Flip-Flops?
+
+A single D-FF synchronizes the signal to the clock domain but doesn't filter. The second FF creates a **metastability barrier** — if the first FF captures a marginal edge (signal transitioning exactly at the clock edge), the second FF resolves it to a clean 0 or 1 before it reaches SCCP4. This is the standard **2-FF synchronizer** pattern used in all clock domain crossings.
+
+### Filter Characteristics
+
+| Parameter | Value |
+|-----------|-------|
+| Minimum pulse width passed | 10-20 ns (1-2 clock periods) |
+| Latency added | 20 ns (2 clock periods) |
+| DShot600 bit period | 1,667 ns |
+| Latency as % of bit period | ~1.2% |
+| CPU overhead | Zero (pure hardware) |
+
+The 20 ns latency is negligible — it shifts all edge timestamps by a constant offset that cancels out in the duty-cycle ratio calculation.
+
+### Why It's Deferred (Not Implemented Yet)
+
+The current software-only approach handles noise through:
+- **PWM**: pulse width validation rejects glitch-induced short/long pulses
+- **DShot**: CRC-4 detects corrupted frames; rolling alignment recovers from persistent glitches
+- **Lock FSM**: requires 10 consecutive valid frames — sporadic glitches don't cause false lock
+
+CLC becomes necessary only if **real-world testing** reveals:
+- Persistent CRC failure rates > 0.1% during motor operation
+- False edge captures that cause repeated alignment loss
+- EMI-induced noise that software filtering can't handle
+
+This will be evaluated during hardware DShot testing with a real flight controller and motor running under load (Milestone C onward). If needed, CLC1 can be enabled via `FEATURE_RX_CLC` flag with zero impact on the existing signal path.
+
+### Implementation Notes (When Needed)
+
+```c
+/* garuda_config.h */
+#define FEATURE_RX_CLC  0  /* 1 = enable CLC1 deglitch filter */
+
+/* hal_input_capture.c — in HAL_IC4_Init() */
+#if FEATURE_RX_CLC
+    /* Configure CLC1 as 2-FF synchronizer */
+    CLC1CONL = 0;
+    CLC1CONLbits.MODE = 0b010;  /* D-FF mode */
+    /* Input: RD8 via data select mux */
+    /* Output: routed to spare RPn for PPS loopback */
+    /* Remap ICM4R from raw pin to CLC output pin */
+    CLC1CONLbits.LCEN = 1;      /* Enable CLC1 */
+#endif
+```
+
+The `FEATURE_RX_CLC` flag keeps CLC code compiled out by default — zero binary impact when not used.
+
+---
+
 ## Link State Machine
 
 The RX link FSM manages the lifecycle from signal detection to loss:
