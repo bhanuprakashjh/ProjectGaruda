@@ -2,7 +2,7 @@ import { useState, useCallback } from 'react';
 import { useEscStore } from '../store/useEscStore';
 import { serial } from './ConnectionBar';
 import { buildPacket, CMD } from '../protocol/gsp';
-import { PARAM_NAMES, PARAM_UNITS, PARAM_TOOLTIPS, PARAM_GROUPS } from '../protocol/types';
+import { PARAM_NAMES, PARAM_UNITS, PARAM_TOOLTIPS, PARAM_GROUPS, isFocEnabled } from '../protocol/types';
 
 const GROUP_ICONS: Record<number, string> = {
   0: '\uD83D\uDE80', // Startup & Ramp
@@ -27,11 +27,12 @@ const GROUP_COLORS: Record<number, string> = {
 };
 
 export function ParamPanel() {
-  const { connected, snapshot, params } = useEscStore();
+  const { connected, snapshot, params, info } = useEscStore();
   const [editValues, setEditValues] = useState<Record<number, string>>({});
   const [hoveredParam, setHoveredParam] = useState<number | null>(null);
   const isIdle = snapshot?.state === 0;
   const editable = connected && isIdle;
+  const focMode = info ? isFocEnabled(info.featureFlags) : false;
 
   const setParam = useCallback(async (id: number, value: number) => {
     const buf = new Uint8Array(6);
@@ -78,6 +79,17 @@ export function ParamPanel() {
 
   return (
     <div style={{ marginTop: 16 }}>
+      {/* FOC mode note */}
+      {focMode && (
+        <div style={{
+          background: 'rgba(34,211,238,0.08)', border: '1px solid rgba(34,211,238,0.2)',
+          borderRadius: 'var(--radius)', padding: '8px 14px', marginBottom: 12,
+          color: 'var(--accent-cyan)', fontSize: 11,
+        }}>
+          FOC mode active. These are 6-step runtime parameters — FOC tuning is done in the Motor Setup tab via compile-time defines.
+          Only Motor Hardware and Voltage Protection groups apply in FOC mode.
+        </div>
+      )}
       {/* Header bar */}
       <div style={{
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',

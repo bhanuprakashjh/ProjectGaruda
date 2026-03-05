@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { useEscStore } from '../store/useEscStore';
 import { isFocEnabled } from '../protocol/types';
 import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend } from 'recharts';
@@ -112,12 +112,22 @@ export function ScopePanel() {
   const telemActive = useEscStore(s => s.telemActive);
   const focMode = info ? isFocEnabled(info.featureFlags) : false;
 
-  const defaultChannels = focMode
-    ? new Set(['focIq', 'focId', 'focOmega', 'duty'])
-    : new Set(['eRPM', 'duty', 'bemf', 'zcThreshold']);
-
-  const [activeChannels, setActiveChannels] = useState<Set<string>>(defaultChannels);
+  const [activeChannels, setActiveChannels] = useState<Set<string>>(
+    new Set(['eRPM', 'duty', 'bemf', 'zcThreshold'])
+  );
   const [expanded, setExpanded] = useState(true);
+  const prevFocMode = useRef(focMode);
+
+  // Auto-switch default channels when mode changes (e.g. after GET_INFO)
+  useEffect(() => {
+    if (focMode !== prevFocMode.current) {
+      prevFocMode.current = focMode;
+      setActiveChannels(focMode
+        ? new Set(['focIq', 'focId', 'focOmega', 'duty'])
+        : new Set(['eRPM', 'duty', 'bemf', 'zcThreshold'])
+      );
+    }
+  }, [focMode]);
 
   const polePairs = info?.motorPolePairs ?? 1;
 

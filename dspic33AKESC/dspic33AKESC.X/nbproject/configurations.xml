@@ -10,13 +10,33 @@
         <itemPath>../gsp/gsp_params.h</itemPath>
         <itemPath>../gsp/gsp_snapshot.h</itemPath>
       </logicalFolder>
+      <logicalFolder name="foc" displayName="foc" projectFiles="true">
+        <itemPath>../foc/foc_types.h</itemPath>
+        <itemPath>../foc/clarke.h</itemPath>
+        <itemPath>../foc/park.h</itemPath>
+        <itemPath>../foc/svpwm.h</itemPath>
+        <itemPath>../foc/pi_controller.h</itemPath>
+        <itemPath>../foc/back_emf_obs.h</itemPath>
+        <itemPath>../foc/pll_estimator.h</itemPath>
+        <itemPath>../foc/flux_estimator.h</itemPath>
+        <itemPath>../foc/smo_observer.h</itemPath>
+        <itemPath>../foc/mxlemming_obs.h</itemPath>
+        <itemPath>../foc/foc_v2_types.h</itemPath>
+        <itemPath>../foc/foc_v2_math.h</itemPath>
+        <itemPath>../foc/foc_v2_pi.h</itemPath>
+        <itemPath>../foc/foc_v2_observer.h</itemPath>
+        <itemPath>../foc/foc_v2_control.h</itemPath>
+        <itemPath>../foc/foc_v2_detect.h</itemPath>
+      </logicalFolder>
       <logicalFolder name="hal" displayName="hal" projectFiles="true">
         <itemPath>../hal/board_service.h</itemPath>
         <itemPath>../hal/clock.h</itemPath>
         <itemPath>../hal/delay.h</itemPath>
         <itemPath>../hal/hal_adc.h</itemPath>
+        <itemPath>../hal/hal_ata6847.h</itemPath>
         <itemPath>../hal/hal_comparator.h</itemPath>
         <itemPath>../hal/hal_pwm.h</itemPath>
+        <itemPath>../hal/hal_zcd.h</itemPath>
         <itemPath>../hal/port_config.h</itemPath>
         <itemPath>../hal/timer1.h</itemPath>
         <itemPath>../hal/uart1.h</itemPath>
@@ -49,6 +69,7 @@
       <itemPath>../garuda_types.h</itemPath>
       <itemPath>../garuda_config.h</itemPath>
       <itemPath>../garuda_calc_params.h</itemPath>
+      <itemPath>../garuda_foc_params.h</itemPath>
       <itemPath>../garuda_service.h</itemPath>
       <itemPath>../util.h</itemPath>
     </logicalFolder>
@@ -70,13 +91,30 @@
         <itemPath>../gsp/gsp_params.c</itemPath>
         <itemPath>../gsp/gsp_snapshot.c</itemPath>
       </logicalFolder>
+      <logicalFolder name="foc" displayName="foc" projectFiles="true">
+        <itemPath>../foc/clarke.c</itemPath>
+        <itemPath>../foc/park.c</itemPath>
+        <itemPath>../foc/svpwm.c</itemPath>
+        <itemPath>../foc/pi_controller.c</itemPath>
+        <itemPath>../foc/back_emf_obs.c</itemPath>
+        <itemPath>../foc/pll_estimator.c</itemPath>
+        <itemPath>../foc/flux_estimator.c</itemPath>
+        <itemPath>../foc/smo_observer.c</itemPath>
+        <itemPath>../foc/mxlemming_obs.c</itemPath>
+        <itemPath>../foc/foc_v2_pi.c</itemPath>
+        <itemPath>../foc/foc_v2_observer.c</itemPath>
+        <itemPath>../foc/foc_v2_control.c</itemPath>
+        <itemPath>../foc/foc_v2_detect.c</itemPath>
+      </logicalFolder>
       <logicalFolder name="hal" displayName="hal" projectFiles="true">
         <itemPath>../hal/board_service.c</itemPath>
         <itemPath>../hal/clock.c</itemPath>
         <itemPath>../hal/device_config.c</itemPath>
         <itemPath>../hal/hal_adc.c</itemPath>
+        <itemPath>../hal/hal_ata6847.c</itemPath>
         <itemPath>../hal/hal_comparator.c</itemPath>
         <itemPath>../hal/hal_pwm.c</itemPath>
+        <itemPath>../hal/hal_zcd.c</itemPath>
         <itemPath>../hal/port_config.c</itemPath>
         <itemPath>../hal/timer1.c</itemPath>
         <itemPath>../hal/uart1.c</itemPath>
@@ -173,7 +211,7 @@
         <property key="enable-unroll-loops" value="false"/>
         <property key="expand-pragma-config" value="false"/>
         <property key="extra-include-directories"
-                  value="../hal;../motor;../learn;../gsp;../input;.."/>
+                  value="../hal;../motor;../learn;../gsp;../input;../foc;.."/>
         <property key="isolate-each-function" value="false"/>
         <property key="keep-inline" value="false"/>
         <property key="oXC16gcc-cnsts-mauxflash" value="false"/>
