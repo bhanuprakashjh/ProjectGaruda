@@ -77,6 +77,7 @@ export const FAULT_CODES = ['NONE', 'OVERVOLTAGE', 'UNDERVOLTAGE', 'OVERCURRENT'
 export const FOC_SUB_STATES = ['IDLE', 'ARMED', 'ALIGN', 'I/F RAMP', 'CLOSED_LOOP'] as const;
 
 export const PROFILE_NAMES = ['Hurst DMB0224C10002', 'A2212 1400KV', '5010 750KV', '5055 580KV', 'Custom'] as const;
+export const PROFILE_COUNT = 4; /* built-in profiles (excl. Custom) */
 
 export const PARAM_NAMES: Record<number, string> = {
   // Startup & Ramp (group 0)
@@ -118,6 +119,26 @@ export const PARAM_NAMES: Record<number, string> = {
   0x6B: 'Max Restart Attempts [desyncMaxRestarts]',
   // Motor Hardware (group 7)
   0x50: 'Motor Pole Pairs [motorPolePairs]',
+  // FOC Motor Model (group 8)
+  0x70: 'Phase Resistance [focRsMilliOhm]',
+  0x71: 'Phase Inductance [focLsMicroH]',
+  0x72: 'Back-EMF Constant [focKeUvSRad]',
+  0x73: 'Nominal Bus Voltage [focVbusNomCentiV]',
+  0x74: 'Max Phase Current [focMaxCurrentCentiA]',
+  0x75: 'Max Electrical Speed [focMaxElecRadS]',
+  // FOC Tuning (group 9)
+  0x76: 'Current Loop Kp [focKpDqMilli]',
+  0x77: 'Current Loop Ki [focKiDq]',
+  0x78: 'Observer LPF Alpha [focObsLpfAlphaMilli]',
+  // FOC Startup (group 10)
+  0x79: 'Align Current [focAlignIqCentiA]',
+  0x7A: 'Ramp Current [focRampIqCentiA]',
+  0x7B: 'Alignment Time [focAlignTimeMs]',
+  0x7C: 'Iq Ramp Time [focIqRampTimeMs]',
+  0x7D: 'Speed Ramp Rate [focRampRateRps2]',
+  0x7E: 'CL Handoff Speed [focHandoffRadS]',
+  0x7F: 'OC Fault Threshold [focFaultOcCentiA]',
+  0x80: 'Stall Speed Threshold [focFaultStallDeciRadS]',
 };
 
 export const PARAM_UNITS: Record<number, string> = {
@@ -131,6 +152,14 @@ export const PARAM_UNITS: Record<number, string> = {
   0x68: 'ADC', 0x69: 'ADC',
   0x6A: 'ms', 0x6B: 'count',
   0x50: 'pairs',
+  // FOC Motor Model
+  0x70: 'm\u03A9', 0x71: '\u00B5H', 0x72: '\u00B5V\u00B7s/rad',
+  0x73: 'cV', 0x74: 'cA', 0x75: 'rad/s',
+  // FOC Tuning
+  0x76: '\u00D71000', 0x77: '1/s', 0x78: '\u00D71000',
+  // FOC Startup
+  0x79: 'cA', 0x7A: 'cA', 0x7B: 'ms', 0x7C: 'ms',
+  0x7D: 'rad/s\u00B2', 0x7E: 'rad/s', 0x7F: 'cA', 0x80: 'drad/s',
 };
 
 export const PARAM_TOOLTIPS: Record<number, string> = {
@@ -165,6 +194,26 @@ export const PARAM_TOOLTIPS: Record<number, string> = {
   0x6A: 'Coast-down time after desync before attempting restart.',
   0x6B: 'Maximum restart attempts after desync before permanent fault. 0 = no restarts.',
   0x50: 'Number of magnetic pole pairs. Informational: used for eRPM to mechanical RPM conversion in GUI.',
+  // FOC Motor Model
+  0x70: 'Phase resistance in milliohms. Critical for FOC current control — wrong Rs causes observer drift and PI mismatch.',
+  0x71: 'Phase inductance in microhenries. Affects current loop bandwidth and observer L\u00B7dI cancellation.',
+  0x72: 'Back-EMF constant in \u00B5V\u00B7s/rad (electrical). Ke = \u03BB_pm. Formula: 60 / (\u221A3 \u00D7 2\u03C0 \u00D7 KV \u00D7 pole_pairs).',
+  0x73: 'Nominal bus voltage in centivolts. Used for voltage clamp, dead-time comp, and speed limiting.',
+  0x74: 'Maximum phase current in centiamps. Limits speed PI output and defines OC fault threshold.',
+  0x75: 'Maximum electrical speed in rad/s. Caps speed reference and observer LPF tuning.',
+  // FOC Tuning
+  0x76: 'D/Q current loop proportional gain \u00D71000. Kp = \u03C9_bw \u00D7 Ls. Too high = current ringing.',
+  0x77: 'D/Q current loop integral gain. Ki = \u03C9_bw \u00D7 Rs (parallel form). Too high = overshoot.',
+  0x78: 'Observer low-pass filter coefficient \u00D71000. Higher = less filtering, better for high-speed motors.',
+  // FOC Startup
+  0x79: 'Alignment current in centiamps. Must overcome cogging torque. Too high = excess heating.',
+  0x7A: 'Open-loop ramp current in centiamps. Must overcome prop drag during I/f acceleration.',
+  0x7B: 'Alignment dwell time in ms. Heavy rotors need more time to settle.',
+  0x7C: 'Duration to ramp Iq from alignment to running current. Smoother = less vibration.',
+  0x7D: 'I/f speed ramp rate in rad/s\u00B2. Lower = gentler startup for heavy props.',
+  0x7E: 'Speed threshold for closed-loop handoff. PLL must track within 20% for 10ms.',
+  0x7F: 'Software overcurrent fault threshold in centiamps. Motor faults if |I| exceeds this.',
+  0x80: 'Stall detection speed in decirad/s. Motor faults if speed stays below this while commanding motion.',
 };
 
 export const PARAM_GROUPS: Record<number, string> = {
@@ -176,6 +225,9 @@ export const PARAM_GROUPS: Record<number, string> = {
   5: 'Voltage Protection',
   6: 'Recovery',
   7: 'Motor Hardware',
+  8: 'FOC Motor Model',
+  9: 'FOC Tuning',
+  10: 'FOC Startup',
 };
 
 export const FEATURE_NAMES: Record<number, string> = {

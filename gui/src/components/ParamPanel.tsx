@@ -13,6 +13,9 @@ const GROUP_ICONS: Record<number, string> = {
   5: '\uD83D\uDD0B', // Voltage Protection
   6: '\u21BB',       // Recovery
   7: '\u2699',       // Motor Hardware
+  8: '\uD83D\uDCA0', // FOC Motor Model
+  9: '\uD83D\uDD27', // FOC Tuning
+  10: '\u23F1',      // FOC Startup
 };
 
 const GROUP_COLORS: Record<number, string> = {
@@ -24,18 +27,23 @@ const GROUP_COLORS: Record<number, string> = {
   5: '#22c55e',
   6: '#eab308',
   7: '#94a3b8',
+  8: '#06b6d4',  // FOC Motor Model - teal
+  9: '#8b5cf6',  // FOC Tuning - violet
+  10: '#f472b6', // FOC Startup - pink
 };
 
 /** Groups that apply to both FOC and 6-step */
 const COMMON_GROUPS = new Set([2, 5, 7]); // Current Protection, Voltage Protection, Motor Hardware
 /** Groups that only apply to 6-step */
 const SIXSTEP_ONLY_GROUPS = new Set([0, 1, 3, 4, 6]); // Startup, Closed-Loop, ZC, Duty Slew, Recovery
+/** Groups that only apply to FOC */
+const FOC_ONLY_GROUPS = new Set([8, 9, 10]); // FOC Motor Model, FOC Tuning, FOC Startup
 
 export function ParamPanel() {
   const { connected, snapshot, params, info } = useEscStore();
   const [editValues, setEditValues] = useState<Record<number, string>>({});
   const [hoveredParam, setHoveredParam] = useState<number | null>(null);
-  const isIdle = snapshot?.state === 0;
+  const isIdle = !snapshot || snapshot.state === 0;
   const editable = connected && isIdle;
   const focMode = info ? isFocEnabled(info.featureFlags) : false;
 
@@ -92,8 +100,8 @@ export function ParamPanel() {
         color: focMode ? 'var(--accent-cyan)' : 'var(--accent-orange)', fontSize: 11,
       }}>
         {focMode
-          ? 'FOC mode active. FOC tuning is done in the Motor Setup tab. Groups marked "6-Step Only" are inactive in this mode.'
-          : '6-Step mode active. FOC parameters are not shown.'}
+          ? 'FOC mode active. FOC motor model and startup params can be tuned per-profile. 6-Step groups are dimmed.'
+          : '6-Step mode active. FOC parameters are dimmed.'}
       </div>
       {/* Header bar */}
       <div style={{
@@ -152,9 +160,12 @@ export function ParamPanel() {
       {(() => {
         const commonGroups = sortedGroups.filter(([g]) => COMMON_GROUPS.has(g));
         const sixStepGroups = sortedGroups.filter(([g]) => SIXSTEP_ONLY_GROUPS.has(g));
+        const focGroups = sortedGroups.filter(([g]) => FOC_ONLY_GROUPS.has(g));
         const sections = [
+          ...(focMode ? [{ label: 'FOC Parameters', desc: 'Motor model, tuning, and startup for FOC mode', groups: focGroups, dimmed: false }] : []),
           { label: 'Common Parameters', desc: 'Apply to both FOC and 6-Step modes', groups: commonGroups, dimmed: false },
           { label: '6-Step Parameters', desc: focMode ? 'Inactive in FOC mode' : 'Active in 6-Step mode', groups: sixStepGroups, dimmed: focMode },
+          ...(!focMode ? [{ label: 'FOC Parameters', desc: 'Inactive in 6-Step mode', groups: focGroups, dimmed: true }] : []),
         ];
         return sections.map(section => section.groups.length > 0 && (
           <div key={section.label} style={{ marginBottom: 16 }}>

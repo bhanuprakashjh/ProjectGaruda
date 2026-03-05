@@ -8,16 +8,17 @@ const PROFILE_DESCRIPTIONS: Record<number, string> = {
   0: '10-pole, 24V, low-KV industrial motor',
   1: '14-pole, 12V, 1400KV drone motor',
   2: '28-pole, large multirotor motor',
-  3: 'User-defined motor configuration',
+  3: '14-pole, 14.8V, 580KV heavy motor',
+  4: 'User-defined motor configuration',
 };
 
 const PROFILE_ICONS: Record<number, string> = {
-  0: '\uD83C\uDFED', 1: '\uD83D\uDEE9', 2: '\uD83D\uDE81', 3: '\u270F',
+  0: '\uD83C\uDFED', 1: '\uD83D\uDEE9', 2: '\uD83D\uDE81', 3: '\uD83D\uDCAA', 4: '\u270F',
 };
 
 export function ProfileSelector() {
   const { connected, snapshot, info, activeProfile, setParamModalOpen } = useEscStore();
-  const isIdle = snapshot?.state === 0;
+  const isIdle = !snapshot || snapshot.state === 0;
   const canLoad = connected && isIdle;
 
   const loadProfile = useCallback(async (profileId: number) => {
@@ -63,7 +64,7 @@ export function ProfileSelector() {
       </div>
 
       {/* Profile cards */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 10 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: 10 }}>
         {PROFILE_NAMES.map((name, i) => {
           const isActive = activeProfile === i;
           return (

@@ -146,6 +146,8 @@ export function ConnectionBar() {
       await serial.write(buildPacket(CMD.PING));
       await serial.write(buildPacket(CMD.GET_INFO));
       await new Promise(r => setTimeout(r, 50));
+      await serial.write(buildPacket(CMD.GET_SNAPSHOT));
+      await new Promise(r => setTimeout(r, 50));
       await serial.write(buildPacket(CMD.GET_PARAM_LIST));
     } catch (e: any) {
       console.error('Connect failed:', e);
