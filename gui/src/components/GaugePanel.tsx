@@ -1,6 +1,12 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useRef } from 'react';
 import { useEscStore } from '../store/useEscStore';
 import { isFocEnabled, FOC_SUB_STATES } from '../protocol/types';
+
+/** EMA smoothing factor — 0 = frozen, 1 = no smoothing. 0.15 gives ~6-sample lag. */
+const ALPHA = 0.15;
+function ema(prev: number, cur: number): number {
+  return prev + ALPHA * (cur - prev);
+}
 
 function ArcGauge({ value, max, label, unit, color, stale, format }: {
   value: number; max: number; label: string; unit: string; color: string; stale?: boolean;
@@ -44,7 +50,8 @@ function ArcGauge({ value, max, label, unit, color, stale, format }: {
         </defs>
         <path d={bgArc} fill="none" stroke="var(--border)" strokeWidth={8} strokeLinecap="round" />
         {valArc && (
-          <path d={valArc} fill="none" stroke={`url(#grad-${label})`} strokeWidth={8} strokeLinecap="round" />
+          <path d={valArc} fill="none" stroke={`url(#grad-${label})`} strokeWidth={8} strokeLinecap="round"
+            style={{ transition: 'd 0.3s ease-out' }} />
         )}
         <text x={cx} y={cy - 2} textAnchor="middle" fill="var(--text-primary)" fontSize={18} fontWeight={700}
           fontFamily="var(--font-mono)" opacity={stale ? 0.4 : 1}>
@@ -106,22 +113,54 @@ export function GaugePanel() {
 
   const polePairs = info?.motorPolePairs ?? 1;
 
-  // Common values
-  const vbus = (snapshot.vbusRaw * 3.3 / 4096 * 19.8);
-  const ibus = ((snapshot.ibusRaw - 2048) / 93.0);
-  const ibusPeak = ((snapshot.ibusMax - 2048) / 93.0);
+  // Raw values
+  const rawVbus = snapshot.vbusRaw * 3.3 / 4096 * 19.8;
+  const rawIbus = (snapshot.ibusRaw - 2048) / 93.0;
+  const rawIbusPeak = (snapshot.ibusMax - 2048) / 93.0;
+  const rawFocRpm = focMode && snapshot.focOmega !== 0
+    ? Math.abs(snapshot.focOmega) * 60 / (2 * Math.PI * polePairs) : 0;
+  const rawFocSpeedRads = focMode ? Math.abs(snapshot.focOmega) : 0;
+  const rawFocPowerW = focMode ? 1.5 * snapshot.focVbus * snapshot.focIqMeas * (snapshot.focOmega > 0 ? 1 : -1) : 0;
+  const rawERPM = snapshot.stepPeriod > 0 ? 240000 / snapshot.stepPeriod : 0;
+  const rawMechRPM = polePairs > 0 ? rawERPM / polePairs : rawERPM;
 
-  // FOC values
-  const focRpm = focMode && snapshot.focOmega !== 0
-    ? Math.round(Math.abs(snapshot.focOmega) * 60 / (2 * Math.PI * polePairs))
-    : 0;
-  const focSpeedRads = focMode ? Math.abs(snapshot.focOmega) : 0;
-  const focPowerW = focMode ? 1.5 * snapshot.focVbus * snapshot.focIqMeas * (snapshot.focOmega > 0 ? 1 : -1) : 0;
+  // EMA-smoothed values to prevent flickering
+  const smoothed = useRef({
+    vbus: rawVbus, ibus: rawIbus, ibusPeak: rawIbusPeak,
+    focRpm: rawFocRpm, focSpeedRads: rawFocSpeedRads, focPowerW: rawFocPowerW,
+    focIq: snapshot.focIqMeas, focId: snapshot.focIdMeas,
+    focIa: snapshot.focIa, focIb: snapshot.focIb,
+    focTheta: snapshot.focTheta, focThetaObs: snapshot.focThetaObs,
+    focVbus: snapshot.focVbus,
+    eRPM: rawERPM, mechRPM: rawMechRPM, duty: snapshot.dutyPct,
+  });
+  const s = smoothed.current;
+  s.vbus = ema(s.vbus, rawVbus);
+  s.ibus = ema(s.ibus, rawIbus);
+  s.ibusPeak = ema(s.ibusPeak, rawIbusPeak);
+  s.focRpm = ema(s.focRpm, rawFocRpm);
+  s.focSpeedRads = ema(s.focSpeedRads, rawFocSpeedRads);
+  s.focPowerW = ema(s.focPowerW, rawFocPowerW);
+  s.focIq = ema(s.focIq, snapshot.focIqMeas);
+  s.focId = ema(s.focId, snapshot.focIdMeas);
+  s.focIa = ema(s.focIa, snapshot.focIa);
+  s.focIb = ema(s.focIb, snapshot.focIb);
+  s.focTheta = ema(s.focTheta, snapshot.focTheta);
+  s.focThetaObs = ema(s.focThetaObs, snapshot.focThetaObs);
+  s.focVbus = ema(s.focVbus, snapshot.focVbus);
+  s.eRPM = ema(s.eRPM, rawERPM);
+  s.mechRPM = ema(s.mechRPM, rawMechRPM);
+  s.duty = ema(s.duty, snapshot.dutyPct);
+
+  const vbus = s.vbus;
+  const ibus = s.ibus;
+  const ibusPeak = s.ibusPeak;
+  const focRpm = Math.round(s.focRpm);
+  const focSpeedRads = s.focSpeedRads;
+  const focPowerW = s.focPowerW;
   const focSubStr = FOC_SUB_STATES[snapshot.focSubState] ?? '?';
-
-  // 6-step values
-  const eRPM = snapshot.stepPeriod > 0 ? Math.round(240000 / snapshot.stepPeriod) : 0;
-  const mechRPM = polePairs > 0 ? Math.round(eRPM / polePairs) : eRPM;
+  const eRPM = Math.round(s.eRPM);
+  const mechRPM = Math.round(s.mechRPM);
 
   return (
     <div style={{
@@ -162,14 +201,14 @@ export function GaugePanel() {
           <>
             <ArcGauge value={focRpm} max={info?.maxErpm ? Math.round(info.maxErpm / polePairs) : 20000}
               label="Speed" unit="RPM" color="#3b82f6" stale={isStale} />
-            <StatCard label="Iq" value={snapshot.focIqMeas.toFixed(2)} unit="A" color="var(--accent-yellow)"
+            <StatCard label="Iq" value={s.focIq.toFixed(2)} unit="A" color="var(--accent-yellow)"
               sub={`torque current`} stale={isStale} />
-            <StatCard label="Id" value={snapshot.focIdMeas.toFixed(2)} unit="A"
-              color={Math.abs(snapshot.focIdMeas) > 1 ? 'var(--accent-red)' : 'var(--accent-green)'}
+            <StatCard label="Id" value={s.focId.toFixed(2)} unit="A"
+              color={Math.abs(s.focId) > 1 ? 'var(--accent-red)' : 'var(--accent-green)'}
               sub={`field (target: 0)`} stale={isStale} />
-            <StatCard label="Vbus" value={(focMode ? snapshot.focVbus : vbus).toFixed(1)} unit="V" color="var(--accent-green)"
+            <StatCard label="Vbus" value={(focMode ? s.focVbus : vbus).toFixed(1)} unit="V" color="var(--accent-green)"
               sub={`${snapshot.vbusRaw} ADC`} stale={isStale} />
-            <ArcGauge value={snapshot.dutyPct} max={100} label="Duty" unit="%" color="#f472b6" stale={isStale} />
+            <ArcGauge value={s.duty} max={100} label="Duty" unit="%" color="#f472b6" stale={isStale} />
             <StatCard label="Power" value={Math.abs(focPowerW).toFixed(1)} unit="W" color="var(--accent-cyan)"
               sub={`${ibus.toFixed(2)}A bus`} stale={isStale} />
           </>
@@ -180,7 +219,7 @@ export function GaugePanel() {
               sub={`${snapshot.vbusRaw} ADC`} stale={isStale} />
             <StatCard label="Ibus" value={ibus.toFixed(2)} unit="A" color="var(--accent-yellow)"
               sub={`peak ${ibusPeak.toFixed(1)}A`} stale={isStale} />
-            <ArcGauge value={snapshot.dutyPct} max={100} label="Duty" unit="%" color="#f472b6" stale={isStale} />
+            <ArcGauge value={s.duty} max={100} label="Duty" unit="%" color="#f472b6" stale={isStale} />
             <StatCard label="mRPM" value={mechRPM.toLocaleString()} unit="RPM" color="var(--accent-cyan)"
               sub={`${polePairs}pp`} stale={isStale} />
           </>
@@ -193,10 +232,10 @@ export function GaugePanel() {
           display: 'flex', gap: 2, marginTop: 6,
           padding: '6px 4px', background: 'rgba(255,255,255,0.01)', borderRadius: 'var(--radius-sm)',
         }}>
-          <StatCard label="Ia" value={snapshot.focIa.toFixed(2)} unit="A" color="#a78bfa" stale={isStale} />
-          <StatCard label="Ib" value={snapshot.focIb.toFixed(2)} unit="A" color="#c084fc" stale={isStale} />
-          <StatCard label="Theta" value={(snapshot.focTheta * 180 / Math.PI).toFixed(0)} unit="deg" color="#22d3ee" stale={isStale} />
-          <StatCard label="Obs Theta" value={(snapshot.focThetaObs * 180 / Math.PI).toFixed(0)} unit="deg" color="#06b6d4" stale={isStale} />
+          <StatCard label="Ia" value={s.focIa.toFixed(2)} unit="A" color="#a78bfa" stale={isStale} />
+          <StatCard label="Ib" value={s.focIb.toFixed(2)} unit="A" color="#c084fc" stale={isStale} />
+          <StatCard label="Theta" value={(s.focTheta * 180 / Math.PI).toFixed(0)} unit="deg" color="#22d3ee" stale={isStale} />
+          <StatCard label="Obs Theta" value={(s.focThetaObs * 180 / Math.PI).toFixed(0)} unit="deg" color="#06b6d4" stale={isStale} />
           <StatCard label="Speed" value={focSpeedRads.toFixed(0)} unit="rad/s" color="#60a5fa" stale={isStale} />
           <StatCard label="Ibus" value={ibus.toFixed(2)} unit="A" color="var(--accent-orange)"
             sub={`peak ${ibusPeak.toFixed(1)}A`} stale={isStale} />
