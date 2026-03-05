@@ -42,10 +42,161 @@
 #include "input/rx_decode.h"
 #endif
 
+#if FEATURE_FOC
+#include <math.h>
+#include "garuda_foc_params.h"
+#include "foc/foc_types.h"
+#include "foc/clarke.h"
+#include "foc/park.h"
+#include "foc/svpwm.h"
+#include "foc/pi_controller.h"
+#include "foc/back_emf_obs.h"
+#include "foc/pll_estimator.h"
+#include "foc/flux_estimator.h"
+#if FEATURE_SMO
+#include "foc/smo_observer.h"
+#endif
+#if FEATURE_MXLEMMING
+#include "foc/mxlemming_obs.h"
+#endif
+#endif
+
+#if FEATURE_FOC_V2
+#include <math.h>
+#include "garuda_foc_params.h"
+#include "foc/foc_v2_types.h"
+#include "foc/foc_v2_control.h"
+#include "hal/hal_pwm.h"
+#endif
+
 #include "x2cscope/diagnostics.h"
 
 /* Global ESC runtime data — volatile: shared between ISRs and main loop */
 volatile GARUDA_DATA_T garudaData;
+
+#if FEATURE_FOC_V2
+/* FOC v2 state — accessed only from ADC ISR (not volatile) */
+static FOC_State_t s_foc_v2;
+#endif
+
+#if FEATURE_FOC
+/* ── Module-level FOC state (accessed only from ADC ISR) ─────────────── */
+static PI_t         s_pid_d;        /* D-axis current PI */
+static PI_t         s_pid_q;        /* Q-axis current PI */
+static PI_t         s_pid_spd;      /* Speed PI (outer loop) */
+static BackEMFObs_t s_obs;          /* Back-EMF voltage-model observer */
+static PLL_t        s_pll;          /* PLL angle/speed estimator */
+static FluxEst_t    s_flux_est;     /* Flux-integration angle estimator (parallel) */
+#if FEATURE_SMO
+static SMO_t        s_smo;          /* Sliding Mode Observer (parallel) */
+static PLL_t        s_pll_smo;      /* PLL driven by SMO back-EMF estimates */
+#endif
+#if FEATURE_MXLEMMING
+static MxlObs_t     s_mxl;          /* MXLEMMING flux observer */
+#endif
+
+static float        s_iq_ref;       /* Q-axis current reference (A) */
+static float        s_vbus;         /* Last measured bus voltage (V) */
+static uint16_t     s_slow_ctr;     /* Slow loop counter (0 -> FOC_SLOW_DIV) */
+
+/* Open-loop startup ramp state */
+static float        s_theta_ol;     /* Open-loop angle (rad) */
+static float        s_omega_ol;     /* Open-loop speed (rad/s elec.) */
+static bool         s_ovr_released; /* True after overrides released this run */
+static uint32_t     s_iq_ramp_ctr;  /* Ticks elapsed since entry (Iq ramp) */
+static uint32_t     s_align_ctr;    /* Ticks elapsed during alignment dwell */
+
+/* PLL angle correction gain (per fast-loop tick): 2pi x BW x Ts */
+#define PLL_CORRECTION_GAIN  (6.28318530718f * PLL_CORRECTION_BW_HZ * FOC_TS_FAST_S)
+
+/* ADC zero-current offset calibration (sampled while motor is off) */
+#define CAL_SAMPLES  1024U
+#define CAL_SHIFT    10U
+static uint32_t     s_ia_accum;
+static uint32_t     s_ib_accum;
+static uint16_t     s_cal_count;
+static uint16_t     s_ia_offset;
+static uint16_t     s_ib_offset;
+static bool         s_cal_done;
+
+/* Stall timer (slow loop ticks) */
+static uint32_t     s_stall_ctr;
+
+/* I/f → closed-loop transition state */
+static bool         s_cl_active;    /* True after PLL lock → speed PI + PLL angle */
+static uint32_t     s_cl_lock_ctr;  /* Consecutive ticks PLL tracks OL within tolerance */
+
+/* Phase current OC debounce (software OC since ibusRaw=0 at PWM valley) */
+#define FOC_OC_DEBOUNCE  48U  /* 48 ticks @ 24kHz = 2ms */
+static uint16_t     s_foc_oc_ctr;
+
+/* Helper: get PLL rotor angle (corrected for BEMF->rotor offset) */
+static inline float pll_rotor_angle(void)
+{
+    float a = s_pll.theta_est - PLL_ANGLE_OFFSET;
+    if (a < 0.0f)            a += 6.28318530718f;
+    if (a >= 6.28318530718f) a -= 6.28318530718f;
+    return a;
+}
+
+#if FEATURE_SMO
+static inline float smo_rotor_angle(void)
+{
+    float a = s_pll_smo.theta_est - PLL_ANGLE_OFFSET;
+    if (a < 0.0f)            a += 6.28318530718f;
+    if (a >= 6.28318530718f) a -= 6.28318530718f;
+    return a;
+}
+#endif
+
+/* Forward declarations */
+static void foc_startup_reset(void);
+
+static void foc_startup_reset(void)
+{
+    s_theta_ol     = 0.0f;
+    s_omega_ol     = 0.0f;
+    s_ovr_released = false;
+    s_iq_ramp_ctr  = 0;
+    s_align_ctr    = 0;
+    s_cl_active    = false;
+    s_cl_lock_ctr  = 0;
+    s_foc_oc_ctr   = 0;
+    pi_reset(&s_pid_d);
+    pi_reset(&s_pid_q);
+    pi_reset(&s_pid_spd);
+    s_iq_ref    = 0.0f;
+    s_stall_ctr = 0;
+    flux_est_reset(&s_flux_est);
+#if FEATURE_SMO
+    smo_reset(&s_smo);
+    pll_reset(&s_pll_smo);
+#endif
+#if FEATURE_MXLEMMING
+    mxl_reset(&s_mxl);
+#endif
+}
+
+static inline float counts_to_amps_cal(uint16_t raw, uint16_t offset)
+{
+    /* Negate: OA1/OA2 inverting topology on MCLV-48V-300W DIM.
+     * AN1292 reference uses (HALF_ADC_COUNT - ADC_DATA) for same reason. */
+    return -((float)(int16_t)(raw - offset)) * CURRENT_SCALE_A_PER_COUNT;
+}
+
+static inline float counts_to_vbus(uint16_t raw)
+{
+    return (float)raw * VBUS_SCALE_V_PER_COUNT;
+}
+#endif /* FEATURE_FOC */
+
+#if FEATURE_FOC_V2
+/* Reuse same helper for v2 telemetry raw→amps conversion */
+static inline float v2_counts_to_amps(uint16_t raw, uint16_t offset)
+{
+    return -((float)(int16_t)(raw - offset)) * CURRENT_SCALE_A_PER_COUNT;
+}
+#endif
 
 /* Heartbeat LED counter */
 static uint16_t heartbeatCounter = 0;
@@ -96,6 +247,50 @@ void GARUDA_ServiceInit(void)
     garudaData.desyncRestartAttempts = 0;
     garudaData.recoveryCounter = 0;
 
+#if FEATURE_FOC
+    /* FOC algorithm state */
+    pi_init(&s_pid_d,   KP_DQ,  KI_DQ,  -CLAMP_VDQ,       CLAMP_VDQ);
+    pi_init(&s_pid_q,   KP_DQ,  KI_DQ,  -CLAMP_VDQ,       CLAMP_VDQ);
+    pi_init(&s_pid_spd, KP_SPD, KI_SPD, -CLAMP_IQ_REF_A,  CLAMP_IQ_REF_A);
+    bemf_obs_reset(&s_obs);
+    pll_reset(&s_pll);
+    flux_est_reset(&s_flux_est);
+#if FEATURE_SMO
+    smo_reset(&s_smo);
+    pll_reset(&s_pll_smo);
+#endif
+#if FEATURE_MXLEMMING
+    mxl_reset(&s_mxl);
+#endif
+    foc_startup_reset();
+    s_iq_ref    = 0.0f;
+    s_vbus      = MOTOR_VBUS_NOM_V;
+    s_slow_ctr  = 0;
+    s_stall_ctr = 0;
+    s_ia_accum  = 0;
+    s_ib_accum  = 0;
+    s_cal_count = 0;
+    s_ia_offset = ADC_MIDPOINT;
+    s_ib_offset = ADC_MIDPOINT;
+    s_cal_done  = false;
+#endif
+
+#if FEATURE_FOC_V2
+    {
+        FOC_MotorParams_t mp = {
+            .Rs             = MOTOR_RS_OHM,
+            .Ls             = MOTOR_LS_H,
+            .lambda_pm      = MOTOR_FLUX_LINKAGE,
+            .Ke             = MOTOR_KE_VPEAK,
+            .pole_pairs     = MOTOR_POLE_PAIRS_FOC,
+            .max_current_a  = MOTOR_MAX_CURRENT_A,
+            .max_elec_rad_s = MOTOR_MAX_ELEC_RAD_S,
+            .vbus_nom_v     = MOTOR_VBUS_NOM_V
+        };
+        foc_v2_init(&s_foc_v2, &mp);
+    }
+#endif
+
     /* Throttle source init — unconditional (Finding 42/54).
      * Priority: ADC_POT > RX_AUTO > RX_PWM > RX_DSHOT > GSP */
 #if FEATURE_ADC_POT
@@ -125,6 +320,18 @@ void GARUDA_ServiceInit(void)
     garudaData.bemf.filterCount = 0;
     garudaData.bemf.ad2SettleCount = 0;
     garudaData.bemf.bemfSampleValid = true;
+    garudaData.bemf.phaseBHigh = 0;
+    garudaData.bemf.phaseBLow = 0;
+    garudaData.bemf.phaseBHighValid = false;
+    garudaData.bemf.phaseBLowValid = false;
+    garudaData.bemf.measuredNeutral = 0;
+    garudaData.bemf.neutralValid = false;
+    garudaData.bemf.zcNeutral[0] = 0;
+    garudaData.bemf.zcNeutral[1] = 0;
+    garudaData.bemf.zcNeutral[2] = 0;
+    garudaData.bemf.zcNeutralCount[0] = 0;
+    garudaData.bemf.zcNeutralCount[1] = 0;
+    garudaData.bemf.zcNeutralCount[2] = 0;
 
     garudaData.timing.stepPeriod = 0;
     garudaData.timing.lastCommTick = 0;
@@ -181,11 +388,16 @@ void GARUDA_ServiceInit(void)
 void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
 {
     /* Read all ADC buffers. MUST read AD1CH0DATA first — interrupt source.
-     * AD1CH0 = Phase B voltage (RB8/AD1AN11, always sampled)
-     * AD2CH0 = Phase A or C voltage (muxed per commutation step)
-     * AD2CH0DATA is safe: same PWM trigger, same SAMC, ISR latency guarantees done. */
+     * Reading clears data-ready condition on dsPIC33AK. */
+#if FEATURE_FOC || FEATURE_FOC_V2
+    /* FOC: AD1CH0 = Ia (OA1OUT), AD2CH0 = Ib (OA2OUT) — raw uint16_t */
+    uint16_t raw_ia = ADCBUF_IA;
+    uint16_t raw_ib = ADCBUF_IB;
+#else
+    /* 6-step: AD1CH0 = Phase B voltage (RB8), AD2CH0 = Phase A/C (muxed) */
     uint16_t phaseB_val = ADCBUF_PHASE_B;
     uint16_t phaseAC_val = ADCBUF_PHASE_AC;
+#endif
     garudaData.vbusRaw = ADCBUF_VBUS;
     garudaData.potRaw = ADCBUF_POT;
 
@@ -220,18 +432,57 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
      * any state changes (morph→CL etc.) so the NEXT tick sees the transition. */
     ESC_STATE_T entryState = garudaData.state;
 
-    /* Duty-proportional ZC threshold = virtual neutral point.
-     * neutral = Vbus * duty / (2 * LOOPTIME_TCY)
-     * Approximated as (vbusRaw * duty) >> 18 for 24kHz PWM.
+    /* P1 DISABLED: Phase B rail-based measuredNeutral gives correct Phase B
+     * midpoint (24 at low duty) but is 30% lower than the duty-proportional
+     * value (34). Since HWZC uses zcThreshold directly (hwzc.c:169) for its
+     * ADC comparator, the lower threshold pushes the comparator near the noise
+     * floor → massive noise rejections (NW6: 75k rejects vs NW4: 20k) →
+     * HWZC miss rate 26.7% → latch-off → software ZC fallback → failure.
      *
-     * Asymmetric IIR smoothing prevents threshold-BEMF mismatch during
-     * rapid duty transients.  Threshold tracks UP fast (motor accelerating,
-     * BEMF rising) but DOWN slowly (motor coasting, BEMF stays high).
-     * Rise: tau ~0.33ms (8 ticks).  Fall: tau ~10.7ms (256 ticks). */
+     * Phase B tracking still runs for diagnostic visibility in watch data. */
+    if (garudaData.state == ESC_CLOSED_LOOP
+#if FEATURE_SINE_STARTUP
+        || (garudaData.state == ESC_MORPH
+            && (garudaData.morph.subPhase == MORPH_HIZ
+                || garudaData.morph.subPhase == MORPH_WINDOWED_HIZ))
+#endif
+       )
+    {
+        PHASE_STATE_T bRole = commutationTable[garudaData.currentStep].phaseB;
+        if (bRole == PHASE_PWM_ACTIVE)
+        {
+            garudaData.bemf.phaseBHigh = phaseB_val;
+            garudaData.bemf.phaseBHighValid = true;
+            if (garudaData.bemf.phaseBLowValid)
+            {
+                garudaData.bemf.measuredNeutral =
+                    (garudaData.bemf.phaseBHigh + garudaData.bemf.phaseBLow) >> 1;
+                garudaData.bemf.neutralValid = true;
+            }
+        }
+        else if (bRole == PHASE_LOW)
+        {
+            garudaData.bemf.phaseBLow = phaseB_val;
+            garudaData.bemf.phaseBLowValid = true;
+            if (garudaData.bemf.phaseBHighValid)
+            {
+                garudaData.bemf.measuredNeutral =
+                    (garudaData.bemf.phaseBHigh + garudaData.bemf.phaseBLow) >> 1;
+                garudaData.bemf.neutralValid = true;
+            }
+        }
+        /* Steps 2,5: B=FLOAT — no update, use cached measuredNeutral */
+    }
+
+    /* ZC threshold: duty-proportional (P0) with symmetric IIR (P3).
+     * P0: Exact division replaces >>18 shift (+1.7% bias fix).
+     * P1 measured neutral disabled — see comment above. */
     static uint16_t zcThreshSmooth = 0;
     {
+        /* P0: Duty-proportional threshold — always used.
+         * Exact division replaces >>18 shift (+1.7% bias fix). */
         uint16_t rawThresh = (uint16_t)(
-            ((uint32_t)garudaData.vbusRaw * garudaData.duty) >> ZC_DUTY_THRESHOLD_SHIFT);
+            ((uint32_t)garudaData.vbusRaw * garudaData.duty) / ZC_DUTY_DIVISOR);
 
         if (garudaData.state == ESC_CLOSED_LOOP
 #if FEATURE_SINE_STARTUP
@@ -251,6 +502,16 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                )
             {
                 zcThreshSmooth = rawThresh;
+
+                /* P1: Reset measured neutral on CL entry — start fresh each run */
+                garudaData.bemf.neutralValid = false;
+                garudaData.bemf.phaseBHighValid = false;
+                garudaData.bemf.phaseBLowValid = false;
+                garudaData.bemf.phaseBHigh = 0;
+                garudaData.bemf.phaseBLow = 0;
+                garudaData.bemf.zcNeutralCount[0] = 0;
+                garudaData.bemf.zcNeutralCount[1] = 0;
+                garudaData.bemf.zcNeutralCount[2] = 0;
             }
 #if FEATURE_SINE_STARTUP
             /* Guardrail #7: only consume in windowed context — stale flag
@@ -263,17 +524,13 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                 garudaData.morph.forceThreshSeed = false;
             }
 #endif
-            else if (rawThresh >= zcThreshSmooth)
-            {
-                /* Rising — track fast (tau ~8 ticks = 0.33ms) */
-                zcThreshSmooth += ((uint16_t)(rawThresh - zcThreshSmooth) + 4) >> 3;
-            }
             else
             {
-                /* Falling — track slow (tau ~256 ticks = 10.7ms) */
-                uint16_t decay = ((uint16_t)(zcThreshSmooth - rawThresh) + 128) >> 8;
-                if (decay == 0) decay = 1;  /* Guarantee convergence */
-                zcThreshSmooth -= decay;
+                /* P3: Symmetric IIR — 1/4 gain both directions, tau ~4 ticks = 0.17ms.
+                 * Replaces asymmetric (fast rise 0.33ms, slow fall 10.7ms) that
+                 * caused threshold lag during deceleration. */
+                int16_t delta = (int16_t)rawThresh - (int16_t)zcThreshSmooth;
+                zcThreshSmooth += (delta + 2) >> 2;
             }
             garudaData.bemf.zcThreshold = zcThreshSmooth;
         }
@@ -310,8 +567,10 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
     }
     adcIsrTick++;
 #else
+#if !FEATURE_FOC && !FEATURE_FOC_V2
     garudaData.bemf.bemfRaw = phaseB_val;
     (void)phaseAC_val;  /* AD2CH0DATA must be read; suppress unused warning */
+#endif
 #endif
 
     /* Bus voltage fault enforcement (OV/UV) */
@@ -408,6 +667,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
     }
 #endif
 
+#ifdef ENABLE_PWM_FAULT_PCI
     /* Count transient FPCI trips via FLTEVT latched event flags.
      * With TERM=1 (auto-terminate), board FPCI trips that resolve within
      * one PWM cycle never set FLTACT by the time the ISR runs — but
@@ -419,6 +679,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
         PG2STAT = PCI_FAULT_EVT_MASK;
         PG3STAT = PCI_FAULT_EVT_MASK;
     }
+#endif
 
     /* Software hard fault — immediate shutdown (Mode 2 only) */
 #if OC_PROTECT_MODE == 2
@@ -440,6 +701,493 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
 #endif
 #endif /* FEATURE_HW_OVERCURRENT */
 
+#if FEATURE_FOC
+    /* ── FOC control path — replaces ENTIRE 6-step state machine ──
+     * Architecture from RK1 (proven on A2212 1400KV):
+     *   - Inline modular calls (no MCAPP_FOCStateMachine black box)
+     *   - V/f voltage-mode with gradual PLL angle correction
+     *   - POT=0 → motor coasts to stop; POT>0 → resumes (no re-arm)
+     *   - No ESC_RUNNING state — PLL correction makes CL implicit
+     */
+    {
+        /* Convert ADC counts → physical units using calibrated offsets */
+        float ia    = counts_to_amps_cal(raw_ia, s_ia_offset);
+        float ib    = counts_to_amps_cal(raw_ib, s_ib_offset);
+        s_vbus      = counts_to_vbus(garudaData.vbusRaw);
+
+        /* Dynamic PI voltage clamp — must match circular limiter (Vbus/sqrt(3))
+         * so anti-windup engages at the real output ceiling, not 1.73x above it. */
+        {
+            float vclamp = s_vbus * 0.95f * 0.577350269f;
+            s_pid_d.out_max =  vclamp;
+            s_pid_d.out_min = -vclamp;
+            s_pid_q.out_max =  vclamp;
+            s_pid_q.out_min = -vclamp;
+        }
+
+        /* Throttle source: use garudaData.throttle (already muxed above) */
+        uint16_t throttle_raw = garudaData.throttle;
+
+        /* State dispatch */
+        ESC_STATE_T state = garudaData.state;
+
+        if (state == ESC_IDLE || state == ESC_ARMED)
+        {
+            /* Outputs off — PWM overrides already asserted */
+            s_ovr_released = false;
+
+            /* ADC zero-current offset calibration (motor off → no current) */
+            if (!s_cal_done) {
+                s_ia_accum += raw_ia;
+                s_ib_accum += raw_ib;
+                if (++s_cal_count >= CAL_SAMPLES) {
+                    s_ia_offset = (uint16_t)(s_ia_accum >> CAL_SHIFT);
+                    s_ib_offset = (uint16_t)(s_ib_accum >> CAL_SHIFT);
+                    s_cal_done  = true;
+                }
+            }
+
+            goto foc_slow_loop;
+        }
+        else if (state == ESC_CLOSED_LOOP)
+        {
+            /* ── I/f (current-forced) sensorless FOC ─────────────────────
+             * PI current controllers active from tick 0.
+             * Phase 1 (alignment): θ=0 fixed, Iq ramps 0→ALIGN_IQ.
+             * Phase 2 (I/f OL):    θ forced at pot speed, Id=0 + Iq=RAMP_IQ.
+             * Phase 3 (CL):        PLL angle, speed PI → Iq reference.
+             *
+             * Key advantage over V/f: on low-Rs motors (A2212, 0.065Ω),
+             * any angle error θ_err causes Id_waste = V*sin(θ_err)/Rs.
+             * V/f cannot correct this (voltage is set, not current).
+             * I/f commands Id=0 and PI instantly cancels d-axis waste. */
+
+            /* Release PWM overrides once at CLOSED_LOOP entry */
+            if (!s_ovr_released) {
+                HAL_PWM_ReleaseAllOverrides();
+                s_ovr_released = true;
+            }
+
+#if FOC_DIAG_PWM_TEST == 1
+            /* ── DIAG 1: PWM-only — 50% duty, no FOC math ──────── */
+            HAL_PWM_SetDutyFloat3Phase(0.5f, 0.5f, 0.5f);
+            garudaData.focSubState = 99;
+            goto foc_slow_loop;
+#elif FOC_DIAG_PWM_TEST == 2
+            /* ── DIAG 2: Open-loop voltage — tests current sensing ─
+             * Applies fixed Vq=0.2V at θ=0 (no PI, no feedback).
+             * Expected: Iq ≈ Vq/Rs = 0.2/0.065 = 3.1A (POSITIVE).
+             * If Iq is NEGATIVE → current sense polarity is inverted.
+             * If Iq ≈ 0 → current sensing not working.
+             * focSubState=98 confirms this code path. */
+            {
+                float vq_test = 0.2f;  /* 0.2V → ~3A on A2212 */
+                float theta_test = 0.0f;
+
+                /* Read + convert currents for telemetry */
+                AlphaBeta_t iab_diag;
+                clarke_transform(ia, ib, &iab_diag);
+                DQ_t idq_diag;
+                park_transform(&iab_diag, theta_test, &idq_diag);
+
+                /* Fixed voltage — no PI */
+                DQ_t vdq_diag = { .d = 0.0f, .q = vq_test };
+                AlphaBeta_t vab_diag;
+                inv_park_transform(&vdq_diag, theta_test, &vab_diag);
+                float da2, db2, dc2;
+                svpwm_update(vab_diag.alpha, vab_diag.beta, s_vbus, &da2, &db2, &dc2);
+                HAL_PWM_SetDutyFloat3Phase(da2, db2, dc2);
+
+                /* Telemetry: pack id/iq into focIa/focIb for easy reading */
+                garudaData.focIa    = idq_diag.d;  /* expect ~0 */
+                garudaData.focIb    = idq_diag.q;  /* expect ~+3A if polarity OK */
+                garudaData.focTheta = theta_test;
+                garudaData.focVbus  = s_vbus;
+                garudaData.focSubState = 98;
+            }
+            goto foc_slow_loop;
+#elif FOC_DIAG_PWM_TEST == 3
+            /* ── DIAG 3: FOC with PI, no feedforward ────────────── */
+            /* Falls through to normal FOC but feedforward is zeroed below */
+#endif
+
+            /* ── Angle + Current Reference Management ──────────────── */
+            bool in_align = (s_align_ctr < STARTUP_ALIGN_TICKS);
+            float theta_drive;
+            float id_ref = 0.0f;
+            float iq_ref;
+
+            if (in_align) {
+                /* Phase 1: Alignment at θ=0 with gradual Iq ramp.
+                 * Ramp prevents L/R transient spike (L/R=0.46ms for A2212).
+                 * Iq at θ=0 creates field at 90° elec → rotor locks there. */
+                s_align_ctr++;
+                s_theta_ol = 0.0f;
+                s_omega_ol = 0.0f;
+                theta_drive = 0.0f;
+                float align_frac = (float)s_align_ctr / (float)STARTUP_ALIGN_TICKS;
+                iq_ref = STARTUP_ALIGN_IQ_A * align_frac;
+
+            } else if (!s_cl_active) {
+                /* Phase 2: I/f open-loop — forced angle + PI current control.
+                 * POT controls speed target, slew-rate limited. PI maintains
+                 * Id=0 and Iq=RAMP_IQ. No V/f formula — PI computes voltage. */
+                float pot_target;
+                if (throttle_raw < THROTTLE_DEADBAND) {
+                    pot_target = 0.0f;
+                } else {
+                    float pot_frac = (float)(throttle_raw - THROTTLE_DEADBAND)
+                                   / (4095.0f - (float)THROTTLE_DEADBAND);
+                    pot_target = pot_frac * STARTUP_MAX_OL_RAD_S;
+                }
+
+                /* Slew-rate limited speed ramp */
+                float max_delta = STARTUP_RAMP_RATE_RPS2 * FOC_TS_FAST_S;
+                if (s_omega_ol < pot_target) {
+                    s_omega_ol += max_delta;
+                    if (s_omega_ol > pot_target) s_omega_ol = pot_target;
+                } else if (s_omega_ol > pot_target) {
+                    s_omega_ol -= max_delta;
+                    if (s_omega_ol < pot_target) s_omega_ol = pot_target;
+                }
+
+                /* Advance forced angle */
+                s_theta_ol += s_omega_ol * FOC_TS_FAST_S;
+                if (s_theta_ol >= 6.28318530718f) s_theta_ol -= 6.28318530718f;
+                theta_drive = s_theta_ol;
+
+                /* I/f current: ramp from ALIGN_IQ to RAMP_IQ over IQ_RAMP_TICKS */
+                if (s_iq_ramp_ctr < STARTUP_IQ_RAMP_TICKS) {
+                    s_iq_ramp_ctr++;
+                    float frac = (float)s_iq_ramp_ctr / (float)STARTUP_IQ_RAMP_TICKS;
+                    iq_ref = STARTUP_ALIGN_IQ_A
+                           + (STARTUP_RAMP_IQ_A - STARTUP_ALIGN_IQ_A) * frac;
+                } else {
+                    iq_ref = STARTUP_RAMP_IQ_A;
+                }
+
+#if FEATURE_CLOSED_LOOP
+                /* PLL angle correction + CL transition check.
+                 * Observer lag compensation: BEMF EMA introduces phase lag
+                 * that makes PLL trail the true rotor. Compensate forward. */
+                if (s_omega_ol >= STARTUP_HANDOFF_RAD_S) {
+                    float pll_rotor = pll_rotor_angle();
+
+                    /* Compensate observer EMA phase lag */
+                    float lag_comp = OBS_LAG_COEFF * s_omega_ol * FOC_TS_FAST_S;
+                    if (lag_comp > OBS_LAG_COMP_MAX_RAD) lag_comp = OBS_LAG_COMP_MAX_RAD;
+                    pll_rotor += lag_comp;
+                    if (pll_rotor >= 6.28318530718f) pll_rotor -= 6.28318530718f;
+
+                    float err = pll_rotor - s_theta_ol;
+                    if (err >  3.14159265f) err -= 6.28318530718f;
+                    if (err < -3.14159265f) err += 6.28318530718f;
+
+                    /* Nudge forced angle toward PLL */
+                    s_theta_ol += PLL_CORRECTION_GAIN * err;
+                    if (s_theta_ol < 0.0f)            s_theta_ol += 6.28318530718f;
+                    if (s_theta_ol >= 6.28318530718f) s_theta_ol -= 6.28318530718f;
+
+                    /* CL transition: PLL tracks OL within tolerance */
+                    if (fabsf(err) < CL_ANGLE_TOL_RAD) {
+                        if (++s_cl_lock_ctr >= CL_LOCK_COUNT) {
+                            s_cl_active = true;
+                            /* Bumpless transfer: seed speed PI integrator
+                             * so its output matches current Iq reference.
+                             * PI output = Kp*err + integrator, err≈0 at lock
+                             * → integrator ≈ output ≈ iq_ref. */
+                            s_pid_spd.integrator = iq_ref;
+                        }
+                    } else {
+                        s_cl_lock_ctr = 0;
+                    }
+                }
+#endif
+            } else {
+                /* Phase 3: Full closed-loop — angle + speed PI.
+                 * MXLEMMING provides angle (no PLL pi/2 offset, no EMA lag).
+                 * PLL provides speed (inherently filtered by PI loop filter;
+                 * MXLEMMING dtheta/dt is too noisy for speed PI feedback). */
+#if FEATURE_MXLEMMING
+                theta_drive = s_mxl.theta_est;
+#else
+                theta_drive = pll_rotor_angle();
+#endif
+                float cl_omega = s_pll.omega_est;
+
+                /* Speed reference from pot */
+                float speed_ref;
+                if (throttle_raw < THROTTLE_DEADBAND) {
+                    speed_ref = 0.0f;
+                } else {
+                    float pot_frac = (float)(throttle_raw - THROTTLE_DEADBAND)
+                                   / (4095.0f - (float)THROTTLE_DEADBAND);
+                    speed_ref = pot_frac * MOTOR_MAX_ELEC_RAD_S;
+                }
+
+                /* Speed PI → Iq reference */
+                iq_ref = pi_update(&s_pid_spd, speed_ref - cl_omega,
+                                   FOC_TS_FAST_S);
+
+                /* Track speed for telemetry */
+                s_omega_ol = cl_omega;
+            }
+
+            /* ── FOC Pipeline: Clarke → Park → PI → InvPark → SVPWM ── */
+            AlphaBeta_t iab;
+            clarke_transform(ia, ib, &iab);
+
+            DQ_t idq;
+            park_transform(&iab, theta_drive, &idq);
+
+            DQ_t vdq;
+            vdq.d = pi_update(&s_pid_d, id_ref - idq.d, FOC_TS_FAST_S);
+            vdq.q = pi_update(&s_pid_q, iq_ref - idq.q, FOC_TS_FAST_S);
+
+            /* ── BEMF + cross-coupling feedforward ──────────────────── */
+            {
+#if FOC_DIAG_PWM_TEST == 3
+                float omega_ff = 0.0f;  /* DIAG 3: feedforward disabled */
+#else
+                /* Always use PLL omega for feedforward — it's inherently
+                 * filtered (PI loop filter), so no voltage spikes from
+                 * MXLEMMING dtheta/dt noise at low flux. */
+                float omega_ff = s_cl_active ? s_pll.omega_est : s_omega_ol;
+#endif
+
+                /* BEMF feedforward on q-axis */
+                float bemf_ff = omega_ff * MOTOR_KE_VPEAK;
+                /* Cross-coupling decoupling */
+                float vd_decouple = -idq.q * omega_ff * MOTOR_LS_H;
+                float vq_decouple = +idq.d * omega_ff * MOTOR_LS_H;
+
+                vdq.d += vd_decouple;
+                vdq.q += bemf_ff + vq_decouple;
+
+                /* Circular voltage limiting (d-axis priority, Vbus/sqrt(3)) */
+                float vmax = s_vbus * 0.95f * 0.577350269f;
+                if (vdq.d >  vmax) vdq.d =  vmax;
+                if (vdq.d < -vmax) vdq.d = -vmax;
+                float sq = vmax * vmax - vdq.d * vdq.d;
+                if (sq < 0.0f) sq = 0.0f;  /* FP rounding safety */
+                float vq_lim = sqrtf(sq);
+                if (vdq.q >  vq_lim) vdq.q =  vq_lim;
+                if (vdq.q < -vq_lim) vdq.q = -vq_lim;
+            }
+
+            AlphaBeta_t vab;
+            inv_park_transform(&vdq, theta_drive, &vab);
+
+            float da, db, dc;
+            svpwm_update(vab.alpha, vab.beta, s_vbus, &da, &db, &dc);
+            HAL_PWM_SetDutyFloat3Phase(da, db, dc);
+
+            /* Telemetry */
+            garudaData.focIa = ia;
+            garudaData.focIb = ib;
+            {
+                float ic_phase = -(ia + ib);
+                garudaData.focIdcEst = da * ia + db * ib + dc * ic_phase;
+            }
+
+            /* Observer chain — uses shared iab and vab.
+             * PLL always runs (needed for OL→CL lock detection).
+             * MXLEMMING runs in parallel; drives CL angle when active. */
+            {
+                bemf_obs_update(&s_obs,
+                                vab.alpha, vab.beta,
+                                iab.alpha, iab.beta,
+                                FOC_TS_FAST_S);
+                pll_update(&s_pll, s_obs.e_alpha, s_obs.e_beta, FOC_TS_FAST_S);
+                flux_est_update(&s_flux_est, s_obs.e_alpha, s_obs.e_beta, FOC_TS_FAST_S);
+#if FEATURE_SMO
+                smo_update(&s_smo,
+                           vab.alpha, vab.beta,
+                           iab.alpha, iab.beta);
+                pll_update(&s_pll_smo, s_smo.e_alpha, s_smo.e_beta, FOC_TS_FAST_S);
+#endif
+#if FEATURE_MXLEMMING
+                mxl_update(&s_mxl,
+                           vab.alpha, vab.beta,
+                           iab.alpha, iab.beta,
+                           FOC_TS_FAST_S);
+#endif
+            }
+
+            /* Update telemetry for GSP/GUI.
+             * focSubState: 0=align, 1=OL ramp, 2=OL+PLL tracking, 3=CL */
+            garudaData.focTheta    = theta_drive;
+            garudaData.focOmega    = s_pll.omega_est;
+            garudaData.focVbus     = s_vbus;
+#if FEATURE_MXLEMMING
+            garudaData.focTheta2   = s_mxl.theta_est;
+#else
+            garudaData.focTheta2   = pll_rotor_angle();
+#endif
+            garudaData.focSubState = in_align ? 0
+                                   : s_cl_active ? 3
+                                   : (s_omega_ol >= STARTUP_HANDOFF_RAD_S ? 2 : 1);
+            garudaData.focOffsetIa = s_ia_offset;
+            garudaData.focOffsetIb = s_ib_offset;
+#if FEATURE_SMO
+            garudaData.focSmoTheta = smo_rotor_angle();
+            garudaData.focSmoOmega = s_pll_smo.omega_est;
+#endif
+
+            /* Phase current overcurrent protection (ibusRaw=0 at PWM valley).
+             * Use |Ia|+|Ib| > FAULT_OC_A as fast proxy for peak phase current.
+             * Debounce 2ms to reject switching transients. */
+            {
+                float i_mag = fabsf(ia) + fabsf(ib);
+                if (i_mag > FAULT_OC_A) {
+                    if (++s_foc_oc_ctr >= FOC_OC_DEBOUNCE) {
+                        HAL_MC1PWMDisableOutputs();
+                        garudaData.state     = ESC_FAULT;
+                        garudaData.faultCode = FAULT_OVERCURRENT;
+                        garudaData.runCommandActive = false;
+                        LED2 = 0;
+                        s_foc_oc_ctr = 0;
+                    }
+                } else {
+                    s_foc_oc_ctr = 0;
+                }
+            }
+
+            /* Stall detection — only when throttle demands motion.
+             * In I/f: stall = PLL speed near zero while forced angle advancing. */
+            if (throttle_raw >= THROTTLE_DEADBAND &&
+                !in_align &&
+                fabsf(s_pll.omega_est) < FAULT_STALL_RAD_S &&
+                s_omega_ol > STARTUP_HANDOFF_RAD_S) {
+                if (++s_stall_ctr >= (uint32_t)(FAULT_STALL_TIMEOUT_MS * FOC_SLOW_DIV)) {
+                    HAL_MC1PWMDisableOutputs();
+                    garudaData.state     = ESC_FAULT;
+                    garudaData.faultCode = FAULT_STALL;
+                    garudaData.runCommandActive = false;
+                    LED2 = 0;
+                    s_stall_ctr = 0;
+                }
+            } else {
+                s_stall_ctr = 0;
+            }
+        }
+        else if (state == ESC_FAULT)
+        {
+            HAL_MC1PWMDisableOutputs();
+        }
+        /* ESC_IDLE, ESC_ARMED: handled above (offset cal + goto slow loop) */
+
+    foc_slow_loop:
+        /* ── Slow loop (every FOC_SLOW_DIV ticks → 1 kHz) ────────────── */
+        if (++s_slow_ctr >= FOC_SLOW_DIV)
+        {
+            s_slow_ctr = 0;
+            state = garudaData.state;  /* Re-read after fast loop may have changed it */
+
+            /* Arming counter — moved from Timer1 ISR to avoid cross-ISR races */
+            if (state == ESC_ARMED)
+            {
+                if (throttle_raw < THROTTLE_DEADBAND) {
+                    if (++garudaData.armCounter >= (uint32_t)FOC_ARM_TIME_MS) {
+                        /* Throttle held at zero for ARM_TIME_MS → enter FOC */
+                        foc_startup_reset();
+                        bemf_obs_reset(&s_obs);
+                        pll_reset(&s_pll);
+#if FEATURE_SMO
+                        smo_reset(&s_smo);
+                        pll_reset(&s_pll_smo);
+#endif
+                        /* Pre-load center duty before releasing overrides */
+                        HAL_PWM_SetDutyFloat3Phase(0.5f, 0.5f, 0.5f);
+                        garudaData.state = ESC_CLOSED_LOOP;
+                        LED2 = 1;
+                    }
+                } else {
+                    garudaData.armCounter = 0;
+                }
+            }
+        }
+    } /* end FOC scope */
+#elif FEATURE_FOC_V2
+    /* ── FOC v2 control path — closed-loop current control ──────────
+     * Architecture: MXLEMMING flux observer + Tustin PI + SVPWM.
+     * True Id/Iq current control from tick 0. No V/f waste.
+     * State machine: IDLE → ARMED → ALIGN → IF_RAMP → CLOSED_LOOP
+     */
+    {
+        /* Sync mode from main loop state changes (button press: IDLE→ARMED, stop) */
+        if (garudaData.state == ESC_ARMED && s_foc_v2.mode == FOC_IDLE) {
+            s_foc_v2.mode = FOC_ARMED;
+            s_foc_v2.arm_ctr = 0;
+        } else if (garudaData.state == ESC_IDLE && s_foc_v2.mode != FOC_IDLE) {
+            s_foc_v2.mode = FOC_IDLE;
+            /* Reset calibration for next run */
+            s_foc_v2.cal_done = false;
+            s_foc_v2.cal_count = 0;
+            s_foc_v2.cal_accum_a = 0;
+            s_foc_v2.cal_accum_b = 0;
+        }
+
+        /* FOC v2 uses raw_ia/raw_ib already read at ISR entry */
+        uint16_t throttle_v2 = garudaData.throttle;
+
+        float da_v2, db_v2, dc_v2;
+        foc_v2_fast_tick(&s_foc_v2,
+                         raw_ia, raw_ib,
+                         garudaData.vbusRaw, throttle_v2,
+                         &da_v2, &db_v2, &dc_v2);
+
+        /* Release PWM overrides when entering active modes */
+        {
+            static bool v2_ovr_released = false;
+            if (s_foc_v2.mode >= FOC_ALIGN && s_foc_v2.mode <= FOC_CLOSED_LOOP) {
+                if (!v2_ovr_released) {
+                    HAL_PWM_ReleaseAllOverrides();
+                    v2_ovr_released = true;
+                }
+                HAL_PWM_SetDutyFloat3Phase(da_v2, db_v2, dc_v2);
+            } else {
+                v2_ovr_released = false;
+            }
+        }
+
+        /* Map FOC v2 mode to ESC state for main loop compatibility */
+        switch (s_foc_v2.mode) {
+            case FOC_IDLE:        garudaData.state = ESC_IDLE; break;
+            case FOC_ARMED:       garudaData.state = ESC_ARMED; break;
+            case FOC_ALIGN:       garudaData.state = ESC_ALIGN; break;
+            case FOC_IF_RAMP:     garudaData.state = ESC_OL_RAMP; break;
+            case FOC_CLOSED_LOOP: garudaData.state = ESC_CLOSED_LOOP; break;
+            case FOC_FAULT:       garudaData.state = ESC_FAULT; break;
+            default:              garudaData.state = ESC_FAULT; break;
+        }
+
+        /* Fault propagation */
+        if (s_foc_v2.mode == FOC_FAULT) {
+            HAL_MC1PWMDisableOutputs();
+            if (garudaData.faultCode == FAULT_NONE)
+                garudaData.faultCode = FAULT_FOC_INTERNAL;
+            garudaData.runCommandActive = false;
+            LED2 = 0;
+        }
+
+        /* Telemetry update */
+#if FEATURE_FOC_V2
+        garudaData.focIdMeas   = s_foc_v2.id_meas;
+        garudaData.focIqMeas   = s_foc_v2.iq_meas;
+        garudaData.focTheta    = s_foc_v2.theta;
+        garudaData.focOmega    = s_foc_v2.omega_pll;
+        garudaData.focVbus     = s_foc_v2.vbus;
+        garudaData.focIa       = v2_counts_to_amps(raw_ia, (uint16_t)s_foc_v2.ia_offset);
+        garudaData.focIb       = v2_counts_to_amps(raw_ib, (uint16_t)s_foc_v2.ib_offset);
+        garudaData.focThetaObs = s_foc_v2.theta_obs;
+        garudaData.focSubState = s_foc_v2.sub_state;
+        garudaData.focOffsetIa = (uint16_t)s_foc_v2.ia_offset;
+        garudaData.focOffsetIb = (uint16_t)s_foc_v2.ib_offset;
+#endif
+    } /* end FOC v2 scope */
+#else
+    /* ── 6-step state machine ── */
     /* State machine */
     switch (garudaData.state)
     {
@@ -1549,6 +2297,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
             HAL_MC1PWMDisableOutputs();
             break;
     }
+#endif /* !FEATURE_FOC && !FEATURE_FOC_V2 — end of 6-step state machine */
 
 #if FEATURE_BEMF_CLOSED_LOOP
     /* Track state for transition detection (must be last before flag clear).
@@ -1603,6 +2352,11 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
             break;
 
         case ESC_ARMED:
+#if FEATURE_FOC || FEATURE_FOC_V2
+            /* FOC: arming handled in ADC ISR slow loop (1kHz) to avoid
+             * cross-ISR races. Timer1 is a no-op for ESC_ARMED with FOC. */
+            break;
+#else
             /* Verify throttle stays at zero for ARM_TIME */
             if (garudaData.throttle < ARM_THROTTLE_ZERO_ADC)
             {
@@ -1622,26 +2376,33 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
                 garudaData.armCounter = 0; /* Reset if throttle not zero */
             }
             break;
+#endif
 
         case ESC_ALIGN:
-#if FEATURE_SINE_STARTUP
+#if FEATURE_FOC || FEATURE_FOC_V2
+            /* FOC: alignment handled in ADC ISR. Timer1 is a no-op. */
+            break;
+#elif FEATURE_SINE_STARTUP
             if (STARTUP_SineAlign(&garudaData))
                 garudaData.state = ESC_OL_RAMP;
+            break;
 #else
             if (STARTUP_Align(&garudaData))
             {
                 garudaData.state = ESC_OL_RAMP;
                 garudaData.rampCounter = garudaData.rampStepPeriod;
             }
-#endif
             break;
+#endif
 
-#if DIAGNOSTIC_MANUAL_STEP
         case ESC_OL_RAMP:
+#if FEATURE_FOC || FEATURE_FOC_V2
+            /* FOC: I/f ramp handled in ADC ISR. Timer1 is a no-op. */
+            break;
+#elif DIAGNOSTIC_MANUAL_STEP
             garudaData.state = ESC_CLOSED_LOOP;
             break;
 #elif FEATURE_SINE_STARTUP
-        case ESC_OL_RAMP:
             if (STARTUP_SineRamp(&garudaData))
             {
                 /* Sine ramp complete → enter waveform morph.
@@ -1657,12 +2418,7 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
                 garudaData.state = ESC_MORPH;
             }
             break;
-
-        case ESC_MORPH:
-            /* All morph logic runs in ADC ISR (24kHz). Timer1 is idle. */
-            break;
 #else
-        case ESC_OL_RAMP:
 #if FEATURE_PRESYNC_RAMP
             /* Skip blind forced ramp. Enter CL directly with slow initial
              * step period. ADC ISR pre-sync handles feedback-gated
@@ -1678,7 +2434,23 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
             break;
 #endif
 
-#if DIAGNOSTIC_MANUAL_STEP
+        case ESC_MORPH:
+#if FEATURE_FOC || FEATURE_FOC_V2
+            /* FOC: no morph phase. Unreachable. */
+            break;
+#elif FEATURE_SINE_STARTUP
+            /* All morph logic runs in ADC ISR (24kHz). Timer1 is idle. */
+            break;
+#else
+            /* Morph only used with SINE_STARTUP — unreachable here */
+            break;
+#endif
+
+#if FEATURE_FOC || FEATURE_FOC_V2
+        case ESC_CLOSED_LOOP:
+            /* FOC: all control in ADC ISR. Timer1 does nothing. */
+            break;
+#elif DIAGNOSTIC_MANUAL_STEP
         case ESC_CLOSED_LOOP:
             /* Manual step mode: hold current step. SW2 advances from main loop. */
             break;
@@ -1756,6 +2528,7 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
     TIMER1_InterruptFlagClear();
 }
 
+#ifdef ENABLE_PWM_FAULT_PCI
 /**
  * @brief PWM Fault ISR — handles PCI fault events.
  */
@@ -1785,6 +2558,7 @@ void __attribute__((__interrupt__, no_auto_psv)) _PWMInterrupt(void)
     }
     ClearPWMIF();
 }
+#endif /* ENABLE_PWM_FAULT_PCI */
 
 #if FEATURE_ADC_CMP_ZC
 /**

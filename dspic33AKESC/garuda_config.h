@@ -15,21 +15,27 @@ extern "C" {
 #endif
 
 /* Feature Flags (0=disabled, 1=enabled) */
-#define FEATURE_BEMF_CLOSED_LOOP 1  /* Phase 2: BEMF ZC detection (0=Phase 1 open-loop only) */
+#define FEATURE_BEMF_CLOSED_LOOP 0  /* Phase 2: BEMF ZC detection (0=Phase 1 open-loop only) */
 #define FEATURE_VBUS_FAULT       1  /* Phase A4: Bus voltage OV/UV fault enforcement */
-#define FEATURE_DESYNC_RECOVERY  1  /* Phase B2: Controlled restart-on-desync (ESC_RECOVERY) */
-#define FEATURE_DUTY_SLEW        1  /* Phase B1: Asymmetric duty slew rate limiter */
-#define FEATURE_TIMING_ADVANCE   1  /* Phase B3: Linear timing advance by RPM (0-15 deg linear by speed) */
-#define FEATURE_DYNAMIC_BLANKING 1  /* Phase C1: Speed+duty-aware blanking (extra blank at high duty/demag) */
-#define FEATURE_VBUS_SAG_LIMIT   1  /* Phase C2: Bus voltage sag power limiting (reduce duty on Vbus dip) */
-#define FEATURE_BEMF_INTEGRATION 1  /* Phase E: Shadow integration estimator (shadow-only, no control) */
-#define FEATURE_SINE_STARTUP     1  /* Sine ramp + waveform morph transition.
+#define FEATURE_DESYNC_RECOVERY  0  /* Phase B2: Controlled restart-on-desync (ESC_RECOVERY) */
+#define FEATURE_DUTY_SLEW        0  /* Phase B1: Asymmetric duty slew rate limiter */
+#define FEATURE_TIMING_ADVANCE   0  /* Phase B3: Linear timing advance by RPM (0-15 deg linear by speed) */
+#define FEATURE_DYNAMIC_BLANKING 0  /* Phase C1: Speed+duty-aware blanking (extra blank at high duty/demag) */
+#define FEATURE_VBUS_SAG_LIMIT   0  /* Phase C2: Bus voltage sag power limiting (reduce duty on Vbus dip) */
+#define FEATURE_BEMF_INTEGRATION 0  /* Phase E: Shadow integration estimator (shadow-only, no control) */
+#define FEATURE_SINE_STARTUP     0  /* Sine ramp + waveform morph transition.
                                      * Global: replaces coast gap for ALL motor
                                      * profiles. Per-motor tuning via existing
                                      * per-profile defines (SINE_*_MODULATION_PCT,
                                      * SINE_PHASE_OFFSET_DEG, etc). */
-#define FEATURE_ADC_CMP_ZC       1  /* Phase F: ADC comparator-based high-speed ZC */
+#define FEATURE_ADC_CMP_ZC       0  /* Phase F: ADC comparator-based high-speed ZC */
 #define FEATURE_HW_OVERCURRENT  1  /* Phase G: Hardware overcurrent protection via CMP3+OA3 */
+
+/* FOC (Field-Oriented Control) — compile-time alternative to 6-step */
+#define FEATURE_FOC              0  /* Phase I: OLD FOC v1 (reference, deprecated) */
+#define FEATURE_FOC_V2           1  /* Phase I v2: closed-loop current control + MXLEMMING */
+#define FEATURE_SMO              0  /* 0=PLL only, 1=PLL+SMO parallel (v1 only) */
+#define FEATURE_MXLEMMING        0  /* 0=PLL chain, 1=MXLEMMING flux observer (v1 only) */
 #define FEATURE_LEARN_MODULES    0  /* master: ring buffer + quality + health */
 #define FEATURE_ADAPTATION       0  /* requires FEATURE_LEARN_MODULES */
 #define FEATURE_COMMISSION       0  /* requires FEATURE_LEARN_MODULES */
@@ -55,6 +61,15 @@ extern "C" {
  * No automatic ramp — user controls step timing.
  * Set to 0 for normal auto-ramp operation. */
 #define DIAGNOSTIC_MANUAL_STEP  0
+
+/* FOC diagnostic levels (requires FEATURE_FOC=1):
+ * 0 = Normal FOC (production)
+ * 1 = PWM-only: 50% duty, no FOC math (tests PWM hardware)
+ * 2 = Open-loop voltage: applies fixed Vq, reads current (tests current sense)
+ *     Check focIa/focIb/focSubState in watch. Expect:
+ *       focSubState=98, Iq≈Vq/Rs (positive = correct polarity)
+ * 3 = FOC with PI but no feedforward (tests PI only) */
+#define FOC_DIAG_PWM_TEST       2
 
 /* Learn module tuning (only compiled when FEATURE_LEARN_MODULES=1) */
 #if FEATURE_LEARN_MODULES
@@ -232,10 +247,10 @@ extern "C" {
 #define ARM_THROTTLE_ZERO_ADC      200         /* Max pot ADC to consider "zero" (~4.9% of 4095) */
 
 /* Bus Voltage */
-#define VBUS_OVERVOLTAGE_ADC       3600        /* ~52V with typical divider (tunable) */
-#define VBUS_UNDERVOLTAGE_ADC      500         /* ~7V with typical divider (tunable) */
+#define VBUS_OVERVOLTAGE_ADC       3600        /* ~67V at ratio 23.0 (tunable) */
+#define VBUS_UNDERVOLTAGE_ADC      500         /* ~9.3V at ratio 23.0 (tunable) */
 #define VBUS_FAULT_FILTER          3           /* Consecutive ADC samples to confirm fault (3 = ~125us) */
-#define VBUS_UV_STARTUP_ADC        400         /* ~5.6V: relaxed UV during pre-sync startup.
+#define VBUS_UV_STARTUP_ADC        400         /* ~7.4V: relaxed UV during pre-sync startup.
                                                 * Below ~4.5V, bootstrap caps can't charge and
                                                 * gate drive fails. 400 ADC (~5.6V) gives margin
                                                 * above brownout while staying well below the
@@ -367,6 +382,9 @@ extern "C" {
 /* CMP3 settings */
 #define OC_CMP_HYSTERESIS       0b11  /* 45mV hysteresis (max, for noise immunity) */
 #define OC_CMP_FILTER_EN        1     /* 1=enable CMP3 digital filter, 0=disable */
+#define OC_LEB_BLANKING_NS      500   /* Leading-edge blanking (ns) — suppresses PWM
+                                       * switching noise on current sense. 500ns = 200 clocks
+                                       * @ 400MHz. Must exceed FET rise time + ringing. */
 
 #endif /* FEATURE_HW_OVERCURRENT */
 
@@ -384,11 +402,10 @@ extern "C" {
 #define ZC_STEP_MISS_LIMIT      2       /* Per-step misses before fallback deadline (timing-based) */
 #define ZC_TIMEOUT_MULT         2       /* Timeout = ZC_TIMEOUT_MULT * stepPeriod (in adcIsrTick) */
 
-/* ADC threshold parameters.
- * Threshold tracks the virtual neutral: Vbus * duty / (2 * LOOPTIME_TCY).
- * Approximated as (vbusRaw * duty) >> ZC_DUTY_THRESHOLD_SHIFT.
- * Shift 18 is accurate for 24kHz PWM (2*LOOPTIME_TCY ≈ 266K ≈ 2^18). */
-#define ZC_DUTY_THRESHOLD_SHIFT 18
+/* P0: ZC_DUTY_THRESHOLD_SHIFT replaced by exact ZC_DUTY_DIVISOR in
+ * garuda_calc_params.h. Old >>18 had +1.7% bias (2^18=262144 vs
+ * 2*LOOPTIME_TCY=266636). See adaptive ZC threshold plan. */
+/* #define ZC_DUTY_THRESHOLD_SHIFT 18 */
 #define ZC_ADC_DEADBAND         4       /* Reduced from 10: tighter deadband for faster ZC crossing */
 #define ZC_AD2_SETTLE_SAMPLES   2       /* Increased from 1: extra settle for AD2 mux (steps 1,3,4) */
 

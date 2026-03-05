@@ -40,6 +40,10 @@ extern "C" {
 void SetupGPIOPorts(void);
 void MapGPIOHWFunction(void);
 
+#if FEATURE_FOC || FEATURE_FOC_V2
+void HAL_OA12_Init(void);
+#endif
+
 #if FEATURE_HW_OVERCURRENT
 void HAL_OA3_Init(void);
 #endif

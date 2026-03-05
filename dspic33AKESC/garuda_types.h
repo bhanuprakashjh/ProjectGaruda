@@ -67,6 +67,15 @@ typedef struct
     uint8_t  filterCount;       /* Consecutive reads matching cmpExpected */
     uint8_t  ad2SettleCount;    /* Samples to discard after AD2 PINSEL change (0=settled) */
     bool     bemfSampleValid;   /* false when bemfRaw is stale after mux switch */
+    /* P1: Measured neutral from active-rail tracking + ZC events */
+    uint16_t phaseBHigh;         /* Phase B ADC reading when B=PWM (high rail) */
+    uint16_t phaseBLow;          /* Phase B ADC reading when B=LOW (low rail) */
+    bool     phaseBHighValid;    /* Explicit validity — phaseBLow=0 is legitimate */
+    bool     phaseBLowValid;     /* Explicit validity — can't use >0 sentinel */
+    uint16_t measuredNeutral;    /* (phaseBHigh + phaseBLow) / 2 — real-time neutral */
+    bool     neutralValid;       /* true after first valid high+low pair captured */
+    uint16_t zcNeutral[3];       /* Per-phase neutral from ZC events [A,B,C] */
+    uint8_t  zcNeutralCount[3];  /* ZC measurement count per phase (saturates 255) */
 } BEMF_STATE_T;
 
 /* ZC timeout result enum */
@@ -498,7 +507,15 @@ typedef enum
     FAULT_DESYNC,
     FAULT_STARTUP_TIMEOUT,  /* Pre-sync timeout: ZC never achieved within PRESYNC_TIMEOUT_MS */
     FAULT_MORPH_TIMEOUT,    /* Morph did not achieve ZC lock */
-    FAULT_RX_LOSS           /* RX signal lost (PWM/DShot/AUTO) — requires CLEAR_FAULT */
+    FAULT_RX_LOSS,          /* RX signal lost (PWM/DShot/AUTO) — requires CLEAR_FAULT */
+    FAULT_FOC_INTERNAL,     /* FOC internal fault (estimator divergence, overcurrent) */
+    FAULT_TRAP_BUS,         /* CPU bus error trap */
+    FAULT_TRAP_ILLEGAL,     /* Illegal instruction trap */
+    FAULT_TRAP_ADDRESS,     /* CPU address error trap */
+    FAULT_TRAP_STACK,       /* CPU stack error trap */
+    FAULT_TRAP_MATH,        /* CPU math error trap (integer div by zero) */
+    FAULT_TRAP_GENERAL,     /* General error trap */
+    FAULT_TRAP_DEFAULT      /* Unhandled interrupt (default handler) */
 } FAULT_CODE_T;
 
 /* Main ESC runtime data */
@@ -577,6 +594,39 @@ typedef struct
     bool gspStartIntent;
     bool gspStopIntent;
     bool gspFaultClearIntent;
+#endif
+
+#if FEATURE_FOC
+    /* FOC v1 telemetry (updated by ADC ISR, read by main/GSP) */
+    float       focIa;          /* Phase A current (A) */
+    float       focIb;          /* Phase B current (A) */
+    float       focTheta;       /* PLL electrical angle (rad) */
+    float       focOmega;       /* PLL electrical speed (rad/s) */
+    float       focVbus;        /* Bus voltage (V) */
+    float       focIdcEst;      /* Estimated DC bus current (A) */
+    float       focTheta2;      /* Flux estimator angle (parallel, rad) */
+    uint8_t     focSubState;    /* Internal FOC sub-state (0=align,1=OL,2=running) */
+    uint16_t    focOffsetIa;    /* Calibrated ADC offset Ia */
+    uint16_t    focOffsetIb;    /* Calibrated ADC offset Ib */
+#if FEATURE_SMO
+    float       focSmoTheta;    /* SMO angle (rad) */
+    float       focSmoOmega;    /* SMO speed (rad/s) */
+#endif
+#endif
+
+#if FEATURE_FOC_V2
+    /* FOC v2 telemetry — proper Id/Iq (not raw phase currents) */
+    float       focIdMeas;      /* D-axis current (A) — should be ~0 */
+    float       focIqMeas;      /* Q-axis current (A) — torque */
+    float       focTheta;       /* Commutation angle (rad) */
+    float       focOmega;       /* PLL speed (rad/s) */
+    float       focVbus;        /* Bus voltage (V) */
+    float       focIa;          /* Phase A current (A, for debug) */
+    float       focIb;          /* Phase B current (A, for debug) */
+    float       focThetaObs;    /* Observer angle (rad) */
+    uint8_t     focSubState;    /* 0=idle,1=armed,2=align,3=if,4=cl */
+    uint16_t    focOffsetIa;    /* Calibrated ADC offset Ia */
+    uint16_t    focOffsetIb;    /* Calibrated ADC offset Ib */
 #endif
 
     /* RX input state (Phase H) — unconditional for status reporting */

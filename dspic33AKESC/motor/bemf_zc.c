@@ -69,6 +69,31 @@ static inline uint16_t computeBlankTicks(volatile GARUDA_DATA_T *pData)
 }
 
 /**
+ * @brief Record corrected floating-phase voltage as per-phase neutral at ZC.
+ * Uses vCorrected domain (gain/offset applied) to match the comparison
+ * path. IIR: 3/4 old + 1/4 new. Software ZC path only — HWZC path has
+ * up to 125 counts stale ADC data, too imprecise for neutral learning.
+ */
+static inline void recordZcNeutral(volatile BEMF_STATE_T *bemf,
+                                    uint8_t floatingPhase,
+                                    uint16_t vCorrectedAtZc)
+{
+    if (bemf->zcNeutralCount[floatingPhase] == 0)
+    {
+        bemf->zcNeutral[floatingPhase] = vCorrectedAtZc;
+        bemf->zcNeutralCount[floatingPhase] = 1;
+    }
+    else
+    {
+        int16_t delta = (int16_t)vCorrectedAtZc
+                      - (int16_t)bemf->zcNeutral[floatingPhase];
+        bemf->zcNeutral[floatingPhase] += (delta + 2) >> 2;
+        if (bemf->zcNeutralCount[floatingPhase] < 255)
+            bemf->zcNeutralCount[floatingPhase]++;
+    }
+}
+
+/**
  * @brief Initialize ZC detection state for closed-loop entry.
  * Called once when ADC ISR first detects ESC_CLOSED_LOOP state.
  *
@@ -455,6 +480,10 @@ bool BEMF_ZC_Poll(volatile GARUDA_DATA_T *pData, uint16_t now)
             pData->timing.risingZcWorks = true;
         else
             pData->timing.fallingZcWorks = true;
+
+        /* P1: At ZC, BEMF=0 → vCorrected = V_neutral for this phase.
+         * Record in corrected domain (matching comparison path). */
+        recordZcNeutral(&pData->bemf, floatPhase, (uint16_t)vCorrected);
 
         /* Post-sync: update timing and set commutation deadline */
         if (pData->timing.zcSynced)

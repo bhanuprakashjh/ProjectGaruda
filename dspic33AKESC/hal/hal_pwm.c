@@ -223,7 +223,9 @@ void InitPWMGenerator1(void)
     PG1EVTbits.ADTR1EN1 = 1;       /* PG1TRIGA triggers ADC */
     PG1EVTbits.UPDTRG = 1;         /* DC write triggers UPDATE */
     PG1EVTbits.PGTRGSEL = 0;
-    PG1EVTbits.FLTIEN = 1;         /* Fault interrupt enabled */
+#ifdef ENABLE_PWM_FAULT_PCI
+    PG1EVTbits.FLTIEN = 1;         /* Fault interrupt enabled (6-step ISR) */
+#endif
     PG1EVTbits.CLIEN = 0;
     PG1EVTbits.FFIEN = 0;
     PG1EVTbits.SIEN = 0;
@@ -255,7 +257,18 @@ void InitPWMGenerator1(void)
     PG1FPCIbits.PPS = 0;           /* Non-inverted */
 #endif
 #else
+    /* FOC mode: FPCI truly disabled via acceptance qualifier gating.
+     * Board U25B shunt comparator has no LEB — SVM switching transients
+     * false-trip U25B → board fault latches → FPCI kills outputs.
+     * Fix: ACP=1 (edge-sensitive, requires qualifier), AQSS=010 (LEB as
+     * qualifier), AQPS=0. Since PGxLEB=0 in FOC, LEB never asserts →
+     * qualifier never met → fault NEVER accepted. Software OC via ADC
+     * ibusRaw is the primary protection in FOC mode. */
     PG1FPCI     = 0x0000;
+    PG1FPCIbits.ACP  = 1;       /* Edge-sensitive (requires qualifier) */
+    PG1FPCIbits.AQSS = 0b010;   /* LEB active as acceptance qualifier */
+    PG1FPCIbits.AQPS = 0;       /* Non-inverted: need LEB HIGH to accept */
+    PG1FPCIbits.TERM = 1;       /* Safety: auto-terminate if somehow accepted */
 #endif
 
 #if FEATURE_HW_OVERCURRENT && (OC_PROTECT_MODE == 0 || OC_PROTECT_MODE == 2) && OC_CLPCI_ENABLE
@@ -376,7 +389,12 @@ void InitPWMGenerator2(void)
     PG2FPCIbits.PPS = 0;           /* Non-inverted */
 #endif
 #else
+    /* FOC: FPCI disabled via LEB qualifier gating (see PG1 comment) */
     PG2FPCI     = 0x0000;
+    PG2FPCIbits.ACP  = 1;
+    PG2FPCIbits.AQSS = 0b010;
+    PG2FPCIbits.AQPS = 0;
+    PG2FPCIbits.TERM = 1;
 #endif
 
 #if FEATURE_HW_OVERCURRENT && (OC_PROTECT_MODE == 0 || OC_PROTECT_MODE == 2) && OC_CLPCI_ENABLE
@@ -494,7 +512,12 @@ void InitPWMGenerator3(void)
     PG3FPCIbits.PPS = 0;           /* Non-inverted */
 #endif
 #else
+    /* FOC: FPCI disabled via LEB qualifier gating (see PG1 comment) */
     PG3FPCI     = 0x0000;
+    PG3FPCIbits.ACP  = 1;
+    PG3FPCIbits.AQSS = 0b010;
+    PG3FPCIbits.AQPS = 0;
+    PG3FPCIbits.TERM = 1;
 #endif
 
 #if FEATURE_HW_OVERCURRENT && (OC_PROTECT_MODE == 0 || OC_PROTECT_MODE == 2) && OC_CLPCI_ENABLE
@@ -628,10 +651,10 @@ void HAL_PWM_SetDutyCycle(uint32_t duty)
     PWM_PDC1 = duty;
 }
 
-#if FEATURE_SINE_STARTUP
+#if (FEATURE_SINE_STARTUP || FEATURE_FOC || FEATURE_FOC_V2)
 /**
  * @brief Set independent duty cycles on all three PWM generators.
- * Used by sine startup to drive 3-phase sinusoidal waveforms.
+ * Used by sine startup and FOC SVM to drive 3-phase waveforms.
  * Each phase gets its own duty value. Clamps to MIN_DUTY..MAX_DUTY.
  * Write order: slaves (PG3, PG2) before master (PG1).
  */
@@ -689,4 +712,33 @@ void HAL_PWM_FloatPhaseToHiZ(uint8_t step)
             PG3IOCONbits.OVRENH = 1; PG3IOCONbits.OVRENL = 1; break;
     }
 }
-#endif
+#endif /* FEATURE_SINE_STARTUP || FEATURE_FOC || FEATURE_FOC_V2 */
+
+#if FEATURE_FOC || FEATURE_FOC_V2
+/**
+ * @brief Set 3-phase PWM duty cycles from float [0.0, 1.0] values.
+ * Converts normalised float duties to PWM register counts, clamps,
+ * and writes in slave-before-master order.
+ */
+void HAL_PWM_SetDutyFloat3Phase(float da, float db, float dc)
+{
+    /* NaN/Inf safety: clamp inputs to [0,1] before float→uint32 conversion.
+     * NaN bypasses normal comparisons (NaN < x and NaN > x both false),
+     * so (uint32_t)(NaN * range) is undefined behavior — can cause a
+     * CPU trap on dsPIC33AK FPU. Force to 0.5 (safe center duty). */
+    if (!(da >= 0.0f && da <= 1.0f)) da = 0.5f;
+    if (!(db >= 0.0f && db <= 1.0f)) db = 0.5f;
+    if (!(dc >= 0.0f && dc <= 1.0f)) dc = 0.5f;
+
+    uint32_t range = MAX_DUTY - MIN_DUTY;
+    uint32_t a = MIN_DUTY + (uint32_t)(da * (float)range);
+    uint32_t b = MIN_DUTY + (uint32_t)(db * (float)range);
+    uint32_t c = MIN_DUTY + (uint32_t)(dc * (float)range);
+    if (a > MAX_DUTY) a = MAX_DUTY;
+    if (b > MAX_DUTY) b = MAX_DUTY;
+    if (c > MAX_DUTY) c = MAX_DUTY;
+    PG3DC = c;  /* Slave C first */
+    PG2DC = b;  /* Slave B */
+    PG1DC = a;  /* Master A last (triggers broadcast) */
+}
+#endif /* FEATURE_FOC || FEATURE_FOC_V2 */

@@ -61,7 +61,7 @@ export interface ParamListPage {
 }
 
 export const ESC_STATES = ['IDLE', 'ARMED', 'ALIGN', 'OL_RAMP', 'MORPH', 'CLOSED_LOOP', 'BRAKING', 'RECOVERY', 'FAULT'] as const;
-export const FAULT_CODES = ['NONE', 'OVERVOLTAGE', 'UNDERVOLTAGE', 'OVERCURRENT', 'BOARD_PCI', 'STALL', 'DESYNC', 'STARTUP_TIMEOUT', 'MORPH_TIMEOUT', 'RX_LOSS'] as const;
+export const FAULT_CODES = ['NONE', 'OVERVOLTAGE', 'UNDERVOLTAGE', 'OVERCURRENT', 'BOARD_PCI', 'STALL', 'DESYNC', 'STARTUP_TIMEOUT', 'MORPH_TIMEOUT', 'RX_LOSS', 'FOC_INTERNAL'] as const;
 
 export const PROFILE_NAMES = ['Hurst DMB0224C10002', 'A2212 1400KV', '5010 750KV', 'Custom'] as const;
 
@@ -173,6 +173,7 @@ export const FEATURE_NAMES: Record<number, string> = {
   12: 'ADAPTATION', 13: 'COMMISSION', 14: 'EEPROM_V2',
   15: 'X2CSCOPE', 16: 'GSP', 17: 'OC_CLPCI_ENABLE', 18: 'PRESYNC_RAMP',
   19: 'ADC_POT', 20: 'RX_PWM', 21: 'RX_DSHOT', 22: 'RX_AUTO',
+  23: 'FOC',
 };
 
 export interface GspRxStatus {

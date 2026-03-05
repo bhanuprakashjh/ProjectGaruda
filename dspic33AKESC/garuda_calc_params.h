@@ -113,11 +113,13 @@ _Static_assert(ZC_BLANKING_PERCENT < 100,      "ZC_BLANKING_PERCENT must be < 10
 _Static_assert(ZC_ADC_DEADBAND < 512,          "ZC_ADC_DEADBAND must be < 512");
 _Static_assert(ZC_STALENESS_LIMIT >= 6,        "ZC_STALENESS_LIMIT must be >= 6 (one e-cycle)");
 _Static_assert(ZC_STEP_MISS_LIMIT >= 1,        "ZC_STEP_MISS_LIMIT must be >= 1");
-/* Duty-proportional threshold: (vbusRaw * duty) >> SHIFT approximates
- * Vbus * D / 2.  Verify 2*LOOPTIME_TCY is in the right power-of-2 range. */
-_Static_assert(2UL * LOOPTIME_TCY >= (1UL << ZC_DUTY_THRESHOLD_SHIFT)
-            && 2UL * LOOPTIME_TCY <  (1UL << (ZC_DUTY_THRESHOLD_SHIFT + 1)),
-               "ZC_DUTY_THRESHOLD_SHIFT doesn't match 2*LOOPTIME_TCY range");
+/* P0: Exact divisor for duty-proportional threshold. Replaces >>18 shift
+ * which had +1.7% bias (2^18=262144 vs 2*LOOPTIME_TCY=266636).
+ * neutral = Vbus * duty / (2 * LOOPTIME_TCY).
+ * Compile-time constant — compiler strength-reduces to reciprocal multiply. */
+#define ZC_DUTY_DIVISOR  (2UL * LOOPTIME_TCY)
+_Static_assert(ZC_DUTY_DIVISOR > 0 && ZC_DUTY_DIVISOR < 0x100000UL,
+               "ZC_DUTY_DIVISOR out of expected range");
 _Static_assert(ZC_AD2_SETTLE_SAMPLES >= 1 && ZC_AD2_SETTLE_SAMPLES <= 4,
                "ZC_AD2_SETTLE_SAMPLES must be 1-4");
 _Static_assert(ZC_PHASE_GAIN_A > 0 && ZC_PHASE_GAIN_A < 65536, "Gain A out of Q15 range");
@@ -170,7 +172,50 @@ _Static_assert(MIN_ADC_STEP_PERIOD > MIN_CL_ADC_STEP_PERIOD,
 #error "FEATURE_X2CSCOPE and FEATURE_GSP are mutually exclusive (both use UART1)"
 #endif
 
-/* Feature dependency guards */
+/* FOC mutual exclusion guards */
+#if FEATURE_FOC && FEATURE_FOC_V2
+#error "FEATURE_FOC (v1) and FEATURE_FOC_V2 are mutually exclusive"
+#endif
+#if FEATURE_FOC && FEATURE_BEMF_CLOSED_LOOP
+#error "FEATURE_FOC and FEATURE_BEMF_CLOSED_LOOP are mutually exclusive"
+#endif
+#if FEATURE_FOC_V2 && FEATURE_BEMF_CLOSED_LOOP
+#error "FEATURE_FOC_V2 and FEATURE_BEMF_CLOSED_LOOP are mutually exclusive"
+#endif
+#if FEATURE_FOC && FEATURE_SINE_STARTUP
+#error "FEATURE_FOC and FEATURE_SINE_STARTUP are mutually exclusive"
+#endif
+#if FEATURE_FOC_V2 && FEATURE_SINE_STARTUP
+#error "FEATURE_FOC_V2 and FEATURE_SINE_STARTUP are mutually exclusive"
+#endif
+#if FEATURE_FOC && FEATURE_ADC_CMP_ZC
+#error "FEATURE_FOC and FEATURE_ADC_CMP_ZC are mutually exclusive"
+#endif
+#if FEATURE_FOC_V2 && FEATURE_ADC_CMP_ZC
+#error "FEATURE_FOC_V2 and FEATURE_ADC_CMP_ZC are mutually exclusive"
+#endif
+#if FEATURE_FOC && DIAGNOSTIC_MANUAL_STEP
+#error "FEATURE_FOC and DIAGNOSTIC_MANUAL_STEP are mutually exclusive"
+#endif
+#if FEATURE_FOC_V2 && DIAGNOSTIC_MANUAL_STEP
+#error "FEATURE_FOC_V2 and DIAGNOSTIC_MANUAL_STEP are mutually exclusive"
+#endif
+
+/* MXLEMMING requires FOC v1 */
+#if FEATURE_MXLEMMING && !FEATURE_FOC
+#error "FEATURE_MXLEMMING requires FEATURE_FOC"
+#endif
+
+/* FOC SVM switches all 3 phases at different instants — LEB only covers one
+ * edge, so CMP3 false-trips on switching ringing. Force CLPCI off; software
+ * overcurrent (OC_PROTECT_MODE 1 or 2 software path) still protects. */
+#if (FEATURE_FOC || FEATURE_FOC_V2) && OC_CLPCI_ENABLE
+#undef OC_CLPCI_ENABLE
+#define OC_CLPCI_ENABLE 0
+#endif
+
+/* 6-step feature dependency guards (N/A when FOC active) */
+#if !FEATURE_FOC && !FEATURE_FOC_V2
 #if FEATURE_TIMING_ADVANCE && !FEATURE_BEMF_CLOSED_LOOP
 #error "Timing advance requires FEATURE_BEMF_CLOSED_LOOP"
 #endif
@@ -273,6 +318,7 @@ _Static_assert(MORPH_WINDOW_MIN_TICKS >= 5,
 #if FEATURE_ADC_CMP_ZC && !FEATURE_BEMF_CLOSED_LOOP
 #error "ADC comparator ZC requires FEATURE_BEMF_CLOSED_LOOP"
 #endif
+#endif /* !FEATURE_FOC && !FEATURE_FOC_V2 — end of 6-step dependency guards */
 
 #if FEATURE_ADC_CMP_ZC
 /* SCCP2 clock = SCCP peripheral bus = 100 MHz */
@@ -394,6 +440,18 @@ _Static_assert(RAMP_CURRENT_GATE_ADC < OC_CMP3_DAC_VAL,
 #endif
 
 #endif /* FEATURE_HW_OVERCURRENT */
+
+/* ── FOC compile-time constants ─────────────────────────────────────── */
+#if FEATURE_FOC || FEATURE_FOC_V2
+/* FOC current/voltage scaling now in garuda_foc_params.h:
+ * CURRENT_SCALE_A_PER_COUNT, VBUS_SCALE_V_PER_COUNT, ADC_MIDPOINT.
+ * These are derived from the DIM shunt (10 mohm) and opamp gain (8x),
+ * which differ from the board-level OA3 (3 mohm, 24.95x) used by
+ * FEATURE_HW_OVERCURRENT for bus current protection.
+ *
+ * Legacy AN1292 defines (VBUS_ADC_TO_VOLTS, ADC_CURRENT_SCALE) removed;
+ * garuda_foc_params.h provides the canonical values. */
+#endif /* FEATURE_FOC || FEATURE_FOC_V2 */
 
 /* ── Runtime parameter macros ────────────────────────────────────────── *
  * When FEATURE_GSP=1, these read from the GSP runtime param system

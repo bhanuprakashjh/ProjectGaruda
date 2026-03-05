@@ -27,6 +27,19 @@
  */
 void InitializeADCs(void)
 {
+#if FEATURE_FOC || FEATURE_FOC_V2
+    /* Ia on AD1CH0: OA1OUT = RA2 = AD1AN0, PINSEL=0 */
+    AD1CH0CONbits.PINSEL = 0;
+    AD1CH0CONbits.SAMC = 3;        /* Low Z from OA1 output */
+    AD1CH0CONbits.LEFT = 0;
+    AD1CH0CONbits.DIFF = 0;
+
+    /* Ib on AD2CH0: OA2OUT = RB0 = AD2AN1, PINSEL=1 */
+    AD2CH0CONbits.PINSEL = 1;
+    AD2CH0CONbits.SAMC = 3;        /* Low Z from OA2 output */
+    AD2CH0CONbits.LEFT = 0;
+    AD2CH0CONbits.DIFF = 0;
+#else
     /* Phase B on AD1CH0: RB8 = AD1AN11, PINSEL=11 — interrupt source, always sampled */
     AD1CH0CONbits.PINSEL = 11;
     AD1CH0CONbits.SAMC = 5;        /* Increased for divider impedance */
@@ -38,6 +51,7 @@ void InitializeADCs(void)
     AD2CH0CONbits.SAMC = 5;        /* Increased for divider impedance */
     AD2CH0CONbits.LEFT = 0;
     AD2CH0CONbits.DIFF = 0;
+#endif
 
     /* POT on AD1CH1: RA11 = AD1AN10, PINSEL=10 */
     AD1CH1CONbits.PINSEL = 10;
@@ -115,6 +129,7 @@ void InitializeADCs(void)
     AD1CH4CONbits.TRG1SRC = 4;     /* VBUS from PWM1 trigger */
 }
 
+#if !FEATURE_FOC && !FEATURE_FOC_V2
 /**
  * @brief Select which phase voltage to sample on AD2CH0 for the current
  * floating phase. Phase A and C share AD2, so we mux PINSEL.
@@ -146,6 +161,7 @@ bool HAL_ADC_SelectBEMFChannel(uint8_t floatingPhase)
             return false;
     }
 }
+#endif /* !FEATURE_FOC && !FEATURE_FOC_V2 */
 
 #if FEATURE_ADC_CMP_ZC
 

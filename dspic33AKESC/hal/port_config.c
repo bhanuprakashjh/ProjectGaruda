@@ -65,6 +65,22 @@ void SetupGPIOPorts(void)
  */
 void MapGPIOHWFunction(void)
 {
+#if FEATURE_FOC || FEATURE_FOC_V2
+    /* ================================================================
+     * Phase Current Sensing via OA1/OA2 (Internal Op-Amps)
+     * OA1IN+ : RA4  (DIM:013), OA1IN- : RA3  (DIM:015)
+     * OA1OUT : RA2  (DIM:017) → AD1AN0 (Ia)
+     * OA2IN+ : RB2  (DIM:021), OA2IN- : RB1  (DIM:023)
+     * OA2OUT : RB0  (DIM:025) → AD2AN1 (Ib)
+     * From reference: port_config.c:126-145
+     * ================================================================ */
+    ANSELAbits.ANSELA4 = 1; TRISAbits.TRISA4 = 1;   /* OA1IN+ */
+    ANSELAbits.ANSELA3 = 1; TRISAbits.TRISA3 = 1;   /* OA1IN- */
+    ANSELAbits.ANSELA2 = 1; TRISAbits.TRISA2 = 1;   /* OA1OUT (TRIS=1: disable digital output, let OA drive) */
+    ANSELBbits.ANSELB2 = 1; TRISBbits.TRISB2 = 1;   /* OA2IN+ */
+    ANSELBbits.ANSELB1 = 1; TRISBbits.TRISB1 = 1;   /* OA2IN- */
+    ANSELBbits.ANSELB0 = 1; TRISBbits.TRISB0 = 1;   /* OA2OUT (TRIS=1: disable digital output, let OA drive) */
+#else
     /* ================================================================
      * Phase Voltage Feedback (MCLV-48V-300W via EV68M17A DIM)
      * M1_VA : DIM:009 - RB9  (AD2AN10)
@@ -79,6 +95,7 @@ void MapGPIOHWFunction(void)
 
     ANSELAbits.ANSELA10 = 1;
     TRISAbits.TRISA10 = 1;
+#endif
 
     /* ================================================================
      * Potentiometer input (POT1) - used as Speed Reference
@@ -163,6 +180,32 @@ void MapGPIOHWFunction(void)
     ANSELAbits.ANSELA5 = 1;  TRISAbits.TRISA5 = 0;    /* OA3OUT = RA5 (output) */
 #endif
 }
+
+#if FEATURE_FOC || FEATURE_FOC_V2
+/**
+ * @brief Initialize OA1/OA2 internal op-amps for phase current sensing.
+ * External gain resistors on MCLV-48V-300W provide gain.
+ * OA1OUT (RA2) → AD1AN0 (Ia), OA2OUT (RB0) → AD2AN1 (Ib).
+ * Adapted from reference OpampConfig() lines 235-283.
+ */
+void HAL_OA12_Init(void)
+{
+    AMP1CON1 = 0x0000;
+    AMP1CON1bits.HPEN = 1;     /* High-power mode (high bandwidth) */
+    AMP1CON1bits.UGE = 0;      /* External resistor gain (not unity) */
+    AMP1CON1bits.DIFFCON = 0;  /* Both differential pairs active */
+    AMP1CON1bits.OMONEN = 1;   /* Internal ADC connection enabled */
+
+    AMP2CON1 = 0x0000;
+    AMP2CON1bits.HPEN = 1;
+    AMP2CON1bits.UGE = 0;
+    AMP2CON1bits.DIFFCON = 0;
+    AMP2CON1bits.OMONEN = 1;
+
+    AMP1CON1bits.AMPEN = 1;    /* Enable OA1 — begins settling (~10us) */
+    AMP2CON1bits.AMPEN = 1;    /* Enable OA2 */
+}
+#endif
 
 #if FEATURE_HW_OVERCURRENT
 /**
