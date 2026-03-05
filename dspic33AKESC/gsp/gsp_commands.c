@@ -499,11 +499,11 @@ void GSP_TelemTick(void)
     lastTelemTick = now;
     telemSeq++;
 
-    uint8_t buf[70];
+    uint8_t buf[2 + sizeof(GSP_SNAPSHOT_T)];
     buf[0] = (uint8_t)(telemSeq & 0xFF);
     buf[1] = (uint8_t)(telemSeq >> 8);
     GSP_CaptureSnapshot((GSP_SNAPSHOT_T *)&buf[2]);
-    GSP_SendResponse(GSP_CMD_TELEM_FRAME, buf, 70);
+    GSP_SendResponse(GSP_CMD_TELEM_FRAME, buf, sizeof(buf));
 }
 
 /* ── Dispatch table ──────────────────────────────────────────────────── */

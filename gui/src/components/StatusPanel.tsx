@@ -1,5 +1,5 @@
 import { useEscStore } from '../store/useEscStore';
-import { ESC_STATES, FAULT_CODES, PROFILE_NAMES } from '../protocol/types';
+import { ESC_STATES, FAULT_CODES, PROFILE_NAMES, FOC_SUB_STATES, isFocEnabled } from '../protocol/types';
 
 const STATE_COLORS: Record<string, string> = {
   IDLE: 'var(--text-muted)',
@@ -20,6 +20,7 @@ export function StatusPanel() {
   const { snapshot, info, activeProfile, connected, rxStatus } = useEscStore();
   const flags = info?.featureFlags ?? 0;
   const hasRx = ((flags & (1 << 20)) | (flags & (1 << 21)) | (flags & (1 << 22))) !== 0;
+  const focMode = info ? isFocEnabled(info.featureFlags) : false;
   const state = snapshot ? (ESC_STATES[snapshot.state] ?? 'UNKNOWN') : '\u2014';
   const fault = snapshot ? (FAULT_CODES[snapshot.faultCode] ?? 'UNKNOWN') : '\u2014';
   const uptime = snapshot ? snapshot.uptimeSec : 0;
@@ -56,6 +57,19 @@ export function StatusPanel() {
         </span>
       </div>
 
+      {/* FOC sub-state */}
+      {focMode && snapshot && snapshot.focSubState > 0 && (
+        <div style={row}>
+          <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>FOC Phase</span>
+          <span style={{
+            fontSize: 12, fontWeight: 600, fontFamily: 'var(--font-mono)',
+            color: snapshot.focSubState === 4 ? 'var(--accent-green)' : 'var(--accent-cyan)',
+          }}>
+            {FOC_SUB_STATES[snapshot.focSubState] ?? `?${snapshot.focSubState}`}
+          </span>
+        </div>
+      )}
+
       <div style={row}>
         <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Fault</span>
         <span style={{
@@ -81,6 +95,16 @@ export function StatusPanel() {
         </span>
       </div>
 
+      <div style={row}>
+        <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Mode</span>
+        <span style={{
+          fontSize: 12, fontWeight: 600,
+          color: focMode ? 'var(--accent-cyan)' : 'var(--accent-orange)',
+        }}>
+          {focMode ? 'FOC Sensorless' : '6-Step Trapezoidal'}
+        </span>
+      </div>
+
       <div style={{ ...row, borderBottom: 'none' }}>
         <span style={{ fontSize: 12, color: 'var(--text-muted)' }}>Profile</span>
         <span style={{ fontSize: 12, color: 'var(--accent-blue)', fontWeight: 500 }}>
@@ -88,8 +112,8 @@ export function StatusPanel() {
         </span>
       </div>
 
-      {/* ZC status indicators when running */}
-      {snapshot && snapshot.state >= 3 && (
+      {/* ZC status indicators (6-step only) */}
+      {!focMode && snapshot && snapshot.state >= 3 && (
         <div style={{
           marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)',
           display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6,
@@ -130,7 +154,28 @@ export function StatusPanel() {
         </div>
       )}
 
-      {/* RX status when RX features are enabled */}
+      {/* FOC calibration status */}
+      {focMode && snapshot && connected && (
+        <div style={{
+          marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)',
+          display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 6,
+        }}>
+          <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+            Offset Ia
+            <div style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>
+              {snapshot.focOffsetIa}
+            </div>
+          </div>
+          <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+            Offset Ib
+            <div style={{ fontSize: 11, fontFamily: 'var(--font-mono)', color: 'var(--text-secondary)' }}>
+              {snapshot.focOffsetIb}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* RX status */}
       {hasRx && connected && rxStatus && (
         <div style={{
           marginTop: 10, paddingTop: 10, borderTop: '1px solid var(--border)',

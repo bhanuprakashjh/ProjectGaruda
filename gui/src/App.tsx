@@ -8,13 +8,22 @@ import { ProfileSelector } from './components/ProfileSelector';
 import { ParamPanel } from './components/ParamPanel';
 import { ParamModal } from './components/ParamModal';
 import { HelpPanel, MicrochipIcon } from './components/HelpPanel';
-import { useEscStore } from './store/useEscStore';
+import { MotorTuningPanel } from './components/MotorTuningPanel';
+import { useEscStore, type TabId } from './store/useEscStore';
 
 const toastColors = {
   success: { bg: 'var(--accent-green-dim)', border: 'var(--accent-green)' },
   error: { bg: 'var(--accent-red-dim)', border: 'var(--accent-red)' },
   info: { bg: 'var(--accent-blue-dim)', border: 'var(--accent-blue)' },
 };
+
+const TABS: { id: TabId; label: string; icon: string }[] = [
+  { id: 'dashboard', label: 'Dashboard', icon: 'M3 3h7v7H3zM14 3h7v7h-7zM3 14h7v7H3zM14 14h7v7h-7z' },
+  { id: 'scope', label: 'Scope', icon: 'M2 12h4l3-9 4 18 3-9h4' },
+  { id: 'motor', label: 'Motor Setup', icon: 'M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5' },
+  { id: 'params', label: 'Parameters', icon: 'M12 3v18M3 12h18M7.5 7.5l9 9M16.5 7.5l-9 9' },
+  { id: 'help', label: 'Help', icon: 'M12 2a10 10 0 100 20 10 10 0 000-20zm0 14v-2m0-4a2 2 0 114 0c0 1.5-2 2-2 3' },
+];
 
 function GarudaLogo() {
   return (
@@ -28,39 +37,128 @@ function GarudaLogo() {
   );
 }
 
+function TabBar() {
+  const activeTab = useEscStore(s => s.activeTab);
+  const setActiveTab = useEscStore(s => s.setActiveTab);
+
+  return (
+    <div style={{
+      display: 'flex', gap: 2, padding: '0 24px',
+      background: 'var(--bg-secondary)',
+      borderBottom: '1px solid var(--border)',
+    }}>
+      <div style={{ maxWidth: 1280, margin: '0 auto', width: '100%', display: 'flex', gap: 2 }}>
+        {TABS.map(tab => {
+          const active = activeTab === tab.id;
+          return (
+            <button
+              key={tab.id}
+              onClick={() => setActiveTab(tab.id)}
+              style={{
+                padding: '10px 18px',
+                background: active ? 'var(--bg-card)' : 'transparent',
+                border: 'none',
+                borderBottom: active ? '2px solid var(--accent-blue)' : '2px solid transparent',
+                borderTopLeftRadius: 'var(--radius-sm)',
+                borderTopRightRadius: 'var(--radius-sm)',
+                color: active ? 'var(--accent-blue)' : 'var(--text-muted)',
+                fontSize: 12,
+                fontWeight: active ? 600 : 500,
+                cursor: 'pointer',
+                transition: 'all 0.15s',
+                letterSpacing: '0.3px',
+              }}
+            >
+              {tab.label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function DashboardTab() {
+  return (
+    <>
+      {/* Top row: Status + Gauges */}
+      <div style={{ display: 'grid', gridTemplateColumns: '240px 1fr', gap: 16 }}>
+        <StatusPanel />
+        <GaugePanel />
+      </div>
+
+      {/* Controls row */}
+      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginTop: 16 }}>
+        <ControlPanel />
+        <ThrottleSlider />
+      </div>
+
+      {/* Profile selector */}
+      <ProfileSelector />
+    </>
+  );
+}
+
+function ScopeTab() {
+  return <ScopePanel />;
+}
+
+function MotorTab() {
+  return <MotorTuningPanel />;
+}
+
+function ParamsTab() {
+  return <ParamPanel />;
+}
+
+function HelpTab() {
+  return <HelpPanel alwaysExpanded />;
+}
+
 export default function App() {
   const toasts = useEscStore(s => s.toasts);
   const removeToast = useEscStore(s => s.removeToast);
   const info = useEscStore(s => s.info);
   const connected = useEscStore(s => s.connected);
+  const activeTab = useEscStore(s => s.activeTab);
+
+  const renderTab = () => {
+    switch (activeTab) {
+      case 'dashboard': return <DashboardTab />;
+      case 'scope': return <ScopeTab />;
+      case 'motor': return <MotorTab />;
+      case 'params': return <ParamsTab />;
+      case 'help': return <HelpTab />;
+      default: return <DashboardTab />;
+    }
+  };
 
   return (
     <div style={{ minHeight: '100vh', display: 'flex', flexDirection: 'column' }}>
       {/* Header */}
       <header style={{
         background: 'var(--bg-secondary)',
-        borderBottom: '1px solid var(--border)',
         padding: '0 24px',
         position: 'sticky', top: 0, zIndex: 100,
       }}>
         <div style={{
           maxWidth: 1280, margin: '0 auto',
-          display: 'flex', alignItems: 'center', height: 56, gap: 12,
+          display: 'flex', alignItems: 'center', height: 52, gap: 12,
         }}>
           <GarudaLogo />
           <div>
-            <div style={{ fontSize: 16, fontWeight: 700, letterSpacing: '-0.3px', lineHeight: 1.2 }}>
+            <div style={{ fontSize: 15, fontWeight: 700, letterSpacing: '-0.3px', lineHeight: 1.2 }}>
               Garuda ESC
             </div>
-            <div style={{ fontSize: 10, color: 'var(--text-muted)', letterSpacing: '0.5px' }}>
+            <div style={{ fontSize: 9, color: 'var(--text-muted)', letterSpacing: '0.5px' }}>
               CONFIGURATOR
             </div>
           </div>
 
           {connected && info && (
             <div style={{
-              marginLeft: 20, display: 'flex', alignItems: 'center', gap: 16,
-              fontSize: 11, color: 'var(--text-muted)',
+              marginLeft: 16, display: 'flex', alignItems: 'center', gap: 12,
+              fontSize: 10, color: 'var(--text-muted)',
             }}>
               <span>FW <span style={{ color: 'var(--text-secondary)', fontFamily: 'var(--font-mono)' }}>
                 v{info.fwMajor}.{info.fwMinor}.{info.fwPatch}
@@ -77,58 +175,39 @@ export default function App() {
           <div style={{ flex: 1 }} />
 
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, opacity: 0.6 }}>
-            <MicrochipIcon size={16} />
-            <span style={{ fontSize: 10, color: 'var(--text-muted)', letterSpacing: '0.5px' }}>
-              MICROCHIP dsPIC33AK
+            <MicrochipIcon size={14} />
+            <span style={{ fontSize: 9, color: 'var(--text-muted)', letterSpacing: '0.5px' }}>
+              dsPIC33AK
             </span>
           </div>
 
-          <div style={{ width: 1, height: 24, background: 'var(--border)', margin: '0 8px' }} />
+          <div style={{ width: 1, height: 20, background: 'var(--border)', margin: '0 6px' }} />
 
           <ConnectionBar />
         </div>
       </header>
 
+      {/* Tab navigation */}
+      <TabBar />
+
       {/* Main content */}
-      <main style={{ flex: 1, maxWidth: 1280, margin: '0 auto', width: '100%', padding: '20px 24px' }}>
-        {/* Top row: Status + Gauges */}
-        <div style={{ display: 'grid', gridTemplateColumns: '240px 1fr', gap: 16 }}>
-          <StatusPanel />
-          <GaugePanel />
-        </div>
-
-        {/* Live Scope (replaces TimeChart) */}
-        <ScopePanel />
-
-        {/* Controls row */}
-        <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16, marginTop: 16 }}>
-          <ControlPanel />
-          <ThrottleSlider />
-        </div>
-
-        {/* Profile selector */}
-        <ProfileSelector />
-
-        {/* Inline parameters (quick view) */}
-        <ParamPanel />
-
-        {/* Help / Documentation */}
-        <HelpPanel />
+      <main style={{ flex: 1, maxWidth: 1280, margin: '0 auto', width: '100%', padding: '16px 24px' }}>
+        {renderTab()}
       </main>
 
       {/* Footer */}
       <footer style={{
         borderTop: '1px solid var(--border)',
-        padding: '16px 24px',
-        marginTop: 32,
+        padding: '12px 24px',
+        marginTop: 24,
       }}>
         <div style={{
           maxWidth: 1280, margin: '0 auto',
           display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-          fontSize: 11, color: 'var(--text-muted)',
+          fontSize: 10, color: 'var(--text-muted)',
         }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-            <MicrochipIcon size={14} />
+          <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+            <MicrochipIcon size={12} />
             <span>Powered by Microchip dsPIC33AK128MC106</span>
           </div>
           <div>

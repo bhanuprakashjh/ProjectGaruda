@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import type { GspInfo, GspSnapshot, GspRxStatus, ParamDescriptor } from '../protocol/types';
 
+export type TabId = 'dashboard' | 'scope' | 'motor' | 'params' | 'help';
+
 interface ParamValue {
   descriptor: ParamDescriptor;
   value: number;
@@ -25,6 +27,7 @@ interface EscStore {
   telemActive: boolean;
   toasts: Toast[];
   paramModalOpen: boolean;
+  activeTab: TabId;
 
   setConnected: (v: boolean) => void;
   setInfo: (info: GspInfo) => void;
@@ -37,6 +40,7 @@ interface EscStore {
   setThrottleSource: (src: 'ADC' | 'GSP') => void;
   setTelemActive: (v: boolean) => void;
   setParamModalOpen: (v: boolean) => void;
+  setActiveTab: (tab: TabId) => void;
   addToast: (message: string, type: Toast['type']) => void;
   removeToast: (id: number) => void;
   reset: () => void;
@@ -59,6 +63,7 @@ export const useEscStore = create<EscStore>((set) => ({
   telemActive: false,
   toasts: [],
   paramModalOpen: false,
+  activeTab: 'dashboard',
 
   setConnected: (v) => set({ connected: v }),
   setInfo: (info) => set({ info, activeProfile: info.motorProfile }),
@@ -91,6 +96,7 @@ export const useEscStore = create<EscStore>((set) => ({
   setThrottleSource: (src) => set({ throttleSource: src }),
   setTelemActive: (v) => set({ telemActive: v }),
   setParamModalOpen: (v) => set({ paramModalOpen: v }),
+  setActiveTab: (tab) => set({ activeTab: tab }),
   addToast: (message, type) => {
     const id = ++toastId;
     set((state) => ({ toasts: [...state.toasts, { message, type, id }] }));
@@ -103,6 +109,6 @@ export const useEscStore = create<EscStore>((set) => ({
     connected: false, info: null, snapshot: null, lastSnapshotMs: 0,
     history: [], params: new Map(), activeProfile: 0, rxStatus: null,
     throttleSource: 'ADC', telemActive: false, toasts: [],
-    paramModalOpen: false,
+    paramModalOpen: false, activeTab: 'dashboard',
   }),
 }));

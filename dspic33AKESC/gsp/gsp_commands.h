@@ -142,9 +142,23 @@ typedef struct __attribute__((packed)) {
     /* System (8B) */
     uint32_t systemTick;
     uint32_t uptimeSec;
+
+    /* FOC telemetry (38B) — zero when FEATURE_FOC not enabled */
+    float    focIdMeas;       /* D-axis current (A) — should be ~0 */
+    float    focIqMeas;       /* Q-axis current (A) — torque */
+    float    focTheta;        /* Commutation angle (rad) */
+    float    focOmega;        /* Electrical speed (rad/s) */
+    float    focVbus;         /* Bus voltage (V, float) */
+    float    focIa;           /* Phase A current (A) */
+    float    focIb;           /* Phase B current (A) */
+    float    focThetaObs;     /* Observer angle (rad) */
+    uint8_t  focSubState;     /* 0=idle, 1=armed, 2=align, 3=if, 4=cl */
+    uint8_t  focPad;
+    uint16_t focOffsetIa;     /* Calibrated ADC offset Ia */
+    uint16_t focOffsetIb;     /* Calibrated ADC offset Ib */
 } GSP_SNAPSHOT_T;
 
-_Static_assert(sizeof(GSP_SNAPSHOT_T) == 68, "GSP_SNAPSHOT_T wire size mismatch");
+_Static_assert(sizeof(GSP_SNAPSHOT_T) == 106, "GSP_SNAPSHOT_T wire size mismatch");
 
 /* GSP_RX_STATUS_T — 12 bytes, returned by GET_RX_STATUS */
 typedef struct __attribute__((packed)) {

@@ -242,32 +242,35 @@ function FeatureItem({ feature, info }: { feature: FeatureSection; info: ReturnT
   );
 }
 
-export function HelpPanel() {
-  const [showHelp, setShowHelp] = useState(false);
+export function HelpPanel({ alwaysExpanded }: { alwaysExpanded?: boolean } = {}) {
+  const [showHelp, setShowHelp] = useState(!!alwaysExpanded);
   const info = useEscStore(s => s.info);
+  const isOpen = alwaysExpanded || showHelp;
 
   return (
-    <div style={{ marginTop: 20 }}>
-      <button
-        onClick={() => setShowHelp(!showHelp)}
-        style={{
-          width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center',
-          gap: 8, padding: '10px 16px',
-          background: 'var(--bg-card)', border: '1px solid var(--border)',
-          borderRadius: 'var(--radius)', color: 'var(--text-secondary)',
-          fontSize: 13, fontWeight: 500,
-        }}
-      >
-        <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
-          <circle cx="8" cy="8" r="7" stroke="currentColor" strokeWidth="1.5" />
-          <path d="M6.5 6C6.5 5.2 7.2 4.5 8 4.5C8.8 4.5 9.5 5.2 9.5 6C9.5 6.8 8.5 7 8 7.5V8.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
-          <circle cx="8" cy="10.5" r="0.75" fill="currentColor" />
-        </svg>
-        {showHelp ? 'Hide' : 'Show'} ESC Features & Documentation
-        <ChevronIcon open={showHelp} />
-      </button>
+    <div style={{ marginTop: alwaysExpanded ? 0 : 20 }}>
+      {!alwaysExpanded && (
+        <button
+          onClick={() => setShowHelp(!showHelp)}
+          style={{
+            width: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center',
+            gap: 8, padding: '10px 16px',
+            background: 'var(--bg-card)', border: '1px solid var(--border)',
+            borderRadius: 'var(--radius)', color: 'var(--text-secondary)',
+            fontSize: 13, fontWeight: 500,
+          }}
+        >
+          <svg width="16" height="16" viewBox="0 0 16 16" fill="none">
+            <circle cx="8" cy="8" r="7" stroke="currentColor" strokeWidth="1.5" />
+            <path d="M6.5 6C6.5 5.2 7.2 4.5 8 4.5C8.8 4.5 9.5 5.2 9.5 6C9.5 6.8 8.5 7 8 7.5V8.5" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            <circle cx="8" cy="10.5" r="0.75" fill="currentColor" />
+          </svg>
+          {showHelp ? 'Hide' : 'Show'} ESC Features & Documentation
+          <ChevronIcon open={showHelp} />
+        </button>
+      )}
 
-      {showHelp && (
+      {isOpen && (
         <div style={{
           marginTop: 8, padding: 20,
           background: 'var(--bg-card)', border: '1px solid var(--border)',

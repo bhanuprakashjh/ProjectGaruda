@@ -12,12 +12,13 @@ export function decodeInfo(data: Uint8Array): GspInfo {
     motorPolePairs: v.getUint8(7),
     featureFlags: v.getUint32(8, true),
     pwmFrequency: v.getUint32(12, true),
-    maxErpm: v.getUint32(16, true),  // V2: u32 (was u16+reserved)
+    maxErpm: v.getUint32(16, true),
   };
 }
 
 export function decodeSnapshot(data: Uint8Array): GspSnapshot {
   const v = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  const hasFoc = data.byteLength >= 106;
   return {
     state: v.getUint8(0),
     faultCode: v.getUint8(1),
@@ -51,6 +52,18 @@ export function decodeSnapshot(data: Uint8Array): GspSnapshot {
     fpciTripCount: v.getUint32(56, true),
     systemTick: v.getUint32(60, true),
     uptimeSec: v.getUint32(64, true),
+    // FOC fields (backward-compatible: zero if snapshot is old 68-byte format)
+    focIdMeas: hasFoc ? v.getFloat32(68, true) : 0,
+    focIqMeas: hasFoc ? v.getFloat32(72, true) : 0,
+    focTheta: hasFoc ? v.getFloat32(76, true) : 0,
+    focOmega: hasFoc ? v.getFloat32(80, true) : 0,
+    focVbus: hasFoc ? v.getFloat32(84, true) : 0,
+    focIa: hasFoc ? v.getFloat32(88, true) : 0,
+    focIb: hasFoc ? v.getFloat32(92, true) : 0,
+    focThetaObs: hasFoc ? v.getFloat32(96, true) : 0,
+    focSubState: hasFoc ? v.getUint8(100) : 0,
+    focOffsetIa: hasFoc ? v.getUint16(102, true) : 0,
+    focOffsetIb: hasFoc ? v.getUint16(104, true) : 0,
   };
 }
 

@@ -44,6 +44,18 @@ export interface GspSnapshot {
   fpciTripCount: number;
   systemTick: number;
   uptimeSec: number;
+  // FOC telemetry (zero when FOC not enabled)
+  focIdMeas: number;
+  focIqMeas: number;
+  focTheta: number;
+  focOmega: number;
+  focVbus: number;
+  focIa: number;
+  focIb: number;
+  focThetaObs: number;
+  focSubState: number;
+  focOffsetIa: number;
+  focOffsetIb: number;
 }
 
 export interface ParamDescriptor {
@@ -62,6 +74,7 @@ export interface ParamListPage {
 
 export const ESC_STATES = ['IDLE', 'ARMED', 'ALIGN', 'OL_RAMP', 'MORPH', 'CLOSED_LOOP', 'BRAKING', 'RECOVERY', 'FAULT'] as const;
 export const FAULT_CODES = ['NONE', 'OVERVOLTAGE', 'UNDERVOLTAGE', 'OVERCURRENT', 'BOARD_PCI', 'STALL', 'DESYNC', 'STARTUP_TIMEOUT', 'MORPH_TIMEOUT', 'RX_LOSS', 'FOC_INTERNAL'] as const;
+export const FOC_SUB_STATES = ['IDLE', 'ARMED', 'ALIGN', 'I/F RAMP', 'CLOSED_LOOP'] as const;
 
 export const PROFILE_NAMES = ['Hurst DMB0224C10002', 'A2212 1400KV', '5010 750KV', 'Custom'] as const;
 
@@ -176,6 +189,8 @@ export const FEATURE_NAMES: Record<number, string> = {
   23: 'FOC',
 };
 
+export const FEATURE_BIT_FOC = 23;
+
 export interface GspRxStatus {
   linkState: number;
   protocol: number;
@@ -184,4 +199,9 @@ export interface GspRxStatus {
   pulseUs: number;
   crcErrors: number;
   droppedFrames: number;
+}
+
+/** Helper: check if FOC feature is enabled in feature flags */
+export function isFocEnabled(featureFlags: number): boolean {
+  return (featureFlags & (1 << FEATURE_BIT_FOC)) !== 0;
 }

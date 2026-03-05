@@ -1,10 +1,12 @@
 import { useEffect, useState } from 'react';
 import { useEscStore } from '../store/useEscStore';
+import { isFocEnabled, FOC_SUB_STATES } from '../protocol/types';
 
-function ArcGauge({ value, max, label, unit, color, stale }: {
+function ArcGauge({ value, max, label, unit, color, stale, format }: {
   value: number; max: number; label: string; unit: string; color: string; stale?: boolean;
+  format?: (v: number) => string;
 }) {
-  const pct = Math.min(value / max, 1);
+  const pct = Math.min(Math.abs(value) / max, 1);
   const startAngle = 140;
   const sweep = 260;
   const angle = startAngle + pct * sweep;
@@ -29,6 +31,7 @@ function ArcGauge({ value, max, label, unit, color, stale }: {
     : '';
 
   const arcColor = stale ? 'var(--text-muted)' : color;
+  const displayVal = format ? format(value) : value.toLocaleString();
 
   return (
     <div style={{ textAlign: 'center', flex: 1, opacity: stale ? 0.4 : 1, transition: 'opacity 0.5s' }}>
@@ -43,15 +46,15 @@ function ArcGauge({ value, max, label, unit, color, stale }: {
         {valArc && (
           <path d={valArc} fill="none" stroke={`url(#grad-${label})`} strokeWidth={8} strokeLinecap="round" />
         )}
-        <text x={cx} y={cy - 2} textAnchor="middle" fill="var(--text-primary)" fontSize={20} fontWeight={700}
+        <text x={cx} y={cy - 2} textAnchor="middle" fill="var(--text-primary)" fontSize={18} fontWeight={700}
           fontFamily="var(--font-mono)" opacity={stale ? 0.4 : 1}>
-          {value.toLocaleString()}
+          {displayVal}
         </text>
         <text x={cx} y={cy + 14} textAnchor="middle" fill="var(--text-muted)" fontSize={10}>
           {unit}
         </text>
       </svg>
-      <div style={{ fontSize: 11, color: 'var(--text-secondary)', marginTop: -4, fontWeight: 500 }}>{label}</div>
+      <div style={{ fontSize: 10, color: 'var(--text-secondary)', marginTop: -4, fontWeight: 500 }}>{label}</div>
     </div>
   );
 }
@@ -61,14 +64,14 @@ function StatCard({ label, value, unit, color, sub, stale }: {
 }) {
   return (
     <div style={{
-      textAlign: 'center', flex: 1, padding: '12px 8px',
+      textAlign: 'center', flex: 1, padding: '10px 6px',
       borderRadius: 'var(--radius-sm)', background: 'rgba(255,255,255,0.02)',
-      opacity: stale ? 0.4 : 1, transition: 'opacity 0.5s',
+      opacity: stale ? 0.4 : 1, transition: 'opacity 0.5s', minWidth: 90,
     }}>
-      <div style={{ fontSize: 10, color: 'var(--text-muted)', marginBottom: 4, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{label}</div>
-      <div style={{ fontSize: 28, fontWeight: 700, color: stale ? 'var(--text-muted)' : color, fontFamily: 'var(--font-mono)', lineHeight: 1 }}>{value}</div>
-      <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>{unit}</div>
-      {sub && <div style={{ fontSize: 10, color: 'var(--text-muted)', marginTop: 2 }}>{sub}</div>}
+      <div style={{ fontSize: 9, color: 'var(--text-muted)', marginBottom: 3, textTransform: 'uppercase', letterSpacing: '0.5px' }}>{label}</div>
+      <div style={{ fontSize: 22, fontWeight: 700, color: stale ? 'var(--text-muted)' : color, fontFamily: 'var(--font-mono)', lineHeight: 1 }}>{value}</div>
+      <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 2 }}>{unit}</div>
+      {sub && <div style={{ fontSize: 9, color: 'var(--text-muted)', marginTop: 1 }}>{sub}</div>}
     </div>
   );
 }
@@ -80,13 +83,13 @@ export function GaugePanel() {
   const info = useEscStore(s => s.info);
   const [now, setNow] = useState(Date.now());
 
-  // Tick every second to update staleness
   useEffect(() => {
     const timer = setInterval(() => setNow(Date.now()), 1000);
     return () => clearInterval(timer);
   }, []);
 
   const isStale = !telemActive || (lastSnapshotMs > 0 && (now - lastSnapshotMs) > 2000);
+  const focMode = info ? isFocEnabled(info.featureFlags) : false;
 
   if (!snapshot) {
     return (
@@ -101,40 +104,104 @@ export function GaugePanel() {
     );
   }
 
-  const eRPM = snapshot.stepPeriod > 0 ? Math.round(240000 / snapshot.stepPeriod) : 0;
+  const polePairs = info?.motorPolePairs ?? 1;
+
+  // Common values
   const vbus = (snapshot.vbusRaw * 3.3 / 4096 * 19.8);
   const ibus = ((snapshot.ibusRaw - 2048) / 93.0);
-  const polePairs = info?.motorPolePairs ?? 1;
+  const ibusPeak = ((snapshot.ibusMax - 2048) / 93.0);
+
+  // FOC values
+  const focRpm = focMode && snapshot.focOmega !== 0
+    ? Math.round(Math.abs(snapshot.focOmega) * 60 / (2 * Math.PI * polePairs))
+    : 0;
+  const focSpeedRads = focMode ? Math.abs(snapshot.focOmega) : 0;
+  const focPowerW = focMode ? 1.5 * snapshot.focVbus * snapshot.focIqMeas * (snapshot.focOmega > 0 ? 1 : -1) : 0;
+  const focSubStr = FOC_SUB_STATES[snapshot.focSubState] ?? '?';
+
+  // 6-step values
+  const eRPM = snapshot.stepPeriod > 0 ? Math.round(240000 / snapshot.stepPeriod) : 0;
   const mechRPM = polePairs > 0 ? Math.round(eRPM / polePairs) : eRPM;
 
   return (
     <div style={{
       background: 'var(--bg-card)', borderRadius: 'var(--radius)',
-      padding: '16px 12px', border: '1px solid var(--border)',
+      padding: '12px 8px', border: '1px solid var(--border)',
       position: 'relative',
     }}>
+      {/* Mode badge */}
+      <div style={{
+        position: 'absolute', top: 6, left: 12,
+        fontSize: 9, fontWeight: 700, textTransform: 'uppercase',
+        letterSpacing: '0.5px',
+        color: focMode ? 'var(--accent-cyan)' : 'var(--accent-orange)',
+        background: focMode ? 'rgba(34,211,238,0.1)' : 'rgba(249,115,22,0.1)',
+        padding: '1px 6px', borderRadius: 8,
+        border: `1px solid ${focMode ? 'rgba(34,211,238,0.2)' : 'rgba(249,115,22,0.2)'}`,
+      }}>
+        {focMode ? 'FOC' : '6-STEP'}
+        {focMode && <span style={{ marginLeft: 4, opacity: 0.7 }}>{focSubStr}</span>}
+      </div>
+
       {/* Stale badge */}
       {isStale && (
         <div style={{
-          position: 'absolute', top: 8, right: 12,
-          fontSize: 10, fontWeight: 600, textTransform: 'uppercase',
+          position: 'absolute', top: 6, right: 12,
+          fontSize: 9, fontWeight: 600, textTransform: 'uppercase',
           letterSpacing: '0.5px', color: 'var(--accent-yellow)',
-          background: 'rgba(234,179,8,0.1)', padding: '2px 8px',
-          borderRadius: 10, border: '1px solid rgba(234,179,8,0.2)',
+          background: 'rgba(234,179,8,0.1)', padding: '1px 6px',
+          borderRadius: 8, border: '1px solid rgba(234,179,8,0.2)',
         }}>
           {telemActive ? 'NO DATA' : 'STALE'}
         </div>
       )}
-      <div style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-        <ArcGauge value={eRPM} max={info?.maxErpm ?? 30000} label="eRPM" unit="eRPM" color="#3b82f6" stale={isStale} />
-        <StatCard label="Vbus" value={vbus.toFixed(1)} unit="V" color="var(--accent-green)"
-          sub={`${snapshot.vbusRaw} ADC`} stale={isStale} />
-        <StatCard label="Ibus" value={ibus.toFixed(2)} unit="A" color="var(--accent-yellow)"
-          sub={`peak ${((snapshot.ibusMax - 2048) / 93.0).toFixed(1)} A`} stale={isStale} />
-        <ArcGauge value={snapshot.dutyPct} max={100} label="Duty" unit="%" color="#f472b6" stale={isStale} />
-        <StatCard label="mRPM" value={mechRPM.toLocaleString()} unit="RPM" color="var(--accent-cyan)"
-          sub={`${polePairs}pp`} stale={isStale} />
+
+      {/* Primary gauges row */}
+      <div style={{ display: 'flex', alignItems: 'center', gap: 2, marginTop: 12 }}>
+        {focMode ? (
+          <>
+            <ArcGauge value={focRpm} max={info?.maxErpm ? Math.round(info.maxErpm / polePairs) : 20000}
+              label="Speed" unit="RPM" color="#3b82f6" stale={isStale} />
+            <StatCard label="Iq" value={snapshot.focIqMeas.toFixed(2)} unit="A" color="var(--accent-yellow)"
+              sub={`torque current`} stale={isStale} />
+            <StatCard label="Id" value={snapshot.focIdMeas.toFixed(2)} unit="A"
+              color={Math.abs(snapshot.focIdMeas) > 1 ? 'var(--accent-red)' : 'var(--accent-green)'}
+              sub={`field (target: 0)`} stale={isStale} />
+            <StatCard label="Vbus" value={(focMode ? snapshot.focVbus : vbus).toFixed(1)} unit="V" color="var(--accent-green)"
+              sub={`${snapshot.vbusRaw} ADC`} stale={isStale} />
+            <ArcGauge value={snapshot.dutyPct} max={100} label="Duty" unit="%" color="#f472b6" stale={isStale} />
+            <StatCard label="Power" value={Math.abs(focPowerW).toFixed(1)} unit="W" color="var(--accent-cyan)"
+              sub={`${ibus.toFixed(2)}A bus`} stale={isStale} />
+          </>
+        ) : (
+          <>
+            <ArcGauge value={eRPM} max={info?.maxErpm ?? 30000} label="eRPM" unit="eRPM" color="#3b82f6" stale={isStale} />
+            <StatCard label="Vbus" value={vbus.toFixed(1)} unit="V" color="var(--accent-green)"
+              sub={`${snapshot.vbusRaw} ADC`} stale={isStale} />
+            <StatCard label="Ibus" value={ibus.toFixed(2)} unit="A" color="var(--accent-yellow)"
+              sub={`peak ${ibusPeak.toFixed(1)}A`} stale={isStale} />
+            <ArcGauge value={snapshot.dutyPct} max={100} label="Duty" unit="%" color="#f472b6" stale={isStale} />
+            <StatCard label="mRPM" value={mechRPM.toLocaleString()} unit="RPM" color="var(--accent-cyan)"
+              sub={`${polePairs}pp`} stale={isStale} />
+          </>
+        )}
       </div>
+
+      {/* FOC secondary row */}
+      {focMode && snapshot.focSubState >= 3 && (
+        <div style={{
+          display: 'flex', gap: 2, marginTop: 6,
+          padding: '6px 4px', background: 'rgba(255,255,255,0.01)', borderRadius: 'var(--radius-sm)',
+        }}>
+          <StatCard label="Ia" value={snapshot.focIa.toFixed(2)} unit="A" color="#a78bfa" stale={isStale} />
+          <StatCard label="Ib" value={snapshot.focIb.toFixed(2)} unit="A" color="#c084fc" stale={isStale} />
+          <StatCard label="Theta" value={(snapshot.focTheta * 180 / Math.PI).toFixed(0)} unit="deg" color="#22d3ee" stale={isStale} />
+          <StatCard label="Obs Theta" value={(snapshot.focThetaObs * 180 / Math.PI).toFixed(0)} unit="deg" color="#06b6d4" stale={isStale} />
+          <StatCard label="Speed" value={focSpeedRads.toFixed(0)} unit="rad/s" color="#60a5fa" stale={isStale} />
+          <StatCard label="Ibus" value={ibus.toFixed(2)} unit="A" color="var(--accent-orange)"
+            sub={`peak ${ibusPeak.toFixed(1)}A`} stale={isStale} />
+        </div>
+      )}
     </div>
   );
 }

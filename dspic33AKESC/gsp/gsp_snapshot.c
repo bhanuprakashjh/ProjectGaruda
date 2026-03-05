@@ -107,6 +107,30 @@ void GSP_CaptureSnapshot(GSP_SNAPSHOT_T *dst)
     dst->systemTick = src->systemTick;
     dst->uptimeSec  = src->systemTick / 1000;
 
+    /* FOC telemetry (float fields: may tear, acceptable for telemetry) */
+#if FEATURE_FOC_V2
+    dst->focIdMeas   = src->focIdMeas;
+    dst->focIqMeas   = src->focIqMeas;
+    dst->focTheta    = src->focTheta;
+    dst->focOmega    = src->focOmega;
+    dst->focVbus     = src->focVbus;
+    dst->focIa       = src->focIa;
+    dst->focIb       = src->focIb;
+    dst->focThetaObs = src->focThetaObs;
+    dst->focSubState = src->focSubState;
+    dst->focOffsetIa = src->focOffsetIa;
+    dst->focOffsetIb = src->focOffsetIb;
+#elif FEATURE_FOC
+    dst->focTheta    = src->focTheta;
+    dst->focOmega    = src->focOmega;
+    dst->focVbus     = src->focVbus;
+    dst->focIa       = src->focIa;
+    dst->focIb       = src->focIb;
+    dst->focSubState = src->focSubState;
+    dst->focOffsetIa = src->focOffsetIa;
+    dst->focOffsetIb = src->focOffsetIb;
+#endif
+
     /* Prio-7 fields: use consistency techniques */
 #if FEATURE_ADC_CMP_ZC
     /* stepPeriodHR: seqlock */
