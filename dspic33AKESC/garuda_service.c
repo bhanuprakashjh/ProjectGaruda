@@ -1184,6 +1184,14 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
         garudaData.focSubState = s_foc_v2.sub_state;
         garudaData.focOffsetIa = (uint16_t)s_foc_v2.ia_offset;
         garudaData.focOffsetIb = (uint16_t)s_foc_v2.ib_offset;
+
+        /* Populate duty for telemetry: max of 3 SVPWM phase duties */
+        {
+            float dmax = da_v2;
+            if (db_v2 > dmax) dmax = db_v2;
+            if (dc_v2 > dmax) dmax = dc_v2;
+            garudaData.duty = (uint32_t)(dmax * LOOPTIME_TCY);
+        }
 #endif
     } /* end FOC v2 scope */
 #else

@@ -92,6 +92,7 @@ extern "C" {
  * 0 = Hurst DMB0224C10002 (10-pole, 24V, 4.03 ohm, 7.24 Vpk/KRPM)
  * 1 = A2212 1400KV (14-pole, 12V, 0.065 ohm, 1400 KV)
  * 2 = 5010 750KV (14-pole, 4S/14.8V, ~0.1 ohm, 750 KV, 14" prop)
+ * 3 = 5055 ~580KV (14-pole, 4S/14.8V, 0.05 ohm L-N, 17.5 uH L-N)
  *
  * All motor-dependent parameters are grouped here for easy swapping.
  * Board-specific and feature-tuning parameters are below.
@@ -231,6 +232,39 @@ extern "C" {
 #define FEATURE_PRESYNC_RAMP       0       /* Standard forced OL_RAMP */
 #define OC_CLPCI_ENABLE            0       /* CLPCI disabled: same OA3 ringing issue as A2212.
                                             * Protection via software ADC + board FPCI. */
+
+#elif MOTOR_PROFILE == 3
+/* === 5055 ~580KV (colleague's motor — ADJUST KV AS NEEDED) ===
+ * Rs = 0.1 ohm pp (0.05 L-N), Ls = 35 uH pp (17.5 L-N)
+ * Assumed: 14 poles (7PP), 4S/14.8V
+ * 580 KV => ~8584 RPM @ 14.8V = ~60088 eRPM
+ *
+ * KEY: Very low Rs + heavy rotor = MUST ramp slowly. */
+#define MOTOR_POLE_PAIRS             7
+#define DEADTIME_NS                500     /* Low-L motor */
+#define ALIGN_DUTY_PERCENT           4     /* 14.8V*4%/0.05=11.8A stall — low duty critical! */
+#define RAMP_DUTY_PERCENT            8     /* Conservative: 14.8V*8%/0.05=23.7A stall.
+                                            * Supply CC will limit in practice. */
+#define INITIAL_ERPM               100     /* Very slow: heavy rotor needs time per step. */
+#define RAMP_TARGET_ERPM          2000     /* Good BEMF at this speed. */
+#define MAX_CLOSED_LOOP_ERPM     65000     /* 580KV * 14.8V * 7pp ≈ 60088, rounded up */
+#define RAMP_ACCEL_ERPM_PER_S      150     /* Slow: 14.8s to reach ramp target. */
+#define SINE_ALIGN_MODULATION_PCT    3     /* Low: 0.05 ohm means high current per % duty */
+#define SINE_RAMP_MODULATION_PCT     8     /* Conservative modulation */
+#define ZC_DEMAG_DUTY_THRESH        45     /* Low-L = more demag */
+#define ZC_DEMAG_BLANK_EXTRA_PERCENT 16    /* Moderate */
+#define HWZC_CROSSOVER_ERPM       1500     /* HWZC immediately after morph */
+#define CL_IDLE_DUTY_PERCENT        10     /* Maintain ZC at idle */
+#define SINE_PHASE_OFFSET_DEG       60     /* Tune if needed */
+#define OC_LIMIT_MA              15000     /* CMP3 CLPCI chopping (15A) */
+#define OC_STARTUP_MA            22000     /* Let supply CC limit during startup */
+#define OC_FAULT_MA              20000     /* Software hard fault (20A) */
+#define OC_SW_LIMIT_MA           10000     /* Soft limit (10A) */
+#define RAMP_CURRENT_GATE_MA      6000     /* Hold ramp if bus current > 6A.
+                                            * Critical for 0.05 ohm: prevents
+                                            * runaway current during forced comm. */
+#define FEATURE_PRESYNC_RAMP       0
+#define OC_CLPCI_ENABLE            0       /* CLPCI disabled: OA3 ringing issue */
 
 #else
 #error "Unknown MOTOR_PROFILE — see garuda_config.h"

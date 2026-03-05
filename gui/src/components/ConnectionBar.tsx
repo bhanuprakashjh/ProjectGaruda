@@ -71,8 +71,9 @@ export function ConnectionBar() {
       }
       case CMD.GET_SNAPSHOT: pushSnapshot(decodeSnapshot(payload)); break;
       case CMD.TELEM_FRAME: {
+        if (payload.length < 70) break; // minimum: 2-byte header + 68-byte snapshot
         const snapData = payload.slice(2);
-        pushSnapshot(decodeSnapshot(snapData));
+        try { pushSnapshot(decodeSnapshot(snapData)); } catch { /* ignore malformed */ }
         break;
       }
       case CMD.GET_PARAM_LIST: {

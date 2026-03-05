@@ -26,6 +26,11 @@ const GROUP_COLORS: Record<number, string> = {
   7: '#94a3b8',
 };
 
+/** Groups that apply to both FOC and 6-step */
+const COMMON_GROUPS = new Set([2, 5, 7]); // Current Protection, Voltage Protection, Motor Hardware
+/** Groups that only apply to 6-step */
+const SIXSTEP_ONLY_GROUPS = new Set([0, 1, 3, 4, 6]); // Startup, Closed-Loop, ZC, Duty Slew, Recovery
+
 export function ParamPanel() {
   const { connected, snapshot, params, info } = useEscStore();
   const [editValues, setEditValues] = useState<Record<number, string>>({});
@@ -79,17 +84,17 @@ export function ParamPanel() {
 
   return (
     <div style={{ marginTop: 16 }}>
-      {/* FOC mode note */}
-      {focMode && (
-        <div style={{
-          background: 'rgba(34,211,238,0.08)', border: '1px solid rgba(34,211,238,0.2)',
-          borderRadius: 'var(--radius)', padding: '8px 14px', marginBottom: 12,
-          color: 'var(--accent-cyan)', fontSize: 11,
-        }}>
-          FOC mode active. These are 6-step runtime parameters — FOC tuning is done in the Motor Setup tab via compile-time defines.
-          Only Motor Hardware and Voltage Protection groups apply in FOC mode.
-        </div>
-      )}
+      {/* Mode indicator */}
+      <div style={{
+        background: focMode ? 'rgba(34,211,238,0.08)' : 'rgba(249,115,22,0.08)',
+        border: `1px solid ${focMode ? 'rgba(34,211,238,0.2)' : 'rgba(249,115,22,0.2)'}`,
+        borderRadius: 'var(--radius)', padding: '8px 14px', marginBottom: 12,
+        color: focMode ? 'var(--accent-cyan)' : 'var(--accent-orange)', fontSize: 11,
+      }}>
+        {focMode
+          ? 'FOC mode active. FOC tuning is done in the Motor Setup tab. Groups marked "6-Step Only" are inactive in this mode.'
+          : '6-Step mode active. FOC parameters are not shown.'}
+      </div>
       {/* Header bar */}
       <div style={{
         display: 'flex', justifyContent: 'space-between', alignItems: 'center',
@@ -143,9 +148,34 @@ export function ParamPanel() {
         </div>
       )}
 
-      {/* Parameter grid */}
-      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12 }}>
-        {sortedGroups.map(([group, items]) => {
+      {/* Parameter grid — Common groups first, then 6-step only */}
+      {(() => {
+        const commonGroups = sortedGroups.filter(([g]) => COMMON_GROUPS.has(g));
+        const sixStepGroups = sortedGroups.filter(([g]) => SIXSTEP_ONLY_GROUPS.has(g));
+        const sections = [
+          { label: 'Common Parameters', desc: 'Apply to both FOC and 6-Step modes', groups: commonGroups, dimmed: false },
+          { label: '6-Step Parameters', desc: focMode ? 'Inactive in FOC mode' : 'Active in 6-Step mode', groups: sixStepGroups, dimmed: focMode },
+        ];
+        return sections.map(section => section.groups.length > 0 && (
+          <div key={section.label} style={{ marginBottom: 16 }}>
+            <div style={{
+              display: 'flex', alignItems: 'baseline', gap: 8, marginBottom: 8,
+            }}>
+              <span style={{
+                fontSize: 12, fontWeight: 700, textTransform: 'uppercase',
+                letterSpacing: '1px', color: section.dimmed ? 'var(--text-muted)' : 'var(--text-secondary)',
+              }}>
+                {section.label}
+              </span>
+              <span style={{ fontSize: 10, color: 'var(--text-muted)' }}>
+                {section.desc}
+              </span>
+            </div>
+            <div style={{
+              display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12,
+              opacity: section.dimmed ? 0.5 : 1, transition: 'opacity 0.3s',
+            }}>
+        {section.groups.map(([group, items]) => {
           const groupColor = GROUP_COLORS[group] ?? 'var(--accent-blue)';
           return (
             <div key={group} style={{
@@ -163,6 +193,11 @@ export function ParamPanel() {
                 <span style={{ fontSize: 13, fontWeight: 600, color: groupColor }}>
                   {PARAM_GROUPS[group] ?? `Group ${group}`}
                 </span>
+                {section.dimmed && (
+                  <span style={{ fontSize: 9, color: 'var(--text-muted)', fontStyle: 'italic' }}>
+                    6-Step Only
+                  </span>
+                )}
                 <span style={{
                   fontSize: 10, color: 'var(--text-muted)', marginLeft: 'auto',
                   fontFamily: 'var(--font-mono)',
@@ -268,7 +303,10 @@ export function ParamPanel() {
             </div>
           );
         })}
-      </div>
+            </div>
+          </div>
+        ));
+      })()}
     </div>
   );
 }

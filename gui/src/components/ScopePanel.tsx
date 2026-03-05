@@ -157,19 +157,24 @@ export function ScopePanel() {
     setActiveChannels(new Set(channels));
   };
 
+  const activeChList = useMemo(
+    () => visibleChannels.filter(ch => activeChannels.has(ch.key)),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [activeChannels, focMode, polePairs]
+  );
+
   const data = useMemo(() => {
     return history.map((s, i) => {
       const point: Record<string, number> = { t: +(i * 0.02).toFixed(2) };
-      for (const ch of visibleChannels) {
-        if (activeChannels.has(ch.key)) {
-          point[ch.key] = ch.extract(s, { polePairs });
-        }
+      for (const ch of activeChList) {
+        const v = ch.extract(s, { polePairs });
+        point[ch.key] = Number.isFinite(v) ? v : 0;
       }
       return point;
     });
-  }, [history, activeChannels, polePairs, visibleChannels]);
+  }, [history, activeChList, polePairs]);
 
-  const activeList = visibleChannels.filter(c => activeChannels.has(c.key));
+  const activeList = activeChList;
 
   // Axis assignment
   const leftKeys = focMode

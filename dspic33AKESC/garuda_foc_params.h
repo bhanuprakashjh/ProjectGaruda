@@ -254,6 +254,87 @@
  * alpha = 2pi * 2706 * Ts = 0.71, round to 0.70 */
 #define SMO_LPF_ALPHA           0.70f
 
+#elif MOTOR_PROFILE == 3
+/* ----------------------------------------------------------------
+ * Generic 5055 ~580KV (colleague's motor — ADJUST KV AS NEEDED)
+ * Rs = 0.1 ohm phase-to-phase -> 0.05 ohm L-N
+ * Ls = 35 uH phase-to-phase -> 17.5 uH L-N
+ * Assumed: 14P (7 pole pairs), 4S-6S (tuned for 4S = 14.8V)
+ * 580 KV -> no-load ~8584 RPM @ 14.8V
+ *
+ * KEY TUNING NOTES:
+ *   - Very low Rs (0.05 ohm): small voltage = huge current
+ *   - Heavy rotor + prop: MUST use slow ramp rate (50-100 rad/s^2)
+ *   - Update KV/Ke/flux if your motor is a different KV rating
+ * ---------------------------------------------------------------- */
+
+/** Phase resistance, L-N (ohm). Rpp=0.1 -> Rs=0.05. */
+#define MOTOR_RS_OHM            0.050f
+/** Phase inductance, L-N (H). Lpp=35uH -> Ls=17.5uH. */
+#define MOTOR_LS_H              17.5e-6f
+/** λ_pm = 60/(sqrt3 * 2pi * KV * pp) = 60/(1.732 * 2pi * 580 * 7)
+ *  = 0.001355 V*s/rad_elec (per-phase flux linkage).
+ *  ADJUST THIS IF YOUR KV IS DIFFERENT. */
+#define MOTOR_KE_VPEAK          0.001355f
+#define MOTOR_POLE_PAIRS_FOC    7
+#define MOTOR_VBUS_NOM_V        14.8f       /* 4S LiPo nominal */
+/** Peak phase current limit — 5055 can handle 30A+ but start conservative. */
+#define MOTOR_MAX_CURRENT_A     25.0f
+/** 8584 RPM * 7PP * 2pi/60 = 6290, round up. */
+#define MOTOR_MAX_ELEC_RAD_S    7000.0f
+#define MOTOR_FLUX_LINKAGE      0.001355f
+
+/* D/Q Current Loop PI (BW ~ 800 Hz — slightly detuned for low-Rs stability)
+ *   Kp = ωbw * Ls = 2pi*800 * 17.5e-6 = 0.088
+ *   Ki = ωbw * Rs = 2pi*800 * 0.050 = 251
+ *   Lower BW than A2212 to prevent current ringing on very-low-Rs motor. */
+#define KP_DQ                   0.088f
+#define KI_DQ                   251.0f
+
+/* Speed Loop PI */
+#define KP_SPD                  0.003f
+#define KI_SPD                  0.3f
+
+/* I/f (Current-Forced) Startup — SLOW for heavy 5055 rotor
+ *
+ * CRITICAL: Ramp rate must be low enough that the rotor can physically
+ * follow the forced angle. A 5055 rotor + 10"+ prop has 5-10x the
+ * inertia of an A2212 + 8x4.5. Too fast = vibration + overcurrent.
+ *
+ * Kt_FOC = (3/2)*7*0.001355 = 0.01423 N-m/A */
+/** Alignment Iq (A) — 4A * 0.01423 = 57 mN-m, locks heavy rotor. */
+#define STARTUP_ALIGN_IQ_A      4.0f
+/** OL running Iq (A) — conservative: let rotor track without fighting.
+ *  3A gives 43 mN-m — enough for 10-12" prop without excess current. */
+#define STARTUP_RAMP_IQ_A       3.0f
+/** Iq ramp: 12000 ticks = 500ms — very gradual alignment. */
+#define STARTUP_IQ_RAMP_TICKS   12000U
+/** Alignment dwell: 24000 ticks = 1000ms — heavy rotor needs time. */
+#define STARTUP_ALIGN_TICKS     24000U
+/** 80 rad/s^2 — SLOW ramp for heavy rotor. A2212 uses 500!
+ *  At 80, takes ~10s to reach handoff. Increase to 150 if reliable. */
+#define STARTUP_RAMP_RATE_RPS2  80.0f
+/** BEMF at 800 = 0.001355*800 = 1.08V — 7.3% of 14.8V Vbus.
+ *  Adequate for PLL. Lower than A2212 because better Ke/Vbus ratio. */
+#define STARTUP_HANDOFF_RAD_S   800.0f
+/** Min OL speed at pot=0: 1200 rad/s ~ 1636 RPM mech. */
+#define STARTUP_MIN_OL_RAD_S    1200.0f
+/** At 14.8V: Vbus/Ke = 14.8/0.001355 = 10923, cap at 80%. */
+#define STARTUP_MAX_OL_RAD_S    8700.0f
+
+/* Fault Thresholds */
+#define FAULT_OC_A              30.0f
+#define FAULT_STALL_RAD_S       30.0f
+
+/* Observer LPF -- 5055 (moderate-speed motor)
+ * Max elec freq = 7000/(2pi) = 1114 Hz.
+ * alpha=0.20 -> cutoff ~ 765 Hz: adequate. */
+#define OBS_LPF_ALPHA           0.20f
+
+/* SMO tuning -- 5055
+ * LPF cutoff ~ 2x max elec freq = 2228 Hz -> alpha = 0.58 */
+#define SMO_LPF_ALPHA           0.58f
+
 #else
 #error "Unknown MOTOR_PROFILE for FOC params -- see garuda_config.h"
 #endif

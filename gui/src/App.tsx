@@ -1,3 +1,4 @@
+import { Component, type ReactNode } from 'react';
 import { ConnectionBar } from './components/ConnectionBar';
 import { StatusPanel } from './components/StatusPanel';
 import { GaugePanel } from './components/GaugePanel';
@@ -10,6 +11,24 @@ import { ParamModal } from './components/ParamModal';
 import { HelpPanel, MicrochipIcon } from './components/HelpPanel';
 import { MotorTuningPanel } from './components/MotorTuningPanel';
 import { useEscStore, type TabId } from './store/useEscStore';
+
+class ErrorBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
+  state = { error: null as string | null };
+  static getDerivedStateFromError(e: Error) { return { error: e.message }; }
+  render() {
+    if (this.state.error) return (
+      <div style={{ padding: 24, color: '#ef4444', background: '#1a1a2e', minHeight: '100vh' }}>
+        <h2>Something went wrong</h2>
+        <pre style={{ fontSize: 12, whiteSpace: 'pre-wrap' }}>{this.state.error}</pre>
+        <button onClick={() => this.setState({ error: null })}
+          style={{ marginTop: 12, padding: '8px 16px', background: '#3b82f6', color: '#fff', border: 'none', borderRadius: 4, cursor: 'pointer' }}>
+          Try Again
+        </button>
+      </div>
+    );
+    return this.props.children;
+  }
+}
 
 const toastColors = {
   success: { bg: 'var(--accent-green-dim)', border: 'var(--accent-green)' },
@@ -192,7 +211,9 @@ export default function App() {
 
       {/* Main content */}
       <main style={{ flex: 1, maxWidth: 1280, margin: '0 auto', width: '100%', padding: '16px 24px' }}>
-        {renderTab()}
+        <ErrorBoundary>
+          {renderTab()}
+        </ErrorBoundary>
       </main>
 
       {/* Footer */}
