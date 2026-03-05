@@ -217,10 +217,14 @@
 #define KP_SPD                  0.005f
 #define KI_SPD                  0.5f
 
-/* I/f (Current-Forced) Startup — heavier rotor + big prop */
-/** Alignment Iq (A) — 2A locks heavy 5010 rotor against prop drag. */
-#define STARTUP_ALIGN_IQ_A      2.0f
-/** OL running Iq (A) — 3A for 14"+ prop inertia during acceleration. */
+/* I/f (Current-Forced) Startup — heavier rotor + big prop
+ * Kt_FOC = (3/2)*7*0.001050 = 0.01103 N·m/A (with √3-corrected λ_pm).
+ * NOTE: With corrected Kt, consider bumping RAMP_IQ to 5-6A for heavy
+ * 14"+ props — 3A gives only 33 mN·m which may be marginal under load. */
+/** Alignment Id (A) — 3A × 0.01103 = 33 mN·m, locks 5010 rotor. */
+#define STARTUP_ALIGN_IQ_A      3.0f
+/** OL running Iq (A) — 3A for 14"+ prop inertia during acceleration.
+ *  Consider 5-6A if prop stalls during I/f ramp (Kt*5 = 55 mN·m). */
 #define STARTUP_RAMP_IQ_A       3.0f
 /** Iq ramp ticks (24kHz).  12000 = 500ms — smooth transition. */
 #define STARTUP_IQ_RAMP_TICKS   12000U
@@ -229,11 +233,11 @@
 /** 100 rad/s^2 — slow ramp for 14" prop inertia.
  *  ~10 seconds to reach handoff at 1000 rad/s with full pot. */
 #define STARTUP_RAMP_RATE_RPS2  100.0f
-/** BEMF at 1000 = 0.001819*1000 = 1.82V — 12.3% of 14.8V Vbus. */
+/** BEMF at 1000 = 0.001050*1000 = 1.05V — 7.1% of 14.8V Vbus. */
 #define STARTUP_HANDOFF_RAD_S   1000.0f
 #define STARTUP_MIN_OL_RAD_S    1500.0f     /* ~2045 RPM mech */
-/** At 14.8V: Vbus/Ke = 14.8/0.001819 = 8136, cap at 85% → 7000. */
-#define STARTUP_MAX_OL_RAD_S    7000.0f
+/** At 14.8V: Vbus/Ke = 14.8/0.001050 = 14095, cap at 85% → 12000. */
+#define STARTUP_MAX_OL_RAD_S    12000.0f
 
 /* Fault Thresholds */
 #define FAULT_OC_A              35.0f
