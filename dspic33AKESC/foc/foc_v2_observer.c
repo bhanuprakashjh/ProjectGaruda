@@ -66,17 +66,30 @@ void foc_observer_update(FOC_Observer_t *obs, FOC_PLL_t *pll,
     obs->lambda_est += 0.1f * obs->gain * obs->lambda_est * (-err) * dt;
     obs->lambda_est = foc_clampf(obs->lambda_est, lambda * 0.3f, lambda * 2.5f);
 
-    /* Clamp flux vector to estimated lambda */
-    foc_clamp_abs(&obs->x1, obs->lambda_est);
-    foc_clamp_abs(&obs->x2, obs->lambda_est);
-
-    /* Upward flux correction — prevent zero-flux collapse at low speed.
-     * If flux magnitude drops below 50% of nominal, gently push it up. */
-    float mag = sqrtf(obs->x1 * obs->x1 + obs->x2 * obs->x2);
-    if (mag < lambda * 0.5f && mag > 0.001f) {
-        float scale = 1.0f + 0.1f * dt * 24000.0f;  /* ~10%/tick at 24kHz */
-        obs->x1 *= scale;
-        obs->x2 *= scale;
+    /* Circular normalization: constrain flux magnitude to lambda_est
+     * while preserving angle.  Per-axis clamping (foc_clamp_abs) creates
+     * a square boundary that distorts the angle when the per-tick
+     * integration step is a large fraction of lambda — critical for
+     * high-KV motors (A2212: step = 42% of lambda at 10k RPM).
+     *
+     * Also handles upward flux correction: if magnitude drops below
+     * 50% of nominal lambda, gently push it up to prevent zero-flux
+     * collapse at low speed. */
+    {
+        float mag_c = sqrtf(obs->x1 * obs->x1 + obs->x2 * obs->x2);
+        if (mag_c > 1e-12f) {
+            if (mag_c > obs->lambda_est) {
+                /* Overshoot: normalize to lambda_est (preserves angle) */
+                float sc = obs->lambda_est / mag_c;
+                obs->x1 *= sc;
+                obs->x2 *= sc;
+            } else if (mag_c < lambda * 0.5f) {
+                /* Collapse: gently boost ~10%/tick at 24kHz */
+                float sc = 1.0f + 0.1f * dt * 24000.0f;
+                obs->x1 *= sc;
+                obs->x2 *= sc;
+            }
+        }
     }
 
     /* Angle extraction — direct atan2, no PLL needed for angle */

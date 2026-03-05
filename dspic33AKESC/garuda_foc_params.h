@@ -109,15 +109,18 @@
 
 #define MOTOR_RS_OHM            0.065f
 #define MOTOR_LS_H              30e-6f
-/** Ke_elec = 60/(2pi * 1400 * 7) = 0.000975 V*s/rad_elec */
-#define MOTOR_KE_VPEAK          0.000975f
+/** λ_pm = 60/(sqrt3 * 2pi * KV * pp) = 60/(1.732 * 2pi * 1400 * 7) = 0.000563
+ *  Per-phase flux linkage for FOC d-q frame.  Previous value (0.000975) was
+ *  line-to-line Ke — missing √3 caused BEMF feedforward to consume 73% more
+ *  voltage budget, limiting speed to ~8300 RPM instead of ~14300 RPM. */
+#define MOTOR_KE_VPEAK          0.000563f
 #define MOTOR_POLE_PAIRS_FOC    7
 #define MOTOR_VBUS_NOM_V        12.0f
 #define MOTOR_MAX_CURRENT_A     20.0f
 /** 16800 RPM * 7PP * 2pi/60 = 12315, round to 12000 */
 #define MOTOR_MAX_ELEC_RAD_S    12000.0f
-/** Flux linkage (V-s/rad_elec) = Ke_elec. */
-#define MOTOR_FLUX_LINKAGE      0.000975f
+/** Flux linkage = λ_pm (per-phase). */
+#define MOTOR_FLUX_LINKAGE      0.000563f
 
 /* D/Q Current Loop PI (BW ~ 1 kHz, parallel form)
  *   Kp = ωbw * Ls = 2pi*1000 * 30e-6 = 0.1885 ≈ 0.19
@@ -140,15 +143,15 @@
  * Alignment: hold θ=0, ramp Iq from 0 → ALIGN_IQ over ALIGN_TICKS.
  * OL ramp: advance θ at pot-controlled rate, PI maintains Id=0 + Iq=RAMP_IQ.
  * CL handoff: PLL tracks OL within tolerance → switch to PLL angle + speed PI. */
-/** Alignment Iq (A) — must overcome cogging torque + prop friction.
- *  A2212 Kt_FOC = (3/2)*7*0.000975 = 0.01024 N·m/A.
- *  Cogging ~10-20 mN·m → need ≥2A. 3A gives 30.7 mN·m (3× margin).
- *  Power: 3²×0.065 = 0.585W/phase — negligible for 500ms alignment. */
-#define STARTUP_ALIGN_IQ_A      3.0f
+/** Alignment Id (A) — must overcome cogging torque + prop friction.
+ *  A2212 Kt_FOC = (3/2)*7*0.000563 = 0.00591 N·m/A.
+ *  Cogging ~10-20 mN·m → need ≥3.4A. 5A gives 29.6 mN·m (3× margin).
+ *  Power: 5²×0.065 = 1.6W/phase — negligible for 500ms alignment. */
+#define STARTUP_ALIGN_IQ_A      5.0f
 /** OL running Iq (A) — torque current during forced-angle ramp.
  *  Must overcome prop drag (A2212 + 8x4.5) during acceleration.
- *  At 4A: 41 mN·m torque — strong enough for 8" prop inertia. */
-#define STARTUP_RAMP_IQ_A       4.0f
+ *  At 6A: Kt*6 = 35.4 mN·m — strong enough for 8" prop inertia. */
+#define STARTUP_RAMP_IQ_A       6.0f
 /** Iq ramp ticks (24kHz).  6000 = 250ms — smooth alignment→running. */
 #define STARTUP_IQ_RAMP_TICKS   6000U
 /** Alignment dwell (ticks).  12000 = 500ms — locks rotor position. */
@@ -194,15 +197,15 @@
 /** Phase inductance (H) -- ESTIMATED, needs LCR measurement.
  *  Similar 12N14P outrunners measure 20-50 uH. Using 30 uH. */
 #define MOTOR_LS_H              30e-6f
-/** Ke_elec = 60/(2pi * 750 * 7) = 0.001819 V*s/rad_elec */
-#define MOTOR_KE_VPEAK          0.001819f
+/** λ_pm = 60/(sqrt3 * 2pi * 750 * 7) = 0.001050 V*s/rad_elec (per-phase) */
+#define MOTOR_KE_VPEAK          0.001050f
 #define MOTOR_POLE_PAIRS_FOC    7
 #define MOTOR_VBUS_NOM_V        14.8f       /* 4S LiPo nominal */
 #define MOTOR_MAX_CURRENT_A     30.0f
 /** 11100 RPM * 7PP * 2pi/60 = 8134, round up for headroom. */
 #define MOTOR_MAX_ELEC_RAD_S    8500.0f
-/** Flux linkage (V-s/rad_elec) = Ke_elec. */
-#define MOTOR_FLUX_LINKAGE      0.001819f
+/** Flux linkage = λ_pm (per-phase). */
+#define MOTOR_FLUX_LINKAGE      0.001050f
 
 /* D/Q Current Loop PI (BW ~ 1 kHz, parallel form)
  *   Kp = ωbw * Ls = 2pi*1000 * 30e-6 = 0.1885 ≈ 0.19

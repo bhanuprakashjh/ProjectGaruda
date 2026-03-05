@@ -104,10 +104,13 @@ static inline void foc_svpwm(float v_alpha, float v_beta, float vbus,
     if (vc > vmax) vmax = vc;
     float voff = -0.5f * (vmin + vmax);
 
-    /* Shift to [0..1] range */
-    *da = foc_clampf(va + voff + 0.5f, 0.0f, 1.0f);
-    *db = foc_clampf(vb + voff + 0.5f, 0.0f, 1.0f);
-    *dc = foc_clampf(vc + voff + 0.5f, 0.0f, 1.0f);
+    /* Shift to [0..1] range.
+     * Clamp to [0.04, 0.96] to guarantee minimum off-time per phase,
+     * reducing reverse-recovery and dead-time current spikes.
+     * 4% of 41.67µs = 1.67µs min off-time per edge. */
+    *da = foc_clampf(va + voff + 0.5f, 0.04f, 0.96f);
+    *db = foc_clampf(vb + voff + 0.5f, 0.04f, 0.96f);
+    *dc = foc_clampf(vc + voff + 0.5f, 0.04f, 0.96f);
 }
 
 #ifdef __cplusplus

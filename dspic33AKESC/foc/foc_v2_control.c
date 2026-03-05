@@ -108,10 +108,10 @@ void foc_v2_init(FOC_State_t *foc, const FOC_MotorParams_t *params)
     foc_pi_init(&foc->pid_spd, KP_SPD, KI_SPD,
                 -params->max_current_a, params->max_current_a);
 
-    /* Init PLL — 200 Hz BW for A2212 (max ~955 Hz electrical).
-     * 50 Hz was too low: phase lag at high speed caused observer→Park
-     * feedback instability. 200 Hz gives <15° lag at 6000 rad/s. */
-    foc_pll_init(&foc->pll, 200.0f);
+    /* Init PLL — 100 Hz BW, used for speed estimation only.
+     * Observer atan2 angle drives commutation (zero lag).
+     * PLL smooths speed for the speed PI and handoff check. */
+    foc_pll_init(&foc->pll, 100.0f);
 
     /* Init observer */
     foc_observer_reset(&foc->obs);
@@ -332,10 +332,11 @@ void foc_v2_fast_tick(FOC_State_t *foc,
         }
 
         case FOC_CLOSED_LOOP: {
-            /* PLL angle for commutation — smoother than raw atan2.
-             * Raw observer atan2 has derivative noise from flux integrator;
-             * PLL is 2nd-order filtered. */
-            theta_drive = foc->pll.theta_est;
+            /* Observer atan2 angle for commutation — zero phase lag.
+             * PLL has phase lead at high electrical frequency (200Hz BW
+             * overshoots at 933Hz/8kRPM → 16° lead → desync).
+             * PLL is used only for smooth speed estimation (speed PI). */
+            theta_drive = foc->obs.theta_est;
             float cl_omega = foc->pll.omega_est;
 
             /* Speed reference from pot (handled in slow loop via pid_spd) */
