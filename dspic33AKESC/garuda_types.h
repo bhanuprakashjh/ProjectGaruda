@@ -396,10 +396,10 @@ typedef struct __attribute__((packed))
     uint16_t initialErpm;
     uint16_t rampTargetErpm;
     uint16_t rampAccelErpmPerS;
-    uint8_t reserved[48];       /* pad to 64 bytes (16 used + 48 reserved) */
+    uint8_t reserved[112];      /* pad to 128 bytes (16 used + 112 reserved) */
 } GARUDA_CONFIG_T;
 
-_Static_assert(sizeof(GARUDA_CONFIG_T) == 64, "GARUDA_CONFIG_T must be 64 bytes");
+_Static_assert(sizeof(GARUDA_CONFIG_T) == 128, "GARUDA_CONFIG_T must be 128 bytes");
 
 /* Learned motor parameters (persisted to EEPROM) */
 typedef struct __attribute__((packed))
@@ -459,11 +459,11 @@ _Static_assert(sizeof(EEPROM_LEARNED_T) == 64, "EEPROM_LEARNED_T must be 64 byte
 /* Full EEPROM image (128 bytes) */
 typedef struct __attribute__((packed))
 {
-    GARUDA_CONFIG_T   config;           /* bytes 0-63 */
-    EEPROM_LEARNED_T  learned;          /* bytes 64-127 */
+    GARUDA_CONFIG_T   config;           /* bytes 0-127 */
+    EEPROM_LEARNED_T  learned;          /* bytes 128-191 */
 } EEPROM_IMAGE_T;
 
-_Static_assert(sizeof(EEPROM_IMAGE_T) == 128, "EEPROM_IMAGE_T must be 128 bytes");
+_Static_assert(sizeof(EEPROM_IMAGE_T) == 192, "EEPROM_IMAGE_T must be 192 bytes");
 
 /* Throttle source selection */
 typedef enum

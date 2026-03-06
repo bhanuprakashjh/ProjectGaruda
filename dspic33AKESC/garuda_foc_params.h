@@ -35,53 +35,76 @@
 #define MOTOR_RS_OHM            2.54f
 /** Phase inductance, line-to-neutral (H).  L-L = 4.60 mH -> Ls = 2.30 mH */
 #define MOTOR_LS_H              2.30e-3f
-/** Back-EMF constant (V*s/rad, electrical).
- *  Ke_mech = 7.24e-3 Vpk/RPM * 60/(2pi) = 0.06914 V*s/rad_mech
- *  Ke_elec = 0.06914 / 5 = 0.01383 */
-#define MOTOR_KE_VPEAK          0.01383f
+/** Per-phase flux linkage λ_pm (V·s/rad, electrical).
+ *  Ke_LL = 7.24e-3 Vpk/RPM (line-to-line, standard scope measurement)
+ *  λ_pm = 60 / (√3 × 2π × KV × PP), where KV = 1000/7.24 = 138.1
+ *  = 60 / (1.732 × 6.2832 × 138.1 × 5) = 0.00799 V·s/rad_elec
+ *  Previous value 0.01383 was L-L Ke (missing √3) — caused voltage
+ *  saturation at 1900 RPM instead of reaching rated 3125 RPM. */
+#define MOTOR_KE_VPEAK          0.00799f
 #define MOTOR_POLE_PAIRS_FOC    5
 #define MOTOR_VBUS_NOM_V        24.0f
 /** Peak phase current limit (A) -- 5x rated for startup transient margin. */
 #define MOTOR_MAX_CURRENT_A     5.0f
 /** Max electrical speed (rad/s).  3125 RPM * 5PP * 2pi/60 = 1636, round up. */
 #define MOTOR_MAX_ELEC_RAD_S    2000.0f
-/** Flux linkage (V-s/rad_elec) = Ke_elec.
- *  Used by MXLEMMING observer for flux magnitude clamping. */
-#define MOTOR_FLUX_LINKAGE      0.01383f
+/** Flux linkage (V·s/rad_elec) = λ_pm (per-phase). */
+#define MOTOR_FLUX_LINKAGE      0.00799f
 
-/* D/Q Current Loop PI (BW ~ 1 kHz, parallel form)
- *   Kp = ωbw * Ls = 2pi*1000 * 2.30e-3 = 14.45
- *   Ki = ωbw * Rs = 2pi*1000 * 2.54 = 15959 (parallel form)
- *   Using 876 from original Microchip tuning — conservative, proven stable. */
+/* D/Q Current Loop PI (BW ~ 1 kHz, parallel form, Tustin integration)
+ *   Kp = ωbw * Ls = 2π×1000 × 2.30e-3 = 14.45
+ *   Ki = ωbw * Rs = 2π×1000 × 2.54  = 15958 (parallel form)
+ *   PI zero = Ki/Kp = 15958/14.45 = 1104 rad/s = Rs/Ls → pole cancellation.
+ *   Previous Ki=876 was from Microchip AN1292 (different PI form/scaling),
+ *   gave PI zero at 61 rad/s — 18x below plant pole, causing sluggish
+ *   integral tracking and audible current-harmonic noise on this PMSM. */
 #define KP_DQ                   14.45f
-#define KI_DQ                   876.0f
+#define KI_DQ                   15958.0f
 
-/* Speed Loop PI (outer loop — active after CL handoff) */
-#define KP_SPD                  0.005f
-#define KI_SPD                  0.5f
+/* Speed Loop PI (outer loop — active after CL handoff)
+ *   Hurst: Kt_FOC=0.0599, J≈1.5e-5 kg·m², 5PP.
+ *   Plant gain: pp×Kt/(J×s) = 19967/s.
+ *   Kp=0.015 → ~48 Hz BW (well below 1kHz current loop).
+ *   Ki=1.5 → τ_i=10ms integral tracking.
+ *   Previous Kp=0.005 gave ~16 Hz → sluggish pot response. */
+#define KP_SPD                  0.015f
+#define KI_SPD                  1.5f
 
 /* I/f (Current-Forced) Startup
  * Alignment: hold θ=0, ramp Iq from 0 → ALIGN_IQ over ALIGN_TICKS.
  * OL ramp: advance θ at pot-controlled rate, PI maintains Id=0 + Iq=RAMP_IQ.
  * CL handoff: when PLL tracks OL within tolerance, switch to PLL angle + speed PI. */
-/** Alignment Iq (A) — 0.2A × 2.54Ω = 0.51V, enough to lock Hurst rotor. */
-#define STARTUP_ALIGN_IQ_A      0.20f
+/** Alignment Id (A) — 0.3A × Kt_FOC(0.0599) = 18 mN·m.
+ *  Enough to overcome Hurst cogging (~10 mN·m) without jarring the rotor. */
+#define STARTUP_ALIGN_IQ_A      0.30f
 /** OL running Iq (A) — torque current during forced-angle ramp.
- *  Hurst: low friction, 0.5A is ample (rated 1.0A). */
+ *  0.5A × Kt(0.0599) = 30 mN·m — ample for no-load Hurst.
+ *  1.0A was too much unloaded: rotor oscillated around forced angle. */
 #define STARTUP_RAMP_IQ_A       0.50f
-/** Iq ramp ticks (24kHz).  12000 = 500ms — gradual Iq transition. */
-#define STARTUP_IQ_RAMP_TICKS   12000U
-/** Alignment dwell (ticks).  24000 = 1000ms — lets rotor fully settle. */
-#define STARTUP_ALIGN_TICKS     24000U
-/** Ramp rate (rad/s^2 electrical).  50 → ~5s to handoff with full pot. */
-#define STARTUP_RAMP_RATE_RPS2  50.0f
+/** Iq ramp ticks (24kHz).  6000 = 250ms — fast d→q rotation. */
+#define STARTUP_IQ_RAMP_TICKS   6000U
+/** Alignment dwell (ticks).  12000 = 500ms — Hurst rotor settles in <200ms.
+ *  1000ms was too long: rotor vibrated from current ripple at standstill. */
+#define STARTUP_ALIGN_TICKS     12000U
+/** Ramp rate (rad/s^2 electrical).  300 → ~0.87s to handoff.
+ *  Faster through the audible-frequency I/f region where rotor oscillates
+ *  around the forced angle.  Hurst rotor inertia is light — 300 is safe
+ *  (required torque = J×α/pp ≈ 0.9 mN·m vs available 30 mN·m). */
+#define STARTUP_RAMP_RATE_RPS2  300.0f
 /** PLL correction begins above this speed (rad/s elec.).
- *  BEMF = 0.01383*260 = 3.6V — good PLL SNR. */
-#define STARTUP_HANDOFF_RAD_S   260.0f
-/** Min OL speed (pot=0): 1000 RPM * 5PP * 2pi/60 = 523.6 */
+ *  BEMF = 0.00799×500 = 4.0V (16.6% of 24V).
+ *  MXLEMMING SNR per tick = Ke×ω×dt / (Ls×σ_I).
+ *  At 260 rad/s: SNR=0.75 (noise dominates → observer random-walks).
+ *  At 500 rad/s: SNR=1.44 (signal > noise → observer tracks).
+ *  Threshold for reliable tracking: SNR > 1 → ω > 345 rad/s.
+ *  Using 500 for margin (SNR=1.44, 44% headroom). */
+#define STARTUP_HANDOFF_RAD_S   500.0f
+/** Min OL speed (pot=0): 1000 RPM × 5PP × 2π/60 = 523.6
+ *  NOTE: FOC v2 calculates max_ol dynamically from Vbus/Ke. */
 #define STARTUP_MIN_OL_RAD_S    523.6f
-/** Max OL speed (pot=max): Vbus/Ke = 24/0.01383 = 1736, cap at 85%. */
-#define STARTUP_MAX_OL_RAD_S    735.0f
+/** Max OL speed (pot=max): Vbus/Ke = 24/0.00799 = 3003, cap at 85% = 2553.
+ *  NOTE: FOC v2 uses dynamic calculation; this is documentation only. */
+#define STARTUP_MAX_OL_RAD_S    2553.0f
 
 /* Fault Thresholds */
 #define FAULT_OC_A              10.0f
@@ -143,24 +166,25 @@
  * Alignment: hold θ=0, ramp Iq from 0 → ALIGN_IQ over ALIGN_TICKS.
  * OL ramp: advance θ at pot-controlled rate, PI maintains Id=0 + Iq=RAMP_IQ.
  * CL handoff: PLL tracks OL within tolerance → switch to PLL angle + speed PI. */
-/** Alignment Id (A) — must overcome cogging torque + prop friction.
- *  A2212 Kt_FOC = (3/2)*7*0.000563 = 0.00591 N·m/A.
- *  Cogging ~10-20 mN·m → need ≥3.4A. 5A gives 29.6 mN·m (3× margin).
- *  Power: 5²×0.065 = 1.6W/phase — negligible for 500ms alignment. */
-#define STARTUP_ALIGN_IQ_A      5.0f
-/** OL running Iq (A) — torque current during forced-angle ramp.
- *  Must overcome prop drag (A2212 + 8x4.5) during acceleration.
- *  At 6A: Kt*6 = 35.4 mN·m — strong enough for 8" prop inertia. */
-#define STARTUP_RAMP_IQ_A       6.0f
-/** Iq ramp ticks (24kHz).  6000 = 250ms — smooth alignment→running. */
-#define STARTUP_IQ_RAMP_TICKS   6000U
-/** Alignment dwell (ticks).  12000 = 500ms — locks rotor position. */
-#define STARTUP_ALIGN_TICKS     12000U
-/** 500 rad/s^2 — reaches handoff (1500) in 3s with full pot. */
-#define STARTUP_RAMP_RATE_RPS2  500.0f
-/** BEMF at 1500 = 0.000975*1500 = 1.46V (12.2% of Vbus).
- *  PLL reliable at this level. */
-#define STARTUP_HANDOFF_RAD_S   1500.0f
+/** Alignment Id (A) — locks rotor at θ=0.
+ *  A2212 Kt_FOC = 0.00591 N·m/A.  2A = 11.8 mN·m (enough for cogging).
+ *  Reduced from 5A: lower current = less U25B transient during startup. */
+#define STARTUP_ALIGN_IQ_A      2.0f
+/** OL running Iq (A) — torque during forced-angle ramp.
+ *  3A × Kt = 17.7 mN·m — enough for no-load + light prop.
+ *  Reduced from 6A: U25B trips at high I/f current. */
+#define STARTUP_RAMP_IQ_A       3.0f
+/** Iq ramp ticks (24kHz).  2400 = 100ms — fast d→q rotation. */
+#define STARTUP_IQ_RAMP_TICKS   2400U
+/** Alignment dwell (ticks).  4800 = 200ms — A2212 rotor is light. */
+#define STARTUP_ALIGN_TICKS     4800U
+/** 2000 rad/s^2 — reaches handoff (1000) in 0.5s.
+ *  Fast through the I/f region to minimize time at high fixed current.
+ *  A2212 rotor + prop inertia is low — 2000 is safe. */
+#define STARTUP_RAMP_RATE_RPS2  2000.0f
+/** BEMF at 1000 = 0.000563*1000 = 0.56V (4.7% of Vbus).
+ *  A2212 has excellent Ls/λ ratio → observer works at low BEMF. */
+#define STARTUP_HANDOFF_RAD_S   1000.0f
 /** Min OL speed at pot=0: 2000 rad/s ~ 2730 RPM mech. */
 #define STARTUP_MIN_OL_RAD_S    2000.0f
 /** At 12V: Vbus/Ke = 12/0.000975 = 12308, cap at 85% → 10000. */

@@ -95,7 +95,8 @@ static inline void foc_svpwm(float v_alpha, float v_beta, float vbus,
     float vb = (-0.5f * v_alpha + FOC_SQRT3 * 0.5f * v_beta) * inv_vbus;
     float vc = (-0.5f * v_alpha - FOC_SQRT3 * 0.5f * v_beta) * inv_vbus;
 
-    /* Min-max injection (third harmonic equivalent) */
+    /* Min-max centered injection (third harmonic equivalent).
+     * All 3 phases switch per cycle — symmetric current ripple. */
     float vmin = va;
     if (vb < vmin) vmin = vb;
     if (vc < vmin) vmin = vc;
@@ -104,13 +105,12 @@ static inline void foc_svpwm(float v_alpha, float v_beta, float vbus,
     if (vc > vmax) vmax = vc;
     float voff = -0.5f * (vmin + vmax);
 
-    /* Shift to [0..1] range.
-     * Clamp to [0.04, 0.96] to guarantee minimum off-time per phase,
-     * reducing reverse-recovery and dead-time current spikes.
-     * 4% of 41.67µs = 1.67µs min off-time per edge. */
-    *da = foc_clampf(va + voff + 0.5f, 0.04f, 0.96f);
-    *db = foc_clampf(vb + voff + 0.5f, 0.04f, 0.96f);
-    *dc = foc_clampf(vc + voff + 0.5f, 0.04f, 0.96f);
+    /* Clamp [0.04, 0.96]: 4% of 41.67µs = 1.67µs min off-time per edge. */
+    #define SVM_DUTY_MIN  0.04f
+    #define SVM_DUTY_MAX  0.96f
+    *da = foc_clampf(va + voff + 0.5f, SVM_DUTY_MIN, SVM_DUTY_MAX);
+    *db = foc_clampf(vb + voff + 0.5f, SVM_DUTY_MIN, SVM_DUTY_MAX);
+    *dc = foc_clampf(vc + voff + 0.5f, SVM_DUTY_MIN, SVM_DUTY_MAX);
 }
 
 #ifdef __cplusplus

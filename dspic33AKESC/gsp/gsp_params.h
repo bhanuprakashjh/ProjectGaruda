@@ -6,8 +6,8 @@
  * Provides typed parameter struct (GSP_PARAMS_T), precomputed derived
  * values for ISR use (GSP_DERIVED_T), and table-driven validation.
  *
- * 31 tunables: 8 Stage 1 + 11 motor profile + 12 tuning params.
- * 3 built-in profiles (Hurst, A2212, 5010) + 1 custom.
+ * 48 tunables: 8 Stage 1 + 11 motor profile + 12 tuning + 17 FOC params.
+ * 4 built-in profiles (Hurst, A2212, 5010, 5055) + 1 custom.
  *
  * Component: GSP
  */
@@ -61,12 +61,31 @@ extern "C" {
 #define PARAM_ID_DESYNC_COAST_MS        0x6A
 #define PARAM_ID_DESYNC_MAX_RESTARTS    0x6B
 
+/* FOC motor model params (17 new — runtime-configurable motor profiles) */
+#define PARAM_ID_FOC_RS_MOHM            0x70
+#define PARAM_ID_FOC_LS_UH              0x71
+#define PARAM_ID_FOC_KE_UV_S_RAD        0x72
+#define PARAM_ID_FOC_VBUS_NOM_CV        0x73
+#define PARAM_ID_FOC_MAX_CURRENT_CA     0x74
+#define PARAM_ID_FOC_MAX_ELEC_RAD_S     0x75
+#define PARAM_ID_FOC_KP_DQ_MILLI        0x76
+#define PARAM_ID_FOC_KI_DQ              0x77
+#define PARAM_ID_FOC_OBS_LPF_MILLI      0x78
+#define PARAM_ID_FOC_ALIGN_IQ_CA        0x79
+#define PARAM_ID_FOC_RAMP_IQ_CA         0x7A
+#define PARAM_ID_FOC_ALIGN_TIME_MS      0x7B
+#define PARAM_ID_FOC_IQ_RAMP_TIME_MS    0x7C
+#define PARAM_ID_FOC_RAMP_RATE_RPS2     0x7D
+#define PARAM_ID_FOC_HANDOFF_RAD_S      0x7E
+#define PARAM_ID_FOC_FAULT_OC_CA        0x7F
+#define PARAM_ID_FOC_FAULT_STALL_DRS    0x80
+
 /* Parameter type codes (for descriptor table) */
 #define PARAM_TYPE_U8   0
 #define PARAM_TYPE_U16  1
 #define PARAM_TYPE_U32  2
 
-/* Parameter group codes (8 groups) */
+/* Parameter group codes (11 groups) */
 #define PARAM_GROUP_STARTUP      0
 #define PARAM_GROUP_CLOSED_LOOP  1
 #define PARAM_GROUP_OVERCURRENT  2
@@ -75,6 +94,9 @@ extern "C" {
 #define PARAM_GROUP_VOLTAGE      5
 #define PARAM_GROUP_RECOVERY     6
 #define PARAM_GROUP_MOTOR_HW     7
+#define PARAM_GROUP_FOC_MOTOR    8
+#define PARAM_GROUP_FOC_TUNING   9
+#define PARAM_GROUP_FOC_STARTUP  10
 
 /* ── Runtime parameter struct (31 fields) ────────────────────────────── */
 
@@ -116,6 +138,24 @@ typedef struct {
     uint16_t desyncCoastMs;
     uint8_t  desyncMaxRestarts;
     uint8_t  _pad2;
+    /* FOC motor model params (17 new) — u16 integer-scaled */
+    uint16_t focRsMilliOhm;          /* Rs × 1000 (mΩ) */
+    uint16_t focLsMicroH;            /* Ls × 1e6 (µH) */
+    uint16_t focKeUvSRad;            /* Ke × 1e6 (µV·s/rad) */
+    uint16_t focVbusNomCentiV;       /* Vbus × 100 (cV) */
+    uint16_t focMaxCurrentCentiA;    /* Imax × 100 (cA) */
+    uint16_t focMaxElecRadS;         /* max ωe (rad/s) */
+    uint16_t focKpDqMilli;           /* Kp_dq × 1000 */
+    uint16_t focKiDq;                /* Ki_dq (integer) */
+    uint16_t focObsLpfAlphaMilli;    /* OBS_LPF_ALPHA × 1000 */
+    uint16_t focAlignIqCentiA;       /* Align Iq × 100 (cA) */
+    uint16_t focRampIqCentiA;        /* Ramp Iq × 100 (cA) */
+    uint16_t focAlignTimeMs;         /* Alignment dwell (ms) */
+    uint16_t focIqRampTimeMs;        /* Iq ramp duration (ms) */
+    uint16_t focRampRateRps2;        /* Ramp acceleration (rad/s²) */
+    uint16_t focHandoffRadS;         /* CL handoff speed (rad/s) */
+    uint16_t focFaultOcCentiA;       /* OC fault threshold × 100 (cA) */
+    uint16_t focFaultStallDeciRadS;  /* Stall threshold × 10 (drad/s) */
 } GSP_PARAMS_T;
 
 /* ── Derived values (precomputed from params, ISR reads these) ───────── */
@@ -172,8 +212,9 @@ typedef enum {
 #define GSP_PROFILE_HURST   0
 #define GSP_PROFILE_A2212   1
 #define GSP_PROFILE_5010    2
-#define GSP_PROFILE_CUSTOM  3
-#define GSP_PROFILE_COUNT   3  /* built-in profiles (excl. Custom) */
+#define GSP_PROFILE_5055    3
+#define GSP_PROFILE_CUSTOM  4
+#define GSP_PROFILE_COUNT   4  /* built-in profiles (excl. Custom) */
 
 /* Global instances (defined in gsp_params.c) */
 extern GSP_PARAMS_T  gspParams;
@@ -229,7 +270,7 @@ const PARAM_DESCRIPTOR_T *GSP_ParamGetDescriptor(uint8_t idx);
 bool GSP_ParamsLoadProfile(uint8_t profileId);
 
 /**
- * @return Currently active profile ID (0-3).
+ * @return Currently active profile ID (0-4).
  */
 uint8_t GSP_ParamsGetActiveProfile(void);
 
@@ -237,6 +278,7 @@ uint8_t GSP_ParamsGetActiveProfile(void);
 
 #define GSP_PERSIST_V1_MARKER  0xA1
 #define GSP_PERSIST_V2_MARKER  0xA2
+#define GSP_PERSIST_V3_MARKER  0xA3
 
 /* V2 packed persist struct — 48 bytes, fills GARUDA_CONFIG_T.reserved */
 typedef struct __attribute__((packed)) {
@@ -282,6 +324,65 @@ typedef struct __attribute__((packed)) {
 } GSP_CONFIG_PERSIST_V2_T;
 
 _Static_assert(sizeof(GSP_CONFIG_PERSIST_V2_T) == 48, "V2 persist must be 48 bytes");
+
+/* V3 packed persist struct — extends V2 with FOC motor model params */
+typedef struct __attribute__((packed)) {
+    /* --- V2 portion (bytes 0-47, identical layout) --- */
+    uint8_t  schemaMarker;          /* 0xA3 = V3 */
+    uint8_t  activeProfile;
+    uint8_t  rampDutyPct;
+    uint8_t  clIdleDutyPct;
+    uint8_t  timingAdvMaxDeg;
+    uint16_t rampTargetErpm;
+    uint16_t rampAccelErpmPerS;
+    uint16_t hwzcCrossoverErpm;
+    uint16_t ocSwLimitMa;
+    uint16_t ocFaultMa;
+    uint8_t  motorPolePairs;
+    uint8_t  alignDutyPct;
+    uint16_t initialErpm;
+    uint8_t  sineAlignModPct;
+    uint8_t  sineRampModPct;
+    uint8_t  zcDemagDutyThresh;
+    uint8_t  zcDemagBlankExtraPct;
+    uint16_t ocLimitMa;
+    uint16_t ocStartupMa;
+    uint16_t rampCurrentGateMa;
+    uint16_t maxClosedLoopErpmLo;
+    uint8_t  dutySlewUpPctPerMs;
+    uint8_t  dutySlewDownPctPerMs;
+    uint16_t postSyncSettleMs;
+    uint8_t  postSyncSlewDivisor;
+    uint8_t  zcBlankingPercent;
+    uint8_t  zcAdcDeadband;
+    uint8_t  zcSyncThreshold;
+    uint8_t  zcFilterThreshold;
+    uint16_t vbusOvAdc;
+    uint16_t vbusUvAdc;
+    uint16_t desyncCoastMs;
+    uint8_t  desyncMaxRestarts;
+    uint8_t  maxClErpmHi;
+    /* --- V3 FOC extension (bytes 48-81) --- */
+    uint16_t focRsMilliOhm;
+    uint16_t focLsMicroH;
+    uint16_t focKeUvSRad;
+    uint16_t focVbusNomCentiV;
+    uint16_t focMaxCurrentCentiA;
+    uint16_t focMaxElecRadS;
+    uint16_t focKpDqMilli;
+    uint16_t focKiDq;
+    uint16_t focObsLpfAlphaMilli;
+    uint16_t focAlignIqCentiA;
+    uint16_t focRampIqCentiA;
+    uint16_t focAlignTimeMs;
+    uint16_t focIqRampTimeMs;
+    uint16_t focRampRateRps2;
+    uint16_t focHandoffRadS;
+    uint16_t focFaultOcCentiA;
+    uint16_t focFaultStallDeciRadS;
+} GSP_CONFIG_PERSIST_V3_T;
+
+_Static_assert(sizeof(GSP_CONFIG_PERSIST_V3_T) == 82, "V3 persist must be 82 bytes");
 
 /* V1 persist (for backward compat read) */
 typedef struct __attribute__((packed)) {

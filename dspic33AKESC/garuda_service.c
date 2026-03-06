@@ -67,6 +67,9 @@
 #include "foc/foc_v2_types.h"
 #include "foc/foc_v2_control.h"
 #include "hal/hal_pwm.h"
+#if FEATURE_GSP
+#include "gsp/gsp_params.h"
+#endif
 #endif
 
 #include "x2cscope/diagnostics.h"
@@ -77,6 +80,56 @@ volatile GARUDA_DATA_T garudaData;
 #if FEATURE_FOC_V2
 /* FOC v2 state — accessed only from ADC ISR (not volatile) */
 static FOC_State_t s_foc_v2;
+/* Flag: set by profile load handler, checked by ISR to re-init FOC */
+volatile bool gspFocReinitNeeded;
+
+/** Build FOC_MotorParams_t from GSP runtime params (or compile-time fallback). */
+static FOC_MotorParams_t BuildFocMotorParams(void)
+{
+    FOC_MotorParams_t mp;
+#if FEATURE_GSP
+    mp.Rs             = (float)gspParams.focRsMilliOhm * 0.001f;
+    mp.Ls             = (float)gspParams.focLsMicroH * 1e-6f;
+    mp.Ke             = (float)gspParams.focKeUvSRad * 1e-6f;
+    mp.lambda_pm      = mp.Ke;  /* Ke = lambda_pm for PMSM */
+    mp.pole_pairs     = gspParams.motorPolePairs;
+    mp.vbus_nom_v     = (float)gspParams.focVbusNomCentiV * 0.01f;
+    mp.max_current_a  = (float)gspParams.focMaxCurrentCentiA * 0.01f;
+    mp.max_elec_rad_s = (float)gspParams.focMaxElecRadS;
+    mp.kp_dq          = (float)gspParams.focKpDqMilli * 0.001f;
+    mp.ki_dq          = (float)gspParams.focKiDq;
+    mp.obs_lpf_alpha  = (float)gspParams.focObsLpfAlphaMilli * 0.001f;
+    mp.align_iq_a     = (float)gspParams.focAlignIqCentiA * 0.01f;
+    mp.ramp_iq_a      = (float)gspParams.focRampIqCentiA * 0.01f;
+    mp.align_ticks    = (uint32_t)gspParams.focAlignTimeMs * 24U;  /* ms → 24kHz ticks */
+    mp.iq_ramp_ticks  = (uint32_t)gspParams.focIqRampTimeMs * 24U;
+    mp.ramp_rate_rps2 = (float)gspParams.focRampRateRps2;
+    mp.handoff_rad_s  = (float)gspParams.focHandoffRadS;
+    mp.fault_oc_a     = (float)gspParams.focFaultOcCentiA * 0.01f;
+    mp.fault_stall_rad_s = (float)gspParams.focFaultStallDeciRadS * 0.1f;
+#else
+    mp.Rs             = MOTOR_RS_OHM;
+    mp.Ls             = MOTOR_LS_H;
+    mp.lambda_pm      = MOTOR_FLUX_LINKAGE;
+    mp.Ke             = MOTOR_KE_VPEAK;
+    mp.pole_pairs     = MOTOR_POLE_PAIRS_FOC;
+    mp.max_current_a  = MOTOR_MAX_CURRENT_A;
+    mp.max_elec_rad_s = MOTOR_MAX_ELEC_RAD_S;
+    mp.vbus_nom_v     = MOTOR_VBUS_NOM_V;
+    mp.kp_dq          = KP_DQ;
+    mp.ki_dq          = KI_DQ;
+    mp.obs_lpf_alpha  = OBS_LPF_ALPHA;
+    mp.align_iq_a     = STARTUP_ALIGN_IQ_A;
+    mp.ramp_iq_a      = STARTUP_RAMP_IQ_A;
+    mp.align_ticks    = STARTUP_ALIGN_TICKS;
+    mp.iq_ramp_ticks  = STARTUP_IQ_RAMP_TICKS;
+    mp.ramp_rate_rps2 = STARTUP_RAMP_RATE_RPS2;
+    mp.handoff_rad_s  = STARTUP_HANDOFF_RAD_S;
+    mp.fault_oc_a     = FAULT_OC_A;
+    mp.fault_stall_rad_s = FAULT_STALL_RAD_S;
+#endif
+    return mp;
+}
 #endif
 
 #if FEATURE_FOC
@@ -277,17 +330,9 @@ void GARUDA_ServiceInit(void)
 
 #if FEATURE_FOC_V2
     {
-        FOC_MotorParams_t mp = {
-            .Rs             = MOTOR_RS_OHM,
-            .Ls             = MOTOR_LS_H,
-            .lambda_pm      = MOTOR_FLUX_LINKAGE,
-            .Ke             = MOTOR_KE_VPEAK,
-            .pole_pairs     = MOTOR_POLE_PAIRS_FOC,
-            .max_current_a  = MOTOR_MAX_CURRENT_A,
-            .max_elec_rad_s = MOTOR_MAX_ELEC_RAD_S,
-            .vbus_nom_v     = MOTOR_VBUS_NOM_V
-        };
+        FOC_MotorParams_t mp = BuildFocMotorParams();
         foc_v2_init(&s_foc_v2, &mp);
+        gspFocReinitNeeded = false;
     }
 #endif
 
@@ -1126,6 +1171,13 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
             s_foc_v2.cal_count = 0;
             s_foc_v2.cal_accum_a = 0;
             s_foc_v2.cal_accum_b = 0;
+        }
+
+        /* Re-init FOC with updated motor params (after profile load) */
+        if (gspFocReinitNeeded && s_foc_v2.mode == FOC_IDLE) {
+            FOC_MotorParams_t mp = BuildFocMotorParams();
+            foc_v2_init(&s_foc_v2, &mp);
+            gspFocReinitNeeded = false;
         }
 
         /* FOC v2 uses raw_ia/raw_ib already read at ISR entry */

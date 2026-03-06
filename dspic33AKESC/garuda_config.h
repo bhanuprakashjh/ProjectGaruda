@@ -124,7 +124,7 @@ extern "C" {
 #define OC_SW_LIMIT_MA            1500     /* Software soft limit (1.5A) */
 #define RAMP_CURRENT_GATE_MA         0     /* 0=disabled: Hurst starts easily without gating */
 #define FEATURE_PRESYNC_RAMP       0       /* Hurst: standard forced OL_RAMP */
-#define OC_CLPCI_ENABLE            1       /* CMP3 CLPCI chopping enabled for Hurst */
+#define OC_CLPCI_ENABLE            0       /* Disabled for FOC: SVPWM incompatible with CLPCI chopping */
 
 #elif MOTOR_PROFILE == 1
 /* === A2212 1400KV (drone motor) ===

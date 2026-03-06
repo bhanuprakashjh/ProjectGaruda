@@ -26,6 +26,12 @@
 #define DT_SLOW          FOC_TS_SLOW_S
 #define SLOW_DIV         FOC_SLOW_DIV
 
+/* Dead-time duty compensation: tdt × fsw.
+ * 750ns at 24kHz = 0.018 (1.8% duty).
+ * Applied per-phase after SVPWM to cancel voltage error from FET
+ * dead-time insertion.  Sign depends on phase current direction. */
+#define DT_COMP_DUTY     ((float)DEADTIME_NS * 1e-9f * (float)PWMFREQUENCY_HZ)
+
 /* ADC calibration */
 #define CAL_SAMPLES      1024U
 #define CAL_SHIFT         10U
@@ -38,8 +44,8 @@
  * 20-30° rotor lag in I/f mode — angle comparison always fails). */
 #define HANDOFF_SPEED_TOL  0.20f
 
-/* Lock count for handoff (20ms at 24kHz) */
-#define HANDOFF_LOCK_TICKS 480U
+/* Lock count for handoff (10ms at 24kHz — reduced for faster CL entry) */
+#define HANDOFF_LOCK_TICKS 240U
 
 /* Re-arm: throttle=0 for 1s in slow loop ticks */
 #define REARM_TIMEOUT_TICKS 1000U
@@ -101,10 +107,22 @@ void foc_v2_init(FOC_State_t *foc, const FOC_MotorParams_t *params)
     float t_pwm_s  = 1.0f / (float)PWMFREQUENCY_HZ;
     foc->dt_comp   = params->vbus_nom_v * (t_dead_s / t_pwm_s);
 
+    /* Copy runtime startup/tuning params */
+    foc->align_iq        = params->align_iq_a;
+    foc->ramp_iq         = params->ramp_iq_a;
+    foc->align_ticks     = params->align_ticks;
+    foc->iq_ramp_ticks   = params->iq_ramp_ticks;
+    foc->ramp_rate       = params->ramp_rate_rps2;
+    foc->handoff_rad_s   = params->handoff_rad_s;
+    foc->fault_oc_a      = params->fault_oc_a;
+    foc->fault_stall_rad_s = params->fault_stall_rad_s;
+    foc->obs_lpf_alpha   = params->obs_lpf_alpha;
+    foc->max_elec_rad_s  = params->max_elec_rad_s;
+
     /* Init PI controllers */
     float vclamp = params->vbus_nom_v * 0.95f * FOC_INV_SQRT3;
-    foc_pi_init(&foc->pid_d, KP_DQ, KI_DQ, -vclamp, vclamp);
-    foc_pi_init(&foc->pid_q, KP_DQ, KI_DQ, -vclamp, vclamp);
+    foc_pi_init(&foc->pid_d, params->kp_dq, params->ki_dq, -vclamp, vclamp);
+    foc_pi_init(&foc->pid_q, params->kp_dq, params->ki_dq, -vclamp, vclamp);
     foc_pi_init(&foc->pid_spd, KP_SPD, KI_SPD,
                 -params->max_current_a, params->max_current_a);
 
@@ -112,6 +130,7 @@ void foc_v2_init(FOC_State_t *foc, const FOC_MotorParams_t *params)
      * Observer atan2 angle drives commutation (zero lag).
      * PLL smooths speed for the speed PI and handoff check. */
     foc_pll_init(&foc->pll, 100.0f);
+    foc->pll.omega_max = params->max_elec_rad_s;
 
     /* Init observer */
     foc_observer_reset(&foc->obs);
@@ -226,7 +245,7 @@ void foc_v2_fast_tick(FOC_State_t *foc,
                                 v_alpha, v_beta,
                                 i_alpha, i_beta,
                                 foc->Rs, foc->Ls, foc->lambda_pm,
-                                foc->dt_comp, duty_abs,
+                                0.0f, duty_abs,  /* DT comp applied on output duties, not observer */
                                 DT_FAST);
         }
 
@@ -246,13 +265,13 @@ void foc_v2_fast_tick(FOC_State_t *foc,
             foc->align_ctr++;
             theta_drive = 0.0f;
 
-            float align_frac = (float)foc->align_ctr / (float)STARTUP_ALIGN_TICKS;
+            float align_frac = (float)foc->align_ctr / (float)foc->align_ticks;
             if (align_frac > 1.0f) align_frac = 1.0f;
-            id_ref = STARTUP_ALIGN_IQ_A * align_frac;
+            id_ref = foc->align_iq * align_frac;
             iq_ref = 0.0f;
 
             /* Transition: alignment complete → IF_RAMP */
-            if (foc->align_ctr >= STARTUP_ALIGN_TICKS) {
+            if (foc->align_ctr >= foc->align_ticks) {
                 /* Seed observer: rotor aligned at θ=0 */
                 foc_observer_seed(&foc->obs, foc->lambda_pm, 0.0f);
                 foc->pll.theta_est = 0.0f;
@@ -267,52 +286,59 @@ void foc_v2_fast_tick(FOC_State_t *foc,
         }
 
         case FOC_IF_RAMP: {
-            /* I/f open-loop: forced angle + PI current control */
+            /* I/f open-loop: forced angle + PI current control.
+             * Ramp speed is POT-INDEPENDENT — always accelerate to handoff
+             * speed as fast as possible, then CL speed PI takes over.
+             * This minimizes time in I/f (high fixed current) and avoids
+             * humming at pot=0 during ramp. */
             foc->ramp_ctr++;
 
-            /* Pot → speed target */
-            float pot_target;
-            if (throttle < THROTTLE_DEADBAND) {
-                pot_target = 0.0f;
-            } else {
-                float pot_frac = (float)(throttle - THROTTLE_DEADBAND)
-                               / (4095.0f - (float)THROTTLE_DEADBAND);
-                pot_target = pot_frac * STARTUP_MAX_OL_RAD_S;
-            }
-
-            /* Slew-rate limited speed ramp */
-            float max_delta = STARTUP_RAMP_RATE_RPS2 * DT_FAST;
-            if (foc->omega_if < pot_target) {
-                foc->omega_if += max_delta;
-                if (foc->omega_if > pot_target) foc->omega_if = pot_target;
-            } else if (foc->omega_if > pot_target) {
-                foc->omega_if -= max_delta;
-                if (foc->omega_if < pot_target) foc->omega_if = pot_target;
-            }
+            /* Always ramp toward handoff speed at max rate */
+            float max_delta = foc->ramp_rate * DT_FAST;
+            foc->omega_if += max_delta;
+            if (foc->omega_if > foc->handoff_rad_s * 1.1f)
+                foc->omega_if = foc->handoff_rad_s * 1.1f;
 
             /* Advance forced angle */
             foc->theta_if += foc->omega_if * DT_FAST;
             foc->theta_if = foc_angle_wrap(foc->theta_if);
             theta_drive = foc->theta_if;
 
-            /* I/f current: ramp from ALIGN_IQ to RAMP_IQ */
-            if (foc->ramp_ctr < STARTUP_IQ_RAMP_TICKS) {
-                float frac = (float)foc->ramp_ctr / (float)STARTUP_IQ_RAMP_TICKS;
-                iq_ref = STARTUP_ALIGN_IQ_A
-                       + (STARTUP_RAMP_IQ_A - STARTUP_ALIGN_IQ_A) * frac;
+            /* Anchor observer to forced angle for entire IF_RAMP. */
+            foc_observer_seed(&foc->obs, foc->lambda_pm, foc->theta_if);
+            foc->pll.theta_est = foc->theta_if;
+            foc->pll.omega_est = foc->omega_if;
+
+            /* Smooth d→q current transition during I/f ramp.
+             * At ALIGN end: Id=align_iq, Iq=0.  Jumping to Id=0, Iq=X
+             * in one tick creates a 90° torque impulse → loud thump.
+             * Instead, linearly fade Id→0 while ramping Iq→ramp_iq
+             * over iq_ramp_ticks, giving a smooth current vector rotation. */
+            if (foc->ramp_ctr < foc->iq_ramp_ticks) {
+                float frac = (float)foc->ramp_ctr / (float)foc->iq_ramp_ticks;
+                iq_ref = foc->ramp_iq * frac;
+                id_ref = foc->align_iq * (1.0f - frac);
             } else {
-                iq_ref = STARTUP_RAMP_IQ_A;
+                iq_ref = foc->ramp_iq;
             }
 
             /* Handoff check: PLL speed matches forced speed.
              * Speed-based (not angle-based) — immune to load angle from
              * prop drag, which causes 20-30° rotor lag in I/f mode. */
-            if (foc->omega_if >= STARTUP_HANDOFF_RAD_S) {
+            if (foc->omega_if >= foc->handoff_rad_s) {
                 float spd_err = foc->pll.omega_est - foc->omega_if;
                 if (spd_err < 0.0f) spd_err = -spd_err;
                 float spd_tol = HANDOFF_SPEED_TOL * foc->omega_if;
 
-                if (spd_err < spd_tol) {
+                /* Also require observer angle within ±90° of forced angle.
+                 * Speed match alone is insufficient — PLL tracks rate, not
+                 * absolute angle.  A 180° lock causes inverted speed PI. */
+                float ang_err = foc->obs.theta_est - foc->theta_if;
+                if (ang_err >  FOC_PI_F) ang_err -= FOC_TWO_PI;
+                if (ang_err < -FOC_PI_F) ang_err += FOC_TWO_PI;
+                if (ang_err < 0.0f) ang_err = -ang_err;
+
+                if (spd_err < spd_tol && ang_err < (FOC_PI_F * 0.5f)) {
                     if (++foc->lock_ctr >= HANDOFF_LOCK_TICKS) {
                         /* Bumpless transfer: preload PI with steady-state values.
                          * Feedforward (Ke*ω) is now added outside PI, so PI only
@@ -378,11 +404,13 @@ void foc_v2_fast_tick(FOC_State_t *foc,
         float vq_lim = sqrtf(sq);
         vq_tot = foc_clampf(vq_tot, -vq_lim, vq_lim);
 
-        /* Back-calculate effective PI output for anti-windup:
-         * If clamp reduced total, feed the clamped PI value back so
-         * the integrator doesn't wind up against the voltage ceiling. */
-        vd_pi = vd_tot - ff_d;
-        vq_pi = vq_tot - ff_q;
+        /* NOTE: Current PI anti-windup relies on the dynamic PI limits
+         * set at lines 215-224 (vq_pi_budget tracks BEMF feedforward).
+         * The circular voltage clamp may occasionally clip beyond these
+         * limits, but the PI's internal Tustin anti-windup prevents
+         * severe accumulation.  Speed PI windup (the main issue at the
+         * voltage ceiling) is handled by the dynamic speed PI clamp
+         * in the slow loop. */
 
         /* Save total voltage for observer on next tick */
         foc->vd = vd_tot;
@@ -394,6 +422,22 @@ void foc_v2_fast_tick(FOC_State_t *foc,
 
         /* 10-11. SVPWM */
         foc_svpwm(v_alpha, v_beta, foc->vbus, da_out, db_out, dc_out);
+
+        /* Dead-time compensation on output duties.
+         * FET dead-time inserts voltage error proportional to sign(Ix).
+         * Compensate by adding/subtracting DT_COMP_DUTY per phase.
+         * This eliminates the persistent Id drift (~0.3A) seen on the
+         * Hurst at low phase current where DT error is a large fraction
+         * of the applied voltage. */
+        {
+            float ic = -(ia + ib);
+            *da_out += DT_COMP_DUTY * foc_soft_sign(ia, 0.1f);
+            *db_out += DT_COMP_DUTY * foc_soft_sign(ib, 0.1f);
+            *dc_out += DT_COMP_DUTY * foc_soft_sign(ic, 0.1f);
+            *da_out = foc_clampf(*da_out, SVM_DUTY_MIN, SVM_DUTY_MAX);
+            *db_out = foc_clampf(*db_out, SVM_DUTY_MIN, SVM_DUTY_MAX);
+            *dc_out = foc_clampf(*dc_out, SVM_DUTY_MIN, SVM_DUTY_MAX);
+        }
 
         /* 12. Update commutation angle for next tick */
         foc->theta = theta_drive;
@@ -410,7 +454,7 @@ void foc_v2_fast_tick(FOC_State_t *foc,
         /* 14. Software overcurrent check */
         {
             float i_sq = id_meas * id_meas + iq_meas * iq_meas;
-            if (i_sq > FAULT_OC_A * FAULT_OC_A) {
+            if (i_sq > foc->fault_oc_a * foc->fault_oc_a) {
                 if (++foc->oc_debounce_ctr >= OC_DEBOUNCE_TICKS) {
                     foc->mode = FOC_FAULT;
                     foc->oc_debounce_ctr = 0;
@@ -429,7 +473,7 @@ void foc_v2_fast_tick(FOC_State_t *foc,
             foc->iq_ref > 0.1f) {
             float abs_omega = foc->pll.omega_est;
             if (abs_omega < 0.0f) abs_omega = -abs_omega;
-            if (abs_omega < FAULT_STALL_RAD_S) {
+            if (abs_omega < foc->fault_stall_rad_s) {
                 foc->stall_ctr++;
                 if (foc->stall_ctr >= (uint32_t)(FAULT_STALL_TIMEOUT_MS * SLOW_DIV)) {
                     foc->mode = FOC_FAULT;
@@ -461,20 +505,23 @@ slow_loop:
             }
         }
         else if (foc->mode == FOC_CLOSED_LOOP) {
-            /* Speed PI: pot → speed ref → Iq ref */
+            /* Speed PI: pot → speed ref → Iq ref.
+             * Minimum idle speed = handoff speed to keep observer tracking.
+             * Below this speed, BEMF is too weak for reliable sensorless. */
+            float idle_speed = foc->handoff_rad_s;
             float speed_ref;
             if (throttle < THROTTLE_DEADBAND) {
-                speed_ref = 0.0f;
+                speed_ref = idle_speed;
             } else {
                 float pot_frac = (float)(throttle - THROTTLE_DEADBAND)
                                / (4095.0f - (float)THROTTLE_DEADBAND);
-                speed_ref = pot_frac * MOTOR_MAX_ELEC_RAD_S;
+                speed_ref = idle_speed + pot_frac * (foc->max_elec_rad_s - idle_speed);
             }
 
             /* Voltage-limited speed cap: prevent commanding speeds that
              * require more BEMF voltage than the bus can deliver.
-             * Reserve 15% of Vq budget for current control headroom. */
-            float vq_avail = foc->vbus * 0.85f * FOC_INV_SQRT3;
+             * Reserve 20% of Vq budget for current control headroom. */
+            float vq_avail = foc->vbus * 0.80f * FOC_INV_SQRT3;
             float omega_max_v = vq_avail / foc->Ke;
             if (speed_ref > omega_max_v)
                 speed_ref = omega_max_v;
@@ -487,7 +534,7 @@ slow_loop:
             static uint32_t rearm_ctr = 0;
             float abs_omega = foc->pll.omega_est;
             if (abs_omega < 0.0f) abs_omega = -abs_omega;
-            if (throttle < THROTTLE_DEADBAND && abs_omega < FAULT_STALL_RAD_S * 2.0f) {
+            if (throttle < THROTTLE_DEADBAND && abs_omega < foc->fault_stall_rad_s * 2.0f) {
                 if (++rearm_ctr >= REARM_TIMEOUT_TICKS) {
                     foc_v2_stop(foc);
                     rearm_ctr = 0;

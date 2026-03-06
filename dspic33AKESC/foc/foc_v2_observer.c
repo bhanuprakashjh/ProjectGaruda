@@ -52,10 +52,17 @@ void foc_observer_update(FOC_Observer_t *obs, FOC_PLL_t *pll,
 
     /* Flux integration with L·dI cancellation.
      * dx = (V - Rs·I)·dt - Ls·(I[n] - I[n-1])
-     * The Ls term removes the inductive voltage component directly
-     * from current measurements, avoiding Ls model sensitivity. */
-    obs->x1 += (v_a_eff - Rs * i_alpha) * dt - Ls * (i_alpha - obs->i_alpha_last);
-    obs->x2 += (v_b_eff - Rs * i_beta)  * dt - Ls * (i_beta  - obs->i_beta_last);
+     * Rs·I uses unfiltered current (no lag on resistive term).
+     *
+     * L·dI noise: accumulates at Ls/λ per tick from ADC noise.
+     * For high-Ls motors (Hurst: Ls/λ=0.29), this dominates at low speed.
+     * For low-Ls motors (A2212: Ls/λ=0.053), noise coupling is small.
+     * No dI filtering applied here — raw per-sample difference like MESC.
+     * High-Ls motors need higher handoff speed instead (SNR > 1). */
+    obs->x1 += (v_a_eff - Rs * i_alpha) * dt
+             - Ls * (i_alpha - obs->i_alpha_last);
+    obs->x2 += (v_b_eff - Rs * i_beta)  * dt
+             - Ls * (i_beta  - obs->i_beta_last);
     obs->i_alpha_last = i_alpha;
     obs->i_beta_last  = i_beta;
 
@@ -67,24 +74,15 @@ void foc_observer_update(FOC_Observer_t *obs, FOC_PLL_t *pll,
     obs->lambda_est = foc_clampf(obs->lambda_est, lambda * 0.3f, lambda * 2.5f);
 
     /* Circular normalization: constrain flux magnitude to lambda_est
-     * while preserving angle.  Per-axis clamping (foc_clamp_abs) creates
-     * a square boundary that distorts the angle when the per-tick
-     * integration step is a large fraction of lambda — critical for
-     * high-KV motors (A2212: step = 42% of lambda at 10k RPM).
-     *
-     * Also handles upward flux correction: if magnitude drops below
-     * 50% of nominal lambda, gently push it up to prevent zero-flux
-     * collapse at low speed. */
+     * while preserving angle. */
     {
         float mag_c = sqrtf(obs->x1 * obs->x1 + obs->x2 * obs->x2);
         if (mag_c > 1e-12f) {
             if (mag_c > obs->lambda_est) {
-                /* Overshoot: normalize to lambda_est (preserves angle) */
                 float sc = obs->lambda_est / mag_c;
                 obs->x1 *= sc;
                 obs->x2 *= sc;
             } else if (mag_c < lambda * 0.5f) {
-                /* Collapse: gently boost ~10%/tick at 24kHz */
                 float sc = 1.0f + 0.1f * dt * 24000.0f;
                 obs->x1 *= sc;
                 obs->x2 *= sc;
@@ -97,20 +95,20 @@ void foc_observer_update(FOC_Observer_t *obs, FOC_PLL_t *pll,
     if (obs->theta_est < 0.0f)
         obs->theta_est += FOC_TWO_PI;
 
-    /* Observer gain scheduling: scale with duty, floor at 5%.
-     * Low duty = low applied voltage = noisy flux → reduce gain.
-     * High duty = strong flux signal → aggressive correction. */
+    /* Observer gain scheduling: scale with duty, floor at 5%. */
     float base_gain = 1e-3f / (lambda * lambda + 1e-12f);
     float duty_factor = (duty_abs > 0.05f) ? duty_abs : 0.05f;
     obs->gain = duty_factor * base_gain;
 
-    /* PLL for speed only (smooth speed estimate for speed PI).
-     * The observer atan2 angle has derivative noise — PLL filters it. */
+    /* PLL for speed only (smooth speed estimate for speed PI). */
     float delta = obs->theta_est - pll->theta_est;
     if (delta >  FOC_PI_F) delta -= FOC_TWO_PI;
     if (delta < -FOC_PI_F) delta += FOC_TWO_PI;
 
     pll->omega_est += pll->ki * delta * dt;
+    /* Clamp speed to prevent runaway from noisy observer angle */
+    if (pll->omega_est >  pll->omega_max) pll->omega_est =  pll->omega_max;
+    if (pll->omega_est < -pll->omega_max) pll->omega_est = -pll->omega_max;
     pll->theta_est += (pll->omega_est + pll->kp * delta) * dt;
     pll->theta_est = foc_angle_wrap(pll->theta_est);
 }
@@ -135,4 +133,6 @@ void foc_pll_init(FOC_PLL_t *pll, float bw_hz)
     pll->ki = pll->kp * pll->kp * 0.25f;
     pll->theta_est = 0.0f;
     pll->omega_est = 0.0f;
+    /* omega_max must be set by caller after init (default safe value) */
+    pll->omega_max = 20000.0f;
 }

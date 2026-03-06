@@ -48,6 +48,7 @@ typedef struct {
     float theta_est;         /* PLL angle tracking (rad) */
     float omega_est;         /* PLL speed estimate (rad/s) */
     float kp, ki;            /* PLL PI gains */
+    float omega_max;         /* Speed clamp magnitude (rad/s) */
 } FOC_PLL_t;
 
 /* ── Motor parameters (from profile or auto-detect) ──────────── */
@@ -60,6 +61,18 @@ typedef struct {
     float max_current_a;     /* Peak phase current limit (A) */
     float max_elec_rad_s;    /* Max electrical speed (rad/s) */
     float vbus_nom_v;        /* Nominal bus voltage (V) */
+    /* Runtime startup/tuning params (populated from GSP) */
+    float kp_dq;             /* D/Q current loop Kp */
+    float ki_dq;             /* D/Q current loop Ki */
+    float obs_lpf_alpha;     /* Observer LPF coefficient */
+    float align_iq_a;        /* Alignment Iq (A) */
+    float ramp_iq_a;         /* OL ramp Iq (A) */
+    uint32_t align_ticks;    /* Alignment dwell (24kHz ticks) */
+    uint32_t iq_ramp_ticks;  /* Iq ramp duration (24kHz ticks) */
+    float ramp_rate_rps2;    /* I/f ramp acceleration (rad/s²) */
+    float handoff_rad_s;     /* CL handoff speed threshold (rad/s) */
+    float fault_oc_a;        /* Software OC threshold (A) */
+    float fault_stall_rad_s; /* Stall speed threshold (rad/s) */
 } FOC_MotorParams_t;
 
 /* ── FOC state machine ───────────────────────────────────────── */
@@ -130,6 +143,18 @@ typedef struct {
 
     /* Bus voltage */
     float vbus;
+
+    /* Runtime startup/tuning params (copied from FOC_MotorParams_t) */
+    float align_iq;          /* Alignment current (A) */
+    float ramp_iq;           /* OL ramp current (A) */
+    uint32_t align_ticks;    /* Alignment dwell (ticks) */
+    uint32_t iq_ramp_ticks;  /* Iq transition duration (ticks) */
+    float ramp_rate;         /* Speed ramp (rad/s²) */
+    float handoff_rad_s;     /* CL entry speed (rad/s) */
+    float fault_oc_a;        /* OC threshold (A) */
+    float fault_stall_rad_s; /* Stall threshold (rad/s) */
+    float obs_lpf_alpha;     /* Observer LPF alpha */
+    float max_elec_rad_s;    /* Max speed (rad/s) */
 
     /* Overcurrent debounce */
     uint16_t oc_debounce_ctr;

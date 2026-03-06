@@ -33,7 +33,22 @@ static uint8_t activeProfile;
  * These const arrays duplicate the literal values from each profile
  * block — intentional: stable per-motor constants that rarely change. */
 
-static const GSP_PARAMS_T profileDefaults[3] = {
+/* Shared tuning defaults (same for all profiles) */
+#define TUNING_DEFAULTS \
+    .dutySlewUpPctPerMs   = 2,  \
+    .dutySlewDownPctPerMs = 5,  \
+    .postSyncSettleMs     = 1000, \
+    .postSyncSlewDivisor  = 4,  \
+    .zcBlankingPercent    = 3,  \
+    .zcAdcDeadband        = 4,  \
+    .zcSyncThreshold      = 6,  \
+    .zcFilterThreshold    = 2,  \
+    .vbusOvAdc            = 3600, \
+    .vbusUvAdc            = 500,  \
+    .desyncCoastMs        = 200,  \
+    .desyncMaxRestarts    = 3
+
+static const GSP_PARAMS_T profileDefaults[4] = {
     [GSP_PROFILE_HURST] = {
         .rampTargetErpm     = 2000,
         .rampAccelErpmPerS  = 1000,
@@ -54,19 +69,25 @@ static const GSP_PARAMS_T profileDefaults[3] = {
         .ocLimitMa          = 1800,
         .ocStartupMa        = 18000,
         .rampCurrentGateMa  = 0,
-        /* Shared tuning defaults */
-        .dutySlewUpPctPerMs   = 2,
-        .dutySlewDownPctPerMs = 5,
-        .postSyncSettleMs     = 1000,
-        .postSyncSlewDivisor  = 4,
-        .zcBlankingPercent    = 3,
-        .zcAdcDeadband        = 4,
-        .zcSyncThreshold      = 6,
-        .zcFilterThreshold    = 2,
-        .vbusOvAdc            = 3600,
-        .vbusUvAdc            = 500,
-        .desyncCoastMs        = 200,
-        .desyncMaxRestarts    = 3,
+        TUNING_DEFAULTS,
+        /* FOC motor model: Hurst DMB0224C10002 (5PP, 24V, high-Rs) */
+        .focRsMilliOhm       = 2540,   /* 2.54 Ω */
+        .focLsMicroH          = 2300,   /* 2.30 mH */
+        .focKeUvSRad          = 7990,   /* 0.00799 V·s/rad (per-phase λ_pm, L-L/√3) */
+        .focVbusNomCentiV     = 2400,   /* 24.0V */
+        .focMaxCurrentCentiA  = 500,    /* 5.0A */
+        .focMaxElecRadS       = 2000,
+        .focKpDqMilli         = 14450,  /* 14.45 */
+        .focKiDq              = 15958,  /* pole cancellation: Rs/Ls × Kp */
+        .focObsLpfAlphaMilli  = 60,     /* 0.06 */
+        .focAlignIqCentiA     = 30,     /* 0.30A */
+        .focRampIqCentiA      = 50,     /* 0.50A (no-load Hurst) */
+        .focAlignTimeMs       = 500,
+        .focIqRampTimeMs      = 250,
+        .focRampRateRps2      = 300,    /* fast through noisy low-speed I/f region */
+        .focHandoffRadS       = 500,
+        .focFaultOcCentiA     = 1000,   /* 10.0A */
+        .focFaultStallDeciRadS = 100,   /* 10.0 rad/s */
     },
     [GSP_PROFILE_A2212] = {
         .rampTargetErpm     = 3000,
@@ -88,18 +109,25 @@ static const GSP_PARAMS_T profileDefaults[3] = {
         .ocLimitMa          = 12000,
         .ocStartupMa        = 22000,
         .rampCurrentGateMa  = 5000,
-        .dutySlewUpPctPerMs   = 2,
-        .dutySlewDownPctPerMs = 5,
-        .postSyncSettleMs     = 1000,
-        .postSyncSlewDivisor  = 4,
-        .zcBlankingPercent    = 3,
-        .zcAdcDeadband        = 4,
-        .zcSyncThreshold      = 6,
-        .zcFilterThreshold    = 2,
-        .vbusOvAdc            = 3600,
-        .vbusUvAdc            = 500,
-        .desyncCoastMs        = 200,
-        .desyncMaxRestarts    = 3,
+        TUNING_DEFAULTS,
+        /* FOC motor model: A2212 1400KV (7PP, 12V, low-Rs) */
+        .focRsMilliOhm       = 65,     /* 0.065 Ω */
+        .focLsMicroH          = 30,     /* 30 µH */
+        .focKeUvSRad          = 563,    /* 0.000563 V·s/rad */
+        .focVbusNomCentiV     = 1200,   /* 12.0V */
+        .focMaxCurrentCentiA  = 2000,   /* 20.0A */
+        .focMaxElecRadS       = 12000,
+        .focKpDqMilli         = 190,    /* 0.19 */
+        .focKiDq              = 408,
+        .focObsLpfAlphaMilli  = 350,    /* 0.35 */
+        .focAlignIqCentiA     = 200,    /* 2.0A */
+        .focRampIqCentiA      = 300,    /* 3.0A */
+        .focAlignTimeMs       = 200,
+        .focIqRampTimeMs      = 100,
+        .focRampRateRps2      = 2000,
+        .focHandoffRadS       = 1000,
+        .focFaultOcCentiA     = 2500,   /* 25.0A */
+        .focFaultStallDeciRadS = 500,   /* 50.0 rad/s */
     },
     [GSP_PROFILE_5010] = {
         .rampTargetErpm     = 2500,
@@ -121,18 +149,65 @@ static const GSP_PARAMS_T profileDefaults[3] = {
         .ocLimitMa          = 15000,
         .ocStartupMa        = 22000,
         .rampCurrentGateMa  = 8000,
-        .dutySlewUpPctPerMs   = 2,
-        .dutySlewDownPctPerMs = 5,
-        .postSyncSettleMs     = 1000,
-        .postSyncSlewDivisor  = 4,
-        .zcBlankingPercent    = 3,
-        .zcAdcDeadband        = 4,
-        .zcSyncThreshold      = 6,
-        .zcFilterThreshold    = 2,
-        .vbusOvAdc            = 3600,
-        .vbusUvAdc            = 500,
-        .desyncCoastMs        = 200,
-        .desyncMaxRestarts    = 3,
+        TUNING_DEFAULTS,
+        /* FOC motor model: Flycat 5010-750KV (7PP, 14.8V) */
+        .focRsMilliOhm       = 80,     /* 0.080 Ω */
+        .focLsMicroH          = 30,     /* 30 µH */
+        .focKeUvSRad          = 1050,   /* 0.001050 V·s/rad */
+        .focVbusNomCentiV     = 1480,   /* 14.8V */
+        .focMaxCurrentCentiA  = 3000,   /* 30.0A */
+        .focMaxElecRadS       = 8500,
+        .focKpDqMilli         = 190,    /* 0.19 */
+        .focKiDq              = 503,
+        .focObsLpfAlphaMilli  = 200,    /* 0.20 */
+        .focAlignIqCentiA     = 300,    /* 3.0A */
+        .focRampIqCentiA      = 300,    /* 3.0A */
+        .focAlignTimeMs       = 750,
+        .focIqRampTimeMs      = 500,
+        .focRampRateRps2      = 100,
+        .focHandoffRadS       = 1000,
+        .focFaultOcCentiA     = 3500,   /* 35.0A */
+        .focFaultStallDeciRadS = 500,   /* 50.0 rad/s */
+    },
+    [GSP_PROFILE_5055] = {
+        .rampTargetErpm     = 2000,
+        .rampAccelErpmPerS  = 150,
+        .rampDutyPct        = 8,
+        .clIdleDutyPct      = 8,
+        .timingAdvMaxDeg    = 15,
+        .hwzcCrossoverErpm  = 1500,
+        .ocSwLimitMa        = 10000,
+        .ocFaultMa          = 20000,
+        .motorPolePairs     = 7,
+        .alignDutyPct       = 4,
+        .initialErpm        = 100,
+        .maxClosedLoopErpm  = 80000,
+        .sineAlignModPct    = 4,
+        .sineRampModPct     = 8,
+        .zcDemagDutyThresh  = 45,
+        .zcDemagBlankExtraPct = 16,
+        .ocLimitMa          = 15000,
+        .ocStartupMa        = 22000,
+        .rampCurrentGateMa  = 6000,
+        TUNING_DEFAULTS,
+        /* FOC motor model: Generic 5055 ~580KV (7PP, 14.8V, very-low-Rs) */
+        .focRsMilliOhm       = 50,     /* 0.050 Ω */
+        .focLsMicroH          = 18,     /* 17.5 µH → 18 */
+        .focKeUvSRad          = 1355,   /* 0.001355 V·s/rad */
+        .focVbusNomCentiV     = 1480,   /* 14.8V */
+        .focMaxCurrentCentiA  = 2500,   /* 25.0A */
+        .focMaxElecRadS       = 7000,
+        .focKpDqMilli         = 88,     /* 0.088 */
+        .focKiDq              = 251,
+        .focObsLpfAlphaMilli  = 200,    /* 0.20 */
+        .focAlignIqCentiA     = 400,    /* 4.0A */
+        .focRampIqCentiA      = 300,    /* 3.0A */
+        .focAlignTimeMs       = 1000,
+        .focIqRampTimeMs      = 500,
+        .focRampRateRps2      = 80,
+        .focHandoffRadS       = 800,
+        .focFaultOcCentiA     = 3000,   /* 30.0A */
+        .focFaultStallDeciRadS = 300,   /* 30.0 rad/s */
     },
 };
 
@@ -181,6 +256,26 @@ static const PARAM_DESCRIPTOR_T paramDescriptors[] = {
     { PARAM_ID_DESYNC_MAX_RESTARTS,   PARAM_TYPE_U8,  PARAM_GROUP_RECOVERY,     0,    10, offsetof(GSP_PARAMS_T, desyncMaxRestarts),  1 },
     /* Motor Hardware (group 7) */
     { PARAM_ID_MOTOR_POLE_PAIRS,      PARAM_TYPE_U8,  PARAM_GROUP_MOTOR_HW,    1,    20, offsetof(GSP_PARAMS_T, motorPolePairs),     1 },
+    /* FOC Motor Model (group 8) */
+    { PARAM_ID_FOC_RS_MOHM,           PARAM_TYPE_U16, PARAM_GROUP_FOC_MOTOR,   10, 10000, offsetof(GSP_PARAMS_T, focRsMilliOhm),     2 },
+    { PARAM_ID_FOC_LS_UH,             PARAM_TYPE_U16, PARAM_GROUP_FOC_MOTOR,    1, 10000, offsetof(GSP_PARAMS_T, focLsMicroH),        2 },
+    { PARAM_ID_FOC_KE_UV_S_RAD,       PARAM_TYPE_U16, PARAM_GROUP_FOC_MOTOR,    1, 65000, offsetof(GSP_PARAMS_T, focKeUvSRad),        2 },
+    { PARAM_ID_FOC_VBUS_NOM_CV,       PARAM_TYPE_U16, PARAM_GROUP_FOC_MOTOR,  500,  6000, offsetof(GSP_PARAMS_T, focVbusNomCentiV),   2 },
+    { PARAM_ID_FOC_MAX_CURRENT_CA,    PARAM_TYPE_U16, PARAM_GROUP_FOC_MOTOR,   50,  5000, offsetof(GSP_PARAMS_T, focMaxCurrentCentiA), 2 },
+    { PARAM_ID_FOC_MAX_ELEC_RAD_S,    PARAM_TYPE_U16, PARAM_GROUP_FOC_MOTOR,  500, 30000, offsetof(GSP_PARAMS_T, focMaxElecRadS),     2 },
+    /* FOC Tuning (group 9) */
+    { PARAM_ID_FOC_KP_DQ_MILLI,       PARAM_TYPE_U16, PARAM_GROUP_FOC_TUNING,   1, 60000, offsetof(GSP_PARAMS_T, focKpDqMilli),       2 },
+    { PARAM_ID_FOC_KI_DQ,             PARAM_TYPE_U16, PARAM_GROUP_FOC_TUNING,   1, 60000, offsetof(GSP_PARAMS_T, focKiDq),            2 },
+    { PARAM_ID_FOC_OBS_LPF_MILLI,     PARAM_TYPE_U16, PARAM_GROUP_FOC_TUNING,  10,   900, offsetof(GSP_PARAMS_T, focObsLpfAlphaMilli), 2 },
+    /* FOC Startup (group 10) */
+    { PARAM_ID_FOC_ALIGN_IQ_CA,       PARAM_TYPE_U16, PARAM_GROUP_FOC_STARTUP,  1,  5000, offsetof(GSP_PARAMS_T, focAlignIqCentiA),   2 },
+    { PARAM_ID_FOC_RAMP_IQ_CA,        PARAM_TYPE_U16, PARAM_GROUP_FOC_STARTUP,  1,  5000, offsetof(GSP_PARAMS_T, focRampIqCentiA),    2 },
+    { PARAM_ID_FOC_ALIGN_TIME_MS,     PARAM_TYPE_U16, PARAM_GROUP_FOC_STARTUP, 100, 5000, offsetof(GSP_PARAMS_T, focAlignTimeMs),     2 },
+    { PARAM_ID_FOC_IQ_RAMP_TIME_MS,   PARAM_TYPE_U16, PARAM_GROUP_FOC_STARTUP,  50, 2000, offsetof(GSP_PARAMS_T, focIqRampTimeMs),    2 },
+    { PARAM_ID_FOC_RAMP_RATE_RPS2,    PARAM_TYPE_U16, PARAM_GROUP_FOC_STARTUP,  10, 5000, offsetof(GSP_PARAMS_T, focRampRateRps2),    2 },
+    { PARAM_ID_FOC_HANDOFF_RAD_S,     PARAM_TYPE_U16, PARAM_GROUP_FOC_STARTUP,  50, 10000, offsetof(GSP_PARAMS_T, focHandoffRadS),    2 },
+    { PARAM_ID_FOC_FAULT_OC_CA,       PARAM_TYPE_U16, PARAM_GROUP_FOC_STARTUP, 100, 5000, offsetof(GSP_PARAMS_T, focFaultOcCentiA),   2 },
+    { PARAM_ID_FOC_FAULT_STALL_DRS,   PARAM_TYPE_U16, PARAM_GROUP_FOC_STARTUP,  10, 1000, offsetof(GSP_PARAMS_T, focFaultStallDeciRadS), 2 },
 };
 
 #define PARAM_COUNT (sizeof(paramDescriptors) / sizeof(paramDescriptors[0]))
@@ -267,6 +362,11 @@ void GSP_ParamsInitDefaults(void)
     gspParams.ocLimitMa = 0;
     gspParams.ocStartupMa = 0;
     gspParams.rampCurrentGateMa = 0;
+#endif
+
+#if FEATURE_FOC_V2
+    extern volatile bool gspFocReinitNeeded;
+    gspFocReinitNeeded = true;
 #endif
 }
 
@@ -529,6 +629,14 @@ PARAM_RESULT_T GSP_ParamSet(uint16_t id, uint32_t value)
     WriteField(desc, value);
     GSP_RecomputeDerived();
 
+    /* Signal FOC re-init if a FOC param was changed */
+#if FEATURE_FOC_V2
+    if (id >= PARAM_ID_FOC_RS_MOHM && id <= PARAM_ID_FOC_FAULT_STALL_DRS) {
+        extern volatile bool gspFocReinitNeeded;
+        gspFocReinitNeeded = true;
+    }
+#endif
+
     return PARAM_OK;
 }
 
@@ -563,6 +671,11 @@ bool GSP_ParamsLoadProfile(uint8_t profileId)
         memcpy(&gspParams, &profileDefaults[profileId], sizeof(gspParams));
         activeProfile = profileId;
         GSP_RecomputeDerived();
+        /* Signal FOC re-init needed (checked by ISR when IDLE) */
+#if FEATURE_FOC_V2
+        extern volatile bool gspFocReinitNeeded;
+        gspFocReinitNeeded = true;
+#endif
         return true;
     } else if (profileId == GSP_PROFILE_CUSTOM) {
         /* Custom: adopt current values as-is, just mark profile */
@@ -577,7 +690,7 @@ uint8_t GSP_ParamsGetActiveProfile(void)
     return activeProfile;
 }
 
-/* ── EEPROM persistence (V2) ─────────────────────────────────────────── */
+/* ── EEPROM persistence (V2/V3) ──────────────────────────────────────── */
 
 #define GSP_PERSIST_OFFSET  16  /* Byte offset within GARUDA_CONFIG_T.reserved */
 
@@ -638,8 +751,68 @@ void GSP_ParamsLoadFromConfig(const void *cfg)
     uint8_t marker;
     memcpy(&marker, base + GSP_PERSIST_OFFSET, 1);
 
-    if (marker == GSP_PERSIST_V2_MARKER) {
-        /* V2 schema: load all 31 params + activeProfile */
+    if (marker == GSP_PERSIST_V3_MARKER) {
+        /* V3 schema: V2 fields + 17 FOC params */
+        GSP_CONFIG_PERSIST_V3_T persist;
+        memcpy(&persist, base + GSP_PERSIST_OFFSET, sizeof(persist));
+
+        activeProfile                   = persist.activeProfile;
+        gspParams.rampDutyPct           = persist.rampDutyPct;
+        gspParams.clIdleDutyPct         = persist.clIdleDutyPct;
+        gspParams.timingAdvMaxDeg       = persist.timingAdvMaxDeg;
+        gspParams.rampTargetErpm        = persist.rampTargetErpm;
+        gspParams.rampAccelErpmPerS     = persist.rampAccelErpmPerS;
+        gspParams.hwzcCrossoverErpm     = persist.hwzcCrossoverErpm;
+        gspParams.ocSwLimitMa           = persist.ocSwLimitMa;
+        gspParams.ocFaultMa             = persist.ocFaultMa;
+        gspParams.motorPolePairs        = persist.motorPolePairs;
+        gspParams.alignDutyPct          = persist.alignDutyPct;
+        gspParams.initialErpm           = persist.initialErpm;
+        gspParams.sineAlignModPct       = persist.sineAlignModPct;
+        gspParams.sineRampModPct        = persist.sineRampModPct;
+        gspParams.zcDemagDutyThresh     = persist.zcDemagDutyThresh;
+        gspParams.zcDemagBlankExtraPct  = persist.zcDemagBlankExtraPct;
+        gspParams.ocLimitMa             = persist.ocLimitMa;
+        gspParams.ocStartupMa           = persist.ocStartupMa;
+        gspParams.rampCurrentGateMa     = persist.rampCurrentGateMa;
+        gspParams.maxClosedLoopErpm     = ((uint32_t)persist.maxClErpmHi << 16) |
+                                           persist.maxClosedLoopErpmLo;
+        gspParams.dutySlewUpPctPerMs    = persist.dutySlewUpPctPerMs;
+        gspParams.dutySlewDownPctPerMs  = persist.dutySlewDownPctPerMs;
+        gspParams.postSyncSettleMs      = persist.postSyncSettleMs;
+        gspParams.postSyncSlewDivisor   = persist.postSyncSlewDivisor;
+        gspParams.zcBlankingPercent     = persist.zcBlankingPercent;
+        gspParams.zcAdcDeadband         = persist.zcAdcDeadband;
+        gspParams.zcSyncThreshold       = persist.zcSyncThreshold;
+        gspParams.zcFilterThreshold     = persist.zcFilterThreshold;
+        gspParams.vbusOvAdc             = persist.vbusOvAdc;
+        gspParams.vbusUvAdc             = persist.vbusUvAdc;
+        gspParams.desyncCoastMs         = persist.desyncCoastMs;
+        gspParams.desyncMaxRestarts     = persist.desyncMaxRestarts;
+        /* V3 FOC fields */
+        gspParams.focRsMilliOhm        = persist.focRsMilliOhm;
+        gspParams.focLsMicroH           = persist.focLsMicroH;
+        gspParams.focKeUvSRad           = persist.focKeUvSRad;
+        gspParams.focVbusNomCentiV      = persist.focVbusNomCentiV;
+        gspParams.focMaxCurrentCentiA   = persist.focMaxCurrentCentiA;
+        gspParams.focMaxElecRadS        = persist.focMaxElecRadS;
+        gspParams.focKpDqMilli          = persist.focKpDqMilli;
+        gspParams.focKiDq               = persist.focKiDq;
+        gspParams.focObsLpfAlphaMilli   = persist.focObsLpfAlphaMilli;
+        gspParams.focAlignIqCentiA      = persist.focAlignIqCentiA;
+        gspParams.focRampIqCentiA       = persist.focRampIqCentiA;
+        gspParams.focAlignTimeMs        = persist.focAlignTimeMs;
+        gspParams.focIqRampTimeMs       = persist.focIqRampTimeMs;
+        gspParams.focRampRateRps2       = persist.focRampRateRps2;
+        gspParams.focHandoffRadS        = persist.focHandoffRadS;
+        gspParams.focFaultOcCentiA      = persist.focFaultOcCentiA;
+        gspParams.focFaultStallDeciRadS = persist.focFaultStallDeciRadS;
+
+        if (!SanitizeLoadedParams())
+            FallbackToProfileDefaults();
+
+    } else if (marker == GSP_PERSIST_V2_MARKER) {
+        /* V2 schema: load 31 6-step params, FOC params get profile defaults */
         GSP_CONFIG_PERSIST_V2_T persist;
         memcpy(&persist, base + GSP_PERSIST_OFFSET, sizeof(persist));
 
@@ -676,8 +849,8 @@ void GSP_ParamsLoadFromConfig(const void *cfg)
         gspParams.vbusUvAdc             = persist.vbusUvAdc;
         gspParams.desyncCoastMs         = persist.desyncCoastMs;
         gspParams.desyncMaxRestarts     = persist.desyncMaxRestarts;
+        /* FOC params keep their profile defaults from InitDefaults() */
 
-        /* Sanitize: clamp to bounds + check cross-parameter invariants */
         if (!SanitizeLoadedParams())
             FallbackToProfileDefaults();
 
@@ -707,10 +880,10 @@ void GSP_ParamsLoadFromConfig(const void *cfg)
 void GSP_ParamsSaveToConfig(void *cfg)
 {
     uint8_t *base = (uint8_t *)cfg;
-    GSP_CONFIG_PERSIST_V2_T persist;
+    GSP_CONFIG_PERSIST_V3_T persist;
     memset(&persist, 0, sizeof(persist));
 
-    persist.schemaMarker           = GSP_PERSIST_V2_MARKER;
+    persist.schemaMarker           = GSP_PERSIST_V3_MARKER;
     persist.activeProfile          = activeProfile;
     persist.rampDutyPct            = gspParams.rampDutyPct;
     persist.clIdleDutyPct          = gspParams.clIdleDutyPct;
@@ -744,6 +917,24 @@ void GSP_ParamsSaveToConfig(void *cfg)
     persist.vbusUvAdc              = gspParams.vbusUvAdc;
     persist.desyncCoastMs          = gspParams.desyncCoastMs;
     persist.desyncMaxRestarts      = gspParams.desyncMaxRestarts;
+    /* V3 FOC fields */
+    persist.focRsMilliOhm          = gspParams.focRsMilliOhm;
+    persist.focLsMicroH            = gspParams.focLsMicroH;
+    persist.focKeUvSRad            = gspParams.focKeUvSRad;
+    persist.focVbusNomCentiV       = gspParams.focVbusNomCentiV;
+    persist.focMaxCurrentCentiA    = gspParams.focMaxCurrentCentiA;
+    persist.focMaxElecRadS         = gspParams.focMaxElecRadS;
+    persist.focKpDqMilli           = gspParams.focKpDqMilli;
+    persist.focKiDq                = gspParams.focKiDq;
+    persist.focObsLpfAlphaMilli    = gspParams.focObsLpfAlphaMilli;
+    persist.focAlignIqCentiA       = gspParams.focAlignIqCentiA;
+    persist.focRampIqCentiA        = gspParams.focRampIqCentiA;
+    persist.focAlignTimeMs         = gspParams.focAlignTimeMs;
+    persist.focIqRampTimeMs        = gspParams.focIqRampTimeMs;
+    persist.focRampRateRps2        = gspParams.focRampRateRps2;
+    persist.focHandoffRadS         = gspParams.focHandoffRadS;
+    persist.focFaultOcCentiA       = gspParams.focFaultOcCentiA;
+    persist.focFaultStallDeciRadS  = gspParams.focFaultStallDeciRadS;
 
     memcpy(base + GSP_PERSIST_OFFSET, &persist, sizeof(persist));
 }
