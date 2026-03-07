@@ -19,6 +19,7 @@
 #include "foc_v2_math.h"
 #include "foc_v2_pi.h"
 #include "foc_v2_observer.h"
+#include "foc_v2_detect.h"
 #include "../garuda_foc_params.h"
 
 /* ── Constants from garuda_foc_params.h ──────────────────────── */
@@ -26,11 +27,8 @@
 #define DT_SLOW          FOC_TS_SLOW_S
 #define SLOW_DIV         FOC_SLOW_DIV
 
-/* Dead-time duty compensation: tdt × fsw.
- * 750ns at 24kHz = 0.018 (1.8% duty).
- * Applied per-phase after SVPWM to cancel voltage error from FET
- * dead-time insertion.  Sign depends on phase current direction. */
-#define DT_COMP_DUTY     ((float)DEADTIME_NS * 1e-9f * (float)PWMFREQUENCY_HZ)
+/* Dead-time compensation disabled — see note at line ~460.
+ * Microchip AN1292 reference achieves clean waveforms without it. */
 
 /* ADC calibration */
 #define CAL_SAMPLES      1024U
@@ -102,10 +100,7 @@ void foc_v2_init(FOC_State_t *foc, const FOC_MotorParams_t *params)
     foc->lambda_pm = params->lambda_pm;
     foc->Ke        = params->Ke;
 
-    /* Dead-time compensation: Vbus * (t_dead / T_pwm) */
-    float t_dead_s = (float)DEADTIME_NS * 1e-9f;
-    float t_pwm_s  = 1.0f / (float)PWMFREQUENCY_HZ;
-    foc->dt_comp   = params->vbus_nom_v * (t_dead_s / t_pwm_s);
+    foc->dt_comp   = 0.0f;  /* DT comp disabled */
 
     /* Copy runtime startup/tuning params */
     foc->align_iq        = params->align_iq_a;
@@ -205,6 +200,33 @@ void foc_v2_fast_tick(FOC_State_t *foc,
         goto slow_loop;
     }
 
+    /* ── MOTOR_DETECT: auto-commissioning ────────────────────── */
+    if (foc->mode == FOC_MOTOR_DETECT) {
+        float ia = raw_to_amps(ia_raw, foc->ia_offset);
+        float ib = raw_to_amps(ib_raw, foc->ib_offset);
+        float i_alpha, i_beta;
+        foc_clarke(ia, ib, &i_alpha, &i_beta);
+
+        bool done = foc_detect_fast_tick(foc, ia, ib, i_alpha, i_beta,
+                                         da_out, db_out, dc_out);
+        if (done) {
+            if (foc->detect_state == DETECT_DONE) {
+                /* Apply measured params and transition to ARMED */
+                foc_detect_apply(foc);
+                reset_startup(foc);
+                foc->mode = FOC_ARMED;
+                foc->arm_ctr = 0;
+            } else {
+                /* Detection failed */
+                foc->mode = FOC_FAULT;
+            }
+            *da_out = 0.5f;
+            *db_out = 0.5f;
+            *dc_out = 0.5f;
+        }
+        goto slow_loop;
+    }
+
     /* ── Active modes: ALIGN, IF_RAMP, CLOSED_LOOP ──────────── */
     {
         /* Convert ADC to physical units */
@@ -212,17 +234,13 @@ void foc_v2_fast_tick(FOC_State_t *foc,
         float ib = raw_to_amps(ib_raw, foc->ib_offset);
 
         /* Dynamic PI voltage clamp — tracks Vbus.
-         * Reduce Q-axis PI budget by estimated BEMF feedforward so the
-         * integrator can't wind up against the voltage ceiling. */
+         * No feedforward → PI gets full symmetric voltage budget.
+         * PI will naturally produce BEMF voltage + correction. */
         float vclamp = foc->vbus * 0.95f * FOC_INV_SQRT3;
-        float omega_est = foc->cl_active ? foc->pll.omega_est : foc->omega_if;
-        float bemf_ff = omega_est * foc->Ke;
-        float vq_pi_budget = vclamp - bemf_ff;
-        if (vq_pi_budget < 0.5f) vq_pi_budget = 0.5f;  /* min 0.5V for PI */
         foc->pid_d.out_max =  vclamp;
         foc->pid_d.out_min = -vclamp;
-        foc->pid_q.out_max =  vq_pi_budget;
-        foc->pid_q.out_min = -vclamp;  /* reverse: BEMF helps, full budget */
+        foc->pid_q.out_max =  vclamp;
+        foc->pid_q.out_min = -vclamp;
 
         /* 1. Clarke transform */
         float i_alpha, i_beta;
@@ -304,10 +322,13 @@ void foc_v2_fast_tick(FOC_State_t *foc,
             foc->theta_if = foc_angle_wrap(foc->theta_if);
             theta_drive = foc->theta_if;
 
-            /* Anchor observer to forced angle for entire IF_RAMP. */
-            foc_observer_seed(&foc->obs, foc->lambda_pm, foc->theta_if);
-            foc->pll.theta_est = foc->theta_if;
-            foc->pll.omega_est = foc->omega_if;
+            /* Let observer free-run during I/f ramp.  It was seeded at
+             * the end of ALIGN (line 304) and now tracks independently.
+             * The handoff check below compares the observer's independent
+             * estimate against the forced angle — only fires when the
+             * observer has genuinely converged.  Previous code anchored
+             * the observer here, making the handoff check trivially true
+             * and causing immediate angle drift at CL entry. */
 
             /* Smooth d→q current transition during I/f ramp.
              * At ALIGN end: Id=align_iq, Iq=0.  Jumping to Id=0, Iq=X
@@ -322,30 +343,36 @@ void foc_v2_fast_tick(FOC_State_t *foc,
                 iq_ref = foc->ramp_iq;
             }
 
-            /* Handoff check: PLL speed matches forced speed.
-             * Speed-based (not angle-based) — immune to load angle from
-             * prop drag, which causes 20-30° rotor lag in I/f mode. */
+            /* Handoff: Microchip AN1292 approach — transition when forced
+             * speed reaches handoff threshold and observer sees rotation.
+             * Frame transform handles any angle difference at transition.
+             * Previous complex speed+angle matching failed because Rs
+             * mismatch (model vs actual) causes continuous observer drift. */
             if (foc->omega_if >= foc->handoff_rad_s) {
-                float spd_err = foc->pll.omega_est - foc->omega_if;
-                if (spd_err < 0.0f) spd_err = -spd_err;
-                float spd_tol = HANDOFF_SPEED_TOL * foc->omega_if;
+                /* Simple check: PLL sees positive rotation above 50% of
+                 * handoff speed.  This confirms the observer is alive and
+                 * tracking in the correct direction.  The frame transform
+                 * and speed PI handle any residual mismatch. */
+                float pll_spd = foc->pll.omega_est;
+                bool obs_tracking = (pll_spd > foc->handoff_rad_s * 0.5f);
 
-                /* Also require observer angle within ±90° of forced angle.
-                 * Speed match alone is insufficient — PLL tracks rate, not
-                 * absolute angle.  A 180° lock causes inverted speed PI. */
-                float ang_err = foc->obs.theta_est - foc->theta_if;
-                if (ang_err >  FOC_PI_F) ang_err -= FOC_TWO_PI;
-                if (ang_err < -FOC_PI_F) ang_err += FOC_TWO_PI;
-                if (ang_err < 0.0f) ang_err = -ang_err;
-
-                if (spd_err < spd_tol && ang_err < (FOC_PI_F * 0.5f)) {
+                if (obs_tracking) {
                     if (++foc->lock_ctr >= HANDOFF_LOCK_TICKS) {
-                        /* Bumpless transfer: preload PI with steady-state values.
-                         * Feedforward (Ke*ω) is now added outside PI, so PI only
-                         * needs the resistive drop Rs*Iq for smooth handoff. */
-                        foc_pi_preload(&foc->pid_q, foc->Rs * iq_ref);
-                        foc_pi_preload(&foc->pid_d, 0.0f);
-                        foc_pi_preload(&foc->pid_spd, iq_ref);
+                        /* Bumpless transfer: transform PI integrator state
+                         * from OL frame (theta_if) to CL frame (obs.theta_est).
+                         * Rotates voltage vector to new d-q frame so PI
+                         * integrators don't see a discontinuity. */
+                        float delta_th = foc->theta_if - foc->obs.theta_est;
+                        float cos_d = cosf(delta_th);
+                        float sin_d = sinf(delta_th);
+                        float vd_new =  foc->vd * cos_d + foc->vq * sin_d;
+                        float vq_new = -foc->vd * sin_d + foc->vq * cos_d;
+                        foc_pi_preload(&foc->pid_d, vd_new);
+                        foc_pi_preload(&foc->pid_q, vq_new);
+
+                        /* Speed PI preload with measured Iq */
+                        float iq_actual = foc->iq_meas > 0.0f ? foc->iq_meas : 0.0f;
+                        foc_pi_preload(&foc->pid_spd, iq_actual);
 
                         foc->cl_active = true;
                         foc->mode = FOC_CLOSED_LOOP;
@@ -389,12 +416,13 @@ void foc_v2_fast_tick(FOC_State_t *foc,
         float vd_pi = foc_pi_run(&foc->pid_d, id_ref - id_meas, DT_FAST);
         float vq_pi = foc_pi_run(&foc->pid_q, iq_ref - iq_meas, DT_FAST);
 
-        /* 7. Cross-coupling decoupling + BEMF feedforward */
-        float omega_ff = foc->cl_active ? foc->pll.omega_est : foc->omega_if;
-        float ff_d = -omega_ff * foc->Ls * iq_meas;
-        float ff_q =  omega_ff * foc->Ls * id_meas + omega_ff * foc->Ke;
-        float vd_tot = vd_pi + ff_d;
-        float vq_tot = vq_pi + ff_q;
+        /* 7. No feedforward — let PI controllers handle everything.
+         * Feedforward (BEMF + cross-coupling) amplifies parameter errors
+         * into systematic voltage distortion.  Microchip AN1292 reference
+         * uses no feedforward and achieves clean sinusoidal currents.
+         * Can be re-enabled once motor params are well-characterized. */
+        float vd_tot = vd_pi;
+        float vq_tot = vq_pi;
 
         /* 8. Circular voltage clamp (d-axis priority) */
         float vmax = foc->vbus * 0.95f * FOC_INV_SQRT3;
@@ -423,21 +451,10 @@ void foc_v2_fast_tick(FOC_State_t *foc,
         /* 10-11. SVPWM */
         foc_svpwm(v_alpha, v_beta, foc->vbus, da_out, db_out, dc_out);
 
-        /* Dead-time compensation on output duties.
-         * FET dead-time inserts voltage error proportional to sign(Ix).
-         * Compensate by adding/subtracting DT_COMP_DUTY per phase.
-         * This eliminates the persistent Id drift (~0.3A) seen on the
-         * Hurst at low phase current where DT error is a large fraction
-         * of the applied voltage. */
-        {
-            float ic = -(ia + ib);
-            *da_out += DT_COMP_DUTY * foc_soft_sign(ia, 0.1f);
-            *db_out += DT_COMP_DUTY * foc_soft_sign(ib, 0.1f);
-            *dc_out += DT_COMP_DUTY * foc_soft_sign(ic, 0.1f);
-            *da_out = foc_clampf(*da_out, SVM_DUTY_MIN, SVM_DUTY_MAX);
-            *db_out = foc_clampf(*db_out, SVM_DUTY_MIN, SVM_DUTY_MAX);
-            *dc_out = foc_clampf(*dc_out, SVM_DUTY_MIN, SVM_DUTY_MAX);
-        }
+        /* Dead-time compensation disabled — Microchip AN1292 reference
+         * does not use software DT comp and achieves clean waveforms.
+         * DT comp (1.8% duty = 0.43V) was larger than Rs*I at low current
+         * and any sign error created more distortion than it fixed. */
 
         /* 12. Update commutation angle for next tick */
         foc->theta = theta_drive;

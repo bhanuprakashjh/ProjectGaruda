@@ -111,6 +111,9 @@ export function ConnectionBar() {
       case CMD.CLEAR_FAULT:
         addToast('Fault cleared', 'info');
         break;
+      case CMD.AUTO_DETECT:
+        addToast('Auto-detect started', 'info');
+        break;
       case CMD.ERROR: {
         const errCode = payload.length > 0 ? payload[0] : 0xFF;
         let msg = ERR_NAMES[errCode] ?? `Error 0x${errCode.toString(16).toUpperCase()}`;

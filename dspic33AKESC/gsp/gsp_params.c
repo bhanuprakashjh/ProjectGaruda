@@ -70,22 +70,23 @@ static const GSP_PARAMS_T profileDefaults[4] = {
         .ocStartupMa        = 18000,
         .rampCurrentGateMa  = 0,
         TUNING_DEFAULTS,
-        /* FOC motor model: Hurst DMB0224C10002 (5PP, 24V, high-Rs) */
-        .focRsMilliOhm       = 2540,   /* 2.54 Ω */
-        .focLsMicroH          = 2300,   /* 2.30 mH */
-        .focKeUvSRad          = 7990,   /* 0.00799 V·s/rad (per-phase λ_pm, L-L/√3) */
+        /* FOC motor model: Hurst DMB2424B10002 (Long Hurst / Hurst300)
+         * Rs=0.534Ω (measured), Ls=359µH, Ke=0.00742 V·s/rad, 5PP, 24V */
+        .focRsMilliOhm       = 534,    /* 0.534 Ω (auto-detect measured) */
+        .focLsMicroH          = 359,    /* 0.359 mH */
+        .focKeUvSRad          = 7420,   /* 0.00742 V·s/rad (per-phase λ_pm) */
         .focVbusNomCentiV     = 2400,   /* 24.0V */
-        .focMaxCurrentCentiA  = 500,    /* 5.0A */
+        .focMaxCurrentCentiA  = 1000,   /* 10.0A (2x rated peak) */
         .focMaxElecRadS       = 2000,
-        .focKpDqMilli         = 14450,  /* 14.45 */
-        .focKiDq              = 15958,  /* pole cancellation: Rs/Ls × Kp */
-        .focObsLpfAlphaMilli  = 60,     /* 0.06 */
-        .focAlignIqCentiA     = 30,     /* 0.30A */
-        .focRampIqCentiA      = 50,     /* 0.50A (no-load Hurst) */
+        .focKpDqMilli         = 1200,   /* 1.20 (~530Hz BW, pole cancel with measured Rs) */
+        .focKiDq              = 1778,   /* Ki = ωbw × Rs = 2π×530 × 0.534 */
+        .focObsLpfAlphaMilli  = 80,     /* 0.08 */
+        .focAlignIqCentiA     = 100,    /* 1.0A (Microchip LOCK_CURRENT) */
+        .focRampIqCentiA      = 100,    /* 1.0A (Microchip OPEN_LOOP_CURRENT) */
         .focAlignTimeMs       = 500,
-        .focIqRampTimeMs      = 250,
-        .focRampRateRps2      = 300,    /* fast through noisy low-speed I/f region */
-        .focHandoffRadS       = 500,
+        .focIqRampTimeMs      = 200,
+        .focRampRateRps2      = 500,
+        .focHandoffRadS       = 262,    /* 500 RPM mech × 5PP × 2π/60 */
         .focFaultOcCentiA     = 1000,   /* 10.0A */
         .focFaultStallDeciRadS = 100,   /* 10.0 rad/s */
     },

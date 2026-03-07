@@ -4,12 +4,6 @@
     <logicalFolder name="HeaderFiles"
                    displayName="Header Files"
                    projectFiles="true">
-      <logicalFolder name="gsp" displayName="gsp" projectFiles="true">
-        <itemPath>../gsp/gsp.h</itemPath>
-        <itemPath>../gsp/gsp_commands.h</itemPath>
-        <itemPath>../gsp/gsp_params.h</itemPath>
-        <itemPath>../gsp/gsp_snapshot.h</itemPath>
-      </logicalFolder>
       <logicalFolder name="foc" displayName="foc" projectFiles="true">
         <itemPath>../foc/foc_types.h</itemPath>
         <itemPath>../foc/clarke.h</itemPath>
@@ -27,6 +21,12 @@
         <itemPath>../foc/foc_v2_observer.h</itemPath>
         <itemPath>../foc/foc_v2_control.h</itemPath>
         <itemPath>../foc/foc_v2_detect.h</itemPath>
+      </logicalFolder>
+      <logicalFolder name="gsp" displayName="gsp" projectFiles="true">
+        <itemPath>../gsp/gsp.h</itemPath>
+        <itemPath>../gsp/gsp_commands.h</itemPath>
+        <itemPath>../gsp/gsp_params.h</itemPath>
+        <itemPath>../gsp/gsp_snapshot.h</itemPath>
       </logicalFolder>
       <logicalFolder name="hal" displayName="hal" projectFiles="true">
         <itemPath>../hal/board_service.h</itemPath>
@@ -85,12 +85,6 @@
     <logicalFolder name="SourceFiles"
                    displayName="Source Files"
                    projectFiles="true">
-      <logicalFolder name="gsp" displayName="gsp" projectFiles="true">
-        <itemPath>../gsp/gsp.c</itemPath>
-        <itemPath>../gsp/gsp_commands.c</itemPath>
-        <itemPath>../gsp/gsp_params.c</itemPath>
-        <itemPath>../gsp/gsp_snapshot.c</itemPath>
-      </logicalFolder>
       <logicalFolder name="foc" displayName="foc" projectFiles="true">
         <itemPath>../foc/clarke.c</itemPath>
         <itemPath>../foc/park.c</itemPath>
@@ -105,6 +99,12 @@
         <itemPath>../foc/foc_v2_observer.c</itemPath>
         <itemPath>../foc/foc_v2_control.c</itemPath>
         <itemPath>../foc/foc_v2_detect.c</itemPath>
+      </logicalFolder>
+      <logicalFolder name="gsp" displayName="gsp" projectFiles="true">
+        <itemPath>../gsp/gsp.c</itemPath>
+        <itemPath>../gsp/gsp_commands.c</itemPath>
+        <itemPath>../gsp/gsp_params.c</itemPath>
+        <itemPath>../gsp/gsp_snapshot.c</itemPath>
       </logicalFolder>
       <logicalFolder name="hal" displayName="hal" projectFiles="true">
         <itemPath>../hal/board_service.c</itemPath>

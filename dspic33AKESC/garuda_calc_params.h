@@ -445,9 +445,8 @@ _Static_assert(RAMP_CURRENT_GATE_ADC < OC_CMP3_DAC_VAL,
 #if FEATURE_FOC || FEATURE_FOC_V2
 /* FOC current/voltage scaling now in garuda_foc_params.h:
  * CURRENT_SCALE_A_PER_COUNT, VBUS_SCALE_V_PER_COUNT, ADC_MIDPOINT.
- * These are derived from the DIM shunt (10 mohm) and opamp gain (8x),
- * which differ from the board-level OA3 (3 mohm, 24.95x) used by
- * FEATURE_HW_OVERCURRENT for bus current protection.
+ * These are derived from the board shunt (3 mohm) and DIM diff-amp gain (24.95x).
+ * OA3 (bus current for FEATURE_HW_OVERCURRENT) uses the same shunt/gain path.
  *
  * Legacy AN1292 defines (VBUS_ADC_TO_VOLTS, ADC_CURRENT_SCALE) removed;
  * garuda_foc_params.h provides the canonical values. */

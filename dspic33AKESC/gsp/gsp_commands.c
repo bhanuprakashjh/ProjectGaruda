@@ -30,6 +30,10 @@
 #if FEATURE_EEPROM_V2
 #include "hal/eeprom.h"
 #endif
+#if (FEATURE_RX_PWM || FEATURE_RX_DSHOT || FEATURE_RX_AUTO)
+#include <xc.h>
+#include "input/rx_decode.h"
+#endif
 
 /* ── Telemetry streaming state ──────────────────────────────────────── */
 
@@ -142,6 +146,19 @@ static void HandleStopMotor(const uint8_t *payload, uint8_t payloadLen)
 
     garudaData.gspStopIntent = true;
     GSP_SendResponse(GSP_CMD_STOP_MOTOR, NULL, 0);
+}
+
+static void HandleAutoDetect(const uint8_t *payload, uint8_t payloadLen)
+{
+    (void)payload;
+    (void)payloadLen;
+
+    if (garudaData.state != ESC_IDLE) {
+        SendError(GSP_ERR_WRONG_STATE);
+        return;
+    }
+    garudaData.gspDetectIntent = true;
+    GSP_SendResponse(GSP_CMD_AUTO_DETECT, NULL, 0);
 }
 
 static void HandleClearFault(const uint8_t *payload, uint8_t payloadLen)
@@ -459,6 +476,53 @@ static void HandleGetRxStatus(const uint8_t *payload, uint8_t payloadLen)
                      sizeof(status));
 }
 
+/* ── Phase H: RX inject (test injection into seqlock mailbox) ─────────── */
+
+#if (FEATURE_RX_PWM || FEATURE_RX_DSHOT || FEATURE_RX_AUTO)
+static bool rxInjectActive = false;
+
+static void HandleRxInject(const uint8_t *payload, uint8_t payloadLen)
+{
+    (void)payloadLen;
+
+    uint8_t protocol = payload[0];
+    uint16_t value;
+    memcpy(&value, &payload[1], 2);
+    uint8_t valid = payload[3];
+
+    /* On first inject, disable hardware capture so IC4 ISR / DMA
+     * don't race our injected mailbox values (RD8 noise). */
+    if (!rxInjectActive)
+    {
+        _CCT4IE = 0;
+#if FEATURE_RX_DSHOT
+        DMA0CHbits.CHEN = 0;
+        _DMA0IE = 0;
+#endif
+        rxInjectActive = true;
+    }
+
+    /* Bootstrap link state from UNLOCKED/DETECTING/LOST, or on
+     * protocol change.  Resets lockCount so lock FSM starts fresh. */
+    if (garudaData.rxLinkState <= RX_LINK_DETECTING
+        || garudaData.rxLinkState == RX_LINK_LOST
+        || garudaData.rxProtocol != (RX_PROTOCOL_T)protocol)
+    {
+        garudaData.rxProtocol = (RX_PROTOCOL_T)protocol;
+        RX_ResetLockState();
+    }
+
+    /* Write to seqlock mailbox — same pattern as ISR MailboxWrite().
+     * RX_Service() will consume this on next main loop iteration. */
+    rxMailbox.seqNum++;          /* odd = writing */
+    rxMailbox.value = value;
+    rxMailbox.valid = valid ? 1 : 0;
+    rxMailbox.seqNum++;          /* even = complete */
+
+    GSP_SendResponse(GSP_CMD_RX_INJECT, NULL, 0);
+}
+#endif
+
 /* ── Phase 1: Telemetry streaming ────────────────────────────────────── */
 
 static void HandleTelemStart(const uint8_t *payload, uint8_t payloadLen)
@@ -536,8 +600,13 @@ static const CMD_ENTRY_T cmdTable[] = {
     { GSP_CMD_GET_PARAM_LIST,  0xFF, HandleGetParamList },
     /* Phase 1.5: profiles */
     { GSP_CMD_LOAD_PROFILE,    1, HandleLoadProfile    },
-    /* Phase H: RX status */
+    /* Auto-commissioning */
+    { GSP_CMD_AUTO_DETECT,     0, HandleAutoDetect     },
+    /* Phase H: RX status + injection */
     { GSP_CMD_GET_RX_STATUS,   0, HandleGetRxStatus    },
+#if (FEATURE_RX_PWM || FEATURE_RX_DSHOT || FEATURE_RX_AUTO)
+    { GSP_CMD_RX_INJECT,       4, HandleRxInject       },
+#endif
 };
 
 #define CMD_TABLE_SIZE (sizeof(cmdTable) / sizeof(cmdTable[0]))

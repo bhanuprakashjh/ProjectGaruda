@@ -110,10 +110,35 @@ int main(void)
 #endif
 #if FEATURE_GSP
         GSP_Service();
+        /* Process detect intent immediately after GSP — minimize ISR window */
+        if (garudaData.gspDetectIntent)
+        {
+            garudaData.gspDetectIntent = false;
+            if (garudaData.state == ESC_IDLE)
+            {
+                garudaData.state = ESC_DETECT;
+            }
+        }
 #endif
 
 #if (FEATURE_RX_PWM || FEATURE_RX_DSHOT || FEATURE_RX_AUTO)
         RX_Service();
+
+        /* Auto-arm from RX input: when RX link is locked and throttle is
+         * zero, arm the motor.  The ESC_ARMED handler (Timer1 ISR or FOC
+         * slow loop) verifies throttle stays at zero for ARM_TIME_MS
+         * before transitioning to ALIGN — this is the safety gate.
+         * Every real RC ESC auto-arms this way. */
+        if (garudaData.state == ESC_IDLE
+            && garudaData.rxLinkState == RX_LINK_LOCKED
+            && rxCachedLocked
+            && rxCachedThrottleAdc == 0)
+        {
+            garudaData.runCommandActive = true;
+            garudaData.desyncRestartAttempts = 0;
+            garudaData.armCounter = 0;
+            garudaData.state = ESC_ARMED;
+        }
 #endif
 
 #if FEATURE_FOC || FEATURE_FOC_V2

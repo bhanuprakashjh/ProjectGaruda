@@ -8,7 +8,7 @@ const SRC_VALUES: Record<ThrottleSrc, number> = { ADC: 0, GSP: 1, PWM: 2, DSHOT:
 export function ControlPanel() {
   const { connected, snapshot, info, throttleSource, setThrottleSource } = useEscStore();
   const isIdle = !snapshot || snapshot.state === 0;
-  const isFault = snapshot?.state === 8;
+  const isFault = snapshot?.state === 9;
   const flags = info?.featureFlags ?? 0;
   const hasAdcPot = (flags & (1 << 19)) !== 0;
   const hasRxPwm = (flags & (1 << 20)) !== 0;

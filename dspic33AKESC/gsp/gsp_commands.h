@@ -52,8 +52,11 @@ typedef enum {
     GSP_CMD_GET_PARAM_LIST  = 0x16,
     /* Phase 1.5: profiles */
     GSP_CMD_LOAD_PROFILE    = 0x17,
-    /* Phase H: RX status */
+    /* Auto-commissioning: measure Rs, Ls, λ_pm */
+    GSP_CMD_AUTO_DETECT     = 0x20,
+    /* Phase H: RX status + test injection */
     GSP_CMD_GET_RX_STATUS   = 0x26,
+    GSP_CMD_RX_INJECT       = 0x27,
     /* Unsolicited stream frame */
     GSP_CMD_TELEM_FRAME     = 0x80,
     /* Error response */

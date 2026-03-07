@@ -24,6 +24,9 @@ export function ProfileSelector() {
   const loadProfile = useCallback(async (profileId: number) => {
     if (!canLoad) return;
     await serial.write(buildPacket(CMD.LOAD_PROFILE, new Uint8Array([profileId])));
+    // Auto-save to EEPROM so profile persists across resets
+    await new Promise(r => setTimeout(r, 100));
+    await serial.write(buildPacket(CMD.SAVE_CONFIG));
     // Open param modal after a short delay to let params re-fetch
     setTimeout(() => setParamModalOpen(true), 400);
   }, [canLoad, setParamModalOpen]);

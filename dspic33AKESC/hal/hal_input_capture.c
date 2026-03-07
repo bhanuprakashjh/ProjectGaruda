@@ -155,8 +155,12 @@ bool DshotDecodeFrame(const volatile uint32_t *edges, uint8_t offset,
             raw |= 1;
     }
 
-    /* CRC check: XOR nibbles */
-    uint8_t crc = (raw ^ (raw >> 4) ^ (raw >> 8)) & 0x0F;
+    /* CRC check: XOR the three data nibbles (top 12 bits), compare to
+     * the CRC nibble (bottom 4 bits).  Previous code included the CRC
+     * nibble in the XOR chain, which reduced to checking nibble1 ^
+     * nibble2 ^ nibble3 == 0 — wrong (accepts/rejects wrong frames). */
+    uint16_t data12 = raw >> 4;
+    uint8_t crc = (data12 ^ (data12 >> 4) ^ (data12 >> 8)) & 0x0F;
     if (crc != (raw & 0x0F))
         return false;
 
@@ -265,9 +269,9 @@ void HAL_IC4_ConfigDmaDshot(void)
     DMA0DST = (uint32_t)&dmaEdgeBuf[0][0];  /* Dest: buffer A */
     DMA0CNT = RX_DSHOT_DMA_COUNT;  /* Transfers per block */
 
-    /* DMA trigger: SCCP4 IC capture event */
-    /* DMA0SEL value for CCP4 — verify in Milestone 0 */
-    /* DMA0SELbits.DMASRC = <CCP4 trigger ID>; */
+    /* DMA trigger: SCCP4 IC capture event
+     * Table 13-2 (DS70005539): CCP4 IC/OC = CHSEL 0x1B */
+    DMA0SELbits.CHSEL = 0x1B;
 
     /* Enable DMA transfer-complete interrupt */
     _DMA0IP = 4;    /* Same priority as IC4 ISR */

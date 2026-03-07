@@ -66,6 +66,7 @@
 #include "garuda_foc_params.h"
 #include "foc/foc_v2_types.h"
 #include "foc/foc_v2_control.h"
+#include "foc/foc_v2_detect.h"
 #include "hal/hal_pwm.h"
 #if FEATURE_GSP
 #include "gsp/gsp_params.h"
@@ -1160,11 +1161,16 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
      * State machine: IDLE → ARMED → ALIGN → IF_RAMP → CLOSED_LOOP
      */
     {
-        /* Sync mode from main loop state changes (button press: IDLE→ARMED, stop) */
-        if (garudaData.state == ESC_ARMED && s_foc_v2.mode == FOC_IDLE) {
+        /* Sync mode from main loop state changes */
+        if (garudaData.state == ESC_DETECT && s_foc_v2.mode == FOC_IDLE) {
+            /* Auto-detect triggered from main loop (GSP command) */
+            foc_detect_start(&s_foc_v2);
+        } else if (garudaData.state == ESC_ARMED && s_foc_v2.mode == FOC_IDLE) {
             s_foc_v2.mode = FOC_ARMED;
             s_foc_v2.arm_ctr = 0;
-        } else if (garudaData.state == ESC_IDLE && s_foc_v2.mode != FOC_IDLE) {
+        } else if (garudaData.state == ESC_IDLE &&
+                   s_foc_v2.mode != FOC_IDLE &&
+                   s_foc_v2.mode != FOC_MOTOR_DETECT) {
             s_foc_v2.mode = FOC_IDLE;
             /* Reset calibration for next run */
             s_foc_v2.cal_done = false;
@@ -1192,7 +1198,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
         /* Release PWM overrides when entering active modes */
         {
             static bool v2_ovr_released = false;
-            if (s_foc_v2.mode >= FOC_ALIGN && s_foc_v2.mode <= FOC_CLOSED_LOOP) {
+            if ((s_foc_v2.mode >= FOC_MOTOR_DETECT && s_foc_v2.mode <= FOC_CLOSED_LOOP)) {
                 if (!v2_ovr_released) {
                     HAL_PWM_ReleaseAllOverrides();
                     v2_ovr_released = true;
@@ -1203,15 +1209,43 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
             }
         }
 
-        /* Map FOC v2 mode to ESC state for main loop compatibility */
+        /* After detect completes: write ALL detected + derived params back
+         * to gspParams BEFORE state mapping (ESC_DETECT → ESC_ARMED).
+         * This ensures SAVE_CONFIG persists a complete, self-consistent set
+         * that produces the same FOC behavior after MCU reset. */
+        if (s_foc_v2.mode == FOC_ARMED && garudaData.state == ESC_DETECT) {
+            /* Motor params */
+            gspParams.focRsMilliOhm    = (uint16_t)(s_foc_v2.Rs * 1000.0f + 0.5f);
+            gspParams.focLsMicroH      = (uint16_t)(s_foc_v2.Ls * 1e6f + 0.5f);
+            gspParams.focKeUvSRad      = (uint16_t)(s_foc_v2.Ke * 1e6f + 0.5f);
+            /* PI gains (pole cancellation from detected Rs, Ls) */
+            gspParams.focKpDqMilli     = (uint16_t)(s_foc_v2.pid_d.kp * 1000.0f + 0.5f);
+            gspParams.focKiDq          = (uint16_t)(s_foc_v2.pid_d.ki + 0.5f);
+            /* Max speed from Vbus/Ke */
+            gspParams.focMaxElecRadS   = (uint16_t)(s_foc_v2.max_elec_rad_s + 0.5f);
+            /* Startup params */
+            gspParams.focHandoffRadS   = (uint16_t)(s_foc_v2.handoff_rad_s + 0.5f);
+            gspParams.focRampRateRps2  = (uint16_t)(s_foc_v2.ramp_rate + 0.5f);
+            gspParams.focAlignIqCentiA = (uint16_t)(s_foc_v2.align_iq * 100.0f + 0.5f);
+            gspParams.focRampIqCentiA  = (uint16_t)(s_foc_v2.ramp_iq * 100.0f + 0.5f);
+            gspParams.focFaultOcCentiA = (uint16_t)(s_foc_v2.fault_oc_a * 100.0f + 0.5f);
+        }
+
+        /* Map FOC v2 mode to ESC state for main loop compatibility.
+         * Don't overwrite ESC_DETECT when FOC is still IDLE — main loop
+         * sets ESC_DETECT, ISR must not clobber it before processing. */
         switch (s_foc_v2.mode) {
-            case FOC_IDLE:        garudaData.state = ESC_IDLE; break;
-            case FOC_ARMED:       garudaData.state = ESC_ARMED; break;
-            case FOC_ALIGN:       garudaData.state = ESC_ALIGN; break;
-            case FOC_IF_RAMP:     garudaData.state = ESC_OL_RAMP; break;
-            case FOC_CLOSED_LOOP: garudaData.state = ESC_CLOSED_LOOP; break;
-            case FOC_FAULT:       garudaData.state = ESC_FAULT; break;
-            default:              garudaData.state = ESC_FAULT; break;
+            case FOC_IDLE:
+                if (garudaData.state != ESC_DETECT)
+                    garudaData.state = ESC_IDLE;
+                break;
+            case FOC_ARMED:        garudaData.state = ESC_ARMED; break;
+            case FOC_MOTOR_DETECT: garudaData.state = ESC_DETECT; break;
+            case FOC_ALIGN:        garudaData.state = ESC_ALIGN; break;
+            case FOC_IF_RAMP:      garudaData.state = ESC_OL_RAMP; break;
+            case FOC_CLOSED_LOOP:  garudaData.state = ESC_CLOSED_LOOP; break;
+            case FOC_FAULT:        garudaData.state = ESC_FAULT; break;
+            default:               garudaData.state = ESC_FAULT; break;
         }
 
         /* Fault propagation */
@@ -1227,13 +1261,17 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
 #if FEATURE_FOC_V2
         garudaData.focIdMeas   = s_foc_v2.id_meas;
         garudaData.focIqMeas   = s_foc_v2.iq_meas;
-        garudaData.focTheta    = s_foc_v2.theta;
-        garudaData.focOmega    = s_foc_v2.omega_pll;
+        garudaData.focTheta    = (s_foc_v2.mode == FOC_MOTOR_DETECT)
+                                   ? s_foc_v2.theta_if : s_foc_v2.theta;
+        garudaData.focOmega    = (s_foc_v2.mode == FOC_MOTOR_DETECT)
+                                   ? s_foc_v2.omega_if : s_foc_v2.omega_pll;
         garudaData.focVbus     = s_foc_v2.vbus;
         garudaData.focIa       = v2_counts_to_amps(raw_ia, (uint16_t)s_foc_v2.ia_offset);
         garudaData.focIb       = v2_counts_to_amps(raw_ib, (uint16_t)s_foc_v2.ib_offset);
         garudaData.focThetaObs = s_foc_v2.theta_obs;
-        garudaData.focSubState = s_foc_v2.sub_state;
+        garudaData.focSubState = (s_foc_v2.mode == FOC_MOTOR_DETECT)
+                                   ? (uint8_t)s_foc_v2.detect_state
+                                   : s_foc_v2.sub_state;
         garudaData.focOffsetIa = (uint16_t)s_foc_v2.ia_offset;
         garudaData.focOffsetIb = (uint16_t)s_foc_v2.ib_offset;
 

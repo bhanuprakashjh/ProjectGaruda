@@ -24,98 +24,92 @@
 
 #if MOTOR_PROFILE == 0
 /* ----------------------------------------------------------------
- * Hurst DMB0224C10002 (dev bench motor)
- * 10 poles, 24VDC, 1.0A rated, L-L 4.03 ohm / 4.60 mH
- * No-load 3125 RPM @ 24V, Ke 7.24 Vpk/KRPM
+ * Hurst DMB2424B10002 (Long Hurst / Hurst300 / AC300022)
+ * Also: Hurst DMA0204024B101
+ * 10 poles (5PP), 24VDC, 3.4A RMS rated, nominal 2500 RPM
+ *
+ * Reference: Microchip hurst300.h (AN1292 dsPIC33AK FOC-PLL)
+ *   Rs = 0.3715 Ω, Ls = 359 µH, Ke = 6.7316 Vpk_LL/kRPM
+ *
+ * Auto-detect measured Rs=534mΩ, Ls=471µH — higher than Microchip
+ * reference, possibly due to temperature or motor variant. Using
+ * Microchip values as baseline; tune from GUI if needed.
+ *
+ * NOT the short DMB0224C10002 (Rs=2.54Ω, Ls=2.21mH — 7x different!)
  * ---------------------------------------------------------------- */
 
-/** Phase resistance, line-to-neutral (ohm).
- *  Microchip reference (hurst075.h) measures 2.54 ohm for this motor.
- *  Our earlier value (L-L/2 = 2.015) under-compensated Rs in the observer. */
-#define MOTOR_RS_OHM            2.54f
-/** Phase inductance, line-to-neutral (H).  L-L = 4.60 mH -> Ls = 2.30 mH */
-#define MOTOR_LS_H              2.30e-3f
+/** Phase resistance (ohm). Auto-detect measured 0.534Ω.
+ *  Microchip reference: 0.3715Ω (cold).  Using measured value —
+ *  observer convergence depends critically on accurate Rs. */
+#define MOTOR_RS_OHM            0.534f
+/** Phase inductance (H). Microchip reference: 359µH.
+ *  Auto-detect measured 471µH (31% higher). */
+#define MOTOR_LS_H              0.000359f
 /** Per-phase flux linkage λ_pm (V·s/rad, electrical).
- *  Ke_LL = 7.24e-3 Vpk/RPM (line-to-line, standard scope measurement)
- *  λ_pm = 60 / (√3 × 2π × KV × PP), where KV = 1000/7.24 = 138.1
- *  = 60 / (1.732 × 6.2832 × 138.1 × 5) = 0.00799 V·s/rad_elec
- *  Previous value 0.01383 was L-L Ke (missing √3) — caused voltage
- *  saturation at 1900 RPM instead of reaching rated 3125 RPM. */
-#define MOTOR_KE_VPEAK          0.00799f
+ *  Ke_LL = 6.7316 Vpk/kRPM (Microchip hurst300.h).
+ *  KV = 1000/6.7316 = 148.6 RPM/V.
+ *  λ_pm = 60/(√3 × 2π × KV × PP) = 60/(1.732×6.2832×148.6×5) = 0.00742 */
+#define MOTOR_KE_VPEAK          0.00742f
 #define MOTOR_POLE_PAIRS_FOC    5
 #define MOTOR_VBUS_NOM_V        24.0f
-/** Peak phase current limit (A) -- 5x rated for startup transient margin. */
-#define MOTOR_MAX_CURRENT_A     5.0f
-/** Max electrical speed (rad/s).  3125 RPM * 5PP * 2pi/60 = 1636, round up. */
+/** Peak phase current limit (A). Rated 3.4A RMS = 4.8A peak.
+ *  Allow 2x for startup transients. */
+#define MOTOR_MAX_CURRENT_A     10.0f
+/** Max electrical speed (rad/s).
+ *  3500 RPM max × 5PP × 2π/60 = 1833. Round to 2000. */
 #define MOTOR_MAX_ELEC_RAD_S    2000.0f
-/** Flux linkage (V·s/rad_elec) = λ_pm (per-phase). */
-#define MOTOR_FLUX_LINKAGE      0.00799f
+/** Flux linkage = λ_pm (per-phase). */
+#define MOTOR_FLUX_LINKAGE      0.00742f
 
-/* D/Q Current Loop PI (BW ~ 1 kHz, parallel form, Tustin integration)
- *   Kp = ωbw * Ls = 2π×1000 × 2.30e-3 = 14.45
- *   Ki = ωbw * Rs = 2π×1000 × 2.54  = 15958 (parallel form)
- *   PI zero = Ki/Kp = 15958/14.45 = 1104 rad/s = Rs/Ls → pole cancellation.
- *   Previous Ki=876 was from Microchip AN1292 (different PI form/scaling),
- *   gave PI zero at 61 rad/s — 18x below plant pole, causing sluggish
- *   integral tracking and audible current-harmonic noise on this PMSM. */
-#define KP_DQ                   14.45f
-#define KI_DQ                   15958.0f
+/* D/Q Current Loop PI (BW ~ 530 Hz, parallel form, Tustin integration)
+ *   Kp = ωbw × Ls = 2π×530 × 0.000359 = 1.195 ≈ 1.20
+ *   Ki = ωbw × Rs = 2π×530 × 0.534 = 1778
+ *   PI zero = Ki/Kp = 1778/1.20 = 1482 ≈ Rs/Ls = 0.534/0.000359 = 1488
+ *   → pole cancellation with measured Rs. */
+#define KP_DQ                   1.20f
+#define KI_DQ                   1778.0f
 
 /* Speed Loop PI (outer loop — active after CL handoff)
- *   Hurst: Kt_FOC=0.0599, J≈1.5e-5 kg·m², 5PP.
- *   Plant gain: pp×Kt/(J×s) = 19967/s.
- *   Kp=0.015 → ~48 Hz BW (well below 1kHz current loop).
- *   Ki=1.5 → τ_i=10ms integral tracking.
- *   Previous Kp=0.005 gave ~16 Hz → sluggish pot response. */
-#define KP_SPD                  0.015f
-#define KI_SPD                  1.5f
+ *   Kt_FOC = (3/2)×5×0.00742 = 0.0557 N·m/A.
+ *   Microchip reference: Kp=0.00573, Ki=0.0000129.
+ *   Using slightly higher for better pot response. */
+#define KP_SPD                  0.010f
+#define KI_SPD                  1.0f
 
 /* I/f (Current-Forced) Startup
- * Alignment: hold θ=0, ramp Iq from 0 → ALIGN_IQ over ALIGN_TICKS.
- * OL ramp: advance θ at pot-controlled rate, PI maintains Id=0 + Iq=RAMP_IQ.
- * CL handoff: when PLL tracks OL within tolerance, switch to PLL angle + speed PI. */
-/** Alignment Id (A) — 0.3A × Kt_FOC(0.0599) = 18 mN·m.
- *  Enough to overcome Hurst cogging (~10 mN·m) without jarring the rotor. */
-#define STARTUP_ALIGN_IQ_A      0.30f
-/** OL running Iq (A) — torque current during forced-angle ramp.
- *  0.5A × Kt(0.0599) = 30 mN·m — ample for no-load Hurst.
- *  1.0A was too much unloaded: rotor oscillated around forced angle. */
-#define STARTUP_RAMP_IQ_A       0.50f
-/** Iq ramp ticks (24kHz).  6000 = 250ms — fast d→q rotation. */
-#define STARTUP_IQ_RAMP_TICKS   6000U
-/** Alignment dwell (ticks).  12000 = 500ms — Hurst rotor settles in <200ms.
- *  1000ms was too long: rotor vibrated from current ripple at standstill. */
+ * Microchip reference: OPEN_LOOP_CURRENT=1.0A, LOCK_CURRENT=1.0A,
+ * handoff at 500 RPM, ramp rate 2000 RPM/s. */
+/** Alignment Id (A) — 1.0A matches Microchip reference LOCK_CURRENT. */
+#define STARTUP_ALIGN_IQ_A      1.0f
+/** OL running Iq (A) — 1.0A matches Microchip OPEN_LOOP_CURRENT. */
+#define STARTUP_RAMP_IQ_A       1.0f
+/** Iq ramp ticks (24kHz).  4800 = 200ms — smooth d→q rotation. */
+#define STARTUP_IQ_RAMP_TICKS   4800U
+/** Alignment dwell (ticks).  12000 = 500ms (matches Microchip LOCK_TIME). */
 #define STARTUP_ALIGN_TICKS     12000U
-/** Ramp rate (rad/s^2 electrical).  300 → ~0.87s to handoff.
- *  Faster through the audible-frequency I/f region where rotor oscillates
- *  around the forced angle.  Hurst rotor inertia is light — 300 is safe
- *  (required torque = J×α/pp ≈ 0.9 mN·m vs available 30 mN·m). */
-#define STARTUP_RAMP_RATE_RPS2  300.0f
-/** PLL correction begins above this speed (rad/s elec.).
- *  BEMF = 0.00799×500 = 4.0V (16.6% of 24V).
- *  MXLEMMING SNR per tick = Ke×ω×dt / (Ls×σ_I).
- *  At 260 rad/s: SNR=0.75 (noise dominates → observer random-walks).
- *  At 500 rad/s: SNR=1.44 (signal > noise → observer tracks).
- *  Threshold for reliable tracking: SNR > 1 → ω > 345 rad/s.
- *  Using 500 for margin (SNR=1.44, 44% headroom). */
-#define STARTUP_HANDOFF_RAD_S   500.0f
-/** Min OL speed (pot=0): 1000 RPM × 5PP × 2π/60 = 523.6
- *  NOTE: FOC v2 calculates max_ol dynamically from Vbus/Ke. */
-#define STARTUP_MIN_OL_RAD_S    523.6f
-/** Max OL speed (pot=max): Vbus/Ke = 24/0.00799 = 3003, cap at 85% = 2553.
- *  NOTE: FOC v2 uses dynamic calculation; this is documentation only. */
-#define STARTUP_MAX_OL_RAD_S    2553.0f
+/** Ramp rate (rad/s² electrical).
+ *  Microchip: 2000 RPM/s mech = 2000×5×2π/60 = 1047 rad/s² elec.
+ *  Using 500 for margin — still reaches handoff in <0.5s. */
+#define STARTUP_RAMP_RATE_RPS2  500.0f
+/** CL handoff speed (rad/s elec.).
+ *  Microchip: 500 RPM mech = 500×5×2π/60 = 262 rad/s elec.
+ *  BEMF = 0.00742×262 = 1.94V (8.1% of 24V). Good SNR. */
+#define STARTUP_HANDOFF_RAD_S   262.0f
+/** Min OL speed. FOC v2 uses dynamic calculation. */
+#define STARTUP_MIN_OL_RAD_S    500.0f
+/** Max OL speed. Vbus/Ke = 24/0.00742 = 3234, cap at 85% = 2749. */
+#define STARTUP_MAX_OL_RAD_S    2749.0f
 
 /* Fault Thresholds */
 #define FAULT_OC_A              10.0f
 #define FAULT_STALL_RAD_S       10.0f
 
-/* Observer LPF -- Hurst (low-speed motor: heavy filtering OK)
- * Max elec freq = 2000/(2pi) = 318 Hz
- * OBS cutoff = 0.06 -> 229 Hz: fine, BEMF signal is strong (high Ke).
- * SMO cutoff ~ 2x max = 637 Hz -> alpha = 0.17, round to 0.15 */
-#define OBS_LPF_ALPHA           0.06f
-#define SMO_LPF_ALPHA           0.15f
+/* Observer LPF -- long Hurst (moderate-speed motor)
+ * Max elec freq = 2000/(2pi) = 318 Hz.
+ * Microchip BEMF filter cutoff: 250 Hz → alpha ≈ 0.065.
+ * Using 0.08: slightly faster than short Hurst (0.06). */
+#define OBS_LPF_ALPHA           0.08f
+#define SMO_LPF_ALPHA           0.20f
 
 #elif MOTOR_PROFILE == 1
 /* ----------------------------------------------------------------
@@ -481,25 +475,23 @@
 /** Throttle-at-zero duration before ARMED -> STARTUP (ms). */
 #define FOC_ARM_TIME_MS         500U
 
-/* -- Current Sensing Hardware (MCLV-48V-300W DIM EV68M17A) --------
- *   Shunt: 10 mohm low-side (DIM shunts)
- *   Op-amp gain: x8 (OA1/OA2 external resistors on DIM for phase current)
- *     Confirmed by: garuda_calc_params.h comment, RK1 reference (OPAMP_GAIN=8.0),
- *     AN1292 MC1_PEAK_CURRENT=22A matches 1.65/(8*0.010)=20.6A.
- *     NOTE: OA3 (bus current) uses different resistors → gain=24.95.
- *   Polarity: OA1/OA2 inverting topology — counts_to_amps_cal() negates.
- *     AN1292 uses (HALF_ADC_COUNT - ADC_DATA) for same reason.
+/* -- Current Sensing Hardware (MCLV-48V-300W + DIM EV68M17A) ------
+ *   Shunt: 3 mohm low-side (on MCLV-48V-300W board, NOT on DIM)
+ *   Op-amp: DIM differential amp (U1A/U1B), gain = RF/RIN = 4990/200 = 24.95
+ *     I_peak = Vref_half/(Gain*Shunt) = 1.65/(24.95*0.003) = 22.04 A
+ *     Matches AN1292 MC1_PEAK_CURRENT = 22.0 A
+ *   Polarity: inverting topology — raw_to_amps() negates.
  *   ADC: 3.3V reference, 12-bit (0-4095), mid-point ~2048
  * ---------------------------------------------------------------- */
-#define SHUNT_RESISTANCE_OHM    0.010f
-#define OPAMP_GAIN              8.0f
+#define SHUNT_RESISTANCE_OHM    0.003f
+#define OPAMP_GAIN              24.95f
 #define ADC_VREF_V              3.3f
 #define ADC_FULL_SCALE_F        4095.0f
 #define ADC_MIDPOINT            2048
 
 /** Amps per ADC count (signed, centred at zero-current offset).
- *  I_peak = Vref_half/(Gain*Shunt) = 1.65/(8*0.010) = 20.6 A
- *  Scale = Vref/(FS*Gain*Shunt) = 3.3/(4095*8*0.010) = 0.01007 A/count */
+ *  I_peak = Vref_half/(Gain*Shunt) = 1.65/(24.95*0.003) = 22.04 A
+ *  Scale = Vref/(FS*Gain*Shunt) = 3.3/(4095*24.95*0.003) = 0.01077 A/count */
 #define CURRENT_SCALE_A_PER_COUNT \
     (ADC_VREF_V / (ADC_FULL_SCALE_F * OPAMP_GAIN * SHUNT_RESISTANCE_OHM))
 

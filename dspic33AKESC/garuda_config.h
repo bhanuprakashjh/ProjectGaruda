@@ -47,9 +47,9 @@ extern "C" {
 #define FEATURE_ADC_POT          1
 
 /* RX input features: default OFF (Phase H) */
-#define FEATURE_RX_PWM           0  /* RC PWM capture (1000-2000us) */
-#define FEATURE_RX_DSHOT         0  /* DShot digital protocol */
-#define FEATURE_RX_AUTO          0  /* Auto-detect DShot vs PWM */
+#define FEATURE_RX_PWM           1  /* RC PWM capture (1000-2000us) */
+#define FEATURE_RX_DSHOT         1  /* DShot digital protocol */
+#define FEATURE_RX_AUTO          1  /* Auto-detect DShot vs PWM */
 
 /* C.0 DMA gate test (Phase H, Milestone C.0) — default OFF */
 #define C0_DMA_TEST              0
@@ -97,12 +97,12 @@ extern "C" {
  * All motor-dependent parameters are grouped here for easy swapping.
  * Board-specific and feature-tuning parameters are below.
  *──────────────────────────────────────────────────────────────────────────*/
-#define MOTOR_PROFILE  1
+#define MOTOR_PROFILE  0
 
 #if MOTOR_PROFILE == 0
-/* === Hurst DMB0224C10002 (dev bench motor) ===
- * 10 poles, 24VDC, 1.0A rated, L-L 4.03 ohm / 4.60 mH
- * No-load 3125 RPM @ 24V, Ke 7.24 Vpk/KRPM */
+/* === Hurst DMB2424B10002 (long Hurst, MCLV-48V-300W bench motor) ===
+ * 10 poles (5PP), 24VDC, Rs=534mΩ, Ls=471µH (auto-detected)
+ * NOT the short DMB0224C10002 (Rs=2.54Ω, Ls=2.3mH) */
 #define MOTOR_POLE_PAIRS             5
 #define DEADTIME_NS                750
 #define ALIGN_DUTY_PERCENT          20

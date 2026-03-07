@@ -91,6 +91,7 @@ typedef enum {
     DETECT_IDLE = 0,
     DETECT_R,
     DETECT_L,
+    DETECT_ALIGN,       /* Re-align rotor at θ=0 before spinning */
     DETECT_LAMBDA,
     DETECT_TUNE,
     DETECT_DONE,

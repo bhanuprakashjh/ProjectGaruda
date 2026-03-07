@@ -730,13 +730,15 @@ void HAL_PWM_SetDutyFloat3Phase(float da, float db, float dc)
     if (!(db >= 0.0f && db <= 1.0f)) db = 0.5f;
     if (!(dc >= 0.0f && dc <= 1.0f)) dc = 0.5f;
 
-    uint32_t range = MAX_DUTY - MIN_DUTY;
-    uint32_t a = MIN_DUTY + (uint32_t)(da * (float)range);
-    uint32_t b = MIN_DUTY + (uint32_t)(db * (float)range);
-    uint32_t c = MIN_DUTY + (uint32_t)(dc * (float)range);
-    if (a > MAX_DUTY) a = MAX_DUTY;
-    if (b > MAX_DUTY) b = MAX_DUTY;
-    if (c > MAX_DUTY) c = MAX_DUTY;
+    /* Map [0,1] → [0, LOOPTIME_TCY] (full PWM range).
+     * SVM already outputs centered duties — no MIN_DUTY offset needed.
+     * Clamp to [MIN_DUTY, MAX_DUTY] for dead-time safety only. */
+    uint32_t a = (uint32_t)(da * (float)LOOPTIME_TCY);
+    uint32_t b = (uint32_t)(db * (float)LOOPTIME_TCY);
+    uint32_t c = (uint32_t)(dc * (float)LOOPTIME_TCY);
+    if (a < MIN_DUTY) a = MIN_DUTY;  if (a > MAX_DUTY) a = MAX_DUTY;
+    if (b < MIN_DUTY) b = MIN_DUTY;  if (b > MAX_DUTY) b = MAX_DUTY;
+    if (c < MIN_DUTY) c = MIN_DUTY;  if (c > MAX_DUTY) c = MAX_DUTY;
     PG3DC = c;  /* Slave C first */
     PG2DC = b;  /* Slave B */
     PG1DC = a;  /* Master A last (triggers broadcast) */

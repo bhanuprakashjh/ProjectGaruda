@@ -120,12 +120,12 @@ static uint16_t DshotToThrottleAdc(uint16_t dshotVal)
     if (dshotVal <= RX_DSHOT_CMD_MAX)
         return 0;
 
-    /* Map 48-2047 -> 0-2000, then scale to 0-4095 */
-    uint16_t throttle2000 = dshotVal - 48;
-    if (throttle2000 > 2000)
-        throttle2000 = 2000;
+    /* Map 48-2047 -> 0-1999, then scale to 0-4095 */
+    uint16_t throttle1999 = dshotVal - 48;  /* max = 2047-48 = 1999 */
+    if (throttle1999 > 1999)
+        throttle1999 = 1999;
 
-    return (uint16_t)((uint32_t)throttle2000 * 4095 / 2000);
+    return (uint16_t)((uint32_t)throttle1999 * 4095 / 1999);
 }
 
 /* ── RX_Init ──────────────────────────────────────────────────────── */
@@ -152,6 +152,18 @@ void RX_Init(void)
 
     HAL_IC4_Init();
     HAL_IC4_Enable();
+}
+
+/* ── RX_ResetLockState (for test injection) ────────────────────────── */
+
+void RX_ResetLockState(void)
+{
+    lockCount = 0;
+    lastSeqNum = 0;
+    lastValidTick = garudaData.systemTick;
+    rxCachedLocked = 0;
+    rxCachedThrottleAdc = 0;
+    garudaData.rxLinkState = RX_LINK_LOCKING;
 }
 
 /* ── RX_Service (main loop) ───────────────────────────────────────── */
@@ -233,6 +245,10 @@ void RX_Service(void)
                 /* Torn read — skip this cycle */
                 break;
             }
+
+            /* No new frame since last read — skip to timeout check */
+            if (seq2 == lastSeqNum)
+                goto rx_timeout_check;
 
             /* Detect dropped frames */
             if (lastSeqNum != 0)
@@ -332,7 +348,8 @@ void RX_Service(void)
             }
 #endif
 
-            /* Timeout check */
+            /* Timeout check — also reached via goto when no new frame */
+            rx_timeout_check:
             {
                 uint32_t elapsed = garudaData.systemTick - lastValidTick;
                 if (elapsed > RX_TIMEOUT_MS)
@@ -361,9 +378,10 @@ void RX_Service(void)
 
         case RX_LINK_LOST:
         {
-            /* Stay in LOST until fault is cleared, then re-detect */
-            if (garudaData.state == ESC_IDLE
-                && garudaData.faultCode == FAULT_NONE)
+            /* Stay in LOST until motor is stopped, then re-detect.
+             * Only check state — if motor was running, timeout set
+             * state=FAULT; user must CLEAR_FAULT → IDLE first. */
+            if (garudaData.state == ESC_IDLE)
             {
                 /* Re-enter detection */
 #if FEATURE_RX_DSHOT

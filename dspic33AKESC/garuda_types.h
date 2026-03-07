@@ -22,6 +22,7 @@ typedef enum
 {
     ESC_IDLE = 0,
     ESC_ARMED,
+    ESC_DETECT,         /* Auto-commissioning (FOC V2 only) */
     ESC_ALIGN,
     ESC_OL_RAMP,
     ESC_MORPH,          /* Sine-to-trap waveform morph */
@@ -594,6 +595,7 @@ typedef struct
     bool gspStartIntent;
     bool gspStopIntent;
     bool gspFaultClearIntent;
+    bool gspDetectIntent;       /* Auto-commissioning trigger */
 #endif
 
 #if FEATURE_FOC

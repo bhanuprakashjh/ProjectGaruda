@@ -1,28 +1,46 @@
-import { useState, useMemo } from 'react';
+import { useState, useMemo, useEffect, useRef, useCallback } from 'react';
 import { useEscStore } from '../store/useEscStore';
 import { isFocEnabled, PROFILE_NAMES } from '../protocol/types';
+import { serial } from './ConnectionBar';
+import { buildPacket, CMD } from '../protocol/gsp';
 
 const SQRT3 = 1.73205080757;
 const TWO_PI = 6.28318530718;
 
+// ESC state constants (matching garuda_types.h with ESC_DETECT at 2)
+const ESC_IDLE = 0;
+const ESC_ARMED = 1;
+const ESC_DETECT = 2;
+const ESC_FAULT = 9;
+
+// FOC param IDs for readback
+const PARAM_FOC_RS_MOHM = 0x70;
+const PARAM_FOC_LS_UH = 0x71;
+const PARAM_FOC_KE_UV = 0x72;
+const PARAM_FOC_KP_DQ = 0x76;
+const PARAM_FOC_KI_DQ = 0x77;
+const PARAM_FOC_HANDOFF = 0x7E;
+const PARAM_FOC_FAULT_OC = 0x7F;
+const PARAM_POLE_PAIRS = 0x50;
+
 interface MotorInput {
-  kv: number;         // RPM/V
+  kv: number;
   polePairs: number;
   resistance: number; // Ohm
-  inductance: number; // mH (display), stored as H internally
-  vbus: number;       // V
-  pwmFreq: number;    // Hz
-  maxCurrentA: number; // A
+  inductance: number; // mH
+  vbus: number;
+  pwmFreq: number;
+  maxCurrentA: number;
 }
 
 interface FocCalc {
-  lambdaPm: number;    // V.s/rad
-  ke: number;          // same as lambda
-  ktFoc: number;       // N.m/A
-  currentBw: number;   // rad/s
+  lambdaPm: number;
+  ke: number;
+  ktFoc: number;
+  currentBw: number;
   kpCurrent: number;
   kiCurrent: number;
-  maxOmegaElec: number; // rad/s
+  maxOmegaElec: number;
   maxRpmMech: number;
   maxOlRadS: number;
   handoffRadS: number;
@@ -33,6 +51,18 @@ interface FocCalc {
   pllKi: number;
 }
 
+type DetectStatus = 'idle' | 'running' | 'done' | 'failed';
+
+interface DetectResult {
+  rsMohm: number;
+  lsUh: number;
+  keUv: number;
+  kpMilli?: number;
+  kiDq?: number;
+  handoffRadS?: number;
+  faultOcCentiA?: number;
+}
+
 const PRESETS: Record<string, Partial<MotorInput>> = {
   a2212: { kv: 1400, polePairs: 7, resistance: 0.093, inductance: 0.022, vbus: 12, maxCurrentA: 20 },
   '5010': { kv: 750, polePairs: 14, resistance: 0.042, inductance: 0.015, vbus: 14.8, maxCurrentA: 35 },
@@ -40,50 +70,39 @@ const PRESETS: Record<string, Partial<MotorInput>> = {
 };
 
 function calcFoc(m: MotorInput): FocCalc {
-  const L = m.inductance / 1000; // mH -> H
+  const L = m.inductance / 1000;
   const lambdaPm = 60 / (SQRT3 * TWO_PI * m.kv * m.polePairs);
   const ktFoc = 1.5 * m.polePairs * lambdaPm;
-
-  // Current controller bandwidth: 1/10th of PWM frequency
   const bw = TWO_PI * m.pwmFreq / 10;
   const kpCurrent = L * bw;
   const kiCurrent = m.resistance * bw;
-
-  // Speed limits
   const maxOmegaElec = m.vbus / lambdaPm;
   const maxRpmMech = maxOmegaElec * 60 / (TWO_PI * m.polePairs);
   const maxOlRadS = maxOmegaElec * 0.85;
-  const handoffRadS = maxOmegaElec * 0.07; // ~7% of max
-
-  // Startup currents
+  const handoffRadS = maxOmegaElec * 0.07;
   const alignIq = Math.min(m.maxCurrentA * 0.3, 6);
   const rampIq = Math.min(m.maxCurrentA * 0.3, 6);
-
-  // Voltage clamp
   const clampVdq = m.vbus * 0.95 / SQRT3;
-
-  // PLL (100 Hz bandwidth)
   const pllBw = TWO_PI * 100;
   const pllKp = 2 * pllBw;
   const pllKi = pllBw * pllBw;
-
   return {
     lambdaPm, ke: lambdaPm, ktFoc, currentBw: bw,
     kpCurrent, kiCurrent,
     maxOmegaElec, maxRpmMech, maxOlRadS, handoffRadS,
-    alignIq, rampIq, clampVdq,
-    pllKp, pllKi,
+    alignIq, rampIq, clampVdq, pllKp, pllKi,
   };
 }
 
-function InputRow({ label, value, unit, onChange, tooltip, min, max, step }: {
+function InputRow({ label, value, unit, onChange, tooltip, min, max, step, disabled }: {
   label: string; value: number; unit: string; onChange: (v: number) => void;
-  tooltip?: string; min?: number; max?: number; step?: number;
+  tooltip?: string; min?: number; max?: number; step?: number; disabled?: boolean;
 }) {
   return (
     <div style={{
       display: 'flex', alignItems: 'center', gap: 8, padding: '6px 0',
       borderBottom: '1px solid var(--border-light)',
+      opacity: disabled ? 0.5 : 1,
     }}>
       <div style={{ flex: 1, minWidth: 160 }}>
         <div style={{ fontSize: 12, color: 'var(--text-secondary)', fontWeight: 500 }}>{label}</div>
@@ -96,6 +115,7 @@ function InputRow({ label, value, unit, onChange, tooltip, min, max, step }: {
           min={min}
           max={max}
           step={step ?? 'any'}
+          disabled={disabled}
           onChange={e => onChange(parseFloat(e.target.value) || 0)}
           style={{
             width: 100, padding: '4px 8px', borderRadius: 'var(--radius-sm)',
@@ -130,8 +150,31 @@ function ResultRow({ label, value, unit, color, highlight }: {
   );
 }
 
+async function sendCmd(cmdId: number, payload?: Uint8Array) {
+  await serial.write(buildPacket(cmdId, payload));
+}
+
+async function readParam(paramId: number) {
+  const buf = new Uint8Array(2);
+  buf[0] = paramId & 0xFF;
+  buf[1] = (paramId >> 8) & 0xFF;
+  await sendCmd(CMD.GET_PARAM, buf);
+}
+
+async function setParam(paramId: number, value: number) {
+  const buf = new Uint8Array(6);
+  const v = new DataView(buf.buffer);
+  v.setUint16(0, paramId, true);
+  v.setUint32(2, value, true);
+  await sendCmd(CMD.SET_PARAM, buf);
+}
+
 export function MotorTuningPanel() {
   const info = useEscStore(s => s.info);
+  const connected = useEscStore(s => s.connected);
+  const snapshot = useEscStore(s => s.snapshot);
+  const params = useEscStore(s => s.params);
+  const addToast = useEscStore(s => s.addToast);
   const focMode = info ? isFocEnabled(info.featureFlags) : false;
   const activeProfile = useEscStore(s => s.activeProfile);
 
@@ -141,6 +184,15 @@ export function MotorTuningPanel() {
   });
 
   const [showHeader, setShowHeader] = useState(false);
+  const [paramSource, setParamSource] = useState<'calculator' | 'autotune'>('calculator');
+
+  // Auto-tune state
+  const [detectStatus, setDetectStatus] = useState<DetectStatus>('idle');
+  const [detectPhase, setDetectPhase] = useState(0);
+  const [detectElapsed, setDetectElapsed] = useState(0);
+  const [detectResult, setDetectResult] = useState<DetectResult | null>(null);
+  const detectStartTime = useRef(0);
+  const pollTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   const update = (key: keyof MotorInput, val: number) => {
     setMotor(prev => ({ ...prev, [key]: val }));
@@ -151,6 +203,114 @@ export function MotorTuningPanel() {
   };
 
   const calc = useMemo(() => calcFoc(motor), [motor]);
+
+  // Monitor snapshot for detect progress
+  useEffect(() => {
+    if (detectStatus !== 'running' || !snapshot) return;
+
+    const elapsed = (Date.now() - detectStartTime.current) / 1000;
+    setDetectElapsed(elapsed);
+
+    if (snapshot.state === ESC_DETECT) {
+      setDetectPhase(snapshot.focSubState);
+    } else if (snapshot.state === ESC_ARMED) {
+      // Detect completed — read back params
+      setDetectStatus('done');
+      setDetectPhase(6); // DETECT_DONE
+      readDetectedParams();
+    } else if (snapshot.state === ESC_FAULT) {
+      setDetectStatus('failed');
+      setDetectPhase(7); // DETECT_FAIL
+      addToast(`Auto-detect failed (fault code: ${snapshot.faultCode})`, 'error');
+    } else if (snapshot.state === ESC_IDLE && elapsed > 2) {
+      setDetectStatus('failed');
+      addToast('Auto-detect stopped unexpectedly', 'error');
+    }
+  }, [snapshot, detectStatus]);
+
+  // Cleanup poll timer
+  useEffect(() => {
+    return () => {
+      if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+    };
+  }, []);
+
+  const readDetectedParams = useCallback(async () => {
+    // Read all FOC params that were written by detect
+    await readParam(PARAM_FOC_RS_MOHM);
+    await readParam(PARAM_FOC_LS_UH);
+    await readParam(PARAM_FOC_KE_UV);
+    await readParam(PARAM_FOC_KP_DQ);
+    await readParam(PARAM_FOC_KI_DQ);
+    await readParam(PARAM_FOC_HANDOFF);
+    await readParam(PARAM_FOC_FAULT_OC);
+  }, []);
+
+  // Build detect result from store params whenever they update
+  useEffect(() => {
+    if (detectStatus !== 'done') return;
+    const rs = params.get(PARAM_FOC_RS_MOHM)?.value;
+    const ls = params.get(PARAM_FOC_LS_UH)?.value;
+    const ke = params.get(PARAM_FOC_KE_UV)?.value;
+    const kp = params.get(PARAM_FOC_KP_DQ)?.value;
+    const ki = params.get(PARAM_FOC_KI_DQ)?.value;
+    const ho = params.get(PARAM_FOC_HANDOFF)?.value;
+    const oc = params.get(PARAM_FOC_FAULT_OC)?.value;
+    if (rs !== undefined && ls !== undefined && ke !== undefined) {
+      setDetectResult({
+        rsMohm: rs, lsUh: ls, keUv: ke,
+        kpMilli: kp, kiDq: ki,
+        handoffRadS: ho, faultOcCentiA: oc,
+      });
+    }
+  }, [detectStatus, params]);
+
+  const startDetect = async () => {
+    if (!connected || !snapshot || snapshot.state !== ESC_IDLE) {
+      addToast('Motor must be IDLE to start auto-detect', 'error');
+      return;
+    }
+
+    // Set pole pairs first if needed
+    await setParam(PARAM_POLE_PAIRS, motor.polePairs);
+    await new Promise(r => setTimeout(r, 50));
+
+    // Start detect
+    setDetectStatus('running');
+    setDetectPhase(0);
+    setDetectResult(null);
+    detectStartTime.current = Date.now();
+
+    await sendCmd(CMD.AUTO_DETECT);
+
+    // Start polling snapshots if telemetry isn't active
+    const telemActive = useEscStore.getState().telemActive;
+    if (!telemActive) {
+      if (pollTimerRef.current) clearInterval(pollTimerRef.current);
+      pollTimerRef.current = setInterval(async () => {
+        try { await sendCmd(CMD.GET_SNAPSHOT); } catch { /* ignore */ }
+      }, 200);
+    }
+  };
+
+  const saveDetectedParams = async () => {
+    await sendCmd(CMD.SAVE_CONFIG);
+    addToast('Detected parameters saved to EEPROM', 'success');
+  };
+
+  const stopPolling = useCallback(() => {
+    if (pollTimerRef.current) {
+      clearInterval(pollTimerRef.current);
+      pollTimerRef.current = null;
+    }
+  }, []);
+
+  // Stop polling when detect finishes
+  useEffect(() => {
+    if (detectStatus === 'done' || detectStatus === 'failed' || detectStatus === 'idle') {
+      stopPolling();
+    }
+  }, [detectStatus, stopPolling]);
 
   // Generate C header
   const headerCode = useMemo(() => {
@@ -193,9 +353,7 @@ export function MotorTuningPanel() {
     return lines.join('\n');
   }, [motor, calc]);
 
-  const copyHeader = () => {
-    navigator.clipboard.writeText(headerCode);
-  };
+  const copyHeader = () => { navigator.clipboard.writeText(headerCode); };
 
   const cardStyle: React.CSSProperties = {
     background: 'var(--bg-card)', borderRadius: 'var(--radius)',
@@ -206,6 +364,17 @@ export function MotorTuningPanel() {
     fontSize: 11, color: 'var(--text-muted)', textTransform: 'uppercase',
     letterSpacing: '1px', marginBottom: 8, fontWeight: 600,
   };
+
+  const tabBtn = (active: boolean): React.CSSProperties => ({
+    padding: '8px 20px', borderRadius: 'var(--radius-sm)',
+    border: `1px solid ${active ? 'var(--accent-blue)' : 'var(--border)'}`,
+    background: active ? 'var(--accent-blue-dim)' : 'transparent',
+    color: active ? 'var(--accent-blue)' : 'var(--text-muted)',
+    fontSize: 12, fontWeight: 600, cursor: 'pointer',
+  });
+
+  const isIdle = !snapshot || snapshot.state === ESC_IDLE;
+  const isDetecting = snapshot?.state === ESC_DETECT;
 
   return (
     <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
@@ -243,109 +412,336 @@ export function MotorTuningPanel() {
         </div>
       </div>
 
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
-        {/* Input parameters */}
-        <div style={cardStyle}>
-          <div style={sectionTitle}>Motor Parameters</div>
-          <InputRow label="KV Rating" value={motor.kv} unit="RPM/V"
-            onChange={v => update('kv', v)} tooltip="No-load speed constant"
-            min={100} max={10000} step={10} />
-          <InputRow label="Pole Pairs" value={motor.polePairs} unit="pp"
-            onChange={v => update('polePairs', v)} tooltip="Magnetic pole pairs (poles / 2)"
-            min={1} max={30} step={1} />
-          <InputRow label="Phase Resistance" value={motor.resistance} unit="Ohm"
-            onChange={v => update('resistance', v)} tooltip="Line-to-line / 2 for wye-wound"
-            min={0.001} max={10} step={0.001} />
-          <InputRow label="Phase Inductance" value={motor.inductance} unit="mH"
-            onChange={v => update('inductance', v)} tooltip="Line-to-line / 2 for wye-wound"
-            min={0.001} max={100} step={0.001} />
-
-          <div style={{ ...sectionTitle, marginTop: 16 }}>System Parameters</div>
-          <InputRow label="Bus Voltage" value={motor.vbus} unit="V"
-            onChange={v => update('vbus', v)} tooltip="DC bus voltage (battery)"
-            min={3} max={60} step={0.1} />
-          <InputRow label="PWM Frequency" value={motor.pwmFreq} unit="Hz"
-            onChange={v => update('pwmFreq', v)} tooltip="Switching frequency"
-            min={8000} max={48000} step={1000} />
-          <InputRow label="Max Phase Current" value={motor.maxCurrentA} unit="A"
-            onChange={v => update('maxCurrentA', v)} tooltip="Overcurrent fault threshold"
-            min={1} max={100} step={1} />
-        </div>
-
-        {/* Calculated results */}
-        <div style={cardStyle}>
-          <div style={sectionTitle}>Calculated FOC Parameters</div>
-
-          <ResultRow label="Flux Linkage (lambda_pm)" value={calc.lambdaPm.toFixed(6)} unit="V.s/rad"
-            color="var(--accent-cyan)" highlight />
-          <ResultRow label="Back-EMF Constant (Ke)" value={(calc.ke * 1000).toFixed(3)} unit="mV.s/rad"
-            color="var(--accent-cyan)" />
-          <ResultRow label="Torque Constant (Kt_FOC)" value={calc.ktFoc.toFixed(5)} unit="N.m/A"
-            color="var(--accent-green)" highlight />
-
-          <div style={{ ...sectionTitle, marginTop: 12 }}>Current Controller</div>
-          <ResultRow label="Bandwidth" value={(calc.currentBw / TWO_PI).toFixed(0)} unit="Hz" />
-          <ResultRow label="Kp (Id & Iq)" value={calc.kpCurrent.toFixed(4)} unit="" color="var(--accent-blue)" />
-          <ResultRow label="Ki (Id & Iq)" value={calc.kiCurrent.toFixed(4)} unit="" color="var(--accent-blue)" />
-          <ResultRow label="Voltage Clamp" value={calc.clampVdq.toFixed(2)} unit="V" />
-
-          <div style={{ ...sectionTitle, marginTop: 12 }}>Speed / Limits</div>
-          <ResultRow label="Max Elec Speed" value={calc.maxOmegaElec.toFixed(0)} unit="rad/s" />
-          <ResultRow label="Max Mech RPM" value={calc.maxRpmMech.toFixed(0)} unit="RPM" color="var(--accent-yellow)" highlight />
-          <ResultRow label="Handoff Speed" value={calc.handoffRadS.toFixed(0)} unit="rad/s" />
-          <ResultRow label="Max OL Speed (85%)" value={calc.maxOlRadS.toFixed(0)} unit="rad/s" />
-
-          <div style={{ ...sectionTitle, marginTop: 12 }}>Startup</div>
-          <ResultRow label="Align Iq" value={calc.alignIq.toFixed(1)} unit="A" />
-          <ResultRow label="Ramp Iq" value={calc.rampIq.toFixed(1)} unit="A" />
-          <ResultRow label="Align Torque" value={(calc.ktFoc * calc.alignIq * 1000).toFixed(1)} unit="mN.m" />
-
-          <div style={{ ...sectionTitle, marginTop: 12 }}>PLL Estimator</div>
-          <ResultRow label="PLL Kp" value={calc.pllKp.toFixed(1)} unit="" />
-          <ResultRow label="PLL Ki" value={calc.pllKi.toFixed(1)} unit="" />
-        </div>
-      </div>
-
-      {/* Generated header */}
-      <div style={cardStyle}>
-        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
-          <button onClick={() => setShowHeader(!showHeader)} style={{
-            display: 'flex', alignItems: 'center', gap: 6,
-            background: 'none', border: 'none', color: 'var(--text-primary)',
-            fontSize: 12, fontWeight: 600, padding: 0, cursor: 'pointer',
-          }}>
-            <svg width="12" height="12" viewBox="0 0 12 12" fill="none"
-              style={{ transform: showHeader ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}>
-              <path d="M4 2L8 6L4 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
-            </svg>
-            <span style={{ textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-muted)' }}>
-              Generated C Header (garuda_foc_params.h)
-            </span>
+      {/* Parameter Source Tabs */}
+      {focMode && (
+        <div style={{ display: 'flex', gap: 8 }}>
+          <button style={tabBtn(paramSource === 'calculator')}
+            onClick={() => setParamSource('calculator')}>
+            Calculator
           </button>
-          {showHeader && (
-            <button onClick={copyHeader} style={{
-              padding: '4px 12px', borderRadius: 'var(--radius-sm)',
-              border: '1px solid var(--accent-blue)', background: 'var(--accent-blue-dim)',
-              color: 'var(--accent-blue)', fontSize: 11, fontWeight: 600, cursor: 'pointer',
+          <button style={tabBtn(paramSource === 'autotune')}
+            onClick={() => setParamSource('autotune')}>
+            Auto-Tune
+          </button>
+        </div>
+      )}
+
+      {/* Auto-Tune Panel */}
+      {paramSource === 'autotune' && focMode && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {/* Setup */}
+          <div style={cardStyle}>
+            <div style={sectionTitle}>Auto-Tune Setup</div>
+            <div style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 12, lineHeight: 1.5 }}>
+              Auto-detect measures Rs, Ls, and back-EMF constant by injecting test currents.
+              The motor will lock briefly, pulse, then spin. Ensure the motor is free to rotate
+              and connected to the ESC.
+            </div>
+
+            <InputRow label="Pole Pairs" value={motor.polePairs} unit="pp"
+              onChange={v => update('polePairs', v)}
+              tooltip="Must be set manually — cannot be auto-detected"
+              min={1} max={30} step={1}
+              disabled={detectStatus === 'running'} />
+
+            <div style={{ display: 'flex', gap: 12, marginTop: 16, alignItems: 'center' }}>
+              <button
+                disabled={!connected || !isIdle || detectStatus === 'running'}
+                onClick={startDetect}
+                style={{
+                  padding: '10px 24px', borderRadius: 'var(--radius-sm)', border: 'none',
+                  background: (connected && isIdle && detectStatus !== 'running')
+                    ? 'var(--accent-blue)' : 'var(--bg-input)',
+                  color: (connected && isIdle && detectStatus !== 'running')
+                    ? '#fff' : 'var(--text-muted)',
+                  fontSize: 13, fontWeight: 700, cursor:
+                    (connected && isIdle && detectStatus !== 'running') ? 'pointer' : 'default',
+                  letterSpacing: '0.3px',
+                }}
+              >
+                {detectStatus === 'running' ? 'Detecting...' : 'Start Auto-Detect'}
+              </button>
+
+              {!connected && (
+                <span style={{ fontSize: 11, color: 'var(--accent-red)' }}>
+                  Connect to ESC first
+                </span>
+              )}
+              {connected && !isIdle && detectStatus !== 'running' && (
+                <span style={{ fontSize: 11, color: 'var(--accent-orange)' }}>
+                  Motor must be IDLE
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Progress */}
+          {detectStatus === 'running' && (
+            <div style={cardStyle}>
+              <div style={sectionTitle}>Detection Progress</div>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                {[1, 2, 3, 4, 5].map(phase => {
+                  const names = ['Measuring Rs', 'Measuring Ls', 'Re-Aligning', 'Measuring Lambda', 'Auto-Tuning'];
+                  const durations = ['~1.2s', '~3s', '~0.2s', '~4.6s', 'instant'];
+                  const details = [
+                    'Rotor locks at theta=0, measures voltage/current',
+                    'Voltage pulses to measure inductance',
+                    'Re-locks rotor at theta=0 with Id current',
+                    'd\u2192q transition + I/f spin to measure back-EMF',
+                    'Calculates PI gains and startup params',
+                  ];
+                  const isActive = detectPhase === phase;
+                  const isDone = detectPhase > phase;
+                  return (
+                    <div key={phase} style={{
+                      display: 'flex', alignItems: 'center', gap: 12, padding: '8px 12px',
+                      borderRadius: 'var(--radius-sm)',
+                      background: isActive ? 'rgba(59,130,246,0.1)' : 'transparent',
+                      border: `1px solid ${isActive ? 'var(--accent-blue)' : 'var(--border-light)'}`,
+                    }}>
+                      <div style={{
+                        width: 24, height: 24, borderRadius: '50%',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        background: isDone ? 'var(--accent-green)' : isActive ? 'var(--accent-blue)' : 'var(--bg-input)',
+                        color: (isDone || isActive) ? '#fff' : 'var(--text-muted)',
+                        fontSize: 11, fontWeight: 700,
+                      }}>
+                        {isDone ? '\u2713' : phase}
+                      </div>
+                      <div style={{ flex: 1 }}>
+                        <div style={{
+                          fontSize: 12, fontWeight: 600,
+                          color: isActive ? 'var(--accent-blue)' : isDone ? 'var(--accent-green)' : 'var(--text-muted)',
+                        }}>
+                          {names[phase - 1]}
+                          <span style={{ fontSize: 10, color: 'var(--text-muted)', marginLeft: 8, fontWeight: 400 }}>
+                            {durations[phase - 1]}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 10, color: 'var(--text-muted)' }}>{details[phase - 1]}</div>
+                      </div>
+                      {isActive && (
+                        <div style={{
+                          width: 8, height: 8, borderRadius: '50%',
+                          background: 'var(--accent-blue)',
+                          animation: 'pulse 1s ease-in-out infinite',
+                        }} />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+
+              {/* Live telemetry during detect */}
+              {isDetecting && snapshot && (
+                <div style={{
+                  marginTop: 12, padding: '8px 12px',
+                  background: 'var(--bg-secondary)', borderRadius: 'var(--radius-sm)',
+                  fontFamily: 'var(--font-mono)', fontSize: 11, color: 'var(--text-secondary)',
+                  display: 'grid', gridTemplateColumns: 'repeat(4, 1fr)', gap: 4,
+                }}>
+                  <span>Id: {snapshot.focIdMeas.toFixed(3)}A</span>
+                  <span>Iq: {snapshot.focIqMeas.toFixed(3)}A</span>
+                  <span>\u03C9: {snapshot.focOmega.toFixed(1)} rad/s</span>
+                  <span>Vbus: {snapshot.focVbus.toFixed(1)}V</span>
+                </div>
+              )}
+
+              <div style={{ marginTop: 8, fontSize: 11, color: 'var(--text-muted)' }}>
+                Elapsed: {detectElapsed.toFixed(1)}s
+              </div>
+            </div>
+          )}
+
+          {/* Results */}
+          {detectStatus === 'done' && detectResult && (
+            <div style={cardStyle}>
+              <div style={sectionTitle}>Detected Motor Parameters</div>
+
+              <ResultRow label="Phase Resistance (Rs)"
+                value={`${detectResult.rsMohm} m\u03A9 (${(detectResult.rsMohm / 1000).toFixed(4)} \u03A9)`}
+                unit="" color="var(--accent-cyan)" highlight />
+              <ResultRow label="Phase Inductance (Ls)"
+                value={`${detectResult.lsUh} \u00B5H (${(detectResult.lsUh / 1000).toFixed(3)} mH)`}
+                unit="" color="var(--accent-cyan)" highlight />
+              <ResultRow label="Back-EMF Constant (Ke)"
+                value={`${detectResult.keUv} \u00B5V\u00B7s/rad (${(detectResult.keUv / 1e6).toFixed(6)} V\u00B7s/rad)`}
+                unit="" color="var(--accent-cyan)" highlight />
+
+              {detectResult.kpMilli !== undefined && (
+                <ResultRow label="Current Loop Kp" value={(detectResult.kpMilli / 1000).toFixed(4)} unit="" />
+              )}
+              {detectResult.kiDq !== undefined && (
+                <ResultRow label="Current Loop Ki" value={detectResult.kiDq.toFixed(1)} unit="1/s" />
+              )}
+              {detectResult.handoffRadS !== undefined && (
+                <ResultRow label="Handoff Speed" value={detectResult.handoffRadS.toFixed(0)} unit="rad/s" />
+              )}
+              {detectResult.faultOcCentiA !== undefined && (
+                <ResultRow label="OC Fault Threshold" value={(detectResult.faultOcCentiA / 100).toFixed(1)} unit="A" />
+              )}
+
+              {/* Derived KV estimate */}
+              {detectResult.keUv > 0 && (
+                <ResultRow label="Estimated KV"
+                  value={(60 / (SQRT3 * TWO_PI * (detectResult.keUv / 1e6) * motor.polePairs)).toFixed(0)}
+                  unit="RPM/V" color="var(--accent-yellow)" highlight />
+              )}
+
+              <div style={{ display: 'flex', gap: 8, marginTop: 16 }}>
+                <button onClick={saveDetectedParams} style={{
+                  padding: '8px 20px', borderRadius: 'var(--radius-sm)', border: 'none',
+                  background: 'var(--accent-green)', color: '#000',
+                  fontSize: 12, fontWeight: 700, cursor: 'pointer',
+                }}>
+                  Save to EEPROM
+                </button>
+                <button onClick={() => { setDetectStatus('idle'); setDetectResult(null); }} style={{
+                  padding: '8px 20px', borderRadius: 'var(--radius-sm)',
+                  border: '1px solid var(--border)', background: 'transparent',
+                  color: 'var(--text-muted)', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+                }}>
+                  Re-run
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Failure */}
+          {detectStatus === 'failed' && (
+            <div style={{
+              ...cardStyle,
+              borderColor: 'rgba(239,68,68,0.3)',
+              background: 'rgba(239,68,68,0.05)',
             }}>
-              Copy to Clipboard
-            </button>
+              <div style={{ ...sectionTitle, color: 'var(--accent-red)' }}>Detection Failed</div>
+              <div style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.5 }}>
+                {snapshot?.faultCode
+                  ? `Fault code: ${snapshot.faultCode}`
+                  : 'Motor returned to IDLE unexpectedly'}
+                <br />
+                Check: motor connected? Free to spin? Vbus OK?
+              </div>
+              <button onClick={() => setDetectStatus('idle')} style={{
+                marginTop: 12, padding: '8px 20px', borderRadius: 'var(--radius-sm)',
+                border: '1px solid var(--border)', background: 'transparent',
+                color: 'var(--text-muted)', fontSize: 12, fontWeight: 600, cursor: 'pointer',
+              }}>
+                Try Again
+              </button>
+            </div>
           )}
         </div>
-        {showHeader && (
-          <pre style={{
-            background: 'var(--bg-input)', borderRadius: 'var(--radius-sm)',
-            padding: 12, fontSize: 11, fontFamily: 'var(--font-mono)',
-            color: 'var(--text-secondary)', lineHeight: 1.6,
-            overflow: 'auto', maxHeight: 500,
-            border: '1px solid var(--border-light)',
-          }}>
-            {headerCode}
-          </pre>
-        )}
-      </div>
+      )}
 
-      {/* Motor info reference */}
+      {/* Calculator Panel (existing functionality) */}
+      {paramSource === 'calculator' && (
+        <>
+          <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            {/* Input parameters */}
+            <div style={cardStyle}>
+              <div style={sectionTitle}>Motor Parameters</div>
+              <InputRow label="KV Rating" value={motor.kv} unit="RPM/V"
+                onChange={v => update('kv', v)} tooltip="No-load speed constant"
+                min={100} max={10000} step={10} />
+              <InputRow label="Pole Pairs" value={motor.polePairs} unit="pp"
+                onChange={v => update('polePairs', v)} tooltip="Magnetic pole pairs (poles / 2)"
+                min={1} max={30} step={1} />
+              <InputRow label="Phase Resistance" value={motor.resistance} unit="Ohm"
+                onChange={v => update('resistance', v)} tooltip="Line-to-line / 2 for wye-wound"
+                min={0.001} max={10} step={0.001} />
+              <InputRow label="Phase Inductance" value={motor.inductance} unit="mH"
+                onChange={v => update('inductance', v)} tooltip="Line-to-line / 2 for wye-wound"
+                min={0.001} max={100} step={0.001} />
+
+              <div style={{ ...sectionTitle, marginTop: 16 }}>System Parameters</div>
+              <InputRow label="Bus Voltage" value={motor.vbus} unit="V"
+                onChange={v => update('vbus', v)} tooltip="DC bus voltage (battery)"
+                min={3} max={60} step={0.1} />
+              <InputRow label="PWM Frequency" value={motor.pwmFreq} unit="Hz"
+                onChange={v => update('pwmFreq', v)} tooltip="Switching frequency"
+                min={8000} max={48000} step={1000} />
+              <InputRow label="Max Phase Current" value={motor.maxCurrentA} unit="A"
+                onChange={v => update('maxCurrentA', v)} tooltip="Overcurrent fault threshold"
+                min={1} max={100} step={1} />
+            </div>
+
+            {/* Calculated results */}
+            <div style={cardStyle}>
+              <div style={sectionTitle}>Calculated FOC Parameters</div>
+
+              <ResultRow label="Flux Linkage (lambda_pm)" value={calc.lambdaPm.toFixed(6)} unit="V.s/rad"
+                color="var(--accent-cyan)" highlight />
+              <ResultRow label="Back-EMF Constant (Ke)" value={(calc.ke * 1000).toFixed(3)} unit="mV.s/rad"
+                color="var(--accent-cyan)" />
+              <ResultRow label="Torque Constant (Kt_FOC)" value={calc.ktFoc.toFixed(5)} unit="N.m/A"
+                color="var(--accent-green)" highlight />
+
+              <div style={{ ...sectionTitle, marginTop: 12 }}>Current Controller</div>
+              <ResultRow label="Bandwidth" value={(calc.currentBw / TWO_PI).toFixed(0)} unit="Hz" />
+              <ResultRow label="Kp (Id & Iq)" value={calc.kpCurrent.toFixed(4)} unit="" color="var(--accent-blue)" />
+              <ResultRow label="Ki (Id & Iq)" value={calc.kiCurrent.toFixed(4)} unit="" color="var(--accent-blue)" />
+              <ResultRow label="Voltage Clamp" value={calc.clampVdq.toFixed(2)} unit="V" />
+
+              <div style={{ ...sectionTitle, marginTop: 12 }}>Speed / Limits</div>
+              <ResultRow label="Max Elec Speed" value={calc.maxOmegaElec.toFixed(0)} unit="rad/s" />
+              <ResultRow label="Max Mech RPM" value={calc.maxRpmMech.toFixed(0)} unit="RPM" color="var(--accent-yellow)" highlight />
+              <ResultRow label="Handoff Speed" value={calc.handoffRadS.toFixed(0)} unit="rad/s" />
+              <ResultRow label="Max OL Speed (85%)" value={calc.maxOlRadS.toFixed(0)} unit="rad/s" />
+
+              <div style={{ ...sectionTitle, marginTop: 12 }}>Startup</div>
+              <ResultRow label="Align Iq" value={calc.alignIq.toFixed(1)} unit="A" />
+              <ResultRow label="Ramp Iq" value={calc.rampIq.toFixed(1)} unit="A" />
+              <ResultRow label="Align Torque" value={(calc.ktFoc * calc.alignIq * 1000).toFixed(1)} unit="mN.m" />
+
+              <div style={{ ...sectionTitle, marginTop: 12 }}>PLL Estimator</div>
+              <ResultRow label="PLL Kp" value={calc.pllKp.toFixed(1)} unit="" />
+              <ResultRow label="PLL Ki" value={calc.pllKi.toFixed(1)} unit="" />
+            </div>
+          </div>
+
+          {/* Generated header */}
+          <div style={cardStyle}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 8 }}>
+              <button onClick={() => setShowHeader(!showHeader)} style={{
+                display: 'flex', alignItems: 'center', gap: 6,
+                background: 'none', border: 'none', color: 'var(--text-primary)',
+                fontSize: 12, fontWeight: 600, padding: 0, cursor: 'pointer',
+              }}>
+                <svg width="12" height="12" viewBox="0 0 12 12" fill="none"
+                  style={{ transform: showHeader ? 'rotate(90deg)' : 'rotate(0deg)', transition: 'transform 0.2s' }}>
+                  <path d="M4 2L8 6L4 10" stroke="currentColor" strokeWidth="2" strokeLinecap="round" />
+                </svg>
+                <span style={{ textTransform: 'uppercase', letterSpacing: '0.5px', color: 'var(--text-muted)' }}>
+                  Generated C Header (garuda_foc_params.h)
+                </span>
+              </button>
+              {showHeader && (
+                <button onClick={copyHeader} style={{
+                  padding: '4px 12px', borderRadius: 'var(--radius-sm)',
+                  border: '1px solid var(--accent-blue)', background: 'var(--accent-blue-dim)',
+                  color: 'var(--accent-blue)', fontSize: 11, fontWeight: 600, cursor: 'pointer',
+                }}>
+                  Copy to Clipboard
+                </button>
+              )}
+            </div>
+            {showHeader && (
+              <pre style={{
+                background: 'var(--bg-input)', borderRadius: 'var(--radius-sm)',
+                padding: 12, fontSize: 11, fontFamily: 'var(--font-mono)',
+                color: 'var(--text-secondary)', lineHeight: 1.6,
+                overflow: 'auto', maxHeight: 500,
+                border: '1px solid var(--border-light)',
+              }}>
+                {headerCode}
+              </pre>
+            )}
+          </div>
+        </>
+      )}
+
+      {/* Quick Reference (show for both modes) */}
       <div style={cardStyle}>
         <div style={sectionTitle}>Quick Reference</div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: 12, fontSize: 11 }}>
@@ -366,11 +762,12 @@ export function MotorTuningPanel() {
             </div>
           </div>
           <div>
-            <div style={{ color: 'var(--text-muted)', marginBottom: 4 }}>PI Tuning</div>
+            <div style={{ color: 'var(--text-muted)', marginBottom: 4 }}>Auto-Detect Phases</div>
             <div style={{ color: 'var(--text-secondary)' }}>
-              BW = f_pwm / 10 (conservative)<br/>
-              Kp = L x omega_bw<br/>
-              Ki = R x omega_bw
+              1. Rs: DC current injection (~1.2s)<br/>
+              2. Ls: Voltage step response (~3s)<br/>
+              3. Re-align: Lock rotor + d→q transition (~0.3s)<br/>
+              4. Lambda: Spin + measure BEMF (~4.5s)
             </div>
           </div>
         </div>

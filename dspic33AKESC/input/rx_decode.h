@@ -48,6 +48,12 @@ void RX_Init(void);
  */
 void RX_Service(void);
 
+/**
+ * @brief Reset lock FSM state for test injection.
+ * Clears lockCount, lastSeqNum, cached throttle, sets LOCKING.
+ */
+void RX_ResetLockState(void);
+
 #endif /* FEATURE_RX_PWM || FEATURE_RX_DSHOT || FEATURE_RX_AUTO */
 
 #ifdef __cplusplus

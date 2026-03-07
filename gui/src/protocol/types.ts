@@ -72,11 +72,12 @@ export interface ParamListPage {
   entries: ParamDescriptor[];
 }
 
-export const ESC_STATES = ['IDLE', 'ARMED', 'ALIGN', 'OL_RAMP', 'MORPH', 'CLOSED_LOOP', 'BRAKING', 'RECOVERY', 'FAULT'] as const;
+export const ESC_STATES = ['IDLE', 'ARMED', 'DETECT', 'ALIGN', 'OL_RAMP', 'MORPH', 'CLOSED_LOOP', 'BRAKING', 'RECOVERY', 'FAULT'] as const;
 export const FAULT_CODES = ['NONE', 'OVERVOLTAGE', 'UNDERVOLTAGE', 'OVERCURRENT', 'BOARD_PCI', 'STALL', 'DESYNC', 'STARTUP_TIMEOUT', 'MORPH_TIMEOUT', 'RX_LOSS', 'FOC_INTERNAL'] as const;
 export const FOC_SUB_STATES = ['IDLE', 'ARMED', 'ALIGN', 'I/F RAMP', 'CLOSED_LOOP'] as const;
+export const DETECT_PHASE_NAMES = ['Idle', 'Measuring Rs', 'Measuring Ls', 'Re-Aligning', 'Measuring Lambda', 'Auto-Tuning', 'Complete', 'Failed'] as const;
 
-export const PROFILE_NAMES = ['Hurst DMB0224C10002', 'A2212 1400KV', '5010 750KV', '5055 580KV', 'Custom'] as const;
+export const PROFILE_NAMES = ['Hurst Long (300W)', 'A2212 1400KV', '5010 750KV', '5055 580KV', 'Custom'] as const;
 export const PROFILE_COUNT = 4; /* built-in profiles (excl. Custom) */
 
 export const PARAM_NAMES: Record<number, string> = {
