@@ -99,7 +99,7 @@ RX_TIMEOUT_MS      = 200
 RX_PWM_DEADBAND_US = 25
 RX_DSHOT_CMD_MAX   = 47
 
-GSP_SNAPSHOT_SIZE = 106  # FOC-aware snapshot
+GSP_SNAPSHOT_SIZE = 114  # FOC-aware snapshot (with Vd/Vq)
 
 
 # ── CRC-16-CCITT ────────────────────────────────────────────────────────
@@ -689,16 +689,25 @@ def get_full_snapshot(ser: serial.Serial) -> Optional[dict]:
         step_period, = struct.unpack_from("<H", p, 20)
         result["stepPeriod"] = step_period
     # FOC fields (offset 68)
-    if len(p) >= 106:
+    if len(p) >= 114:
         foc_id, foc_iq, foc_theta, foc_omega, foc_vbus = \
             struct.unpack_from("<fffff", p, 68)
+        foc_ia, foc_ib, foc_theta_obs, foc_vd, foc_vq = \
+            struct.unpack_from("<fffff", p, 88)
         result["focId"] = foc_id
         result["focIq"] = foc_iq
         result["focTheta"] = foc_theta
         result["focOmega"] = foc_omega
         result["focVbus"] = foc_vbus
-        foc_sub, = struct.unpack_from("<B", p, 100)
+        result["focIa"] = foc_ia
+        result["focIb"] = foc_ib
+        result["focThetaObs"] = foc_theta_obs
+        result["focVd"] = foc_vd
+        result["focVq"] = foc_vq
+        foc_sub, = struct.unpack_from("<B", p, 108)
         result["focSubState"] = foc_sub
+        result["focOffsetIa"], result["focOffsetIb"] = \
+            struct.unpack_from("<HH", p, 110)
     return result
 
 

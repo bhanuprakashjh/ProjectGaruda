@@ -510,6 +510,7 @@ typedef enum
     FAULT_MORPH_TIMEOUT,    /* Morph did not achieve ZC lock */
     FAULT_RX_LOSS,          /* RX signal lost (PWM/DShot/AUTO) — requires CLEAR_FAULT */
     FAULT_FOC_INTERNAL,     /* FOC internal fault (estimator divergence, overcurrent) */
+    FAULT_FOC_BUSLOSS,      /* HW OC tripped: voltage applied but no current flows */
     FAULT_TRAP_BUS,         /* CPU bus error trap */
     FAULT_TRAP_ILLEGAL,     /* Illegal instruction trap */
     FAULT_TRAP_ADDRESS,     /* CPU address error trap */
@@ -626,6 +627,8 @@ typedef struct
     float       focIa;          /* Phase A current (A, for debug) */
     float       focIb;          /* Phase B current (A, for debug) */
     float       focThetaObs;    /* Observer angle (rad) */
+    float       focVd;          /* D-axis voltage command (V) */
+    float       focVq;          /* Q-axis voltage command (V) */
     uint8_t     focSubState;    /* 0=idle,1=armed,2=align,3=if,4=cl */
     uint16_t    focOffsetIa;    /* Calibrated ADC offset Ia */
     uint16_t    focOffsetIb;    /* Calibrated ADC offset Ib */

@@ -36,11 +36,17 @@ const CHANNELS: ScopeChannel[] = [
   { key: 'focRpm', label: 'Speed (mech)', unit: 'RPM', color: '#60a5fa', group: 'FOC Angle',
     extract: (s, i) => s.focOmega !== 0 ? Math.round(Math.abs(s.focOmega) * 60 / (2 * Math.PI * i.polePairs)) : 0, focOnly: true },
 
+  // FOC voltage
+  { key: 'focVq', label: 'Vq (torque)', unit: 'V', color: '#fb923c', group: 'FOC Voltage',
+    extract: (s) => +s.focVq.toFixed(3), focOnly: true },
+  { key: 'focVd', label: 'Vd (field)', unit: 'V', color: '#a3e635', group: 'FOC Voltage',
+    extract: (s) => +s.focVd.toFixed(3), focOnly: true },
+
   // FOC power
   { key: 'focVbus', label: 'Vbus (float)', unit: 'V', color: '#22c55e', group: 'FOC Power',
     extract: (s) => +s.focVbus.toFixed(2), focOnly: true },
   { key: 'focPower', label: 'Elec Power', unit: 'W', color: '#f97316', group: 'FOC Power',
-    extract: (s) => +(1.5 * s.focVbus * s.focIqMeas).toFixed(1), focOnly: true },
+    extract: (s) => +(s.focVq * s.focIqMeas + s.focVd * s.focIdMeas).toFixed(1), focOnly: true },
 
   // Motor (6-step)
   { key: 'eRPM', label: 'eRPM', unit: 'eRPM', color: '#3b82f6', group: 'Motor',
@@ -101,6 +107,7 @@ const PRESETS: Record<string, { label: string; channels: string[]; focOnly?: boo
   focDebug: { label: 'FOC Debug', channels: ['focIq', 'focId', 'focOmega', 'duty'], focOnly: true },
   focCurrent: { label: 'FOC Currents', channels: ['focIq', 'focId', 'focIa', 'focIb'], focOnly: true },
   focAngle: { label: 'FOC Angles', channels: ['focTheta', 'focThetaObs', 'focOmega'], focOnly: true },
+  focVoltage: { label: 'FOC Voltage', channels: ['focVq', 'focVd', 'focVbus'], focOnly: true },
   focPower: { label: 'FOC Power', channels: ['focVbus', 'focPower', 'focIq'], focOnly: true },
   sixStep: { label: '6-Step', channels: ['eRPM', 'duty', 'bemf', 'zcThreshold'], sixStepOnly: true },
   power: { label: 'Power', channels: ['vbus', 'ibus', 'ibusMax', 'duty'] },

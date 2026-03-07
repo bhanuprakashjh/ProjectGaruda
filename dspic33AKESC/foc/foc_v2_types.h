@@ -160,6 +160,12 @@ typedef struct {
     /* Overcurrent debounce */
     uint16_t oc_debounce_ctr;
 
+    /* Bus-loss detection (HW OC tripped, no current despite voltage) */
+    uint16_t busloss_ctr;
+
+    /* Fault code (set by FOC when entering FOC_FAULT) */
+    uint16_t fault_code;
+
     /* Stall detection */
     uint32_t stall_ctr;
 

@@ -129,7 +129,7 @@ export function GaugePanel() {
   const rawFocRpm = focMode && snapshot.focOmega !== 0
     ? Math.abs(snapshot.focOmega) * 60 / (2 * Math.PI * polePairs) : 0;
   const rawFocSpeedRads = focMode ? Math.abs(snapshot.focOmega) : 0;
-  const rawFocPowerW = focMode ? 1.5 * snapshot.focVbus * snapshot.focIqMeas * (snapshot.focOmega > 0 ? 1 : -1) : 0;
+  const rawFocPowerW = focMode ? 1.5 * (snapshot.focVq * snapshot.focIqMeas + snapshot.focVd * snapshot.focIdMeas) : 0;
   const rawERPM = snapshot.stepPeriod > 0 ? 240000 / snapshot.stepPeriod : 0;
   const rawMechRPM = polePairs > 0 ? rawERPM / polePairs : rawERPM;
   const s = smoothed.current;

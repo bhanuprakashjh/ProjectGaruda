@@ -18,6 +18,7 @@ export function decodeInfo(data: Uint8Array): GspInfo {
 
 export function decodeSnapshot(data: Uint8Array): GspSnapshot {
   const v = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  const hasFocVdVq = data.byteLength >= 114;
   const hasFoc = data.byteLength >= 106;
   return {
     state: v.getUint8(0),
@@ -61,9 +62,11 @@ export function decodeSnapshot(data: Uint8Array): GspSnapshot {
     focIa: hasFoc ? v.getFloat32(88, true) : 0,
     focIb: hasFoc ? v.getFloat32(92, true) : 0,
     focThetaObs: hasFoc ? v.getFloat32(96, true) : 0,
-    focSubState: hasFoc ? v.getUint8(100) : 0,
-    focOffsetIa: hasFoc ? v.getUint16(102, true) : 0,
-    focOffsetIb: hasFoc ? v.getUint16(104, true) : 0,
+    focVd: hasFocVdVq ? v.getFloat32(100, true) : 0,
+    focVq: hasFocVdVq ? v.getFloat32(104, true) : 0,
+    focSubState: hasFocVdVq ? v.getUint8(108) : (hasFoc ? v.getUint8(100) : 0),
+    focOffsetIa: hasFocVdVq ? v.getUint16(110, true) : (hasFoc ? v.getUint16(102, true) : 0),
+    focOffsetIb: hasFocVdVq ? v.getUint16(112, true) : (hasFoc ? v.getUint16(104, true) : 0),
   };
 }
 

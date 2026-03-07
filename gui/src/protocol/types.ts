@@ -53,6 +53,8 @@ export interface GspSnapshot {
   focIa: number;
   focIb: number;
   focThetaObs: number;
+  focVd: number;
+  focVq: number;
   focSubState: number;
   focOffsetIa: number;
   focOffsetIb: number;
@@ -73,7 +75,7 @@ export interface ParamListPage {
 }
 
 export const ESC_STATES = ['IDLE', 'ARMED', 'DETECT', 'ALIGN', 'OL_RAMP', 'MORPH', 'CLOSED_LOOP', 'BRAKING', 'RECOVERY', 'FAULT'] as const;
-export const FAULT_CODES = ['NONE', 'OVERVOLTAGE', 'UNDERVOLTAGE', 'OVERCURRENT', 'BOARD_PCI', 'STALL', 'DESYNC', 'STARTUP_TIMEOUT', 'MORPH_TIMEOUT', 'RX_LOSS', 'FOC_INTERNAL'] as const;
+export const FAULT_CODES = ['NONE', 'OVERVOLTAGE', 'UNDERVOLTAGE', 'OVERCURRENT', 'BOARD_PCI', 'STALL', 'DESYNC', 'STARTUP_TIMEOUT', 'MORPH_TIMEOUT', 'RX_LOSS', 'FOC_INTERNAL', 'FOC_BUSLOSS', 'TRAP_BUS', 'TRAP_ILLEGAL', 'TRAP_ADDRESS', 'TRAP_STACK', 'TRAP_MATH', 'TRAP_GENERAL', 'TRAP_DEFAULT'] as const;
 export const FOC_SUB_STATES = ['IDLE', 'ARMED', 'ALIGN', 'I/F RAMP', 'CLOSED_LOOP'] as const;
 export const DETECT_PHASE_NAMES = ['Idle', 'Measuring Rs', 'Measuring Ls', 'Re-Aligning', 'Measuring Lambda', 'Auto-Tuning', 'Complete', 'Failed'] as const;
 

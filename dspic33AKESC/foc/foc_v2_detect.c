@@ -55,9 +55,9 @@
 #define LAMBDA_DQ_TICKS     2880U   /* 120ms: smooth d→q while spinning */
 
 /* Lambda timing */
-#define LAMBDA_RAMP_TICKS   36000U  /* 1.5s: I/f spin-up */
-#define LAMBDA_SETTLE_TICKS 24000U  /* 1s: speed settle */
-#define LAMBDA_SAMPLE_TICKS 24000U  /* 1s: accumulate Vq/Iq/ω */
+#define LAMBDA_RAMP_TICKS   60000U  /* 2.5s: I/f spin-up (generous for low-speed+prop) */
+#define LAMBDA_SETTLE_TICKS 12000U  /* 0.5s: speed settle */
+#define LAMBDA_SAMPLE_TICKS 12000U  /* 0.5s: accumulate Vq/Iq/ω */
 
 /* Auto-tune */
 #define TUNE_CURRENT_BW_HZ  1000.0f
@@ -101,6 +101,9 @@ static float detect_lambda_iq;    /* Lambda spin Iq (A) */
 static float detect_lambda_speed; /* Lambda test speed (rad/s elec) */
 static float detect_lambda_ramp;  /* Lambda ramp rate (rad/s²) */
 static float detect_profile_oc;   /* Profile OC limit — floor for post-detect */
+static float detect_profile_rs;   /* Profile Rs — used for lambda subtraction
+                                   * instead of measured Rs, because deadtime
+                                   * distortion inflates measured Rs on low-R motors */
 
 void foc_detect_start(FOC_State_t *foc)
 {
@@ -129,42 +132,63 @@ void foc_detect_start(FOC_State_t *foc)
     float profile_ke = foc->Ke;
 
     /* Rs test current: target ≥ 0.5V across winding for measurability.
-     * I = 0.5V / Rs, clamped [0.5A, 5A].  At 65mΩ: 7.7A → clamped 5A.
-     * At 500mΩ: 1A.  At 2Ω: 0.25A → clamped 0.5A. */
+     * I = 0.5V / Rs, clamped [0.5A, 3A].  At 65mΩ: 7.7A → clamped 3A.
+     * At 500mΩ: 1A.  At 2Ω: 0.25A → clamped 0.5A.
+     * Cap at 3A (not 5A) to avoid U25B hardware OC trip on MCLV board
+     * (no LEB on the comparator — switching transients at high current
+     * cause latching fault even though RMS current is well within spec). */
     if (profile_rs > 0.01f) {
         detect_test_current = 0.5f / profile_rs;
     } else {
-        detect_test_current = 3.0f;  /* Unknown motor — moderate default */
+        detect_test_current = 2.0f;  /* Unknown motor — conservative default */
     }
-    detect_test_current = foc_clampf(detect_test_current, 0.5f, 5.0f);
+    detect_test_current = foc_clampf(detect_test_current, 0.5f, 3.0f);
 
     /* Ls pulse peak: same as Rs test current (symmetric) */
     detect_ls_peak_a = detect_test_current;
 
-    /* Lambda spin Iq: 60% of Rs test current (less stress during spin).
+    /* Lambda spin Iq: use full test current for maximum synchronization
+     * torque.  Low-Ke motors (A2212: 0.000563 V·s/rad) produce very
+     * little torque per amp (T = Ke×pp×Iq), so we need every amp
+     * available to prevent desync during I/f spin.
      * Clamped [0.5A, 3A]. */
-    detect_lambda_iq = detect_test_current * 0.6f;
+    detect_lambda_iq = detect_test_current;
     detect_lambda_iq = foc_clampf(detect_lambda_iq, 0.5f, 3.0f);
 
-    /* Lambda test speed: need BEMF = Ke*ω to be ≥ 10× the Rs*Iq drop
-     * for accurate measurement.  ω = 10 * Rs * Iq / Ke.
-     * Clamped [150, 3000] rad/s.
-     *   Hurst: 10 * 0.5 * 0.5 / 0.008 = 312 rad/s
-     *   A2212: 10 * 0.065 * 3 / 0.000563 = 3462 → clamped 3000 */
+    /* Lambda test speed: need BEMF ≫ deadtime distortion for accuracy.
+     * Low-Rs motors have large deadtime error (~0.3V), so we need enough
+     * BEMF to dominate.  But speed is limited by I/f sync torque —
+     * high-KV motors with props can't follow fast forced commutation.
+     *
+     * Compromise: cap at 500 rad/s (682 mech RPM for 7PP).
+     * At this speed, even with prop, the drag is negligible and 3A Iq
+     * provides enough sync torque (0.012 N·m >> prop drag).
+     *
+     * BEMF accuracy depends on using profile_rs (not measured) for the
+     * lambda formula, so the 10×Rs/Ke formula is less critical.
+     *   Hurst: min(676, 500) = 500 rad/s → BEMF 3.71V (excellent)
+     *   A2212: min(3462, 500) = 500 rad/s → BEMF 0.28V (OK with profile Rs) */
     if (profile_ke > KE_MIN) {
         detect_lambda_speed = 10.0f * profile_rs * detect_lambda_iq / profile_ke;
     } else {
-        detect_lambda_speed = 500.0f;  /* Unknown motor — moderate default */
+        detect_lambda_speed = 300.0f;
     }
-    detect_lambda_speed = foc_clampf(detect_lambda_speed, 150.0f, 3000.0f);
+    detect_lambda_speed = foc_clampf(detect_lambda_speed, 150.0f, 500.0f);
 
-    /* Lambda ramp rate: reach test speed in ~1.5s.
-     * rate = speed / 1.5, clamped [100, 2000] */
-    detect_lambda_ramp = detect_lambda_speed / 1.5f;
-    detect_lambda_ramp = foc_clampf(detect_lambda_ramp, 100.0f, 2000.0f);
+    /* Lambda ramp rate: reach test speed in ~2s (gentle for prop loads).
+     * rate = speed / 2.0, clamped [50, 500] */
+    detect_lambda_ramp = detect_lambda_speed / 2.0f;
+    detect_lambda_ramp = foc_clampf(detect_lambda_ramp, 50.0f, 500.0f);
 
     /* Save profile OC limit — post-detect OC must never be lower */
     detect_profile_oc = foc->fault_oc_a;
+
+    /* Save profile Rs for lambda subtraction.  On low-Rs motors (A2212:
+     * 65mΩ), the 500ns deadtime creates ~0.29V of distortion that inflates
+     * measured Rs by ~50-80mΩ.  Using the deadtime-corrupted Rs to subtract
+     * from Vq eats the BEMF signal.  Using the known profile Rs gives a
+     * much closer lambda estimate. */
+    detect_profile_rs = profile_rs;
 
     /* Init PI for detect — use profile-aware gains.
      * Vclamp = Rs * test_current * 3 (headroom for transients).
@@ -531,7 +555,11 @@ bool foc_detect_fast_tick(FOC_State_t *foc,
                 float avg_vq = foc->detect_v_accum / (float)foc->detect_samples;
                 float avg_iq = foc->detect_i_accum / (float)foc->detect_samples;
 
-                foc->detect_lambda = (avg_vq - foc->detect_Rs * avg_iq)
+                /* Use profile Rs (not measured) for subtraction.
+                 * Measured Rs includes deadtime distortion (~50-80mΩ
+                 * extra on low-R motors), which eats the BEMF signal
+                 * and drives lambda toward zero. */
+                foc->detect_lambda = (avg_vq - detect_profile_rs * avg_iq)
                                    / foc->omega_if;
                 foc->detect_lambda = foc_clampf(foc->detect_lambda, KE_MIN, KE_MAX);
             } else {
@@ -603,10 +631,8 @@ void foc_detect_apply(FOC_State_t *foc)
     foc->ramp_iq       = detect_lambda_iq;
 
     /* Overcurrent limit: max of (4× detect current, profile OC limit).
-     * Never reduce below the profile's known-safe OC threshold — that
-     * was tuned for normal operation on this motor class.
-     * For A2212 at 65mΩ: 4×5A=20A vs profile 25A → use 25A.
-     * For Hurst at 500mΩ: 4×1A=4A vs profile 4A → use 4A. */
+     * Never reduce below the profile's known-safe OC threshold.
+     * A2212: max(4×3=12, 25) = 25A.  Hurst: max(4×0.94=3.76, 10) = 10A. */
     float detect_oc = detect_test_current * 4.0f;
     if (detect_oc < detect_lambda_iq * 4.0f)
         detect_oc = detect_lambda_iq * 4.0f;

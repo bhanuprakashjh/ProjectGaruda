@@ -161,21 +161,20 @@
  * OL ramp: advance θ at pot-controlled rate, PI maintains Id=0 + Iq=RAMP_IQ.
  * CL handoff: PLL tracks OL within tolerance → switch to PLL angle + speed PI. */
 /** Alignment Id (A) — locks rotor at θ=0.
- *  A2212 Kt_FOC = 0.00591 N·m/A.  2A = 11.8 mN·m (enough for cogging).
- *  Reduced from 5A: lower current = less U25B transient during startup. */
-#define STARTUP_ALIGN_IQ_A      2.0f
+ *  A2212 Kt_FOC = 0.00591 N·m/A.  2.5A = 14.8 mN·m (overcomes cogging). */
+#define STARTUP_ALIGN_IQ_A      2.5f
 /** OL running Iq (A) — torque during forced-angle ramp.
- *  3A × Kt = 17.7 mN·m — enough for no-load + light prop.
- *  Reduced from 6A: U25B trips at high I/f current. */
-#define STARTUP_RAMP_IQ_A       3.0f
+ *  4A × Kt = 23.6 mN·m — enough for 8x4.5 prop.
+ *  5A trips U25B OC on MCLV board (no LEB on comparator). */
+#define STARTUP_RAMP_IQ_A       4.0f
 /** Iq ramp ticks (24kHz).  2400 = 100ms — fast d→q rotation. */
 #define STARTUP_IQ_RAMP_TICKS   2400U
-/** Alignment dwell (ticks).  4800 = 200ms — A2212 rotor is light. */
-#define STARTUP_ALIGN_TICKS     4800U
-/** 2000 rad/s^2 — reaches handoff (1000) in 0.5s.
- *  Fast through the I/f region to minimize time at high fixed current.
- *  A2212 rotor + prop inertia is low — 2000 is safe. */
-#define STARTUP_RAMP_RATE_RPS2  2000.0f
+/** Alignment dwell (ticks).  7200 = 300ms — allow prop inertia to settle. */
+#define STARTUP_ALIGN_TICKS     7200U
+/** 500 rad/s^2 — reaches handoff (1000) in 2s.
+ *  Slow enough for 8x4.5 prop inertia. Adaptive ramp
+ *  will further slow (or back off) if motor can't keep up. */
+#define STARTUP_RAMP_RATE_RPS2  500.0f
 /** BEMF at 1000 = 0.000563*1000 = 0.56V (4.7% of Vbus).
  *  A2212 has excellent Ls/λ ratio → observer works at low BEMF. */
 #define STARTUP_HANDOFF_RAD_S   1000.0f

@@ -1252,7 +1252,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
         if (s_foc_v2.mode == FOC_FAULT) {
             HAL_MC1PWMDisableOutputs();
             if (garudaData.faultCode == FAULT_NONE)
-                garudaData.faultCode = FAULT_FOC_INTERNAL;
+                garudaData.faultCode = s_foc_v2.fault_code ? s_foc_v2.fault_code : FAULT_FOC_INTERNAL;
             garudaData.runCommandActive = false;
             LED2 = 0;
         }
@@ -1269,6 +1269,8 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
         garudaData.focIa       = v2_counts_to_amps(raw_ia, (uint16_t)s_foc_v2.ia_offset);
         garudaData.focIb       = v2_counts_to_amps(raw_ib, (uint16_t)s_foc_v2.ib_offset);
         garudaData.focThetaObs = s_foc_v2.theta_obs;
+        garudaData.focVd       = s_foc_v2.vd;
+        garudaData.focVq       = s_foc_v2.vq;
         garudaData.focSubState = (s_foc_v2.mode == FOC_MOTOR_DETECT)
                                    ? (uint8_t)s_foc_v2.detect_state
                                    : s_foc_v2.sub_state;

@@ -15,12 +15,14 @@
  * Component: FOC V2
  */
 
+#include <xc.h>
 #include "foc_v2_control.h"
 #include "foc_v2_math.h"
 #include "foc_v2_pi.h"
 #include "foc_v2_observer.h"
 #include "foc_v2_detect.h"
 #include "../garuda_foc_params.h"
+#include "../garuda_types.h"
 
 /* ── Constants from garuda_foc_params.h ──────────────────────── */
 #define DT_FAST          FOC_TS_FAST_S
@@ -37,13 +39,17 @@
 /* Overcurrent debounce (2ms at 24kHz) */
 #define OC_DEBOUNCE_TICKS 48U
 
-/* Handoff speed tolerance: PLL ω within 20% of forced ω.
- * Speed-based handoff is immune to load angle (prop drag causes
- * 20-30° rotor lag in I/f mode — angle comparison always fails). */
-#define HANDOFF_SPEED_TOL  0.20f
+/* Board fault pin: RB11 = U25A(OV)+U25B(OC) → U27 AND → active-low.
+ * In FOC mode, FPCI is LEB-gated off (SVM false-trips), so we poll
+ * the pin directly in the fast loop. Debounce 2ms (48 ticks). */
+#define BOARD_FAULT_PIN      PORTBbits.RB11
+#define BOARD_FAULT_ACTIVE   0                  /* Active-low */
+#define BOARD_FAULT_DEBOUNCE 48U               /* 2ms at 24kHz */
 
-/* Lock count for handoff (10ms at 24kHz — reduced for faster CL entry) */
-#define HANDOFF_LOCK_TICKS 240U
+/* Time-based handoff: dwell at handoff speed before CL entry.
+ * 12000 ticks = 500ms at 24kHz — gives observer time to converge.
+ * PLL omega is too noisy for a speed-based gate at low BEMF. */
+#define HANDOFF_LOCK_TICKS 12000U
 
 /* Re-arm: throttle=0 for 1s in slow loop ticks */
 #define REARM_TIMEOUT_TICKS 1000U
@@ -74,6 +80,7 @@ static void reset_startup(FOC_State_t *foc)
     foc->vd          = 0.0f;
     foc->vq          = 0.0f;
     foc->oc_debounce_ctr = 0;
+    foc->busloss_ctr = 0;
     foc->stall_ctr   = 0;
     foc->sub_state   = 0;
 
@@ -192,11 +199,16 @@ void foc_v2_fast_tick(FOC_State_t *foc,
                 foc->cal_done  = true;
             }
         }
+        foc->sub_state = (foc->mode == FOC_ARMED) ? 1 : 0;
+        foc->id_meas = 0.0f;
+        foc->iq_meas = 0.0f;
+        foc->omega   = 0.0f;
         goto slow_loop;
     }
 
     /* ── FAULT: outputs disabled ─────────────────────────────── */
     if (foc->mode == FOC_FAULT) {
+        foc->sub_state = 0;
         goto slow_loop;
     }
 
@@ -305,13 +317,24 @@ void foc_v2_fast_tick(FOC_State_t *foc,
 
         case FOC_IF_RAMP: {
             /* I/f open-loop: forced angle + PI current control.
-             * Ramp speed is POT-INDEPENDENT — always accelerate to handoff
-             * speed as fast as possible, then CL speed PI takes over.
-             * This minimizes time in I/f (high fixed current) and avoids
-             * humming at pot=0 during ramp. */
+             * Simple linear speed ramp with time-based handoff.
+             * No PLL/observer feedback — at low speed the BEMF is too
+             * weak for reliable observer tracking (A2212 BEMF = 0.56V
+             * at 1000 rad/s, below ADC noise floor at lower speeds).
+             * High torque (5A) and slow ramp (500 rad/s²) ensure the
+             * rotor follows the forced angle through prop load. */
             foc->ramp_ctr++;
 
-            /* Always ramp toward handoff speed at max rate */
+            /* Smooth d→q current transition */
+            if (foc->ramp_ctr < foc->iq_ramp_ticks) {
+                float frac = (float)foc->ramp_ctr / (float)foc->iq_ramp_ticks;
+                iq_ref = foc->ramp_iq * frac;
+                id_ref = foc->align_iq * (1.0f - frac);
+            } else {
+                iq_ref = foc->ramp_iq;
+            }
+
+            /* Linear speed ramp — no feedback gating */
             float max_delta = foc->ramp_rate * DT_FAST;
             foc->omega_if += max_delta;
             if (foc->omega_if > foc->handoff_rad_s * 1.1f)
@@ -322,63 +345,41 @@ void foc_v2_fast_tick(FOC_State_t *foc,
             foc->theta_if = foc_angle_wrap(foc->theta_if);
             theta_drive = foc->theta_if;
 
-            /* Let observer free-run during I/f ramp.  It was seeded at
-             * the end of ALIGN (line 304) and now tracks independently.
-             * The handoff check below compares the observer's independent
-             * estimate against the forced angle — only fires when the
-             * observer has genuinely converged.  Previous code anchored
-             * the observer here, making the handoff check trivially true
-             * and causing immediate angle drift at CL entry. */
-
-            /* Smooth d→q current transition during I/f ramp.
-             * At ALIGN end: Id=align_iq, Iq=0.  Jumping to Id=0, Iq=X
-             * in one tick creates a 90° torque impulse → loud thump.
-             * Instead, linearly fade Id→0 while ramping Iq→ramp_iq
-             * over iq_ramp_ticks, giving a smooth current vector rotation. */
-            if (foc->ramp_ctr < foc->iq_ramp_ticks) {
-                float frac = (float)foc->ramp_ctr / (float)foc->iq_ramp_ticks;
-                iq_ref = foc->ramp_iq * frac;
-                id_ref = foc->align_iq * (1.0f - frac);
-            } else {
-                iq_ref = foc->ramp_iq;
-            }
-
-            /* Handoff: Microchip AN1292 approach — transition when forced
-             * speed reaches handoff threshold and observer sees rotation.
-             * Frame transform handles any angle difference at transition.
-             * Previous complex speed+angle matching failed because Rs
-             * mismatch (model vs actual) causes continuous observer drift. */
+            /* Handoff: time-based.  Once omega_if reaches handoff speed,
+             * wait 500ms (12000 ticks) for observer to converge, then
+             * switch to CL.  PLL omega is too noisy at low speed (A2212
+             * BEMF = 0.56V at 1000 rad/s, observer jitter ±0.5 rad →
+             * PLL speed jitter ±300 rad/s) to use as a gate.
+             * If motor was actually desynced, CL stall detection catches
+             * it within ~500ms and faults — clean retry path. */
             if (foc->omega_if >= foc->handoff_rad_s) {
-                /* Simple check: PLL sees positive rotation above 50% of
-                 * handoff speed.  This confirms the observer is alive and
-                 * tracking in the correct direction.  The frame transform
-                 * and speed PI handle any residual mismatch. */
-                float pll_spd = foc->pll.omega_est;
-                bool obs_tracking = (pll_spd > foc->handoff_rad_s * 0.5f);
-
-                if (obs_tracking) {
-                    if (++foc->lock_ctr >= HANDOFF_LOCK_TICKS) {
-                        /* Bumpless transfer: transform PI integrator state
-                         * from OL frame (theta_if) to CL frame (obs.theta_est).
-                         * Rotates voltage vector to new d-q frame so PI
-                         * integrators don't see a discontinuity. */
-                        float delta_th = foc->theta_if - foc->obs.theta_est;
-                        float cos_d = cosf(delta_th);
-                        float sin_d = sinf(delta_th);
-                        float vd_new =  foc->vd * cos_d + foc->vq * sin_d;
-                        float vq_new = -foc->vd * sin_d + foc->vq * cos_d;
-                        foc_pi_preload(&foc->pid_d, vd_new);
-                        foc_pi_preload(&foc->pid_q, vq_new);
-
-                        /* Speed PI preload with measured Iq */
-                        float iq_actual = foc->iq_meas > 0.0f ? foc->iq_meas : 0.0f;
-                        foc_pi_preload(&foc->pid_spd, iq_actual);
-
-                        foc->cl_active = true;
-                        foc->mode = FOC_CLOSED_LOOP;
+                if (++foc->lock_ctr >= HANDOFF_LOCK_TICKS) {
+                    /* Sanity: PLL must show forward rotation.  If observer
+                     * is completely lost (ω < 0), skip CL — keep running
+                     * I/f and retry next tick. */
+                    if (foc->pll.omega_est <= 0.0f) {
+                        foc->lock_ctr = HANDOFF_LOCK_TICKS - 1U;
+                        break;
                     }
-                } else {
-                    foc->lock_ctr = 0;
+
+                    /* Bumpless transfer: transform PI integrator state
+                     * from OL frame (theta_if) to CL frame (obs.theta_est).
+                     * Rotates voltage vector to new d-q frame so PI
+                     * integrators don't see a discontinuity. */
+                    float delta_th = foc->theta_if - foc->obs.theta_est;
+                    float cos_d = cosf(delta_th);
+                    float sin_d = sinf(delta_th);
+                    float vd_new =  foc->vd * cos_d + foc->vq * sin_d;
+                    float vq_new = -foc->vd * sin_d + foc->vq * cos_d;
+                    foc_pi_preload(&foc->pid_d, vd_new);
+                    foc_pi_preload(&foc->pid_q, vq_new);
+
+                    /* Speed PI preload with measured Iq */
+                    float iq_actual = foc->iq_meas > 0.0f ? foc->iq_meas : 0.0f;
+                    foc_pi_preload(&foc->pid_spd, iq_actual);
+
+                    foc->cl_active = true;
+                    foc->mode = FOC_CLOSED_LOOP;
                 }
             }
             break;
@@ -468,20 +469,34 @@ void foc_v2_fast_tick(FOC_State_t *foc,
                          (foc->mode == FOC_IF_RAMP)      ? 3 :
                          (foc->mode == FOC_CLOSED_LOOP)  ? 4 : 0;
 
-        /* 14. Software overcurrent check */
-        {
-            float i_sq = id_meas * id_meas + iq_meas * iq_meas;
-            if (i_sq > foc->fault_oc_a * foc->fault_oc_a) {
-                if (++foc->oc_debounce_ctr >= OC_DEBOUNCE_TICKS) {
-                    foc->mode = FOC_FAULT;
-                    foc->oc_debounce_ctr = 0;
-                    *da_out = 0.5f;
-                    *db_out = 0.5f;
-                    *dc_out = 0.5f;
-                }
-            } else {
+        /* 14. Software overcurrent check + bus-loss detection */
+        float i_sq = id_meas * id_meas + iq_meas * iq_meas;
+        if (i_sq > foc->fault_oc_a * foc->fault_oc_a) {
+            if (++foc->oc_debounce_ctr >= OC_DEBOUNCE_TICKS) {
+                foc->mode = FOC_FAULT;
+                foc->fault_code = FAULT_OVERCURRENT;
                 foc->oc_debounce_ctr = 0;
+                *da_out = 0.5f;
+                *db_out = 0.5f;
+                *dc_out = 0.5f;
             }
+        } else {
+            foc->oc_debounce_ctr = 0;
+        }
+
+        /* 14b. Board fault detection: U25A(OV)+U25B(OC) → U27 AND → RB11.
+         * Active-low. Poll pin directly (FPCI LEB-gated off in FOC mode). */
+        if (BOARD_FAULT_PIN == BOARD_FAULT_ACTIVE) {
+            if (++foc->busloss_ctr >= BOARD_FAULT_DEBOUNCE) {
+                foc->mode = FOC_FAULT;
+                foc->fault_code = FAULT_BOARD_PCI;
+                foc->busloss_ctr = 0;
+                *da_out = 0.5f;
+                *db_out = 0.5f;
+                *dc_out = 0.5f;
+            }
+        } else {
+            foc->busloss_ctr = 0;
         }
 
         /* 15. Stall detection (CL only) */
@@ -494,6 +509,7 @@ void foc_v2_fast_tick(FOC_State_t *foc,
                 foc->stall_ctr++;
                 if (foc->stall_ctr >= (uint32_t)(FAULT_STALL_TIMEOUT_MS * SLOW_DIV)) {
                     foc->mode = FOC_FAULT;
+                    foc->fault_code = FAULT_STALL;
                     foc->stall_ctr = 0;
                     *da_out = 0.5f;
                     *db_out = 0.5f;
