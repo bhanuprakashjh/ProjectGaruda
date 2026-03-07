@@ -449,6 +449,18 @@ static void HandleLoadProfile(const uint8_t *payload, uint8_t payloadLen)
         return;
     }
 
+    /* Auto-save profile to EEPROM so it persists across resets.
+     * Without this, selecting A2212 in GUI then resetting reverts
+     * to compile-time MOTOR_PROFILE (Hurst). */
+#if FEATURE_EEPROM_V2
+    {
+        GARUDA_CONFIG_T cfg;
+        EEPROM_LoadConfig(&cfg);
+        GSP_ParamsSaveToConfig(&cfg);
+        EEPROM_SaveConfig(&cfg, garudaData.systemTick);
+    }
+#endif
+
     /* Respond with ACK + profile ID */
     uint8_t resp = profileId;
     GSP_SendResponse(GSP_CMD_LOAD_PROFILE, &resp, 1);

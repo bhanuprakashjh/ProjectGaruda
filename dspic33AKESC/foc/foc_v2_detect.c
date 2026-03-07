@@ -34,12 +34,6 @@
 
 /* ── Detect configuration ─────────────────────────────────────── */
 
-/* Test current for Rs measurement (A).
- * Must be enough to get measurable voltage but not trip U25B.
- * 0.5A is conservative — U25B on MCLV-48V-300W has no LEB and trips
- * on SVM switching transients at higher currents. */
-#define DETECT_TEST_CURRENT_A   0.5f
-
 /* Rs timing (24 kHz ticks) */
 #define RS_RAMP_TICKS       12000U  /* 500ms: very slow ramp to avoid transient */
 #define RS_SETTLE_TICKS     4800U   /* 200ms: let PI settle */
@@ -50,7 +44,6 @@
 #define LS_STEP_TICKS       6U      /* 0.25ms: early inductive region only */
 #define LS_COAST_TICKS      960U    /* 40ms: let current fully decay + U25B recover */
 #define LS_NUM_PULSES       10U     /* Average over N pulses */
-#define LS_TARGET_PEAK_A    0.5f    /* Target peak current during step */
 
 /* Re-alignment between Ls and Lambda phases */
 #define REALIGN_TICKS       4800U   /* 200ms: lock rotor at θ=0 before spinning */
@@ -62,12 +55,9 @@
 #define LAMBDA_DQ_TICKS     2880U   /* 120ms: smooth d→q while spinning */
 
 /* Lambda timing */
-#define LAMBDA_RAMP_TICKS   36000U  /* 1.5s: I/f spin-up (150/100=1.5s to target) */
-#define LAMBDA_SETTLE_TICKS 24000U  /* 1s: speed settle (longer for stability) */
+#define LAMBDA_RAMP_TICKS   36000U  /* 1.5s: I/f spin-up */
+#define LAMBDA_SETTLE_TICKS 24000U  /* 1s: speed settle */
 #define LAMBDA_SAMPLE_TICKS 24000U  /* 1s: accumulate Vq/Iq/ω */
-#define LAMBDA_TEST_SPEED   150.0f  /* rad/s elec: conservative speed for sync margin */
-#define LAMBDA_RAMP_RATE    100.0f  /* rad/s²: gentle acceleration */
-#define LAMBDA_IQ_A         1.0f    /* Iq during spin — higher for reliable rotor sync */
 
 /* Auto-tune */
 #define TUNE_CURRENT_BW_HZ  1000.0f
@@ -104,6 +94,14 @@ static float ls_i_start;       /* Current at start of voltage step */
 static float ls_step_voltage;  /* Adaptive step voltage based on measured Rs */
 static float lambda_test_speed; /* Adaptive test speed for lambda phase */
 
+/* ── Adaptive detect parameters (computed from loaded profile) ── */
+static float detect_test_current;  /* Rs test current (A) */
+static float detect_ls_peak_a;    /* Ls pulse target peak (A) */
+static float detect_lambda_iq;    /* Lambda spin Iq (A) */
+static float detect_lambda_speed; /* Lambda test speed (rad/s elec) */
+static float detect_lambda_ramp;  /* Lambda ramp rate (rad/s²) */
+static float detect_profile_oc;   /* Profile OC limit — floor for post-detect */
+
 void foc_detect_start(FOC_State_t *foc)
 {
     foc->detect_state   = DETECT_R;
@@ -121,16 +119,74 @@ void foc_detect_start(FOC_State_t *foc)
     foc->theta_if = 0.0f;
     foc->omega_if = 0.0f;
 
-    /* Init PI for detect — soft gains, bus-scaled voltage clamp.
-     * Vclamp = 0.15*Vbus (≈1.8V@12V, ≈3.6V@24V) — enough for high-Rs
-     * motors (Hurst: 2.35Ω×0.5A = 1.18V) while limiting peak current
-     * on low-Rs motors (A2212: 1.8V/0.065Ω = 27A, but slow ramp
-     * + Kp=0.05 keeps peak well below that).
-     * Ki=50 → slow integral, won't overshoot. */
-    float vclamp = foc->vbus * 0.15f;
-    if (vclamp < 1.5f) vclamp = 1.5f;  /* min 1.5V for very low Vbus */
-    foc_pi_init(&foc->pid_d, 0.05f, 50.0f, -vclamp, vclamp);
-    foc_pi_init(&foc->pid_q, 0.05f, 50.0f, -vclamp, vclamp);
+    /* ── Compute adaptive detect parameters from loaded profile ── */
+    /* The profile Rs/Ke give us a hint about the motor class.
+     * Low-Rs motors (drone: 50-200mΩ) need higher test current for
+     * Rs measurement accuracy (Vd must exceed deadtime distortion).
+     * High-KV motors (small Ke) need faster lambda spin for measurable BEMF. */
+
+    float profile_rs = foc->Rs;
+    float profile_ke = foc->Ke;
+
+    /* Rs test current: target ≥ 0.5V across winding for measurability.
+     * I = 0.5V / Rs, clamped [0.5A, 5A].  At 65mΩ: 7.7A → clamped 5A.
+     * At 500mΩ: 1A.  At 2Ω: 0.25A → clamped 0.5A. */
+    if (profile_rs > 0.01f) {
+        detect_test_current = 0.5f / profile_rs;
+    } else {
+        detect_test_current = 3.0f;  /* Unknown motor — moderate default */
+    }
+    detect_test_current = foc_clampf(detect_test_current, 0.5f, 5.0f);
+
+    /* Ls pulse peak: same as Rs test current (symmetric) */
+    detect_ls_peak_a = detect_test_current;
+
+    /* Lambda spin Iq: 60% of Rs test current (less stress during spin).
+     * Clamped [0.5A, 3A]. */
+    detect_lambda_iq = detect_test_current * 0.6f;
+    detect_lambda_iq = foc_clampf(detect_lambda_iq, 0.5f, 3.0f);
+
+    /* Lambda test speed: need BEMF = Ke*ω to be ≥ 10× the Rs*Iq drop
+     * for accurate measurement.  ω = 10 * Rs * Iq / Ke.
+     * Clamped [150, 3000] rad/s.
+     *   Hurst: 10 * 0.5 * 0.5 / 0.008 = 312 rad/s
+     *   A2212: 10 * 0.065 * 3 / 0.000563 = 3462 → clamped 3000 */
+    if (profile_ke > KE_MIN) {
+        detect_lambda_speed = 10.0f * profile_rs * detect_lambda_iq / profile_ke;
+    } else {
+        detect_lambda_speed = 500.0f;  /* Unknown motor — moderate default */
+    }
+    detect_lambda_speed = foc_clampf(detect_lambda_speed, 150.0f, 3000.0f);
+
+    /* Lambda ramp rate: reach test speed in ~1.5s.
+     * rate = speed / 1.5, clamped [100, 2000] */
+    detect_lambda_ramp = detect_lambda_speed / 1.5f;
+    detect_lambda_ramp = foc_clampf(detect_lambda_ramp, 100.0f, 2000.0f);
+
+    /* Save profile OC limit — post-detect OC must never be lower */
+    detect_profile_oc = foc->fault_oc_a;
+
+    /* Init PI for detect — use profile-aware gains.
+     * Vclamp = Rs * test_current * 3 (headroom for transients).
+     * Minimum 1.5V for low-Rs motors. */
+    float vclamp = profile_rs * detect_test_current * 3.0f;
+    if (vclamp < 1.5f) vclamp = 1.5f;
+    if (vclamp > foc->vbus * 0.3f) vclamp = foc->vbus * 0.3f;
+
+    /* PI gains: Kp from L/R dynamics, Ki for steady-state.
+     * For unknown motors, use conservative soft gains. */
+    float kp_detect, ki_detect;
+    if (foc->Ls > LS_MIN && profile_rs > RS_MIN) {
+        /* BW = 200 Hz (conservative during detect) */
+        float bw = 2.0f * FOC_PI_F * 200.0f;
+        kp_detect = foc->Ls * bw;
+        ki_detect = profile_rs * bw;
+    } else {
+        kp_detect = 0.05f;
+        ki_detect = 50.0f;
+    }
+    foc_pi_init(&foc->pid_d, kp_detect, ki_detect, -vclamp, vclamp);
+    foc_pi_init(&foc->pid_q, kp_detect, ki_detect, -vclamp, vclamp);
 
     /* Reset Ls pulse state */
     ls_pulse_count = 0;
@@ -168,9 +224,9 @@ bool foc_detect_fast_tick(FOC_State_t *foc,
         float id_ref;
         if (foc->detect_ctr <= RS_RAMP_TICKS) {
             float frac = (float)foc->detect_ctr / (float)RS_RAMP_TICKS;
-            id_ref = DETECT_TEST_CURRENT_A * frac;
+            id_ref = detect_test_current * frac;
         } else {
-            id_ref = DETECT_TEST_CURRENT_A;
+            id_ref = detect_test_current;
         }
 
         /* PI current control */
@@ -219,9 +275,9 @@ bool foc_detect_fast_tick(FOC_State_t *foc,
             foc->sub_state      = 2;
 
             /* Compute adaptive Ls step voltage: V = Rs * Ipeak.
-             * Targets LS_TARGET_PEAK_A steady-state current.
+             * Targets detect_ls_peak_a steady-state current.
              * Clamp [0.1V, 3V] for safety. */
-            ls_step_voltage = foc->detect_Rs * LS_TARGET_PEAK_A;
+            ls_step_voltage = foc->detect_Rs * detect_ls_peak_a;
             ls_step_voltage = foc_clampf(ls_step_voltage, 0.1f, 3.0f);
 
             /* Reset PI and Ls pulse state */
@@ -298,7 +354,7 @@ bool foc_detect_fast_tick(FOC_State_t *foc,
                     }
 
                     /* Lambda test speed: use default. */
-                    lambda_test_speed = LAMBDA_TEST_SPEED;
+                    lambda_test_speed = detect_lambda_speed;
 
                     /* Update PI gains with measured Rs, Ls for align + lambda.
                      * Vclamp = 0.45 × Vbus/√3 — leaves headroom vs linear limit. */
@@ -365,10 +421,10 @@ bool foc_detect_fast_tick(FOC_State_t *foc,
         float id_meas, iq_meas;
         foc_park(i_alpha, i_beta, sin_t, cos_t, &id_meas, &iq_meas);
 
-        /* Ramp Id to LAMBDA_IQ_A for firm alignment */
+        /* Ramp Id to detect_lambda_iq for firm alignment */
         float ramp = (float)foc->detect_ctr / (float)(REALIGN_TICKS / 2);
         if (ramp > 1.0f) ramp = 1.0f;
-        float id_ref = LAMBDA_IQ_A * ramp;
+        float id_ref = detect_lambda_iq * ramp;
 
         float vd = foc_pi_run(&foc->pid_d, id_ref - id_meas, DT_FAST);
         float vq = foc_pi_run(&foc->pid_q, 0.0f - iq_meas, DT_FAST);
@@ -403,7 +459,7 @@ bool foc_detect_fast_tick(FOC_State_t *foc,
     case DETECT_LAMBDA: {
         /* I/f ramp: accelerate to adaptive test speed */
         if (foc->omega_if < lambda_test_speed) {
-            foc->omega_if += LAMBDA_RAMP_RATE * DT_FAST;
+            foc->omega_if += detect_lambda_ramp * DT_FAST;
             if (foc->omega_if > lambda_test_speed)
                 foc->omega_if = lambda_test_speed;
         }
@@ -428,11 +484,11 @@ bool foc_detect_fast_tick(FOC_State_t *foc,
         float id_ref, iq_ref;
         if (foc->detect_ctr <= LAMBDA_DQ_TICKS) {
             float frac = (float)foc->detect_ctr / (float)LAMBDA_DQ_TICKS;
-            id_ref = LAMBDA_IQ_A * (1.0f - frac);
-            iq_ref = LAMBDA_IQ_A * frac;
+            id_ref = detect_lambda_iq * (1.0f - frac);
+            iq_ref = detect_lambda_iq * frac;
         } else {
             id_ref = 0.0f;
-            iq_ref = LAMBDA_IQ_A;
+            iq_ref = detect_lambda_iq;
         }
 
         float vd = foc_pi_run(&foc->pid_d, id_ref - id_meas, DT_FAST);
@@ -542,14 +598,18 @@ void foc_detect_apply(FOC_State_t *foc)
 
     /* Set reasonable startup params based on detected motor */
     foc->handoff_rad_s = lambda_test_speed;  /* Proven spin speed */
-    foc->ramp_rate     = LAMBDA_RAMP_RATE;   /* Proven ramp rate */
-    foc->align_iq      = DETECT_TEST_CURRENT_A;
-    foc->ramp_iq       = LAMBDA_IQ_A;
+    foc->ramp_rate     = detect_lambda_ramp; /* Proven ramp rate */
+    foc->align_iq      = detect_test_current;
+    foc->ramp_iq       = detect_lambda_iq;
 
-    /* Conservative overcurrent limit: 4× max detect current.
-     * Uses whichever is higher: Rs test (0.5A) or lambda spin (1.0A).
-     * User can raise via GSP if needed. */
-    float max_test_i = DETECT_TEST_CURRENT_A > LAMBDA_IQ_A
-                     ? DETECT_TEST_CURRENT_A : LAMBDA_IQ_A;
-    foc->fault_oc_a    = max_test_i * 4.0f;
+    /* Overcurrent limit: max of (4× detect current, profile OC limit).
+     * Never reduce below the profile's known-safe OC threshold — that
+     * was tuned for normal operation on this motor class.
+     * For A2212 at 65mΩ: 4×5A=20A vs profile 25A → use 25A.
+     * For Hurst at 500mΩ: 4×1A=4A vs profile 4A → use 4A. */
+    float detect_oc = detect_test_current * 4.0f;
+    if (detect_oc < detect_lambda_iq * 4.0f)
+        detect_oc = detect_lambda_iq * 4.0f;
+    foc->fault_oc_a = (detect_oc > detect_profile_oc)
+                    ? detect_oc : detect_profile_oc;
 }
