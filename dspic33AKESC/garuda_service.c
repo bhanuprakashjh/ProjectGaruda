@@ -73,6 +73,10 @@
 #endif
 #endif
 
+#if FEATURE_BURST_SCOPE
+#include "scope/scope_burst.h"
+#endif
+
 #include "x2cscope/diagnostics.h"
 
 /* Global ESC runtime data — volatile: shared between ISRs and main loop */
@@ -1204,6 +1208,9 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                     v2_ovr_released = true;
                 }
                 HAL_PWM_SetDutyFloat3Phase(da_v2, db_v2, dc_v2);
+            } else if (s_foc_v2.mode == FOC_FAULT && v2_ovr_released) {
+                /* Fault: force 50% duty (zero net voltage) to stop motor */
+                HAL_PWM_SetDutyFloat3Phase(0.5f, 0.5f, 0.5f);
             } else {
                 v2_ovr_released = false;
             }
@@ -1309,6 +1316,37 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
             if (dc_v2 > dmax) dmax = dc_v2;
             garudaData.duty = (uint32_t)(dmax * LOOPTIME_TCY);
         }
+
+#if FEATURE_BURST_SCOPE
+        /* Write burst scope sample from ISR-local FOC state */
+        {
+            SCOPE_SAMPLE_T ss;
+            ss.ia    = (int16_t)(garudaData.focIa * 1000.0f);
+            ss.ib    = (int16_t)(garudaData.focIb * 1000.0f);
+            ss.id    = (int16_t)(s_foc_v2.id_meas * 1000.0f);
+            ss.iq    = (int16_t)(s_foc_v2.iq_meas * 1000.0f);
+            ss.vd    = (int16_t)(s_foc_v2.vd * 100.0f);
+            ss.vq    = (int16_t)(s_foc_v2.vq * 100.0f);
+            ss.theta = (int16_t)(s_foc_v2.theta * 10000.0f);
+            ss.obs_x1 = (int16_t)(s_foc_v2.obs.x1 * 100000.0f);
+            ss.obs_x2 = (int16_t)(s_foc_v2.obs.x2 * 100000.0f);
+            /* Omega ×1 scaling (1 rad/s resolution, range ±32767).
+             * ×10 overflows int16 at 3276 rad/s — A2212 reaches 6000+. */
+            {
+                float omega_clamped = s_foc_v2.omega_pll;
+                if (omega_clamped > 32767.0f) omega_clamped = 32767.0f;
+                if (omega_clamped < -32768.0f) omega_clamped = -32768.0f;
+                ss.omega = (int16_t)(omega_clamped);
+            }
+            ss.mod_index = (int16_t)(garudaData.focModIndex * 10000.0f);
+            ss.flags  = (s_foc_v2.cl_active ? 0x01 : 0x00)
+                      | ((garudaData.state == ESC_FAULT) ? 0x02 : 0x00)
+                      | (((uint8_t)s_foc_v2.mode & 0x07) << 2);
+            ss.state  = (uint8_t)garudaData.state;
+            ss.tick_lsb = (uint16_t)(garudaData.systemTick & 0xFFFF);
+            Scope_WriteSample(&ss);
+        }
+#endif
 #endif
     } /* end FOC v2 scope */
 #else

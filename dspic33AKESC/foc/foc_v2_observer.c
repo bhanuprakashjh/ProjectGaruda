@@ -30,6 +30,7 @@ void foc_observer_reset(FOC_Observer_t *obs)
     obs->i_beta_last  = 0.0f;
     obs->theta_est = 0.0f;
     obs->gain = 0.0f;
+    obs->bemf_int = 0.0f;
 }
 
 void foc_observer_seed(FOC_Observer_t *obs, float lambda, float theta)
@@ -46,9 +47,19 @@ void foc_observer_update(FOC_Observer_t *obs, FOC_PLL_t *pll,
                          float dt_comp_v, float duty_abs,
                          float dt)
 {
-    /* Dead-time compensated voltages */
-    float v_a_eff = v_alpha + dt_comp_v * foc_soft_sign(i_alpha, 0.1f);
-    float v_b_eff = v_beta  + dt_comp_v * foc_soft_sign(i_beta,  0.1f);
+    /* Dead-time compensated voltages.
+     * Dead time makes actual voltage LOWER than commanded for positive
+     * current (body diode clamps to rail during dead interval).
+     * Observer needs actual voltage, so SUBTRACT the dead-time error.
+     * VESC: x1 -= dt_comp * sign(I) * dt  (same effect).
+     * Previous code had WRONG sign (+), which doubled the DT error
+     * and was the reason DT comp was disabled ("caused distortion"). */
+    /* Soft-sign threshold = 2.0A: below this, DT comp scales linearly
+     * to zero.  At no-load (~0.03A from ADC noise), DT comp is negligible
+     * → no random noise injection into observer.  At 2A+, full correction.
+     * Previous 0.1A threshold caused ±0.086V random walk at no-load. */
+    float v_a_eff = v_alpha - dt_comp_v * foc_soft_sign(i_alpha, 2.0f);
+    float v_b_eff = v_beta  - dt_comp_v * foc_soft_sign(i_beta,  2.0f);
 
     /* Flux integration with L·dI cancellation.
      * dx = (V - Rs·I)·dt - Ls·(I[n] - I[n-1])
@@ -111,6 +122,97 @@ void foc_observer_update(FOC_Observer_t *obs, FOC_PLL_t *pll,
     if (pll->omega_est < -pll->omega_max) pll->omega_est = -pll->omega_max;
     pll->theta_est += (pll->omega_est + pll->kp * delta) * dt;
     pll->theta_est = foc_angle_wrap(pll->theta_est);
+}
+
+/* ── BEMF angle correction (PLL_OBS hybrid) ──────────────────── */
+
+void foc_observer_bemf_correct(FOC_Observer_t *obs,
+                                float vd, float vq,
+                                float id, float iq,
+                                float omega,
+                                float Rs, float Ls, float lambda)
+{
+    /* Speed gate with gain ramp.
+     * Below 2000 rad/s: no correction (startup current creates
+     *   systematic BEMFd from Ls*dId/dt → false angle error).
+     * 2000-4000 rad/s: linear ramp from 0 to BEMF_KP_MAX.
+     * Above 4000 rad/s: full correction strength.
+     *
+     * The 180° attractor problem occurs at high speed with zero
+     * load current.  The ramp ensures gentle activation after
+     * the high-current startup regime. */
+    float abs_omega = (omega >= 0.0f) ? omega : -omega;
+    if (abs_omega < 2000.0f) {
+        obs->bemf_int = 0.0f;
+        return;
+    }
+
+    /* d-axis BEMF residual (motor voltage equation).
+     * Standard d-q model: Vd = Rs*Id + Ld*dId/dt - ω*Lq*Iq
+     * In steady state (dId/dt ≈ 0):
+     *   BEMFd = Vd - Rs*Id + ω*Ls*Iq ≈ 0  (correct angle)
+     *   BEMFd ≈ ω*λ*sin(δθ)               (angle error δθ)
+     *
+     * Non-salient motor (Ld ≈ Lq = Ls), use measured ω for
+     * cross-coupling. */
+    float bemfd = vd - Rs * id + omega * Ls * iq;
+
+    /* Normalize by ω*λ to get angle error in radians. */
+    float denom = omega * lambda;
+    if (denom > -0.5f && denom < 0.5f)
+        return;
+
+    float angle_err = bemfd / denom;
+
+    /* Clamp to ±0.5 rad (~29°) — allows strong correction for
+     * large errors while preventing wild overshoot. */
+    angle_err = foc_clampf(angle_err, -0.5f, 0.5f);
+
+    /* Speed-ramped P-only correction.
+     * Kp ramps from 0 at 2000 rad/s to 0.15 at 4000 rad/s.
+     *
+     * At 5500 rad/s, 21° error (Vd=1.12V, BEMFd=1.3V):
+     *   angle_err = 0.42 (clamped to 0.5)
+     *   correction = 0.15 * 0.42 = 0.063 rad/tick = 1512 rad/s
+     *   Settling time: ~7 ticks (0.3ms) — fast enough to
+     *   prevent the 180° flip before HW OC (3ms window).
+     *
+     * At 3000 rad/s (mid-ramp), Kp = 0.075:
+     *   Systematic BEMFd from 2A Iq: 0.1V
+     *   angle_err = 0.1/1.69 = 0.059 rad
+     *   correction = 0.075 * 0.059 = 0.0044 rad/tick
+     *   vs ω*dt = 0.125 rad/tick → 3.5% perturbation (safe). */
+    const float BEMF_KP_MAX  = 0.15f;
+    const float RAMP_LO      = 2000.0f;
+    const float RAMP_HI      = 4000.0f;
+
+    float kp_scale = (abs_omega - RAMP_LO) / (RAMP_HI - RAMP_LO);
+    if (kp_scale > 1.0f) kp_scale = 1.0f;
+    float kp = BEMF_KP_MAX * kp_scale;
+
+    float correction = kp * angle_err;
+
+    /* Rotate flux vector (x1, x2) by correction angle.
+     * Positive correction = rotate forward (increase angle).
+     * For small corrections (<0.01 rad): use first-order approx. */
+    float x1_new, x2_new;
+    if (correction > -0.01f && correction < 0.01f) {
+        /* Small angle: cos≈1, sin≈correction */
+        x1_new = obs->x1 - obs->x2 * correction;
+        x2_new = obs->x1 * correction + obs->x2;
+    } else {
+        float cos_c = cosf(correction);
+        float sin_c = sinf(correction);
+        x1_new = obs->x1 * cos_c - obs->x2 * sin_c;
+        x2_new = obs->x1 * sin_c + obs->x2 * cos_c;
+    }
+    obs->x1 = x1_new;
+    obs->x2 = x2_new;
+
+    /* Recompute angle after correction */
+    obs->theta_est = atan2f(obs->x2, obs->x1);
+    if (obs->theta_est < 0.0f)
+        obs->theta_est += FOC_TWO_PI;
 }
 
 /* ── PLL ──────────────────────────────────────────────────────── */

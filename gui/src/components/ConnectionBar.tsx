@@ -1,7 +1,7 @@
 import { useRef, useCallback } from 'react';
 import { useEscStore } from '../store/useEscStore';
 import { SerialManager } from '../protocol/serial';
-import { GspParser, buildPacket, CMD } from '../protocol/gsp';
+import { GspParser, buildPacket, CMD, decodeScopeStatus, decodeScopeSamples } from '../protocol/gsp';
 import { decodeInfo, decodeSnapshot, decodeParamList, decodeParamValue } from '../protocol/decode';
 import type { ParamDescriptor, ParamListPage } from '../protocol/types';
 
@@ -10,7 +10,7 @@ let parser: GspParser;
 let heartbeatTimer: ReturnType<typeof setInterval> | null = null;
 
 export function ConnectionBar() {
-  const { connected, setConnected, setInfo, pushSnapshot, setParams, setParamValue, setActiveProfile, setTelemActive, addToast, reset } = useEscStore();
+  const { connected, setConnected, setInfo, pushSnapshot, setParams, setParamValue, setActiveProfile, setTelemActive, addToast, reset, setScopeStatus, appendScopeSamples, clearScopeSamples, setScopeReading } = useEscStore();
   const connectingRef = useRef(false);
   const pendingParamPages = useRef<ParamDescriptor[]>([]);
 
@@ -114,6 +114,43 @@ export function ConnectionBar() {
       case CMD.AUTO_DETECT:
         addToast('Auto-detect started', 'info');
         break;
+      case CMD.SCOPE_ARM:
+        addToast('Scope armed', 'info');
+        break;
+      case CMD.SCOPE_STATUS: {
+        if (payload.length >= 6) {
+          const st = decodeScopeStatus(payload);
+          setScopeStatus(st);
+          // Auto-read when READY (only if not already reading)
+          if (st.state === 3 && st.sampleCount > 0 && !useEscStore.getState().scopeReading) {
+            // Clear old samples and start chunked readout
+            appendScopeSamples([]); // no-op, just ensure fresh
+            useEscStore.setState({ scopeSamples: [], scopeReading: true });
+            const count = Math.min(9, st.sampleCount);
+            serial.write(buildPacket(CMD.SCOPE_READ, new Uint8Array([0, count])));
+          }
+        }
+        break;
+      }
+      case CMD.SCOPE_READ: {
+        if (payload.length >= 2) {
+          const { offset, samples } = decodeScopeSamples(payload);
+          appendScopeSamples(samples);
+          // Continue reading if more
+          const scopeStatus = useEscStore.getState().scopeStatus;
+          if (scopeStatus) {
+            const nextOffset = offset + samples.length;
+            if (nextOffset < scopeStatus.sampleCount && samples.length > 0) {
+              const count = Math.min(9, scopeStatus.sampleCount - nextOffset);
+              serial.write(buildPacket(CMD.SCOPE_READ, new Uint8Array([nextOffset, count])));
+            } else {
+              setScopeReading(false);
+              addToast(`Scope: ${useEscStore.getState().scopeSamples.length} samples read`, 'success');
+            }
+          }
+        }
+        break;
+      }
       case CMD.ERROR: {
         const errCode = payload.length > 0 ? payload[0] : 0xFF;
         let msg = ERR_NAMES[errCode] ?? `Error 0x${errCode.toString(16).toUpperCase()}`;
@@ -124,7 +161,7 @@ export function ConnectionBar() {
         break;
       }
     }
-  }, [setInfo, pushSnapshot, setParams, setParamValue, setActiveProfile, addToast, handleParamListPage, refetchAllParams]);
+  }, [setInfo, pushSnapshot, setParams, setParamValue, setActiveProfile, addToast, handleParamListPage, refetchAllParams, setScopeStatus, appendScopeSamples, clearScopeSamples, setScopeReading]);
 
   const connect = useCallback(async () => {
     if (connectingRef.current) return;

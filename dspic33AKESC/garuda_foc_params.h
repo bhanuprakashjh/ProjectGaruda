@@ -133,9 +133,16 @@
 #define MOTOR_KE_VPEAK          0.000563f
 #define MOTOR_POLE_PAIRS_FOC    7
 #define MOTOR_VBUS_NOM_V        12.0f
-#define MOTOR_MAX_CURRENT_A     20.0f
-/** 16800 RPM * 7PP * 2pi/60 = 12315, round to 12000 */
-#define MOTOR_MAX_ELEC_RAD_S    12000.0f
+/** Peak Iq clamp — limited by MCLV-48V-300W board U25B (no LEB).
+ *  Previous prop test: 6.9A Iq OK, 12A trips U25B from switching transients.
+ *  10A gives margin for prop load while avoiding U25B false trips.
+ *  Production board (no U25B): raise to 20A+. */
+#define MOTOR_MAX_CURRENT_A     10.0f
+/** With observer fixes (DT comp + BEMF-d correction + phase lag comp),
+ *  observer stability should extend well past 4000 rad/s.
+ *  6000 rad/s = 8163 RPM mech — conservative test ceiling.
+ *  Raise once stability is confirmed with prop. */
+#define MOTOR_MAX_ELEC_RAD_S    6000.0f
 /** Flux linkage = λ_pm (per-phase). */
 #define MOTOR_FLUX_LINKAGE      0.000563f
 
@@ -359,6 +366,29 @@
 /* ================================================================
  *          SHARED PARAMETERS  (all motor profiles)
  * ================================================================ */
+
+/* -- Dead-time compensation for observer -------------------------
+ *   Dead time = DEADTIME_NS (500 ns for A2212/5010/5055, 750 ns for Hurst).
+ *   dt_comp_frac = 2 × Td / Tpwm (fractional voltage error per Vbus).
+ *   Observer: v_eff = v_cmd - dt_comp_v × sign(I), where
+ *   dt_comp_v = Vbus × dt_comp_frac.
+ *
+ *   A2212 at 12V: 12 × 2×500ns/41.67µs = 0.288V.
+ *   Without this, observer sees 0.288V systematic voltage error,
+ *   causing ~7° angle drift per elec cycle at 4000 rad/s.
+ *
+ *   VESC always applies dead-time comp in observer. */
+#define FOC_DT_COMP_FRAC  (2.0f * DEADTIME_NS * 1e-9f * PWMFREQUENCY_HZ)
+
+/* -- Phase lag compensation for observer angle -------------------
+ *   Digital control has 0.5-sample transport delay between ADC
+ *   sample and PWM update. At high speed, this systematic lag
+ *   causes commutation angle error:
+ *     lag_rad = ω × dt × 0.5  (4.8° at 4000 rad/s)
+ *
+ *   VESC: phase += pll_speed × dt × (0.5 + offset)
+ *   We add 0.5 × dt advance to observer angle for commutation. */
+#define FOC_PHASE_LAG_COMP  0.5f
 
 /* -- Timing (24 kHz switching frequency) ------------------------- */
 

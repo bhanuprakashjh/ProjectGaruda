@@ -57,6 +57,10 @@ typedef enum {
     /* Phase H: RX status + test injection */
     GSP_CMD_GET_RX_STATUS   = 0x26,
     GSP_CMD_RX_INJECT       = 0x27,
+    /* Burst scope */
+    GSP_CMD_SCOPE_ARM       = 0x30,
+    GSP_CMD_SCOPE_STATUS    = 0x31,
+    GSP_CMD_SCOPE_READ      = 0x32,
     /* Unsolicited stream frame */
     GSP_CMD_TELEM_FRAME     = 0x80,
     /* Error response */

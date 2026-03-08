@@ -254,9 +254,11 @@ export const FEATURE_NAMES: Record<number, string> = {
   15: 'X2CSCOPE', 16: 'GSP', 17: 'OC_CLPCI_ENABLE', 18: 'PRESYNC_RAMP',
   19: 'ADC_POT', 20: 'RX_PWM', 21: 'RX_DSHOT', 22: 'RX_AUTO',
   23: 'FOC',
+  24: 'BURST_SCOPE',
 };
 
 export const FEATURE_BIT_FOC = 23;
+export const FEATURE_BIT_BURST_SCOPE = 24;
 
 export interface GspRxStatus {
   linkState: number;
@@ -271,4 +273,57 @@ export interface GspRxStatus {
 /** Helper: check if FOC feature is enabled in feature flags */
 export function isFocEnabled(featureFlags: number): boolean {
   return (featureFlags & (1 << FEATURE_BIT_FOC)) !== 0;
+}
+
+/** Helper: check if burst scope is enabled */
+export function isBurstScopeEnabled(featureFlags: number): boolean {
+  return (featureFlags & (1 << FEATURE_BIT_BURST_SCOPE)) !== 0;
+}
+
+/* ── Burst Scope Types ─────────────────────────────────────────── */
+
+export const SCOPE_TRIG_MODES = ['Manual', 'Fault', 'State Change', 'Threshold'] as const;
+export const SCOPE_STATES = ['IDLE', 'ARMED', 'FILLING', 'READY'] as const;
+export const SCOPE_CHANNELS = ['Ia', 'Ib', 'Id', 'Iq', 'Vd', 'Vq', 'Theta', '', '', 'Omega', 'ModIndex'] as const;
+export const SCOPE_EDGES = ['Rising', 'Falling'] as const;
+
+export const SCOPE_SAMPLE_SIZE = 26;
+export const SCOPE_MAX_CHUNK = 9;
+export const SCOPE_BUF_SIZE = 128;
+
+export interface ScopeSample {
+  ia: number;     /* A */
+  ib: number;
+  id: number;
+  iq: number;
+  vd: number;     /* V */
+  vq: number;
+  theta: number;  /* rad */
+  obsX1: number;  /* V·s */
+  obsX2: number;
+  omega: number;  /* rad/s */
+  modIndex: number; /* 0-1 */
+  flags: number;
+  state: number;
+  tickLsb: number;
+  cl: boolean;
+  fault: boolean;
+  mode: number;
+}
+
+export interface ScopeStatus {
+  state: number;
+  trigMode: number;
+  preTrigPct: number;
+  trigIdx: number;
+  sampleCount: number;
+  sampleSize: number;
+}
+
+export interface ScopeArmConfig {
+  trigMode: number;
+  preTrigPct: number;
+  trigChannel: number;
+  trigEdge: number;
+  threshold: number;
 }

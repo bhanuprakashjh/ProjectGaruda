@@ -46,6 +46,9 @@ extern "C" {
 /* ADC pot: ON for MCLV-48V-300W bench, OFF for flight boards */
 #define FEATURE_ADC_POT          1
 
+/* Burst scope: 128-sample ring buffer at ISR rate, triggered readout */
+#define FEATURE_BURST_SCOPE      1  /* Triggered high-rate burst scope (128×28B ring buffer) */
+
 /* RX input features: default OFF (Phase H) */
 #define FEATURE_RX_PWM           1  /* RC PWM capture (1000-2000us) */
 #define FEATURE_RX_DSHOT         1  /* DShot digital protocol */

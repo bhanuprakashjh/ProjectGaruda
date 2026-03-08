@@ -53,6 +53,9 @@
 #include "input/rx_decode.h"
 #include "hal/hal_input_capture.h"
 #endif
+#if FEATURE_BURST_SCOPE
+#include "scope/scope_burst.h"
+#endif
 
 #define GSP_HEARTBEAT_TIMEOUT_MS 500
 
@@ -88,6 +91,10 @@ int main(void)
 
     /* Initialize ESC state machine and enable ADC interrupt */
     GARUDA_ServiceInit();
+
+#if FEATURE_BURST_SCOPE
+    Scope_Init();
+#endif
 
     /* Initialize RX input capture (Phase H) */
 #if (FEATURE_RX_PWM || FEATURE_RX_DSHOT || FEATURE_RX_AUTO)

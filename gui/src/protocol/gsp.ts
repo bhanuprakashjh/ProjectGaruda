@@ -119,6 +119,76 @@ export const CMD = {
   LOAD_PROFILE: 0x17,
   AUTO_DETECT: 0x20,
   GET_RX_STATUS: 0x26,
+  SCOPE_ARM: 0x30,
+  SCOPE_STATUS: 0x31,
+  SCOPE_READ: 0x32,
   TELEM_FRAME: 0x80,
   ERROR: 0xFF,
 } as const;
+
+/* ── Burst Scope Helpers ─────────────────────────────────────── */
+
+import type { ScopeSample, ScopeStatus, ScopeArmConfig } from './types';
+import { SCOPE_SAMPLE_SIZE } from './types';
+
+export function buildScopeArmPayload(cfg: ScopeArmConfig): Uint8Array {
+  const buf = new Uint8Array(8);
+  buf[0] = cfg.trigMode;
+  buf[1] = cfg.preTrigPct;
+  buf[2] = cfg.trigChannel;
+  buf[3] = cfg.trigEdge;
+  const dv = new DataView(buf.buffer);
+  dv.setInt16(4, cfg.threshold, true);
+  buf[6] = 0; // reserved
+  buf[7] = 0;
+  return buf;
+}
+
+export function buildScopeReadPayload(offset: number, count: number): Uint8Array {
+  return new Uint8Array([offset, count]);
+}
+
+export function decodeScopeStatus(data: Uint8Array): ScopeStatus {
+  return {
+    state: data[0],
+    trigMode: data[1],
+    preTrigPct: data[2],
+    trigIdx: data[3],
+    sampleCount: data[4],
+    sampleSize: data[5],
+  };
+}
+
+export function decodeScopeSamples(data: Uint8Array): { offset: number; samples: ScopeSample[] } {
+  const offset = data[0];
+  const count = data[1];
+  const samples: ScopeSample[] = [];
+  const v = new DataView(data.buffer, data.byteOffset, data.byteLength);
+
+  for (let i = 0; i < count; i++) {
+    const base = 2 + i * SCOPE_SAMPLE_SIZE;
+    if (base + SCOPE_SAMPLE_SIZE > data.byteLength) break;
+
+    const flags = data[base + 22];
+    samples.push({
+      ia:       v.getInt16(base + 0, true) / 1000,
+      ib:       v.getInt16(base + 2, true) / 1000,
+      id:       v.getInt16(base + 4, true) / 1000,
+      iq:       v.getInt16(base + 6, true) / 1000,
+      vd:       v.getInt16(base + 8, true) / 100,
+      vq:       v.getInt16(base + 10, true) / 100,
+      theta:    v.getInt16(base + 12, true) / 10000,
+      obsX1:    v.getInt16(base + 14, true) / 100000,
+      obsX2:    v.getInt16(base + 16, true) / 100000,
+      omega:    v.getInt16(base + 18, true) / 10,
+      modIndex: v.getInt16(base + 20, true) / 10000,
+      flags,
+      state:    data[base + 23],
+      tickLsb:  v.getUint16(base + 24, true),
+      cl:       (flags & 0x01) !== 0,
+      fault:    (flags & 0x02) !== 0,
+      mode:     (flags >> 2) & 0x07,
+    });
+  }
+  return { offset, samples };
+}

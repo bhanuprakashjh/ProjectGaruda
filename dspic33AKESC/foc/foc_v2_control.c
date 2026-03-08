@@ -82,6 +82,10 @@ static void reset_startup(FOC_State_t *foc)
     foc->oc_debounce_ctr = 0;
     foc->busloss_ctr = 0;
     foc->stall_ctr   = 0;
+    foc->reverse_ctr = 0;
+    foc->oscillation_ctr = 0;
+    foc->flip_ctr    = 0;
+    foc->flip_attempts = 0;
     foc->sub_state   = 0;
 
     foc_pi_reset(&foc->pid_d);
@@ -107,7 +111,14 @@ void foc_v2_init(FOC_State_t *foc, const FOC_MotorParams_t *params)
     foc->lambda_pm = params->lambda_pm;
     foc->Ke        = params->Ke;
 
-    foc->dt_comp   = 0.0f;  /* DT comp disabled */
+    /* Dead-time compensation for observer.
+     * dt_comp = Vbus × 2×Td/Tpwm — accounts for dead-time voltage
+     * distortion that the observer would otherwise integrate as
+     * systematic angle error.  VESC always applies this.
+     * Sign fix in foc_observer_update() (was +, now -).
+     * At A2212 12V: 12 × 0.024 = 0.288V — well below BEMF at
+     * handoff speed (1000 × 0.000563 = 0.56V). */
+    foc->dt_comp   = params->vbus_nom_v * FOC_DT_COMP_FRAC;
 
     /* Copy runtime startup/tuning params */
     foc->align_iq        = params->align_iq_a;
@@ -184,8 +195,9 @@ void foc_v2_fast_tick(FOC_State_t *foc,
     *db_out = 0.5f;
     *dc_out = 0.5f;
 
-    /* Vbus conversion */
+    /* Vbus conversion + dynamic dead-time compensation */
     foc->vbus = raw_to_vbus(vbus_raw);
+    foc->dt_comp = foc->vbus * FOC_DT_COMP_FRAC;
 
     /* ── IDLE / ARMED: ADC offset calibration, no motor drive ── */
     if (foc->mode == FOC_IDLE || foc->mode == FOC_ARMED) {
@@ -209,6 +221,9 @@ void foc_v2_fast_tick(FOC_State_t *foc,
     /* ── FAULT: outputs disabled ─────────────────────────────── */
     if (foc->mode == FOC_FAULT) {
         foc->sub_state = 0;
+        *da_out = 0.5f;
+        *db_out = 0.5f;
+        *dc_out = 0.5f;
         goto slow_loop;
     }
 
@@ -275,8 +290,36 @@ void foc_v2_fast_tick(FOC_State_t *foc,
                                 v_alpha, v_beta,
                                 i_alpha, i_beta,
                                 foc->Rs, foc->Ls, foc->lambda_pm,
-                                0.0f, duty_abs,  /* DT comp applied on output duties, not observer */
+                                foc->dt_comp, duty_abs,
                                 DT_FAST);
+
+            /* BEMF-d angle correction: provides closed-loop angle feedback.
+             *
+             * Without this, the observer is a pure open-loop flux integrator
+             * with no mechanism to correct systematic angle errors from
+             * dead-time, voltage reconstruction, and Rs mismatch.
+             * At high speed, these errors accumulate faster (more electrical
+             * cycles per second) and eventually cause observer divergence.
+             *
+             * The BEMFd correction uses the d-axis voltage equation
+             * residual to detect and correct angle errors. Speed-gated:
+             * off below 2000 rad/s (where startup current creates false
+             * BEMFd), ramps to full at 4000 rad/s.
+             *
+             * This turns the observer from open-loop to closed-loop. */
+            if (foc->mode == FOC_CLOSED_LOOP) {
+                /* Park transform the measured current to get id/iq */
+                float sin_obs = sinf(foc->obs.theta_est);
+                float cos_obs = cosf(foc->obs.theta_est);
+                float id_now, iq_now;
+                foc_park(i_alpha, i_beta, sin_obs, cos_obs, &id_now, &iq_now);
+
+                foc_observer_bemf_correct(&foc->obs,
+                                          foc->vd, foc->vq,
+                                          id_now, iq_now,
+                                          foc->pll.omega_est,
+                                          foc->Rs, foc->Ls, foc->lambda_pm);
+            }
         }
 
         /* 3. Select commutation angle based on mode */
@@ -386,15 +429,21 @@ void foc_v2_fast_tick(FOC_State_t *foc,
         }
 
         case FOC_CLOSED_LOOP: {
-            /* Observer atan2 angle for commutation — zero phase lag.
-             * PLL has phase lead at high electrical frequency (200Hz BW
-             * overshoots at 933Hz/8kRPM → 16° lead → desync).
-             * PLL is used only for smooth speed estimation (speed PI). */
-            theta_drive = foc->obs.theta_est;
+            /* Observer atan2 angle for commutation + phase lag compensation.
+             * The observer angle reflects rotor position at ADC sample time,
+             * but PWM is applied 0.5 sample later. At high speed this
+             * systematic lag causes angle error:
+             *   4000 rad/s: 0.5 × 41.67µs × 4000 = 0.083 rad = 4.8°
+             * VESC: phase += pll_speed × dt × (0.5 + offset)
+             * Without this, observer accumulates systematic angle drift. */
+            theta_drive = foc->obs.theta_est
+                        + foc->pll.omega_est * DT_FAST * FOC_PHASE_LAG_COMP;
+            theta_drive = foc_angle_wrap(theta_drive);
             float cl_omega = foc->pll.omega_est;
 
-            /* Speed reference from pot (handled in slow loop via pid_spd) */
-            iq_ref = foc->iq_ref;  /* Set by slow loop */
+            /* Speed/current references from slow loop */
+            iq_ref = foc->iq_ref;
+            id_ref = foc->id_ref;  /* Observer-assist injection at high speed */
 
             /* Track speed for telemetry */
             foc->omega = cl_omega;
@@ -425,13 +474,16 @@ void foc_v2_fast_tick(FOC_State_t *foc,
         float vd_tot = vd_pi;
         float vq_tot = vq_pi;
 
-        /* 8. Circular voltage clamp (d-axis priority) */
+        /* 8. Circular voltage clamp (q-axis priority)
+         * Vq carries the BEMF at high speed — preserving Vq budget
+         * keeps the observer fed with the signal it needs for angle
+         * tracking.  Vd gets whatever headroom remains. */
         float vmax = foc->vbus * 0.95f * FOC_INV_SQRT3;
-        vd_tot = foc_clampf(vd_tot, -vmax, vmax);
-        float sq = vmax * vmax - vd_tot * vd_tot;
+        vq_tot = foc_clampf(vq_tot, -vmax, vmax);
+        float sq = vmax * vmax - vq_tot * vq_tot;
         if (sq < 0.0f) sq = 0.0f;
-        float vq_lim = sqrtf(sq);
-        vq_tot = foc_clampf(vq_tot, -vq_lim, vq_lim);
+        float vd_lim = sqrtf(sq);
+        vd_tot = foc_clampf(vd_tot, -vd_lim, vd_lim);
 
         /* NOTE: Current PI anti-windup relies on the dynamic PI limits
          * set at lines 215-224 (vq_pi_budget tracks BEMF feedforward).
@@ -519,6 +571,42 @@ void foc_v2_fast_tick(FOC_State_t *foc,
                 foc->stall_ctr = 0;
             }
         }
+
+        /* 15b. Fast observer health checks (CL only, runs at 24kHz).
+         * These must catch problems BEFORE the 3ms oscillation-to-HW-OC
+         * window closes. */
+        if (foc->mode == FOC_CLOSED_LOOP) {
+            /* (a) Reverse speed: observer angle has flipped 180°.
+             * Use pll.omega_est directly (omega_pll copy may be deferred
+             * by compiler). 48 ticks (2ms) debounce. */
+            if (foc->pll.omega_est < -50.0f) {
+                foc->reverse_ctr++;
+                if (foc->reverse_ctr >= 48) {
+                    foc->mode = FOC_FAULT;
+                    foc->fault_code = FAULT_OBSERVER;
+                    foc->reverse_ctr = 0;
+                    *da_out = 0.5f;
+                    *db_out = 0.5f;
+                    *dc_out = 0.5f;
+                }
+            } else {
+                foc->reverse_ctr = 0;
+            }
+
+            /* (b) Decay flip attempts when stable (48000 ticks = 2s).
+             * Previous oscillation detector (i_sq > OC²×0.25, +3/-1
+             * counter) removed — false-triggered on normal 12A Iq
+             * with A2212+prop because threshold (156) was within
+             * operating range.  Real OC is handled by section 14. */
+            if (foc->flip_attempts > 0) {
+                if (++foc->flip_ctr >= 48000U) {
+                    foc->flip_attempts--;
+                    foc->flip_ctr = 0;
+                }
+            } else {
+                foc->flip_ctr = 0;
+            }
+        }
     }
 
     /* ── Slow loop (every SLOW_DIV ticks → 1 kHz) ───────────── */
@@ -559,9 +647,85 @@ slow_loop:
             if (speed_ref > omega_max_v)
                 speed_ref = omega_max_v;
 
+            /* No-load speed limiter: prevent observer 180° flip.
+             *
+             * At no-load high speed, phase current → 0 and the flux
+             * observer has no signal to distinguish 0° from 180°.
+             * With 30µH inductance, a 180° flip causes 400kA/s current
+             * slew → HW OC trips in <2 ticks (latching on MCLV board).
+             * No software approach can react fast enough.
+             *
+             * Prevention: if |Iq| < 1.5A (no load) at speed > 4000 rad/s
+             * for >250ms, cap speed to 5000 rad/s.  This keeps the motor
+             * below the unstable region.  With prop load (Iq > 3A at
+             * 3000+ rad/s), the limiter never activates.
+             *
+             * The limit is removed as soon as Iq exceeds the threshold
+             * (load applied), allowing instant full-speed operation. */
+            {
+                float abs_iq = foc->iq_meas;
+                if (abs_iq < 0.0f) abs_iq = -abs_iq;
+                float abs_spd = foc->pll.omega_est;
+                if (abs_spd < 0.0f) abs_spd = -abs_spd;
+
+                /* Aggressive no-load limiter: observer has no angle correction
+                 * signal at no-load (BEMF-d needs current), so it's a pure
+                 * open-loop integrator that WILL diverge above ~4000 rad/s.
+                 * Gate at 3000, cap at 3500, activate in 20ms.
+                 * With prop load (Iq > 2A), limiter is inactive. */
+                #define NOLOAD_IQ_THRESH  2.0f    /* A — below this = no-load */
+                #define NOLOAD_SPD_GATE   3000.0f /* rad/s — start checking */
+                #define NOLOAD_SPD_CAP    3500.0f /* rad/s — cap speed here */
+                #define NOLOAD_DWELL_MS   20U     /* ms — fast activation */
+
+                static uint16_t noload_ctr = 0;
+                static bool noload_active = false;
+
+                if (abs_iq < NOLOAD_IQ_THRESH && abs_spd > NOLOAD_SPD_GATE) {
+                    if (noload_ctr < NOLOAD_DWELL_MS)
+                        noload_ctr++;
+                    if (noload_ctr >= NOLOAD_DWELL_MS)
+                        noload_active = true;
+                } else {
+                    noload_ctr = 0;
+                    noload_active = false;
+                }
+
+                if (noload_active && speed_ref > NOLOAD_SPD_CAP)
+                    speed_ref = NOLOAD_SPD_CAP;
+            }
+
             foc->iq_ref = foc_pi_run(&foc->pid_spd,
                                       speed_ref - foc->pll.omega_est,
                                       DT_SLOW);
+
+            /* Modulation index soft-limit: when approaching voltage
+             * saturation, reduce Iq to maintain current control authority
+             * and prevent observer starvation.
+             * At mod > 0.85 → linearly reduce to 0 at mod = 0.95.
+             * This keeps ~15% voltage headroom for the current PI. */
+            {
+                float v_mag_sq = foc->vd * foc->vd + foc->vq * foc->vq;
+                float vmax_sq  = vq_avail * vq_avail;  /* 80% bus */
+                float mod_ratio = (vmax_sq > 0.01f) ? (v_mag_sq / vmax_sq) : 0.0f;
+                /* mod_ratio > 1.0 means we're already past 80% bus.
+                 * Scale down Iq when mod_ratio > 0.85^2/0.80^2 ≈ 1.13
+                 * i.e., when actual mod_index > 0.85 */
+                const float MOD_SOFT_START = 0.85f * 0.85f / (0.80f * 0.80f);
+                const float MOD_HARD_LIMIT = 0.95f * 0.95f / (0.80f * 0.80f);
+                if (mod_ratio > MOD_SOFT_START) {
+                    float scale = 1.0f - (mod_ratio - MOD_SOFT_START)
+                                       / (MOD_HARD_LIMIT - MOD_SOFT_START);
+                    if (scale < 0.05f) scale = 0.05f;
+                    foc->iq_ref *= scale;
+                }
+            }
+
+            /* Id = 0 in CL (MTPA for non-salient motor).
+             * Previous -1A injection for observer assist removed:
+             * d-axis current doesn't break 0°/180° symmetry, and
+             * the no-load speed limiter now prevents the flip. */
+            foc->id_ref = 0.0f;
 
             /* Re-arm: throttle=0 and low speed for 1s → back to ARMED */
             static uint32_t rearm_ctr = 0;

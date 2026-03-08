@@ -3,6 +3,7 @@ import { ConnectionBar } from './components/ConnectionBar';
 import { StatusPanel } from './components/StatusPanel';
 import { GaugePanel } from './components/GaugePanel';
 import { ScopePanel } from './components/ScopePanel';
+import BurstScopePanel from './components/BurstScopePanel';
 import { ControlPanel } from './components/ControlPanel';
 import { ThrottleSlider } from './components/ThrottleSlider';
 import { ProfileSelector } from './components/ProfileSelector';
@@ -119,7 +120,12 @@ function DashboardTab() {
 }
 
 function ScopeTab() {
-  return <ScopePanel />;
+  return (
+    <>
+      <ScopePanel />
+      <BurstScopePanel />
+    </>
+  );
 }
 
 function MotorTab() {

@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { GspInfo, GspSnapshot, GspRxStatus, ParamDescriptor } from '../protocol/types';
+import type { GspInfo, GspSnapshot, GspRxStatus, ParamDescriptor, ScopeSample, ScopeStatus } from '../protocol/types';
 
 export type TabId = 'dashboard' | 'scope' | 'motor' | 'params' | 'help';
 
@@ -28,6 +28,9 @@ interface EscStore {
   toasts: Toast[];
   paramModalOpen: boolean;
   activeTab: TabId;
+  scopeStatus: ScopeStatus | null;
+  scopeSamples: ScopeSample[];
+  scopeReading: boolean;
 
   setConnected: (v: boolean) => void;
   setInfo: (info: GspInfo) => void;
@@ -43,6 +46,10 @@ interface EscStore {
   setActiveTab: (tab: TabId) => void;
   addToast: (message: string, type: Toast['type']) => void;
   removeToast: (id: number) => void;
+  setScopeStatus: (st: ScopeStatus) => void;
+  appendScopeSamples: (samples: ScopeSample[]) => void;
+  clearScopeSamples: () => void;
+  setScopeReading: (v: boolean) => void;
   reset: () => void;
 }
 
@@ -64,6 +71,9 @@ export const useEscStore = create<EscStore>((set) => ({
   toasts: [],
   paramModalOpen: false,
   activeTab: 'dashboard',
+  scopeStatus: null,
+  scopeSamples: [],
+  scopeReading: false,
 
   setConnected: (v) => set({ connected: v }),
   setInfo: (info) => set({ info, activeProfile: info.motorProfile }),
@@ -105,10 +115,15 @@ export const useEscStore = create<EscStore>((set) => ({
     }, 3000);
   },
   removeToast: (id) => set((state) => ({ toasts: state.toasts.filter(t => t.id !== id) })),
+  setScopeStatus: (st) => set({ scopeStatus: st }),
+  appendScopeSamples: (samples) => set((state) => ({ scopeSamples: [...state.scopeSamples, ...samples] })),
+  clearScopeSamples: () => set({ scopeSamples: [], scopeReading: false }),
+  setScopeReading: (v) => set({ scopeReading: v }),
   reset: () => set({
     connected: false, info: null, snapshot: null, lastSnapshotMs: 0,
     history: [], params: new Map(), activeProfile: 0, rxStatus: null,
     throttleSource: 'ADC', telemActive: false, toasts: [],
     paramModalOpen: false, activeTab: 'dashboard',
+    scopeStatus: null, scopeSamples: [], scopeReading: false,
   }),
 }));

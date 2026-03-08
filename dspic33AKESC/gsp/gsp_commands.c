@@ -34,6 +34,9 @@
 #include <xc.h>
 #include "input/rx_decode.h"
 #endif
+#if FEATURE_BURST_SCOPE
+#include "scope/scope_burst.h"
+#endif
 
 /* ── Telemetry streaming state ──────────────────────────────────────── */
 
@@ -72,6 +75,7 @@ static uint32_t BuildFeatureFlags(void)
     if (FEATURE_RX_DSHOT)        f |= (1UL << 21);
     if (FEATURE_RX_AUTO)         f |= (1UL << 22);
     if (FEATURE_FOC || FEATURE_FOC_V2) f |= (1UL << 23);
+    if (FEATURE_BURST_SCOPE)         f |= (1UL << 24);
     return f;
 }
 
@@ -582,6 +586,86 @@ void GSP_TelemTick(void)
     GSP_SendResponse(GSP_CMD_TELEM_FRAME, buf, sizeof(buf));
 }
 
+/* ── Burst scope handlers ────────────────────────────────────────────── */
+
+#if FEATURE_BURST_SCOPE
+
+static void HandleScopeArm(const uint8_t *payload, uint8_t payloadLen)
+{
+    /* Payload: [trigMode(1), prePct(1), trigCh(1), trigEdge(1), threshold(2), reserved(2)] = 8 bytes */
+    if (payloadLen < 8) {
+        SendError(GSP_ERR_BAD_LENGTH);
+        return;
+    }
+
+    SCOPE_ArmConfig_t cfg;
+    cfg.trigMode    = (SCOPE_TrigMode_t)payload[0];
+    cfg.preTrigPct  = payload[1];
+    cfg.trigChannel = (SCOPE_Channel_t)payload[2];
+    cfg.trigEdge    = (SCOPE_Edge_t)payload[3];
+    cfg.threshold   = (int16_t)((uint16_t)payload[4] | ((uint16_t)payload[5] << 8));
+
+    if (cfg.trigMode > SCOPE_TRIG_THRESHOLD) {
+        SendError(GSP_ERR_OUT_OF_RANGE);
+        return;
+    }
+
+    /* Force trigger for MANUAL mode after arming */
+    Scope_Arm(&cfg);
+    if (cfg.trigMode == SCOPE_TRIG_MANUAL) {
+        Scope_ForceTrigger();
+    }
+
+    GSP_SendResponse(GSP_CMD_SCOPE_ARM, NULL, 0);
+}
+
+static void HandleScopeStatus(const uint8_t *payload, uint8_t payloadLen)
+{
+    (void)payload;
+    (void)payloadLen;
+
+    SCOPE_Status_t st = Scope_GetStatus();
+    uint8_t buf[8];
+    buf[0] = (uint8_t)st.state;
+    buf[1] = (uint8_t)st.trigMode;
+    buf[2] = st.preTrigPct;
+    buf[3] = st.trigIdx;
+    buf[4] = st.sampleCount;
+    buf[5] = st.sampleSize;
+    buf[6] = 0;  /* reserved */
+    buf[7] = 0;
+
+    GSP_SendResponse(GSP_CMD_SCOPE_STATUS, buf, 8);
+}
+
+static void HandleScopeRead(const uint8_t *payload, uint8_t payloadLen)
+{
+    /* Payload: [offset(1), count(1)] = 2 bytes */
+    if (payloadLen < 2) {
+        SendError(GSP_ERR_BAD_LENGTH);
+        return;
+    }
+
+    uint8_t offset = payload[0];
+    uint8_t count  = payload[1];
+
+    if (count > SCOPE_MAX_CHUNK)
+        count = SCOPE_MAX_CHUNK;
+
+    /* Response: [offset(1), actualCount(1), samples...] */
+    uint8_t buf[2 + SCOPE_MAX_CHUNK * SCOPE_SAMPLE_SIZE];
+    SCOPE_SAMPLE_T *samples = (SCOPE_SAMPLE_T *)&buf[2];
+    uint8_t actual = Scope_ReadSamples(offset, count, samples);
+
+    buf[0] = offset;
+    buf[1] = actual;
+
+    GSP_SendResponse(GSP_CMD_SCOPE_READ, buf,
+                     2 + (uint16_t)actual * SCOPE_SAMPLE_SIZE);
+}
+
+#endif /* FEATURE_BURST_SCOPE */
+
 /* ── Dispatch table ──────────────────────────────────────────────────── */
 
 typedef struct {
@@ -618,6 +702,12 @@ static const CMD_ENTRY_T cmdTable[] = {
     { GSP_CMD_GET_RX_STATUS,   0, HandleGetRxStatus    },
 #if (FEATURE_RX_PWM || FEATURE_RX_DSHOT || FEATURE_RX_AUTO)
     { GSP_CMD_RX_INJECT,       4, HandleRxInject       },
+#endif
+    /* Burst scope */
+#if FEATURE_BURST_SCOPE
+    { GSP_CMD_SCOPE_ARM,       8, HandleScopeArm       },
+    { GSP_CMD_SCOPE_STATUS,    0, HandleScopeStatus     },
+    { GSP_CMD_SCOPE_READ,      2, HandleScopeRead       },
 #endif
 };
 

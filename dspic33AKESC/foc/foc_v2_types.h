@@ -41,6 +41,7 @@ typedef struct {
     float i_beta_last;       /* Previous Iβ (for L·dI term) */
     float theta_est;         /* atan2 angle output (rad) */
     float gain;              /* Scheduled observer gain */
+    float bemf_int;          /* BEMF correction integrator (PLL_OBS hybrid) */
 } FOC_Observer_t;
 
 /* ── PLL speed estimator (smooth ω from observer angle) ──────── */
@@ -168,6 +169,16 @@ typedef struct {
 
     /* Stall detection */
     uint32_t stall_ctr;
+
+    /* Reverse rotation detection (observer lost tracking) */
+    uint32_t reverse_ctr;
+
+    /* Sustained high-current oscillation detection */
+    uint32_t oscillation_ctr;
+
+    /* 180° flip detection + correction */
+    uint16_t flip_ctr;           /* Saturating counter for flip detection */
+    uint8_t  flip_attempts;      /* Correction attempts (fault after max) */
 
     /* Arming counter */
     uint32_t arm_ctr;

@@ -46,8 +46,17 @@ GSP_CMD_CLEAR_FAULT     = 0x05
 GSP_CMD_SET_THROTTLE_SRC= 0x07
 GSP_CMD_GET_RX_STATUS   = 0x26
 GSP_CMD_RX_INJECT       = 0x27
+GSP_CMD_SCOPE_ARM       = 0x30
+GSP_CMD_SCOPE_STATUS    = 0x31
+GSP_CMD_SCOPE_READ      = 0x32
 GSP_CMD_TELEM_FRAME     = 0x80
 GSP_CMD_ERROR           = 0xFF
+
+# Scope constants
+SCOPE_SAMPLE_SIZE = 26
+SCOPE_MAX_CHUNK   = 9
+SCOPE_TRIG_STATE  = 2    # Trigger on state transition
+SCOPE_STATE_READY = 3
 
 GSP_ERR_WRONG_STATE     = 0x04
 
@@ -251,6 +260,106 @@ def set_throttle_source(ser: serial.Serial, src: int) -> bool:
     if resp is None:
         return False
     return resp[0] == GSP_CMD_SET_THROTTLE_SRC
+
+
+# ── Scope capture helpers ──────────────────────────────────────────────
+
+SCOPE_TRIG_FAULT  = 1    # Trigger on fault entry
+
+def scope_arm(ser: serial.Serial, pre_pct: int = 50) -> bool:
+    """Arm burst scope with fault trigger."""
+    # mode=fault(1), pre%, channel=iq(3), edge=rising(0), thresh=0, pad
+    payload = struct.pack('<BBBBhBB', SCOPE_TRIG_FAULT, pre_pct, 3, 0, 0, 0, 0)
+    resp = send_cmd(ser, GSP_CMD_SCOPE_ARM, payload)
+    return resp is not None and resp[0] == GSP_CMD_SCOPE_ARM
+
+
+def scope_check_ready(ser: serial.Serial) -> Optional[int]:
+    """Check if scope triggered. Returns sample count if READY, None otherwise."""
+    resp = send_cmd(ser, GSP_CMD_SCOPE_STATUS)
+    if resp is None or resp[0] != GSP_CMD_SCOPE_STATUS:
+        return None
+    p = resp[1]
+    if len(p) < 6:
+        return None
+    scope_state = p[0]
+    sample_count = p[4]
+    if scope_state == SCOPE_STATE_READY:
+        return sample_count
+    return None
+
+
+def scope_read_samples(ser: serial.Serial, sample_count: int) -> list:
+    """Read all scope samples."""
+    samples = []
+    offset = 0
+    while offset < sample_count:
+        count = min(SCOPE_MAX_CHUNK, sample_count - offset)
+        payload = struct.pack('<BB', offset, count)
+        resp = send_cmd(ser, GSP_CMD_SCOPE_READ, payload)
+        if resp is None or resp[0] != GSP_CMD_SCOPE_READ:
+            break
+        p = resp[1]
+        if len(p) < 2:
+            break
+        rx_count = p[1]
+        if rx_count == 0:
+            break
+        for i in range(rx_count):
+            base = 2 + i * SCOPE_SAMPLE_SIZE
+            if base + SCOPE_SAMPLE_SIZE > len(p):
+                break
+            s = struct.unpack_from('<11h 2B H', p, base)
+            samples.append({
+                'ia': s[0]/1000.0, 'ib': s[1]/1000.0,
+                'id': s[2]/1000.0, 'iq': s[3]/1000.0,
+                'vd': s[4]/100.0,  'vq': s[5]/100.0,
+                'theta': s[6]/10000.0,
+                'obs_x1': s[7]/100000.0, 'obs_x2': s[8]/100000.0,
+                'omega': s[9], 'mod_index': s[10]/10000.0,
+                'flags': s[11], 'state': s[12], 'tick_lsb': s[13],
+            })
+        offset += rx_count
+    return samples
+
+
+def scope_dump(samples: list, pre_pct: int = 50, csv_path: Optional[str] = None):
+    """Print scope capture table and optionally save CSV."""
+    if not samples:
+        print("  No scope samples.")
+        return
+    dt_us = 1e6 / 24000.0
+    trig_idx = int(len(samples) * pre_pct / 100)
+
+    print(f"\n  === SCOPE CAPTURE ({len(samples)} samples) ===")
+    print(f"  {'#':>4} {'t(µs)':>8} {'Ia':>7} {'Ib':>7} {'Id':>7} {'Iq':>7} "
+          f"{'Vd':>7} {'Vq':>7} {'θ':>7} {'ω':>8} {'mod':>6} {'st':>3} {'fl':>2}")
+    print('  ' + '-' * 100)
+    for i, s in enumerate(samples):
+        t_us = (i - trig_idx) * dt_us
+        marker = ' *' if i == trig_idx else '  '
+        print(f"  {i:4d} {t_us:8.1f} {s['ia']:7.3f} {s['ib']:7.3f} "
+              f"{s['id']:7.3f} {s['iq']:7.3f} {s['vd']:7.2f} {s['vq']:7.2f} "
+              f"{s['theta']:7.4f} {s['omega']:8.1f} {s['mod_index']:6.4f} "
+              f"{s['state']:3d} {s['flags']:2d}{marker}")
+
+    if csv_path:
+        import csv
+        with open(csv_path, 'w', newline='') as f:
+            w = csv.writer(f)
+            w.writerow(['sample', 't_us', 'ia', 'ib', 'id', 'iq', 'vd', 'vq',
+                         'theta', 'obs_x1', 'obs_x2', 'omega', 'mod_index',
+                         'flags', 'state', 'tick_lsb'])
+            for i, s in enumerate(samples):
+                t_us = (i - trig_idx) * dt_us
+                w.writerow([i, f'{t_us:.1f}', f'{s["ia"]:.4f}', f'{s["ib"]:.4f}',
+                            f'{s["id"]:.4f}', f'{s["iq"]:.4f}',
+                            f'{s["vd"]:.3f}', f'{s["vq"]:.3f}',
+                            f'{s["theta"]:.5f}', f'{s["obs_x1"]:.5f}',
+                            f'{s["obs_x2"]:.5f}', f'{s["omega"]:.1f}',
+                            f'{s["mod_index"]:.5f}', s['flags'], s['state'],
+                            s['tick_lsb']])
+        print(f"\n  Scope data saved to {csv_path}")
 
 
 # ── PWM throttle model (mirrors PwmUsToThrottleAdc in rx_decode.c) ─────
@@ -712,8 +821,9 @@ def get_full_snapshot(ser: serial.Serial) -> Optional[dict]:
 
 
 def motor_test(ser: serial.Serial, rx_src: int, is_foc: bool,
-               use_dshot: bool = False):
-    """Interactive motor test via RX inject — spins the motor."""
+               use_dshot: bool = False, scope_csv: Optional[str] = None):
+    """Interactive motor test via RX inject — spins the motor.
+    Auto-arms burst scope and captures on fault if scope_csv is set."""
     if use_dshot:
         proto = RX_PROTO_DSHOT600
         proto_name = "DShot600"
@@ -745,6 +855,7 @@ def motor_test(ser: serial.Serial, rx_src: int, is_foc: bool,
         print(f"    DOWN/-/[  Decrease throttle by {val_step}us (less speed)")
         print(f"    0         Zero throttle (1000us)")
         print(f"    1-9       Set throttle preset (1100-1900us)")
+    print("    c         Clear fault, zero throttle, re-arm")
     print("    q/Ctrl+C  Stop motor and exit")
     print()
     if use_dshot:
@@ -793,6 +904,16 @@ def motor_test(ser: serial.Serial, rx_src: int, is_foc: bool,
         print(f" state={ESC_STATE_NAMES.get(snap['state'], '?')}")
 
     throttle_val = val_zero  # start at zero throttle
+    scope_armed = False
+    scope_captured = False
+
+    # Arm burst scope for auto-capture on fault
+    if scope_csv is not None:
+        if scope_arm(ser, pre_pct=50):
+            print("  Scope ARMED (auto-capture on state change)")
+            scope_armed = True
+        else:
+            print("  WARNING: Scope arm failed — no auto-capture")
 
     # Set up terminal for single-keypress input
     import select
@@ -839,6 +960,22 @@ def motor_test(ser: serial.Serial, rx_src: int, is_foc: bool,
                                 throttle_val = min(throttle_val + val_step, val_max)
                             elif ch3 == 'B':  # Down arrow
                                 throttle_val = max(throttle_val - val_step, val_min if throttle_val > val_min else val_zero)
+                elif ch in ('c', 'C'):  # clear fault + re-arm
+                    send_cmd(ser, GSP_CMD_CLEAR_FAULT)
+                    time.sleep(0.05)
+                    send_cmd(ser, GSP_CMD_STOP_MOTOR)
+                    time.sleep(0.1)
+                    throttle_val = val_zero
+                    print("\n  Fault cleared, throttle zeroed. Re-arming...", flush=True)
+                    time.sleep(0.5)
+                    # Re-lock and re-arm
+                    for i in range(RX_LOCK_COUNT + 5):
+                        rx_inject(ser, proto, val_zero, 1)
+                        time.sleep(0.01)
+                    time.sleep(0.5)
+                    scope_captured = False
+                    if scope_csv is not None and scope_arm(ser, pre_pct=50):
+                        print("  Scope re-armed.", flush=True)
                 elif ch in ('q', 'Q', '\x03'):  # q or Ctrl+C
                     break
                 elif ch in ('+', '=', ']'):  # increase
@@ -864,28 +1001,31 @@ def motor_test(ser: serial.Serial, rx_src: int, is_foc: bool,
                 snap = get_full_snapshot(ser)
                 if snap:
                     state_name = ESC_STATE_NAMES.get(snap["state"], f"?{snap['state']}")
+                    fault_str = f" F={snap['faultCode']}" if snap.get("faultCode", 0) else ""
                     if use_dshot:
                         if throttle_val <= RX_DSHOT_CMD_MAX:
                             throttle_pct = 0.0
                         else:
                             throttle_pct = (throttle_val - 48) / 19.99
                         line = (f"\r  DS={throttle_val:4d} ({throttle_pct:4.0f}%) "
-                                f"| State={state_name:8s} "
+                                f"| {state_name:5s}{fault_str} "
                                 f"| Duty={snap['dutyPct']:3d}% "
                                 f"| Thr={snap['throttle']:4d}")
                     else:
                         throttle_pct = (throttle_val - 1000) / 10
                         line = (f"\r  PWM={throttle_val}us ({throttle_pct:4.0f}%) "
-                                f"| State={state_name:8s} "
+                                f"| {state_name:5s}{fault_str} "
                                 f"| Duty={snap['dutyPct']:3d}% "
                                 f"| Thr={snap['throttle']:4d}")
 
                     if is_foc and "focIq" in snap:
                         omega = snap.get("focOmega", 0)
-                        rpm = abs(omega) * 60 / (2 * 3.14159)
+                        pole_pairs = 7  # A2212; TODO: read from params
+                        rpm_mech = abs(omega) * 60 / (2 * 3.14159 * pole_pairs)
                         line += (f" | Iq={snap['focIq']:5.2f}A"
                                  f" Id={snap['focId']:5.2f}A"
-                                 f" {rpm:5.0f}RPM")
+                                 f" ω={abs(omega):.0f}r/s"
+                                 f" {rpm_mech:5.0f}RPM")
                     elif not is_foc and snap.get("stepPeriod", 0) > 0:
                         sp = snap["stepPeriod"]
                         if sp > 0:
@@ -893,6 +1033,30 @@ def motor_test(ser: serial.Serial, rx_src: int, is_foc: bool,
 
                     line += "    "  # clear trailing chars
                     print(line, end="", flush=True)
+
+                    # Auto-capture scope on fault (once per fault event)
+                    if (snap["state"] == ESC_FAULT and scope_armed
+                            and not scope_captured):
+                        scope_captured = True
+                        print()  # newline after status
+                        print(f"\n  FAULT detected (F={snap.get('faultCode', '?')})"
+                              " — reading scope buffer...")
+                        time.sleep(0.1)  # let scope finish post-trigger fill
+                        n = scope_check_ready(ser)
+                        if n and n > 0:
+                            samples = scope_read_samples(ser, n)
+                            scope_dump(samples, pre_pct=50, csv_path=scope_csv)
+                        else:
+                            print("  Scope not ready (may have missed trigger).")
+                        print("\n  Press 0 to clear fault + re-arm, q to quit.")
+
+                    # Clear fault on '0' key: also re-arm scope
+                    if snap["state"] != ESC_FAULT and scope_captured:
+                        # Fault was cleared, re-arm scope for next fault
+                        scope_captured = False
+                        if scope_arm(ser, pre_pct=50):
+                            print("\n  Scope re-armed for next fault.")
+
                 last_display = now
 
             time.sleep(0.005)  # 5ms poll
@@ -915,6 +1079,8 @@ def main():
                         help="Interactive motor control via RX inject (spins the motor!)")
     parser.add_argument("--dshot", action="store_true",
                         help="Use DShot600 protocol for motor test (default: PWM)")
+    parser.add_argument("--scope-csv", type=str, default=None,
+                        help="Auto-capture scope on fault, save to CSV (e.g. --scope-csv fault.csv)")
     args = parser.parse_args()
 
     print(f"Connecting to {args.port} @ {args.baud}...")
@@ -961,7 +1127,8 @@ def main():
 
     # Motor test mode
     if args.motor_test:
-        motor_test(ser, rx_src, is_foc, use_dshot=args.dshot)
+        motor_test(ser, rx_src, is_foc, use_dshot=args.dshot,
+                   scope_csv=args.scope_csv)
         ser.close()
         sys.exit(0)
 

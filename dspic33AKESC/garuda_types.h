@@ -510,6 +510,7 @@ typedef enum
     FAULT_MORPH_TIMEOUT,    /* Morph did not achieve ZC lock */
     FAULT_RX_LOSS,          /* RX signal lost (PWM/DShot/AUTO) — requires CLEAR_FAULT */
     FAULT_FOC_INTERNAL,     /* FOC internal fault (estimator divergence, overcurrent) */
+    FAULT_OBSERVER,         /* Observer lost tracking (sustained reverse speed in CL) */
     FAULT_FOC_BUSLOSS,      /* HW OC tripped: voltage applied but no current flows */
     FAULT_TRAP_BUS,         /* CPU bus error trap */
     FAULT_TRAP_ILLEGAL,     /* Illegal instruction trap */
