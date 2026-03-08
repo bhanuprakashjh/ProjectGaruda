@@ -119,6 +119,15 @@ void GSP_CaptureSnapshot(GSP_SNAPSHOT_T *dst)
     dst->focThetaObs = src->focThetaObs;
     dst->focVd       = src->focVd;
     dst->focVq       = src->focVq;
+    dst->focFluxAlpha   = src->focFluxAlpha;
+    dst->focFluxBeta    = src->focFluxBeta;
+    dst->focLambdaEst   = src->focLambdaEst;
+    dst->focObsGain     = src->focObsGain;
+    dst->focPidDInteg   = src->focPidDInteg;
+    dst->focPidQInteg   = src->focPidQInteg;
+    dst->focPidSpdInteg = src->focPidSpdInteg;
+    dst->focModIndex    = src->focModIndex;
+    dst->focObsConfidence = src->focObsConfidence;
     dst->focSubState = src->focSubState;
     dst->focOffsetIa = src->focOffsetIa;
     dst->focOffsetIb = src->focOffsetIb;

@@ -157,13 +157,25 @@ typedef struct __attribute__((packed)) {
     float    focThetaObs;     /* Observer angle (rad) */
     float    focVd;           /* D-axis voltage command (V) */
     float    focVq;           /* Q-axis voltage command (V) */
+    /* Observer internals (16B) */
+    float    focFluxAlpha;    /* Observer flux alpha state (V·s) */
+    float    focFluxBeta;     /* Observer flux beta state (V·s) */
+    float    focLambdaEst;    /* Adaptive flux linkage estimate (V·s/rad) */
+    float    focObsGain;      /* Observer scheduled gain */
+    /* PI controller internals (12B) */
+    float    focPidDInteg;    /* D-axis PI integrator */
+    float    focPidQInteg;    /* Q-axis PI integrator */
+    float    focPidSpdInteg;  /* Speed PI integrator */
+    /* Derived diagnostics (8B) */
+    float    focModIndex;     /* Modulation index 0-1 */
+    float    focObsConfidence;/* Observer confidence 0-1 */
     uint8_t  focSubState;     /* 0=idle, 1=armed, 2=align, 3=if, 4=cl */
     uint8_t  focPad;
     uint16_t focOffsetIa;     /* Calibrated ADC offset Ia */
     uint16_t focOffsetIb;     /* Calibrated ADC offset Ib */
 } GSP_SNAPSHOT_T;
 
-_Static_assert(sizeof(GSP_SNAPSHOT_T) == 114, "GSP_SNAPSHOT_T wire size mismatch");
+_Static_assert(sizeof(GSP_SNAPSHOT_T) == 150, "GSP_SNAPSHOT_T wire size mismatch");
 
 /* GSP_RX_STATUS_T — 12 bytes, returned by GET_RX_STATUS */
 typedef struct __attribute__((packed)) {

@@ -75,11 +75,9 @@ def read_response(ser, timeout=2.0):
 def get_snapshot(ser):
     """Get snapshot and extract FOC fields.
 
-    GSP_SNAPSHOT_T is 106 bytes packed:
+    GSP_SNAPSHOT_T is 150 bytes packed (v3):
       offset 0:  state (u8)
       offset 1:  faultCode (u8)
-      offset 2:  currentStep (u8)
-      offset 3:  direction (u8)
       offset 4:  throttle (u16)
       offset 6:  dutyPct (u8)
       offset 8:  vbusRaw (u16)
@@ -88,10 +86,10 @@ def get_snapshot(ser):
       offset 76: focTheta (float)
       offset 80: focOmega (float)
       offset 84: focVbus (float)
-      offset 88: focIa (float)
-      offset 92: focIb (float)
+      offset 88: focIa/Ib (float)
       offset 96: focThetaObs (float)
-      offset 100: focSubState (u8)
+      offset 100-140: Vd/Vq/obs/PI/diag
+      offset 144: focSubState (u8)
     """
     send_cmd(ser, CMD_GET_SNAPSHOT)
     cmd, payload = read_response(ser)
@@ -106,7 +104,7 @@ def get_snapshot(ser):
     dutyPct   = payload[6]
     vbusRaw   = struct.unpack_from('<H', payload, 8)[0]
 
-    if len(payload) < 106:
+    if len(payload) < 100:
         return {'state': state, 'faultCode': faultCode, 'throttle': throttle,
                 'dutyPct': dutyPct, 'vbusRaw': vbusRaw, 'len': len(payload)}
 
@@ -119,7 +117,13 @@ def get_snapshot(ser):
     ia        = struct.unpack_from('<f', payload, 88)[0]
     ib        = struct.unpack_from('<f', payload, 92)[0]
     theta_obs = struct.unpack_from('<f', payload, 96)[0]
-    foc_sub   = payload[100]
+    # focSubState offset depends on snapshot version
+    if len(payload) >= 150:
+        foc_sub = payload[144]  # v3
+    elif len(payload) >= 114:
+        foc_sub = payload[108]  # v2
+    else:
+        foc_sub = payload[100]  # v1
 
     return {
         'state': state,

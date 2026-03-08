@@ -67,7 +67,8 @@ GSP_ERR_CROSS_VALIDATION = 0x07
 GSP_ERR_EEPROM_THROTTLED = 0x08
 
 GSP_INFO_SIZE = 20
-GSP_SNAPSHOT_SIZE = 68
+GSP_SNAPSHOT_SIZE_MIN = 68   # 6-step only
+GSP_SNAPSHOT_SIZE_MAX = 150  # FOC v3 with observer/PI/diag
 
 # Parameter IDs — Stage 1 (existing)
 PARAM_ID_RAMP_TARGET_ERPM = 0x15
@@ -316,9 +317,9 @@ def decode_info(payload: bytes) -> dict:
 
 
 def decode_snapshot(payload: bytes) -> dict:
-    """Decode GSP_SNAPSHOT_T (68 bytes packed)."""
-    if len(payload) != GSP_SNAPSHOT_SIZE:
-        return {"error": f"expected {GSP_SNAPSHOT_SIZE}B, got {len(payload)}B"}
+    """Decode GSP_SNAPSHOT_T (68-150 bytes packed, backward-compatible)."""
+    if len(payload) < GSP_SNAPSHOT_SIZE_MIN:
+        return {"error": f"expected >={GSP_SNAPSHOT_SIZE_MIN}B, got {len(payload)}B"}
 
     fmt = "<"
     fmt += "BBBBHBB"      # core (8B)
@@ -481,8 +482,8 @@ def test_get_snapshot(ser: serial.Serial) -> bool:
     if cmd_id != GSP_CMD_GET_SNAPSHOT:
         print(f"  FAIL: expected cmd 0x02, got 0x{cmd_id:02X}")
         return False
-    if len(payload) != GSP_SNAPSHOT_SIZE:
-        print(f"  FAIL: expected {GSP_SNAPSHOT_SIZE}B, got {len(payload)}B")
+    if len(payload) < GSP_SNAPSHOT_SIZE_MIN:
+        print(f"  FAIL: expected >={GSP_SNAPSHOT_SIZE_MIN}B, got {len(payload)}B")
         return False
 
     snap = decode_snapshot(payload)
@@ -580,7 +581,7 @@ def test_stress(ser: serial.Serial, iterations: int = 1000) -> bool:
         ser.reset_input_buffer()
         ser.write(build_packet(GSP_CMD_GET_SNAPSHOT))
         resp = read_response(ser, timeout=0.5)
-        if resp and resp[0] == GSP_CMD_GET_SNAPSHOT and len(resp[1]) == GSP_SNAPSHOT_SIZE:
+        if resp and resp[0] == GSP_CMD_GET_SNAPSHOT and len(resp[1]) >= GSP_SNAPSHOT_SIZE_MIN:
             snap_ok += 1
         else:
             failures += 1

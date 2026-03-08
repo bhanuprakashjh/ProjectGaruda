@@ -48,6 +48,28 @@ const CHANNELS: ScopeChannel[] = [
   { key: 'focPower', label: 'Elec Power', unit: 'W', color: '#f97316', group: 'FOC Power',
     extract: (s) => +(s.focVq * s.focIqMeas + s.focVd * s.focIdMeas).toFixed(1), focOnly: true },
 
+  // FOC observer internals
+  { key: 'focFluxAlpha', label: 'Flux Alpha', unit: 'V·s', color: '#14b8a6', group: 'FOC Observer',
+    extract: (s) => +s.focFluxAlpha.toFixed(5), focOnly: true },
+  { key: 'focFluxBeta', label: 'Flux Beta', unit: 'V·s', color: '#0d9488', group: 'FOC Observer',
+    extract: (s) => +s.focFluxBeta.toFixed(5), focOnly: true },
+  { key: 'focLambdaEst', label: 'Lambda Est', unit: 'V·s/rad', color: '#f59e0b', group: 'FOC Observer',
+    extract: (s) => +s.focLambdaEst.toFixed(6), focOnly: true },
+  { key: 'focObsGain', label: 'Obs Gain', unit: '', color: '#78716c', group: 'FOC Observer',
+    extract: (s) => +s.focObsGain.toFixed(4), focOnly: true },
+  { key: 'focObsConfidence', label: 'Obs Confidence', unit: '', color: '#10b981', group: 'FOC Observer',
+    extract: (s) => +s.focObsConfidence.toFixed(3), focOnly: true },
+  { key: 'focModIndex', label: 'Mod Index', unit: '', color: '#ef4444', group: 'FOC Observer',
+    extract: (s) => +s.focModIndex.toFixed(3), focOnly: true },
+
+  // FOC PI internals
+  { key: 'focPidDInteg', label: 'PI-D Integrator', unit: 'V', color: '#84cc16', group: 'FOC PI',
+    extract: (s) => +s.focPidDInteg.toFixed(3), focOnly: true },
+  { key: 'focPidQInteg', label: 'PI-Q Integrator', unit: 'V', color: '#eab308', group: 'FOC PI',
+    extract: (s) => +s.focPidQInteg.toFixed(3), focOnly: true },
+  { key: 'focPidSpdInteg', label: 'PI-Speed Integrator', unit: 'A', color: '#6366f1', group: 'FOC PI',
+    extract: (s) => +s.focPidSpdInteg.toFixed(3), focOnly: true },
+
   // Motor (6-step)
   { key: 'eRPM', label: 'eRPM', unit: 'eRPM', color: '#3b82f6', group: 'Motor',
     extract: (s) => s.stepPeriod > 0 ? Math.round(240000 / s.stepPeriod) : 0, sixStepOnly: true },
@@ -109,6 +131,8 @@ const PRESETS: Record<string, { label: string; channels: string[]; focOnly?: boo
   focAngle: { label: 'FOC Angles', channels: ['focTheta', 'focThetaObs', 'focOmega'], focOnly: true },
   focVoltage: { label: 'FOC Voltage', channels: ['focVq', 'focVd', 'focVbus'], focOnly: true },
   focPower: { label: 'FOC Power', channels: ['focVbus', 'focPower', 'focIq'], focOnly: true },
+  focObserver: { label: 'FOC Observer', channels: ['focObsConfidence', 'focModIndex', 'focLambdaEst', 'focObsGain'], focOnly: true },
+  focPI: { label: 'FOC PI State', channels: ['focPidDInteg', 'focPidQInteg', 'focPidSpdInteg'], focOnly: true },
   sixStep: { label: '6-Step', channels: ['eRPM', 'duty', 'bemf', 'zcThreshold'], sixStepOnly: true },
   power: { label: 'Power', channels: ['vbus', 'ibus', 'ibusMax', 'duty'] },
 };

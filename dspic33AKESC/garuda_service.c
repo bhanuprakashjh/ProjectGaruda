@@ -1271,6 +1271,31 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
         garudaData.focThetaObs = s_foc_v2.theta_obs;
         garudaData.focVd       = s_foc_v2.vd;
         garudaData.focVq       = s_foc_v2.vq;
+        /* Observer internals */
+        garudaData.focFluxAlpha   = s_foc_v2.obs.x1;
+        garudaData.focFluxBeta    = s_foc_v2.obs.x2;
+        garudaData.focLambdaEst   = s_foc_v2.obs.lambda_est;
+        garudaData.focObsGain     = s_foc_v2.obs.gain;
+        /* PI controller internals */
+        garudaData.focPidDInteg   = s_foc_v2.pid_d.integral;
+        garudaData.focPidQInteg   = s_foc_v2.pid_q.integral;
+        garudaData.focPidSpdInteg = s_foc_v2.pid_spd.integral;
+        /* Derived diagnostics */
+        {
+            float vd = s_foc_v2.vd, vq = s_foc_v2.vq;
+            float vbus = s_foc_v2.vbus;
+            float v_mag = sqrtf(vd * vd + vq * vq);
+            float v_max = vbus * 0.57735027f;  /* 1/sqrt(3) */
+            garudaData.focModIndex = (v_max > 0.1f) ? (v_mag / v_max) : 0.0f;
+
+            float fx = s_foc_v2.obs.x1, fy = s_foc_v2.obs.x2;
+            float flux_mag = sqrtf(fx * fx + fy * fy);
+            float lam = s_foc_v2.lambda_pm;
+            garudaData.focObsConfidence = (lam > 0.0f)
+                ? (1.0f - fabsf(flux_mag - lam) / lam) : 0.0f;
+            if (garudaData.focObsConfidence < 0.0f)
+                garudaData.focObsConfidence = 0.0f;
+        }
         garudaData.focSubState = (s_foc_v2.mode == FOC_MOTOR_DETECT)
                                    ? (uint8_t)s_foc_v2.detect_state
                                    : s_foc_v2.sub_state;

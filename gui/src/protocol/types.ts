@@ -55,6 +55,18 @@ export interface GspSnapshot {
   focThetaObs: number;
   focVd: number;
   focVq: number;
+  // Observer internals
+  focFluxAlpha: number;
+  focFluxBeta: number;
+  focLambdaEst: number;
+  focObsGain: number;
+  // PI controller internals
+  focPidDInteg: number;
+  focPidQInteg: number;
+  focPidSpdInteg: number;
+  // Derived diagnostics
+  focModIndex: number;
+  focObsConfidence: number;
   focSubState: number;
   focOffsetIa: number;
   focOffsetIb: number;

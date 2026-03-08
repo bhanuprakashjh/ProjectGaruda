@@ -99,7 +99,7 @@ RX_TIMEOUT_MS      = 200
 RX_PWM_DEADBAND_US = 25
 RX_DSHOT_CMD_MAX   = 47
 
-GSP_SNAPSHOT_SIZE = 114  # FOC-aware snapshot (with Vd/Vq)
+GSP_SNAPSHOT_SIZE = 150  # FOC-aware snapshot (with observer/PI/diag fields)
 
 
 # ── CRC-16-CCITT ────────────────────────────────────────────────────────

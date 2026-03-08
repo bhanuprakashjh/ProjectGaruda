@@ -18,6 +18,7 @@ export function decodeInfo(data: Uint8Array): GspInfo {
 
 export function decodeSnapshot(data: Uint8Array): GspSnapshot {
   const v = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  const hasDiag = data.byteLength >= 150;  // v3: observer/PI/diag fields
   const hasFocVdVq = data.byteLength >= 114;
   const hasFoc = data.byteLength >= 106;
   return {
@@ -53,7 +54,7 @@ export function decodeSnapshot(data: Uint8Array): GspSnapshot {
     fpciTripCount: v.getUint32(56, true),
     systemTick: v.getUint32(60, true),
     uptimeSec: v.getUint32(64, true),
-    // FOC fields (backward-compatible: zero if snapshot is old 68-byte format)
+    // FOC fields (backward-compatible: zero if snapshot is old format)
     focIdMeas: hasFoc ? v.getFloat32(68, true) : 0,
     focIqMeas: hasFoc ? v.getFloat32(72, true) : 0,
     focTheta: hasFoc ? v.getFloat32(76, true) : 0,
@@ -64,9 +65,22 @@ export function decodeSnapshot(data: Uint8Array): GspSnapshot {
     focThetaObs: hasFoc ? v.getFloat32(96, true) : 0,
     focVd: hasFocVdVq ? v.getFloat32(100, true) : 0,
     focVq: hasFocVdVq ? v.getFloat32(104, true) : 0,
-    focSubState: hasFocVdVq ? v.getUint8(108) : (hasFoc ? v.getUint8(100) : 0),
-    focOffsetIa: hasFocVdVq ? v.getUint16(110, true) : (hasFoc ? v.getUint16(102, true) : 0),
-    focOffsetIb: hasFocVdVq ? v.getUint16(112, true) : (hasFoc ? v.getUint16(104, true) : 0),
+    // Observer internals (v3)
+    focFluxAlpha: hasDiag ? v.getFloat32(108, true) : 0,
+    focFluxBeta: hasDiag ? v.getFloat32(112, true) : 0,
+    focLambdaEst: hasDiag ? v.getFloat32(116, true) : 0,
+    focObsGain: hasDiag ? v.getFloat32(120, true) : 0,
+    // PI controller internals (v3)
+    focPidDInteg: hasDiag ? v.getFloat32(124, true) : 0,
+    focPidQInteg: hasDiag ? v.getFloat32(128, true) : 0,
+    focPidSpdInteg: hasDiag ? v.getFloat32(132, true) : 0,
+    // Derived diagnostics (v3)
+    focModIndex: hasDiag ? v.getFloat32(136, true) : 0,
+    focObsConfidence: hasDiag ? v.getFloat32(140, true) : 0,
+    // Sub-state and offsets — position depends on format version
+    focSubState: hasDiag ? v.getUint8(144) : (hasFocVdVq ? v.getUint8(108) : (hasFoc ? v.getUint8(100) : 0)),
+    focOffsetIa: hasDiag ? v.getUint16(146, true) : (hasFocVdVq ? v.getUint16(110, true) : (hasFoc ? v.getUint16(102, true) : 0)),
+    focOffsetIb: hasDiag ? v.getUint16(148, true) : (hasFocVdVq ? v.getUint16(112, true) : (hasFoc ? v.getUint16(104, true) : 0)),
   };
 }
 

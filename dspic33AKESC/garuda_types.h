@@ -629,6 +629,18 @@ typedef struct
     float       focThetaObs;    /* Observer angle (rad) */
     float       focVd;          /* D-axis voltage command (V) */
     float       focVq;          /* Q-axis voltage command (V) */
+    /* Observer internals */
+    float       focFluxAlpha;   /* Observer flux alpha (V·s) */
+    float       focFluxBeta;    /* Observer flux beta (V·s) */
+    float       focLambdaEst;   /* Adaptive flux linkage estimate (V·s/rad) */
+    float       focObsGain;     /* Observer scheduled gain */
+    /* PI controller internals */
+    float       focPidDInteg;   /* D-axis PI integrator state */
+    float       focPidQInteg;   /* Q-axis PI integrator state */
+    float       focPidSpdInteg; /* Speed PI integrator state */
+    /* Derived diagnostics */
+    float       focModIndex;    /* Modulation index 0-1 (voltage utilization) */
+    float       focObsConfidence; /* Observer confidence 0-1 */
     uint8_t     focSubState;    /* 0=idle,1=armed,2=align,3=if,4=cl */
     uint16_t    focOffsetIa;    /* Calibrated ADC offset Ia */
     uint16_t    focOffsetIb;    /* Calibrated ADC offset Ib */

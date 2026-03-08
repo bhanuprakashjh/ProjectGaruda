@@ -42,7 +42,7 @@ GSP_CMD_TELEM_STOP   = 0x15
 GSP_CMD_TELEM_FRAME  = 0x80
 GSP_CMD_ERROR        = 0xFF
 
-GSP_SNAPSHOT_SIZE = 114
+GSP_SNAPSHOT_SIZE = 150
 
 ESC_STATE_NAMES = {
     0: "IDLE", 1: "ARMED", 2: "DETECT", 3: "ALIGN", 4: "OL_RAMP",
@@ -86,6 +86,12 @@ CSV_COLUMNS = [
     # FOC (46B)
     "focIdMeas", "focIqMeas", "focTheta", "focOmega", "focVbus",
     "focIa", "focIb", "focThetaObs", "focVd", "focVq",
+    # Observer internals
+    "focFluxAlpha", "focFluxBeta", "focLambdaEst", "focObsGain",
+    # PI controller internals
+    "focPidDInteg", "focPidQInteg", "focPidSpdInteg",
+    # Derived diagnostics
+    "focModIndex", "focObsConfidence",
     "focSubState", "focSubName", "focOffsetIa", "focOffsetIb",
     # Derived
     "focRPM", "focPower",
@@ -160,7 +166,7 @@ def drain(ser: serial.Serial):
 # ── Snapshot Parser ─────────────────────────────────────────────────────
 
 def parse_snapshot(p: bytes, t0: float) -> Optional[dict]:
-    """Parse a 114-byte snapshot into a dict matching CSV_COLUMNS."""
+    """Parse a 150-byte snapshot into a dict matching CSV_COLUMNS."""
     if len(p) < 68:
         return None
 
@@ -181,11 +187,28 @@ def parse_snapshot(p: bytes, t0: float) -> Optional[dict]:
     # FOC fields
     foc_id = foc_iq = foc_theta = foc_omega = foc_vbus = 0.0
     foc_ia = foc_ib = foc_theta_obs = foc_vd = foc_vq = 0.0
+    foc_flux_a = foc_flux_b = foc_lambda_est = foc_obs_gain = 0.0
+    foc_pid_d = foc_pid_q = foc_pid_spd = 0.0
+    foc_mod_idx = foc_obs_conf = 0.0
     foc_sub = 0
     foc_off_ia = foc_off_ib = 0
 
-    if len(p) >= 114:
-        # New format with Vd/Vq
+    if len(p) >= 150:
+        # V3 format with observer/PI/diag fields
+        foc_id, foc_iq, foc_theta, foc_omega, foc_vbus = \
+            struct.unpack_from("<fffff", p, 68)
+        foc_ia, foc_ib, foc_theta_obs, foc_vd, foc_vq = \
+            struct.unpack_from("<fffff", p, 88)
+        foc_flux_a, foc_flux_b, foc_lambda_est, foc_obs_gain = \
+            struct.unpack_from("<ffff", p, 108)
+        foc_pid_d, foc_pid_q, foc_pid_spd = \
+            struct.unpack_from("<fff", p, 124)
+        foc_mod_idx, foc_obs_conf = \
+            struct.unpack_from("<ff", p, 136)
+        foc_sub, = struct.unpack_from("<B", p, 144)
+        foc_off_ia, foc_off_ib = struct.unpack_from("<HH", p, 146)
+    elif len(p) >= 114:
+        # V2 format with Vd/Vq
         foc_id, foc_iq, foc_theta, foc_omega, foc_vbus = \
             struct.unpack_from("<fffff", p, 68)
         foc_ia, foc_ib, foc_theta_obs, foc_vd, foc_vq = \
@@ -193,7 +216,7 @@ def parse_snapshot(p: bytes, t0: float) -> Optional[dict]:
         foc_sub, = struct.unpack_from("<B", p, 108)
         foc_off_ia, foc_off_ib = struct.unpack_from("<HH", p, 110)
     elif len(p) >= 106:
-        # Old format without Vd/Vq
+        # V1 format without Vd/Vq
         foc_id, foc_iq, foc_theta, foc_omega, foc_vbus = \
             struct.unpack_from("<fffff", p, 68)
         foc_ia, foc_ib, foc_theta_obs = \
@@ -251,6 +274,15 @@ def parse_snapshot(p: bytes, t0: float) -> Optional[dict]:
         "focThetaObs": f"{foc_theta_obs:.4f}",
         "focVd": f"{foc_vd:.4f}",
         "focVq": f"{foc_vq:.4f}",
+        "focFluxAlpha": f"{foc_flux_a:.6f}",
+        "focFluxBeta": f"{foc_flux_b:.6f}",
+        "focLambdaEst": f"{foc_lambda_est:.6f}",
+        "focObsGain": f"{foc_obs_gain:.4f}",
+        "focPidDInteg": f"{foc_pid_d:.4f}",
+        "focPidQInteg": f"{foc_pid_q:.4f}",
+        "focPidSpdInteg": f"{foc_pid_spd:.4f}",
+        "focModIndex": f"{foc_mod_idx:.4f}",
+        "focObsConfidence": f"{foc_obs_conf:.4f}",
         "focSubState": foc_sub,
         "focSubName": FOC_SUB_NAMES.get(foc_sub, f"?{foc_sub}"),
         "focOffsetIa": foc_off_ia,
@@ -368,8 +400,10 @@ def main():
     test_resp = send_cmd(ser, GSP_CMD_GET_SNAPSHOT)
     if test_resp and test_resp[0] == GSP_CMD_GET_SNAPSHOT:
         snap_size = len(test_resp[1])
-        print(f"  Snapshot size: {snap_size} bytes"
-              f" ({'new format with Vd/Vq' if snap_size >= 114 else 'old format' if snap_size >= 106 else 'short'})")
+        fmt_name = ('v3 obs/PI/diag' if snap_size >= 150
+                    else 'v2 Vd/Vq' if snap_size >= 114
+                    else 'v1' if snap_size >= 106 else 'short')
+        print(f"  Snapshot size: {snap_size} bytes ({fmt_name})")
         # Hex dump first 20 bytes for debug
         hexdump = test_resp[1][:20].hex(' ')
         print(f"  First 20 bytes: {hexdump}")
@@ -441,10 +475,13 @@ def main():
             vbus = row["focVbus"]
             thr = row["throttle"]
             fault = row["fault_name"]
+            mod_idx = row["focModIndex"]
+            obs_conf = row["focObsConfidence"]
 
             line = (f"\r  {row['time_s']:>7s}  {state_name:>8s}  {sub_name:>5s}  "
-                    f"{foc_iq:>7s}  {foc_id:>7s}  {foc_vq:>7s}  {foc_vd:>7s}  "
-                    f"{rpm:>7s}  {vbus:>6s}  {thr:>5}  {fault:>6s}")
+                    f"Iq={foc_iq:>6s}  Id={foc_id:>6s}  Vq={foc_vq:>6s}  "
+                    f"{rpm:>6s}rpm  {vbus:>5s}V  mod={mod_idx:>5s}  "
+                    f"conf={obs_conf:>5s}  {fault:>6s}")
             print(line, end="", flush=True)
             last_print = now
 
