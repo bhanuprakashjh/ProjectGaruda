@@ -239,26 +239,44 @@ def get_snapshot(ser: serial.Serial) -> Optional[dict]:
     }
 
 
-def ensure_idle(ser: serial.Serial, retries: int = 10) -> bool:
+def ensure_idle(ser: serial.Serial, retries: int = 10, verbose: bool = True) -> bool:
     """Stop motor and clear faults to get to ESC_IDLE.
     Polls up to `retries` times (100ms each) for state to settle."""
     for attempt in range(retries):
+        drain_unsolicited(ser)
         snap = get_snapshot(ser)
         if snap is None:
+            if verbose:
+                print(f"    ensure_idle: attempt {attempt+1}/{retries} — no snapshot response")
             time.sleep(0.1)
             continue
-        if snap["state"] == ESC_IDLE:
+        state = snap["state"]
+        state_name = ESC_STATE_NAMES.get(state, f"?{state}")
+        if state == ESC_IDLE:
             return True
-        if snap["state"] == ESC_FAULT:
-            send_cmd(ser, GSP_CMD_CLEAR_FAULT)
-            time.sleep(0.1)
+        if verbose:
+            print(f"    ensure_idle: attempt {attempt+1}/{retries} — state={state_name} fault={snap.get('faultCode', '?')}")
+        if state == ESC_FAULT:
+            resp = send_cmd(ser, GSP_CMD_CLEAR_FAULT)
+            if verbose and resp is not None and resp[0] == GSP_CMD_ERROR:
+                print(f"    ensure_idle: CLEAR_FAULT rejected (error 0x{resp[1][0]:02X})" if resp[1] else "")
+            time.sleep(0.2)
             continue
         # Any other state (ARMED, ALIGN, OL_RAMP, CL, BRAKING, etc.) → stop
-        send_cmd(ser, GSP_CMD_STOP_MOTOR)
-        time.sleep(0.2)
+        resp = send_cmd(ser, GSP_CMD_STOP_MOTOR)
+        if verbose and resp is not None and resp[0] == GSP_CMD_ERROR:
+            print(f"    ensure_idle: STOP_MOTOR rejected (error 0x{resp[1][0]:02X})" if resp[1] else "")
+        time.sleep(0.3)
     # Final check
     snap = get_snapshot(ser)
-    return snap is not None and snap["state"] == ESC_IDLE
+    if snap is None:
+        if verbose:
+            print(f"    ensure_idle: FAILED — no snapshot after {retries} attempts")
+        return False
+    if snap["state"] != ESC_IDLE and verbose:
+        state_name = ESC_STATE_NAMES.get(snap["state"], f"?{snap['state']}")
+        print(f"    ensure_idle: FAILED — stuck in {state_name} (fault={snap.get('faultCode', '?')})")
+    return snap["state"] == ESC_IDLE
 
 
 def set_throttle_source(ser: serial.Serial, src: int) -> bool:
