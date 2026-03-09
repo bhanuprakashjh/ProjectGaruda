@@ -21,6 +21,9 @@
         <itemPath>../foc/foc_v2_observer.h</itemPath>
         <itemPath>../foc/foc_v2_control.h</itemPath>
         <itemPath>../foc/foc_v2_detect.h</itemPath>
+        <itemPath>../foc/foc_v3_types.h</itemPath>
+        <itemPath>../foc/foc_v3_smo.h</itemPath>
+        <itemPath>../foc/foc_v3_control.h</itemPath>
       </logicalFolder>
       <logicalFolder name="gsp" displayName="gsp" projectFiles="true">
         <itemPath>../gsp/gsp.h</itemPath>
@@ -102,6 +105,8 @@
         <itemPath>../foc/foc_v2_observer.c</itemPath>
         <itemPath>../foc/foc_v2_control.c</itemPath>
         <itemPath>../foc/foc_v2_detect.c</itemPath>
+        <itemPath>../foc/foc_v3_smo.c</itemPath>
+        <itemPath>../foc/foc_v3_control.c</itemPath>
       </logicalFolder>
       <logicalFolder name="gsp" displayName="gsp" projectFiles="true">
         <itemPath>../gsp/gsp.c</itemPath>

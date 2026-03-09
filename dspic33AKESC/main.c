@@ -148,7 +148,7 @@ int main(void)
         }
 #endif
 
-#if FEATURE_FOC || FEATURE_FOC_V2
+#if FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3
         /* FOC LED2 state encoding:
          *   IDLE: OFF, ARMED: 5Hz blink, CLOSED_LOOP: solid ON, FAULT: fast blink */
         {

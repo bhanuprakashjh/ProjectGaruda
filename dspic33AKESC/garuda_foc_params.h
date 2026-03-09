@@ -201,10 +201,13 @@
  * with < 30 deg phase lag. PLL compensates residual lag. */
 #define OBS_LPF_ALPHA           0.35f
 
-/* SMO tuning -- A2212 (high-speed motor: fast LPF)
- * LPF cutoff ~ 2x max elec freq = 2 * 12000/(2pi) = 3820 Hz
- * alpha = 2pi * 3820 * Ts = 1.0, cap at 0.80 (PLL handles rest) */
-#define SMO_LPF_ALPHA           0.80f
+/* SMO tuning -- A2212 (low-Ls motor: heavy LPF needed)
+ * K=Vbus=12V → switching noise ±12V. Need 2-stage LPF to attenuate
+ * to below BEMF (0.28V at 500 rad/s handoff).
+ * alpha=0.10 @ handoff → adaptive gives 0.05 at 500 rad/s.
+ * 2-stage residual: 12V × 0.026² = 0.008V (vs 0.28V signal).
+ * Signal loss: 14% amplitude, 2° phase lag — acceptable. */
+#define SMO_LPF_ALPHA           0.10f
 
 #elif MOTOR_PROFILE == 2
 /* ----------------------------------------------------------------

@@ -85,11 +85,11 @@ void ChargeBootstrapCapacitors(void);
 void HAL_PWM_SetCommutationStep(uint8_t step);
 void HAL_PWM_SetDutyCycle(uint32_t duty);
 
-#if (FEATURE_SINE_STARTUP || FEATURE_FOC || FEATURE_FOC_V2)
+#if (FEATURE_SINE_STARTUP || FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3)
 void HAL_PWM_SetDutyCycle3Phase(uint32_t dutyA, uint32_t dutyB, uint32_t dutyC);
 void HAL_PWM_ReleaseAllOverrides(void);
 #endif
-#if FEATURE_FOC || FEATURE_FOC_V2
+#if FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3
 void HAL_PWM_SetDutyFloat3Phase(float da, float db, float dc);
 #endif
 #if FEATURE_SINE_STARTUP

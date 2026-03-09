@@ -209,13 +209,13 @@ _Static_assert(MIN_ADC_STEP_PERIOD > MIN_CL_ADC_STEP_PERIOD,
 /* FOC SVM switches all 3 phases at different instants — LEB only covers one
  * edge, so CMP3 false-trips on switching ringing. Force CLPCI off; software
  * overcurrent (OC_PROTECT_MODE 1 or 2 software path) still protects. */
-#if (FEATURE_FOC || FEATURE_FOC_V2) && OC_CLPCI_ENABLE
+#if (FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3) && OC_CLPCI_ENABLE
 #undef OC_CLPCI_ENABLE
 #define OC_CLPCI_ENABLE 0
 #endif
 
 /* 6-step feature dependency guards (N/A when FOC active) */
-#if !FEATURE_FOC && !FEATURE_FOC_V2
+#if !FEATURE_FOC && !FEATURE_FOC_V2 && !FEATURE_FOC_V3
 #if FEATURE_TIMING_ADVANCE && !FEATURE_BEMF_CLOSED_LOOP
 #error "Timing advance requires FEATURE_BEMF_CLOSED_LOOP"
 #endif

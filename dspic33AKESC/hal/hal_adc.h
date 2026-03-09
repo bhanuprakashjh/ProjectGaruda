@@ -29,7 +29,7 @@ extern "C" {
 #define HALF_ADC_COUNT      2048
 
 /* ADC buffer read macros — MUST read to clear data-ready condition */
-#if FEATURE_FOC || FEATURE_FOC_V2
+#if FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3
 /* FOC current sense buffers — raw unsigned, offset subtracted at runtime.
  * RK1 convention: runtime calibration during IDLE/ARMED averages 1024 samples
  * to find the zero-current midpoint, then subtracts per-tick in the ISR. */
@@ -60,7 +60,7 @@ extern "C" {
 
 void InitializeADCs(void);
 
-#if FEATURE_FOC || FEATURE_FOC_V2
+#if FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3
 /* No-op: FOC does not use BEMF mux, but commutation.c references this symbol */
 static inline bool HAL_ADC_SelectBEMFChannel(uint8_t floatingPhase)
 { (void)floatingPhase; return false; }

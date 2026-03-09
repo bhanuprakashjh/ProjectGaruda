@@ -58,7 +58,7 @@ void InitializeCMPs(void)
     DACCTRL2bits.SSTIME = 0;
 
     /* Initialize comparators */
-#if !FEATURE_FOC && !FEATURE_FOC_V2
+#if !FEATURE_FOC && !FEATURE_FOC_V2 && !FEATURE_FOC_V3
     /* CMP1 (RA4) and CMP2 (RB2) — BEMF ZC comparators.
      * SKIPPED in FOC modes: RA4=OA1IN+, RB2=OA2IN+ (pin conflict). */
     CMP1_Initialize();

@@ -74,7 +74,7 @@ static uint32_t BuildFeatureFlags(void)
     if (FEATURE_RX_PWM)          f |= (1UL << 20);
     if (FEATURE_RX_DSHOT)        f |= (1UL << 21);
     if (FEATURE_RX_AUTO)         f |= (1UL << 22);
-    if (FEATURE_FOC || FEATURE_FOC_V2) f |= (1UL << 23);
+    if (FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3) f |= (1UL << 23);
     if (FEATURE_BURST_SCOPE)         f |= (1UL << 24);
     return f;
 }

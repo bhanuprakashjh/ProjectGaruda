@@ -108,7 +108,7 @@ void GSP_CaptureSnapshot(GSP_SNAPSHOT_T *dst)
     dst->uptimeSec  = src->systemTick / 1000;
 
     /* FOC telemetry (float fields: may tear, acceptable for telemetry) */
-#if FEATURE_FOC_V2
+#if FEATURE_FOC_V2 || FEATURE_FOC_V3
     dst->focIdMeas   = src->focIdMeas;
     dst->focIqMeas   = src->focIqMeas;
     dst->focTheta    = src->focTheta;

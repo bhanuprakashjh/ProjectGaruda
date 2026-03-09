@@ -73,6 +73,17 @@
 #endif
 #endif
 
+#if FEATURE_FOC_V3
+#include <math.h>
+#include "garuda_foc_params.h"
+#include "foc/foc_v3_types.h"
+#include "foc/foc_v3_control.h"
+#include "hal/hal_pwm.h"
+#if FEATURE_GSP
+#include "gsp/gsp_params.h"
+#endif
+#endif
+
 #if FEATURE_BURST_SCOPE
 #include "scope/scope_burst.h"
 #endif
@@ -87,7 +98,13 @@ volatile GARUDA_DATA_T garudaData;
 static FOC_State_t s_foc_v2;
 /* Flag: set by profile load handler, checked by ISR to re-init FOC */
 volatile bool gspFocReinitNeeded;
+#elif FEATURE_FOC_V3
+/* FOC v3 state — SMO observer, accessed only from ADC ISR */
+static V3_State_t s_foc_v3;
+volatile bool gspFocReinitNeeded;
+#endif
 
+#if FEATURE_FOC_V2 || FEATURE_FOC_V3
 /** Build FOC_MotorParams_t from GSP runtime params (or compile-time fallback). */
 static FOC_MotorParams_t BuildFocMotorParams(void)
 {
@@ -248,8 +265,8 @@ static inline float counts_to_vbus(uint16_t raw)
 }
 #endif /* FEATURE_FOC */
 
-#if FEATURE_FOC_V2
-/* Reuse same helper for v2 telemetry raw→amps conversion */
+#if FEATURE_FOC_V2 || FEATURE_FOC_V3
+/* Reuse same helper for v2/v3 telemetry raw→amps conversion */
 static inline float v2_counts_to_amps(uint16_t raw, uint16_t offset)
 {
     return -((float)(int16_t)(raw - offset)) * CURRENT_SCALE_A_PER_COUNT;
@@ -339,6 +356,12 @@ void GARUDA_ServiceInit(void)
         foc_v2_init(&s_foc_v2, &mp);
         gspFocReinitNeeded = false;
     }
+#elif FEATURE_FOC_V3
+    {
+        FOC_MotorParams_t mp = BuildFocMotorParams();
+        foc_v3_init(&s_foc_v3, &mp);
+        gspFocReinitNeeded = false;
+    }
 #endif
 
     /* Throttle source init — unconditional (Finding 42/54).
@@ -412,6 +435,12 @@ void GARUDA_ServiceInit(void)
     _CCT1IP = 7;        /* SCCP1 timer: highest priority */
 #endif
 
+    /* Clear any latched PCI fault from previous run (U25B is latching).
+     * Must happen before enabling ADC ISR, otherwise the first PWM
+     * edge re-triggers the fault immediately. */
+    HAL_MC1ClearPWMPCIFault();
+    HAL_MC1PWMDisableOutputs();
+
     /* Enable ADC interrupt to start the control loop */
     GARUDA_ClearADCIF();
     GARUDA_EnableADCInterrupt();
@@ -439,7 +468,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
 {
     /* Read all ADC buffers. MUST read AD1CH0DATA first — interrupt source.
      * Reading clears data-ready condition on dsPIC33AK. */
-#if FEATURE_FOC || FEATURE_FOC_V2
+#if FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3
     /* FOC: AD1CH0 = Ia (OA1OUT), AD2CH0 = Ib (OA2OUT) — raw uint16_t */
     uint16_t raw_ia = ADCBUF_IA;
     uint16_t raw_ib = ADCBUF_IB;
@@ -617,7 +646,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
     }
     adcIsrTick++;
 #else
-#if !FEATURE_FOC && !FEATURE_FOC_V2
+#if !FEATURE_FOC && !FEATURE_FOC_V2 && !FEATURE_FOC_V3
     garudaData.bemf.bemfRaw = phaseB_val;
     (void)phaseAC_val;  /* AD2CH0DATA must be read; suppress unused warning */
 #endif
@@ -1349,6 +1378,145 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
 #endif
 #endif
     } /* end FOC v2 scope */
+#elif FEATURE_FOC_V3
+    /* ── FOC v3 control path — SMO observer + OL ramp startup ──────
+     * Architecture: Sliding Mode Observer + Tustin PI + SVPWM.
+     * State machine: IDLE → ARMED → ALIGN → OL_RAMP → CLOSED_LOOP
+     */
+    {
+        /* Sync mode from main loop state changes */
+        if (garudaData.state == ESC_ARMED && s_foc_v3.mode == V3_IDLE) {
+            s_foc_v3.mode = V3_ARMED;
+            s_foc_v3.arm_ctr = 0;
+        } else if (garudaData.state == ESC_IDLE &&
+                   s_foc_v3.mode != V3_IDLE) {
+            s_foc_v3.mode = V3_IDLE;
+            s_foc_v3.cal_done = false;
+            s_foc_v3.cal_count = 0;
+            s_foc_v3.cal_accum_a = 0;
+            s_foc_v3.cal_accum_b = 0;
+        }
+
+        /* Re-init FOC with updated motor params (after profile load) */
+        if (gspFocReinitNeeded && s_foc_v3.mode == V3_IDLE) {
+            FOC_MotorParams_t mp = BuildFocMotorParams();
+            foc_v3_init(&s_foc_v3, &mp);
+            gspFocReinitNeeded = false;
+        }
+
+        uint16_t throttle_v3 = garudaData.throttle;
+
+        float da_v3, db_v3, dc_v3;
+        foc_v3_fast_tick(&s_foc_v3,
+                         raw_ia, raw_ib,
+                         garudaData.vbusRaw, throttle_v3,
+                         &da_v3, &db_v3, &dc_v3);
+
+        /* Release PWM overrides when entering active modes */
+        {
+            static bool v3_ovr_released = false;
+            if (s_foc_v3.mode >= V3_ALIGN && s_foc_v3.mode <= V3_CLOSED_LOOP) {
+                if (!v3_ovr_released) {
+                    HAL_PWM_ReleaseAllOverrides();
+                    v3_ovr_released = true;
+                }
+                HAL_PWM_SetDutyFloat3Phase(da_v3, db_v3, dc_v3);
+            } else if (s_foc_v3.mode == V3_FAULT && v3_ovr_released) {
+                HAL_PWM_SetDutyFloat3Phase(0.5f, 0.5f, 0.5f);
+            } else {
+                v3_ovr_released = false;
+            }
+        }
+
+        /* Map FOC v3 mode to ESC state for main loop compatibility */
+        switch (s_foc_v3.mode) {
+            case V3_IDLE:         garudaData.state = ESC_IDLE; break;
+            case V3_ARMED:        garudaData.state = ESC_ARMED; break;
+            case V3_ALIGN:        garudaData.state = ESC_ALIGN; break;
+            case V3_OL_RAMP:      garudaData.state = ESC_OL_RAMP; break;
+            case V3_CLOSED_LOOP:  garudaData.state = ESC_CLOSED_LOOP; break;
+            case V3_FAULT:        garudaData.state = ESC_FAULT; break;
+            default:              garudaData.state = ESC_FAULT; break;
+        }
+
+        /* Fault propagation */
+        if (s_foc_v3.mode == V3_FAULT) {
+            HAL_MC1PWMDisableOutputs();
+            if (garudaData.faultCode == FAULT_NONE)
+                garudaData.faultCode = s_foc_v3.fault_code ? s_foc_v3.fault_code : FAULT_FOC_INTERNAL;
+            garudaData.runCommandActive = false;
+            LED2 = 0;
+        }
+
+        /* Telemetry update */
+        garudaData.focIdMeas   = s_foc_v3.id_meas;
+        garudaData.focIqMeas   = s_foc_v3.iq_meas;
+        garudaData.focTheta    = s_foc_v3.theta;
+        garudaData.focOmega    = s_foc_v3.omega_pll;
+        garudaData.focVbus     = s_foc_v3.vbus;
+        garudaData.focIa       = v2_counts_to_amps(raw_ia, (uint16_t)s_foc_v3.ia_offset);
+        garudaData.focIb       = v2_counts_to_amps(raw_ib, (uint16_t)s_foc_v3.ib_offset);
+        garudaData.focThetaObs = s_foc_v3.theta_obs;
+        garudaData.focVd       = s_foc_v3.vd;
+        garudaData.focVq       = s_foc_v3.vq;
+        /* SMO internals → flux telemetry fields (repurposed) */
+        garudaData.focFluxAlpha   = s_foc_v3.smo.e_alpha_filt;
+        garudaData.focFluxBeta    = s_foc_v3.smo.e_beta_filt;
+        garudaData.focLambdaEst   = 0.0f;
+        garudaData.focObsGain     = s_foc_v3.smo.K_base;
+        garudaData.focPidDInteg   = s_foc_v3.pid_d.integral;
+        garudaData.focPidQInteg   = s_foc_v3.pid_q.integral;
+        garudaData.focPidSpdInteg = s_foc_v3.pid_spd.integral;
+        /* Derived diagnostics */
+        {
+            float vd = s_foc_v3.vd, vq = s_foc_v3.vq;
+            float vbus = s_foc_v3.vbus;
+            float v_mag = sqrtf(vd * vd + vq * vq);
+            float v_max = vbus * 0.57735027f;
+            garudaData.focModIndex = (v_max > 0.1f) ? (v_mag / v_max) : 0.0f;
+            garudaData.focObsConfidence = 0.0f;  /* TODO: SMO confidence metric */
+        }
+        garudaData.focSubState = s_foc_v3.sub_state;
+        garudaData.focOffsetIa = (uint16_t)s_foc_v3.ia_offset;
+        garudaData.focOffsetIb = (uint16_t)s_foc_v3.ib_offset;
+
+        /* Duty for telemetry */
+        {
+            float dmax = da_v3;
+            if (db_v3 > dmax) dmax = db_v3;
+            if (dc_v3 > dmax) dmax = dc_v3;
+            garudaData.duty = (uint32_t)(dmax * LOOPTIME_TCY);
+        }
+
+#if FEATURE_BURST_SCOPE
+        /* Burst scope sample from v3 state */
+        {
+            SCOPE_SAMPLE_T ss;
+            ss.ia    = (int16_t)(garudaData.focIa * 1000.0f);
+            ss.ib    = (int16_t)(garudaData.focIb * 1000.0f);
+            ss.id    = (int16_t)(s_foc_v3.id_meas * 1000.0f);
+            ss.iq    = (int16_t)(s_foc_v3.iq_meas * 1000.0f);
+            ss.vd    = (int16_t)(s_foc_v3.vd * 100.0f);
+            ss.vq    = (int16_t)(s_foc_v3.vq * 100.0f);
+            ss.theta = (int16_t)(s_foc_v3.theta * 10000.0f);
+            ss.obs_x1 = (int16_t)(s_foc_v3.smo.e_alpha_filt * 100000.0f);
+            ss.obs_x2 = (int16_t)(s_foc_v3.smo.e_beta_filt * 100000.0f);
+            {
+                float omega_clamped = s_foc_v3.omega_pll;
+                if (omega_clamped > 32767.0f) omega_clamped = 32767.0f;
+                if (omega_clamped < -32768.0f) omega_clamped = -32768.0f;
+                ss.omega = (int16_t)(omega_clamped);
+            }
+            ss.mod_index = (int16_t)(garudaData.focModIndex * 10000.0f);
+            ss.flags  = (s_foc_v3.cl_active ? 0x01 : 0x00)
+                      | ((garudaData.state == ESC_FAULT) ? 0x02 : 0x00)
+                      | (((uint8_t)s_foc_v3.mode & 0x07) << 2);
+            ss.state  = (uint8_t)garudaData.state;
+            ss.tick_lsb = (uint16_t)(garudaData.systemTick & 0xFFFF);
+            Scope_WriteSample(&ss);
+        }
+#endif
+    } /* end FOC v3 scope */
 #else
     /* ── 6-step state machine ── */
     /* State machine */
@@ -2460,7 +2628,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
             HAL_MC1PWMDisableOutputs();
             break;
     }
-#endif /* !FEATURE_FOC && !FEATURE_FOC_V2 — end of 6-step state machine */
+#endif /* !FEATURE_FOC && !FEATURE_FOC_V2 && !FEATURE_FOC_V3 — end of 6-step state machine */
 
 #if FEATURE_BEMF_CLOSED_LOOP
     /* Track state for transition detection (must be last before flag clear).
@@ -2515,7 +2683,7 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
             break;
 
         case ESC_ARMED:
-#if FEATURE_FOC || FEATURE_FOC_V2
+#if FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3
             /* FOC: arming handled in ADC ISR slow loop (1kHz) to avoid
              * cross-ISR races. Timer1 is a no-op for ESC_ARMED with FOC. */
             break;
@@ -2542,7 +2710,7 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
 #endif
 
         case ESC_ALIGN:
-#if FEATURE_FOC || FEATURE_FOC_V2
+#if FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3
             /* FOC: alignment handled in ADC ISR. Timer1 is a no-op. */
             break;
 #elif FEATURE_SINE_STARTUP
@@ -2559,7 +2727,7 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
 #endif
 
         case ESC_OL_RAMP:
-#if FEATURE_FOC || FEATURE_FOC_V2
+#if FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3
             /* FOC: I/f ramp handled in ADC ISR. Timer1 is a no-op. */
             break;
 #elif DIAGNOSTIC_MANUAL_STEP
@@ -2598,7 +2766,7 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
 #endif
 
         case ESC_MORPH:
-#if FEATURE_FOC || FEATURE_FOC_V2
+#if FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3
             /* FOC: no morph phase. Unreachable. */
             break;
 #elif FEATURE_SINE_STARTUP
@@ -2609,7 +2777,7 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
             break;
 #endif
 
-#if FEATURE_FOC || FEATURE_FOC_V2
+#if FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3
         case ESC_CLOSED_LOOP:
             /* FOC: all control in ADC ISR. Timer1 does nothing. */
             break;

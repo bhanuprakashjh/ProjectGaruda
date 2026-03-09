@@ -19,8 +19,8 @@
 #include "board_service.h"
 #include "../garuda_config.h"
 #include "../garuda_types.h"    /* GARUDA_DATA_T, FAULT_TRAP_* for trap handlers */
-#if (FEATURE_HW_OVERCURRENT || FEATURE_FOC || FEATURE_FOC_V2)
-#include "port_config.h"      /* HAL_OA3_Init (HW_OC), HAL_OA12_Init (FOC/V2) */
+#if (FEATURE_HW_OVERCURRENT || FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3)
+#include "port_config.h"      /* HAL_OA3_Init (HW_OC), HAL_OA12_Init (FOC/V2/V3) */
 #endif
 #if FEATURE_HW_OVERCURRENT
 #include "hal_comparator.h"
@@ -141,8 +141,8 @@ static void ButtonGroupInitialize(void)
  */
 void HAL_InitPeripherals(void)
 {
-#if FEATURE_FOC || FEATURE_FOC_V2
-    HAL_OA12_Init();                /* OA1/OA2 for phase current sense (FOC/V2) */
+#if FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3
+    HAL_OA12_Init();                /* OA1/OA2 for phase current sense (FOC/V2/V3) */
 #endif
 #if FEATURE_HW_OVERCURRENT
     HAL_OA3_Init();                 /* 1. Op-amp on (~10us settling) */

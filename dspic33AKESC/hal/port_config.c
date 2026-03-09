@@ -65,7 +65,7 @@ void SetupGPIOPorts(void)
  */
 void MapGPIOHWFunction(void)
 {
-#if FEATURE_FOC || FEATURE_FOC_V2
+#if FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3
     /* ================================================================
      * Phase Current Sensing via OA1/OA2 (Internal Op-Amps)
      * OA1IN+ : RA4  (DIM:013), OA1IN- : RA3  (DIM:015)
@@ -181,7 +181,7 @@ void MapGPIOHWFunction(void)
 #endif
 }
 
-#if FEATURE_FOC || FEATURE_FOC_V2
+#if FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3
 /**
  * @brief Initialize OA1/OA2 internal op-amps for phase current sensing.
  * External gain resistors on MCLV-48V-300W provide gain.

@@ -34,6 +34,7 @@ extern "C" {
 /* FOC (Field-Oriented Control) — compile-time alternative to 6-step */
 #define FEATURE_FOC              0  /* Phase I: OLD FOC v1 (reference, deprecated) */
 #define FEATURE_FOC_V2           1  /* Phase I v2: closed-loop current control + MXLEMMING */
+#define FEATURE_FOC_V3           0  /* Phase J: FOC v3 — SMO observer + OL ramp startup */
 #define FEATURE_SMO              0  /* 0=PLL only, 1=PLL+SMO parallel (v1 only) */
 #define FEATURE_MXLEMMING        0  /* 0=PLL chain, 1=MXLEMMING flux observer (v1 only) */
 #define FEATURE_LEARN_MODULES    0  /* master: ring buffer + quality + health */
@@ -100,7 +101,7 @@ extern "C" {
  * All motor-dependent parameters are grouped here for easy swapping.
  * Board-specific and feature-tuning parameters are below.
  *──────────────────────────────────────────────────────────────────────────*/
-#define MOTOR_PROFILE  1
+#define MOTOR_PROFILE  0
 
 #if MOTOR_PROFILE == 0
 /* === Hurst DMB2424B10002 (long Hurst, MCLV-48V-300W bench motor) ===

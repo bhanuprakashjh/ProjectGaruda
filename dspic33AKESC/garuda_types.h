@@ -647,6 +647,35 @@ typedef struct
     uint16_t    focOffsetIb;    /* Calibrated ADC offset Ib */
 #endif
 
+#if FEATURE_FOC_V3
+    /* FOC v3 telemetry — SMO observer */
+    float       focIdMeas;      /* D-axis current (A) */
+    float       focIqMeas;      /* Q-axis current (A) — torque */
+    float       focTheta;       /* Commutation angle (rad) */
+    float       focOmega;       /* PLL speed (rad/s) */
+    float       focVbus;        /* Bus voltage (V) */
+    float       focIa;          /* Phase A current (A) */
+    float       focIb;          /* Phase B current (A) */
+    float       focThetaObs;    /* SMO angle (rad) */
+    float       focVd;          /* D-axis voltage command (V) */
+    float       focVq;          /* Q-axis voltage command (V) */
+    /* SMO internals (mapped to flux telemetry for GUI reuse) */
+    float       focFluxAlpha;   /* SMO back-EMF alpha (V) */
+    float       focFluxBeta;    /* SMO back-EMF beta (V) */
+    float       focLambdaEst;   /* Not used in v3 (0) */
+    float       focObsGain;     /* SMO gain K */
+    /* PI controller internals */
+    float       focPidDInteg;   /* D-axis PI integrator state */
+    float       focPidQInteg;   /* Q-axis PI integrator state */
+    float       focPidSpdInteg; /* Speed PI integrator state */
+    /* Derived diagnostics */
+    float       focModIndex;    /* Modulation index 0-1 */
+    float       focObsConfidence; /* Observer confidence 0-1 */
+    uint8_t     focSubState;    /* 0=idle,1=armed,2=align,3=ol,4=cl */
+    uint16_t    focOffsetIa;    /* Calibrated ADC offset Ia */
+    uint16_t    focOffsetIb;    /* Calibrated ADC offset Ib */
+#endif
+
     /* RX input state (Phase H) — unconditional for status reporting */
     RX_LINK_STATE_T rxLinkState;
     RX_PROTOCOL_T   rxProtocol;
