@@ -239,17 +239,24 @@ def get_snapshot(ser: serial.Serial) -> Optional[dict]:
     }
 
 
-def ensure_idle(ser: serial.Serial) -> bool:
-    """Stop motor and clear faults to get to ESC_IDLE."""
-    snap = get_snapshot(ser)
-    if snap is None:
-        return False
-    if snap["state"] == ESC_FAULT:
-        send_cmd(ser, GSP_CMD_CLEAR_FAULT)
-        time.sleep(0.05)
-    if snap["state"] != ESC_IDLE:
+def ensure_idle(ser: serial.Serial, retries: int = 10) -> bool:
+    """Stop motor and clear faults to get to ESC_IDLE.
+    Polls up to `retries` times (100ms each) for state to settle."""
+    for attempt in range(retries):
+        snap = get_snapshot(ser)
+        if snap is None:
+            time.sleep(0.1)
+            continue
+        if snap["state"] == ESC_IDLE:
+            return True
+        if snap["state"] == ESC_FAULT:
+            send_cmd(ser, GSP_CMD_CLEAR_FAULT)
+            time.sleep(0.1)
+            continue
+        # Any other state (ARMED, ALIGN, OL_RAMP, CL, BRAKING, etc.) → stop
         send_cmd(ser, GSP_CMD_STOP_MOTOR)
-        time.sleep(0.05)
+        time.sleep(0.2)
+    # Final check
     snap = get_snapshot(ser)
     return snap is not None and snap["state"] == ESC_IDLE
 
