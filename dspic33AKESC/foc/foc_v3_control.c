@@ -283,6 +283,13 @@ void foc_v3_fast_tick(V3_State_t *st,
     /* 5. Run PLL on SMO angle */
     v3_smo_pll_update(&st->pll, st->smo.theta_est, DT_FAST);
 
+    /* 5b. Rs online adaptation (Phase 3).
+     * Only during CL at moderate+ speed where current SNR is good.
+     * Updates smo.F coefficient to track temperature-dependent Rs. */
+    if (st->mode == V3_CLOSED_LOOP && st->pll.omega_est > st->handoff_rad_s) {
+        v3_smo_adapt_rs(&st->smo, i_alpha, i_beta, st->Rs);
+    }
+
     /* 6. Select commutation angle based on mode */
     float theta_drive;
     float iq_ref, id_ref;
@@ -345,12 +352,18 @@ void foc_v3_fast_tick(V3_State_t *st,
 
         theta_drive = st->theta_ol;
 
-        /* Check handoff condition: speed + PLL tracking + angle coherence.
-         * Dwell at handoff speed to let SMO converge.
-         * THREE checks must all pass simultaneously:
-         *  1) PLL speed within ±50% of OL speed
-         *  2) SMO angle within ±60° of forced angle (angle coherence)
-         *  3) Both sustained for HANDOFF_DWELL_TICKS */
+        /* Check handoff condition: confidence-based (Phase 3).
+         *
+         * FOUR checks must all pass simultaneously:
+         *  1) PLL speed within ±50% of OL speed (PLL alive)
+         *  2) SMO angle within ±120° of forced angle (angle coherence)
+         *  3) SMO confidence > 0.3 (BEMF magnitude reasonable)
+         *  4) All sustained for HANDOFF_DWELL_TICKS
+         *
+         * The confidence metric (smo.confidence) measures observed BEMF
+         * magnitude vs expected (λ·ω).  When converged, confidence ≈ 0.5-1.0.
+         * Threshold 0.3 is low enough to not block handoff on motors with
+         * parameter errors, but high enough to reject random noise. */
         if (st->omega_ol >= st->handoff_rad_s) {
             /* Speed check: PLL tracking OL speed */
             float pll_speed = st->pll.omega_est;
@@ -358,18 +371,17 @@ void foc_v3_fast_tick(V3_State_t *st,
             bool pll_tracking = (pll_speed > ol_speed * 0.5f) &&
                                 (pll_speed < ol_speed * 1.5f);
 
-            /* Angle coherence: SMO angle tracks forced angle consistently.
-             * SMO may have a systematic ~70° offset (observer processing
-             * artifact or load angle). Allow up to 120° — the important
-             * thing is that the offset is STABLE, not that it's zero.
-             * If the offset is consistent, PI compensates at CL entry. */
+            /* Angle coherence */
             float angle_err = st->smo.theta_est - st->theta_ol;
             if (angle_err >  FOC_PI_F) angle_err -= FOC_TWO_PI;
             if (angle_err < -FOC_PI_F) angle_err += FOC_TWO_PI;
             float abs_angle_err = (angle_err >= 0.0f) ? angle_err : -angle_err;
             bool angle_ok = (abs_angle_err < 2.094f); /* 2π/3 = 120° */
 
-            if (pll_tracking && angle_ok) {
+            /* Confidence check (Phase 3) */
+            bool conf_ok = (st->smo.confidence > 0.3f);
+
+            if (pll_tracking && angle_ok && conf_ok) {
                 st->handoff_ctr++;
                 st->angle_ok_ctr++;
             } else {

@@ -74,6 +74,11 @@ void v3_smo_init(SMO_Observer_t *smo,
      * to maintain constant phase lag across the speed range. */
     smo->lpf_alpha = SMO_LPF_ALPHA;
 
+    /* Rs adaptation: store initial Rs and plant params for recomputation */
+    smo->Rs_est = Rs;
+    smo->Ls_val = Ls;
+    smo->dt_val = dt;
+
     v3_smo_reset(smo);
 }
 
@@ -91,6 +96,10 @@ void v3_smo_reset(SMO_Observer_t *smo)
     smo->omega_est   = 0.0f;
     smo->theta_prev  = 0.0f;
     smo->omega_lpf   = 0.0f;
+    smo->confidence  = 0.0f;
+    smo->bemf_mag_filt = 0.0f;
+    smo->K_adapt     = smo->K_base;
+    smo->err_mag_filt = 0.0f;
 }
 
 /* ── SMO Update (one tick at 24 kHz) ─────────────────────────── */
@@ -108,13 +117,30 @@ void v3_smo_update(SMO_Observer_t *smo,
     float err_beta  = smo->i_hat_beta  - i_beta;
 
     /* 2. Sliding mode switching function (sigmoid).
-     *    Speed-adaptive K: max(K_base, 1.5·λ·ω).
-     *    K_base = 1.5·Ls/dt: controls current model chattering.
-     *    At high speed, K scales with BEMF to maintain sliding condition.
-     *    This keeps G×K proportional and sigmoid partially saturated
-     *    so the switching duty cycle properly encodes BEMF. */
+     *
+     * Adaptive K (Phase 3): K tracks current estimation error magnitude.
+     * When error is large (transient, startup): K rises → maintain sliding.
+     * When error is small (converged): K falls → less chattering → cleaner BEMF.
+     *
+     * K_now = max(K_bemf, K_adapt), where K_adapt is LP-filtered from:
+     *   K_target = K_base + K_err_scale × |err|
+     * The LP filter (alpha=0.01) prevents K from oscillating with the
+     * switching noise — K changes slowly over ~100 ticks (4ms).
+     *
+     * Fallback: K_bemf = 1.5·λ·ω ensures sliding condition at high speed
+     * even if adaptive K hasn't caught up yet. */
+    float err_mag = sqrtf(err_alpha * err_alpha + err_beta * err_beta);
+    smo->err_mag_filt += 0.01f * (err_mag - smo->err_mag_filt);
+
+    /* K_err_scale: how much K increases per amp of error.
+     * At 1A error: adds K_base worth of gain (doubles K).
+     * At 0.1A (converged): adds 10% of K_base (near minimum). */
+    float K_err_scale = smo->K_base;
+    float K_target = smo->K_base * 0.5f + K_err_scale * smo->err_mag_filt;
+    smo->K_adapt += 0.01f * (K_target - smo->K_adapt);
+
     float K_bemf = 1.5f * smo->lambda_pm * abs_omega;
-    float K_now = (K_bemf > smo->K_base) ? K_bemf : smo->K_base;
+    float K_now = (K_bemf > smo->K_adapt) ? K_bemf : smo->K_adapt;
     if (K_now > smo->K_max) K_now = smo->K_max;
 
     smo->z_alpha = K_now * sigmoid(err_alpha, smo->phi);
@@ -178,6 +204,33 @@ void v3_smo_update(SMO_Observer_t *smo,
         theta_raw += FOC_TWO_PI;
     smo->theta_est = theta_raw;
 
+    /* 5b. Confidence metric (Phase 3).
+     *
+     * Confidence = ratio of observed BEMF magnitude to expected BEMF.
+     * Expected BEMF = λ_pm × |ω|.  Observed = |E_filt|.
+     *
+     * When SMO has converged, E_filt tracks the real BEMF, so the
+     * ratio approaches 1.0.  During startup or desync, E_filt is
+     * noise or has wrong magnitude, so confidence is low.
+     *
+     * LP-filter the BEMF magnitude (alpha=0.005 → ~20Hz BW) to
+     * reject per-cycle ripple. Clamp confidence to [0, 1]. */
+    {
+        float bemf_mag = sqrtf(smo->e_alpha_filt * smo->e_alpha_filt
+                             + smo->e_beta_filt  * smo->e_beta_filt);
+        smo->bemf_mag_filt += 0.005f * (bemf_mag - smo->bemf_mag_filt);
+
+        float bemf_expected = smo->lambda_pm * abs_omega;
+        if (bemf_expected > 0.01f) {
+            float conf = smo->bemf_mag_filt / bemf_expected;
+            if (conf > 1.0f) conf = 1.0f;
+            if (conf < 0.0f) conf = 0.0f;
+            smo->confidence = conf;
+        } else {
+            smo->confidence = 0.0f;
+        }
+    }
+
     /* 6. Simple speed estimate from delta-theta (for telemetry).
      *    The PLL provides the smooth speed used for control. */
     float dtheta = smo->theta_est - smo->theta_prev;
@@ -189,6 +242,63 @@ void v3_smo_update(SMO_Observer_t *smo,
     /* LP filter the raw speed (EMA, alpha=0.05 → ~20Hz BW) */
     smo->omega_lpf += 0.05f * (omega_raw - smo->omega_lpf);
     smo->omega_est = smo->omega_lpf;
+}
+
+/* ── Rs Online Adaptation ────────────────────────────────────── */
+
+/**
+ * Adapt Rs estimate based on current prediction error.
+ *
+ * The SMO current model: Î[k+1] = (1 - Rs*dt/Ls)·Î[k] + ...
+ * If Rs_est < true Rs: model overestimates current → err = Î - I > 0
+ * If Rs_est > true Rs: model underestimates current → err < 0
+ *
+ * Adaptation law: dRs = gain × (err · i_meas) — projects error onto
+ * current direction to get sign-correct Rs update.
+ *
+ * Only call during closed-loop at moderate-to-high speed (good SNR).
+ * Clamp Rs_est to ±50% of initial value to prevent divergence.
+ *
+ * @param smo       Observer state
+ * @param i_alpha   Measured current α (A)
+ * @param i_beta    Measured current β (A)
+ * @param Rs_init   Initial Rs from motor profile (for clamping)
+ */
+void v3_smo_adapt_rs(SMO_Observer_t *smo,
+                     float i_alpha, float i_beta,
+                     float Rs_init)
+{
+    /* Adaptation gain: very slow (0.1 Ω/s per A² of error×current).
+     * At 1A current with 0.05Ω Rs error: dRs/dt = 0.1 × 0.05 × 1 = 5mΩ/s.
+     * Takes ~10s to correct — intentionally slow for stability. */
+    const float adapt_gain = 0.1f;
+
+    /* Project current error onto current direction:
+     *   err_Rs = err_α·iα + err_β·iβ  (dot product)
+     * Positive when model over-predicts → Rs too low → increase. */
+    float err_alpha = smo->i_hat_alpha - i_alpha;
+    float err_beta  = smo->i_hat_beta  - i_beta;
+    float err_proj  = err_alpha * i_alpha + err_beta * i_beta;
+
+    /* Normalize by |I|² to make gain independent of current magnitude.
+     * Avoid division by zero at low current. */
+    float i_sq = i_alpha * i_alpha + i_beta * i_beta;
+    if (i_sq < 0.25f) return;  /* Skip below 0.5A — poor SNR */
+
+    float dRs = adapt_gain * err_proj / i_sq * smo->dt_val;
+
+    /* Update Rs estimate */
+    smo->Rs_est += dRs;
+
+    /* Clamp to ±50% of initial value */
+    float Rs_min = Rs_init * 0.5f;
+    float Rs_max = Rs_init * 1.5f;
+    if (smo->Rs_est < Rs_min) smo->Rs_est = Rs_min;
+    if (smo->Rs_est > Rs_max) smo->Rs_est = Rs_max;
+
+    /* Recompute plant coefficients with updated Rs */
+    smo->F = 1.0f - smo->Rs_est * smo->dt_val / smo->Ls_val;
+    /* G = dt/Ls — doesn't depend on Rs, no update needed */
 }
 
 /* ── PLL for smooth speed estimation ─────────────────────────── */

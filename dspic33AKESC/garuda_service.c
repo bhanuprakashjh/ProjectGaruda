@@ -1474,7 +1474,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
             float v_mag = sqrtf(vd * vd + vq * vq);
             float v_max = vbus * 0.57735027f;
             garudaData.focModIndex = (v_max > 0.1f) ? (v_mag / v_max) : 0.0f;
-            garudaData.focObsConfidence = 0.0f;  /* TODO: SMO confidence metric */
+            garudaData.focObsConfidence = s_foc_v3.smo.confidence;
         }
         garudaData.focSubState = s_foc_v3.sub_state;
         garudaData.focOffsetIa = (uint16_t)s_foc_v3.ia_offset;

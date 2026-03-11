@@ -56,6 +56,15 @@ void v3_smo_update(SMO_Observer_t *smo,
                 float omega_est, float dt);
 
 /**
+ * Adapt Rs online from current prediction error.
+ * Call during closed-loop at moderate+ speed only.
+ * Updates smo->Rs_est and recomputes plant coefficient F.
+ */
+void v3_smo_adapt_rs(SMO_Observer_t *smo,
+                     float i_alpha, float i_beta,
+                     float Rs_init);
+
+/**
  * Initialize PLL for SMO speed estimation.
  */
 void v3_smo_pll_init(SMO_PLL_t *pll, float bw_hz, float omega_max);

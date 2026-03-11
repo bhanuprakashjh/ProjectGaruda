@@ -66,6 +66,19 @@ typedef struct {
     float lambda_pm;         /* Flux linkage (V·s/rad) — for adaptive K */
     float phi;               /* Sigmoid boundary layer (A) */
     float lpf_alpha;         /* BEMF LPF coefficient (speed-adaptive base) */
+
+    /* Confidence metric (Phase 3) */
+    float confidence;        /* SMO confidence [0..1] — BEMF magnitude / expected */
+    float bemf_mag_filt;     /* LP-filtered BEMF magnitude (V) */
+
+    /* Adaptive K (Phase 3) */
+    float K_adapt;           /* Current adaptive gain (V) — tracks error magnitude */
+    float err_mag_filt;      /* LP-filtered current estimation error magnitude (A) */
+
+    /* Rs adaptation (Phase 3) */
+    float Rs_est;            /* Online Rs estimate (Ω) — tracks temperature */
+    float Ls_val;            /* Stored Ls for F/G recomputation */
+    float dt_val;            /* Stored dt for F/G recomputation */
 } SMO_Observer_t;
 
 /* ── PLL for SMO speed estimation ────────────────────────────── */
