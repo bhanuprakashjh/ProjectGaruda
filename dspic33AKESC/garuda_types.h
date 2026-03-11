@@ -674,6 +674,13 @@ typedef struct
     uint8_t     focSubState;    /* 0=idle,1=armed,2=align,3=ol,4=cl */
     uint16_t    focOffsetIa;    /* Calibrated ADC offset Ia */
     uint16_t    focOffsetIb;    /* Calibrated ADC offset Ib */
+    /* V4 observer diagnostics */
+    float       smoResidual;    /* LP-filtered current estimation error (A) */
+    float       pllInnovation;  /* LP-filtered PLL phase error (rad) */
+    float       pllOmega;       /* Raw PLL speed (rad/s) */
+    float       omegaOl;        /* OL forced speed / CL filtered speed (rad/s) */
+    uint16_t    handoffCtr;     /* Handoff dwell counter */
+    uint8_t     smoObservable;  /* Observer health flag */
 #endif
 
     /* RX input state (Phase H) — unconditional for status reporting */

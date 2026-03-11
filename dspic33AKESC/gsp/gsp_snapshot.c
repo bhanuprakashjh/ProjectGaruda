@@ -131,6 +131,12 @@ void GSP_CaptureSnapshot(GSP_SNAPSHOT_T *dst)
     dst->focSubState = src->focSubState;
     dst->focOffsetIa = src->focOffsetIa;
     dst->focOffsetIb = src->focOffsetIb;
+    dst->smoResidual    = src->smoResidual;
+    dst->pllInnovation  = src->pllInnovation;
+    dst->pllOmega       = src->pllOmega;
+    dst->omegaOl        = src->omegaOl;
+    dst->handoffCtr     = src->handoffCtr;
+    dst->smoObservable  = src->smoObservable;
 #elif FEATURE_FOC
     dst->focTheta    = src->focTheta;
     dst->focOmega    = src->focOmega;

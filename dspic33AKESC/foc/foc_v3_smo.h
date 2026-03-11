@@ -26,16 +26,14 @@ extern "C" {
 #endif
 
 /**
- * Initialize SMO with motor parameters.
- * Precomputes F, G, K, phi, lpf_alpha.
+ * Initialize SMO from runtime configuration struct.
+ * Precomputes F, G, stores all tuning params.
  */
-void v3_smo_init(SMO_Observer_t *smo,
-              float Rs, float Ls, float lambda_pm,
-              float vbus_nom, float dt);
+void v3_smo_init(SMO_Observer_t *smo, const SMO_Config_t *cfg);
 
 /**
  * Reset SMO state (zero currents, BEMF, angle).
- * Preserves tuning parameters (F, G, K, phi, lpf_alpha).
+ * Preserves tuning parameters (F, G, gains, LPF config).
  */
 void v3_smo_reset(SMO_Observer_t *smo);
 
@@ -48,12 +46,22 @@ void v3_smo_reset(SMO_Observer_t *smo);
  * @param i_alpha   Measured current α (A)
  * @param i_beta    Measured current β (A)
  * @param omega_est Current speed estimate (rad/s, for adaptive LPF)
- * @param dt        Sample period (s)
  */
 void v3_smo_update(SMO_Observer_t *smo,
                 float v_alpha, float v_beta,
                 float i_alpha, float i_beta,
-                float omega_est, float dt);
+                float omega_est);
+
+/**
+ * Compute SMO phase delay (radians) for commutation compensation.
+ * Uses exact arctan model: φ = 2·arctan(ω/ωc) + ω·dt.
+ * Call after v3_smo_update() — uses the alpha_now computed that tick.
+ *
+ * @param smo   Observer state (holds LPF cutoff ωc)
+ * @param omega Current electrical speed (rad/s)
+ * @return Phase delay in radians
+ */
+float v3_smo_phase_delay(const SMO_Observer_t *smo, float omega);
 
 /**
  * Adapt Rs online from current prediction error.
@@ -66,8 +74,16 @@ void v3_smo_adapt_rs(SMO_Observer_t *smo,
 
 /**
  * Initialize PLL for SMO speed estimation.
+ *
+ * @param pll          PLL state
+ * @param bw_min_hz    Minimum BW at low speed (Hz)
+ * @param bw_max_hz    Maximum BW at high speed (Hz)
+ * @param omega_bw_ref Speed at which BW = bw_max (rad/s)
+ * @param omega_max    Speed clamp magnitude (rad/s)
  */
-void v3_smo_pll_init(SMO_PLL_t *pll, float bw_hz, float omega_max);
+void v3_smo_pll_init(SMO_PLL_t *pll,
+                     float bw_min_hz, float bw_max_hz,
+                     float omega_bw_ref, float omega_max);
 
 /**
  * Reset PLL state (preserves gains).

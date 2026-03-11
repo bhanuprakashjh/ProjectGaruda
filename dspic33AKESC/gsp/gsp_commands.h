@@ -177,9 +177,17 @@ typedef struct __attribute__((packed)) {
     uint8_t  focPad;
     uint16_t focOffsetIa;     /* Calibrated ADC offset Ia */
     uint16_t focOffsetIb;     /* Calibrated ADC offset Ib */
+    /* V4 observer diagnostics (22B) */
+    float    smoResidual;     /* LP-filtered current estimation error (A) */
+    float    pllInnovation;   /* LP-filtered PLL phase error (rad) */
+    float    pllOmega;        /* Raw PLL speed estimate (rad/s) */
+    float    omegaOl;         /* OL forced speed / CL filtered speed (rad/s) */
+    uint16_t handoffCtr;      /* Handoff dwell counter (ticks) */
+    uint8_t  smoObservable;   /* Observer health flag (0/1) */
+    uint8_t  pad3;
 } GSP_SNAPSHOT_T;
 
-_Static_assert(sizeof(GSP_SNAPSHOT_T) == 150, "GSP_SNAPSHOT_T wire size mismatch");
+_Static_assert(sizeof(GSP_SNAPSHOT_T) == 170, "GSP_SNAPSHOT_T wire size mismatch");
 
 /* GSP_RX_STATUS_T — 12 bytes, returned by GET_RX_STATUS */
 typedef struct __attribute__((packed)) {

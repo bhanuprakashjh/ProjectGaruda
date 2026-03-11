@@ -278,7 +278,7 @@ uint8_t GSP_ParamsGetActiveProfile(void);
 
 #define GSP_PERSIST_V1_MARKER  0xA1
 #define GSP_PERSIST_V2_MARKER  0xA2
-#define GSP_PERSIST_V3_MARKER  0xA6  /* Bumped: force reload after MOTOR_PROFILE change */
+#define GSP_PERSIST_V3_MARKER  0xA7  /* Bumped: A2212 handoff 1000→500 rad/s */
 
 /* V2 packed persist struct — 48 bytes, fills GARUDA_CONFIG_T.reserved */
 typedef struct __attribute__((packed)) {

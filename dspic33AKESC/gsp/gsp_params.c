@@ -126,7 +126,7 @@ static const GSP_PARAMS_T profileDefaults[4] = {
         .focAlignTimeMs       = 300,
         .focIqRampTimeMs      = 100,
         .focRampRateRps2      = 500,
-        .focHandoffRadS       = 1000,
+        .focHandoffRadS       = 500,    /* 500 rad/s — proven reliable on A2212 */
         .focFaultOcCentiA     = 2500,   /* 25.0A */
         .focFaultStallDeciRadS = 500,   /* 50.0 rad/s */
     },

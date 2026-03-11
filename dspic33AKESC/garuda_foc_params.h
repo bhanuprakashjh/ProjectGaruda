@@ -147,13 +147,13 @@
 #define MOTOR_VBUS_NOM_V        12.0f
 /** Peak Iq clamp — limited by MCLV-48V-300W board U25B (no LEB).
  *  Previous prop test: 6.9A Iq OK, 12A trips U25B from switching transients.
- *  10A gives margin for prop load while avoiding U25B false trips.
+ *  15A — A2212 handles 15-20A burst in RC use.  U25B disabled for FOC.
  *  Production board (no U25B): raise to 20A+. */
-#define MOTOR_MAX_CURRENT_A     10.0f
-/** With observer fixes (DT comp + BEMF-d correction + phase lag comp),
- *  observer stability should extend well past 4000 rad/s.
- *  6000 rad/s = 8163 RPM mech — conservative test ceiling.
- *  Raise once stability is confirmed with prop. */
+#define MOTOR_MAX_CURRENT_A     15.0f
+/** A2212 max electrical speed.
+ *  6000 rad/s = 8163 RPM mech.  Speed PI + adaptive omega filter
+ *  handle the full range.  MCLV board U25B may trip at very high
+ *  duty due to no LEB — this is hardware, not a control limit. */
 #define MOTOR_MAX_ELEC_RAD_S    6000.0f
 /** Flux linkage = λ_pm (per-phase). */
 #define MOTOR_FLUX_LINKAGE      0.000563f
@@ -167,9 +167,13 @@
 #define KP_DQ                   0.19f
 #define KI_DQ                   408.0f
 
-/* Speed Loop PI (outer loop — active after CL handoff) */
-#define KP_SPD                  0.005f
-#define KI_SPD                  0.5f
+/* Speed Loop PI (outer loop — active after CL handoff)
+ *   Very low gains needed: A2212 SMO has ±50 rad/s PLL jitter at
+ *   500 rad/s.  Higher gains create growing speed oscillation.
+ *   KI=0.02 proven in 57.5s CL run (500→9000 rad/s).
+ *   KI=0.01 caused desync at 3500 — too slow to track pot sweep. */
+#define KP_SPD                  0.0005f
+#define KI_SPD                  0.02f
 
 /* I/f (Current-Forced) Startup
  * PI controllers active from tick 0 — eliminates V/f current waste.
@@ -194,9 +198,11 @@
  *  Slow enough for 8x4.5 prop inertia. Adaptive ramp
  *  will further slow (or back off) if motor can't keep up. */
 #define STARTUP_RAMP_RATE_RPS2  500.0f
-/** BEMF at 1000 = 0.000563*1000 = 0.56V (4.7% of Vbus).
- *  A2212 has excellent Ls/λ ratio → observer works at low BEMF. */
-#define STARTUP_HANDOFF_RAD_S   1000.0f
+/** V/f handoff at 500 rad/s — proven reliable on A2212.
+ *  1000 rad/s caused rotor sync loss (Id=7-8A angle error).
+ *  BEMF at 500 = 0.000563×500 = 0.28V (2.3% of Vbus) — marginal
+ *  but sufficient with SMO adaptive LPF at this speed. */
+#define STARTUP_HANDOFF_RAD_S   500.0f
 /** Min OL speed at pot=0: 2000 rad/s ~ 2730 RPM mech. */
 #define STARTUP_MIN_OL_RAD_S    2000.0f
 /** At 12V: Vbus/Ke = 12/0.000975 = 12308, cap at 85% → 10000. */
@@ -467,26 +473,72 @@
 #define OBS_LAG_COEFF           ((1.0f - OBS_LPF_ALPHA) / OBS_LPF_ALPHA)
 #define OBS_LAG_COMP_MAX_RAD    0.52f   /* Clamp at 30 deg for safety */
 
-/* -- Sliding Mode Observer (SMO) --------------------------------- */
-/*   Parallel observer with inherent robustness to Rs/Ls errors.
- *   Runs alongside the voltage-model observer for comparison.
- *   Outputs feed a separate PLL instance for angle/speed estimation.
- *
- *   SMO_GAIN: must exceed max BEMF. Using Vbus_nom (BEMF < Vbus
- *     at any operating point under normal conditions).
- *   SMO_SIGMOID_PHI: boundary layer width for sigmoid switching
- *     function. Controls chattering vs tracking tradeoff (amps).
- *   SMO_LPF_ALPHA: per-profile (above) -- filters switching signal
- *     to extract back-EMF. Higher for high-speed motors. */
+/* -- Sliding Mode Observer (SMO) — V4 correct classical SMO ------- */
+/*   SMO_K_BASE: minimum sliding gain (V). Must maintain sliding
+ *     condition: G×K > max current error. Cap at 25% Vbus.
+ *   SMO_K_BEMF_SCALE: K_bemf = scale × λ × |ω| ensures convergence
+ *     at high speed.
+ *   SMO_K_ADAPT_ALPHA: LP filter rate for adaptive K tracking.
+ *   SMO_SIGMOID_PHI: boundary layer width for sigmoid switching.
+ *   SMO_LPF_ALPHA: per-profile (above) — base alpha at omega_ref.
+ *   SMO_ALPHA_MIN/MAX: adaptive LPF clamp range.
+ *   SMO_CONF_MIN: health threshold for observable flag.
+ *   SMO_RESIDUAL_MAX: health threshold for observable flag.
+ *   SMO_*_HANDOFF: handoff-specific thresholds. */
 
-/** Sliding gain (V) -- auto-derived from motor profile Vbus. */
+/** Legacy SMO gain for V1 smo_observer.c */
 #define SMO_GAIN                MOTOR_VBUS_NOM_V
 
+/** Minimum sliding gain (V).
+ *  K_base = 1.5·Ls/dt, capped at 25% Vbus.
+ *  A2212: 1.5×30e-6/41.67e-6 = 1.08V (< 3V cap).
+ *  Hurst: 1.5×471e-6/41.67e-6 = 16.9V → capped to 6.0V. */
+/* Computed at init time in SMO_Config_t — these are defaults.
+ * 1.5·Ls/dt capped at 25% Vbus. */
+#define SMO_K_BASE_RAW      (1.5f * MOTOR_LS_H / FOC_TS_FAST_S)
+#define SMO_K_BASE_CAP      (MOTOR_VBUS_NOM_V * 0.25f)
+#define SMO_K_BASE          ((SMO_K_BASE_RAW > SMO_K_BASE_CAP) ? \
+                             SMO_K_BASE_CAP : SMO_K_BASE_RAW)
+
+/** BEMF-proportional floor: K >= scale × λ × |ω| */
+#define SMO_K_BEMF_SCALE    1.5f
+
+/** LP filter rate for adaptive K (0.01 = ~4ms settling) */
+#define SMO_K_ADAPT_ALPHA   0.01f
+
+/** Dead-time compensation mode for observer voltage reconstruction.
+ *  0 = none (raw duty), 1 = per-phase ABC, 2 = αβ approximation.
+ *  A2212 dt_comp=0.29V ≈ BEMF at handoff — DT comp error can
+ *  dominate the signal. Test 0 vs 1 vs 2 to find best residual. */
+#define SMO_DT_COMP_MODE   1
+
 /** Sigmoid boundary layer thickness (A).
- *  Transition region width for F(x) = x/(|x|+phi).
- *  0.1A: sharp enough for good tracking, smooth enough to suppress
- *  chattering at the ADC noise floor (~4 LSB * 0.01 A/count = 0.04A). */
-#define SMO_SIGMOID_PHI         0.1f
+ *  0.1A: sharp tracking, smooth enough for ADC noise floor. */
+#define SMO_SIGMOID_PHI     0.1f
+
+/** Adaptive LPF clamp range.
+ *  alpha_max=0.30 keeps 2-stage LPF active at high speed.
+ *  At 4200 rad/s: -10 dB 3rd harmonic rejection, 0.9 dB fundamental loss.
+ *  Phase delay = ~1.1 rad (64°) — compensated by arctan model. */
+#define SMO_ALPHA_MIN       0.02f
+#define SMO_ALPHA_MAX       0.30f
+
+/** Observer health thresholds (for observable flag) */
+#define SMO_CONF_MIN        0.10f     /* min confidence for observable=true */
+#define SMO_RESIDUAL_MAX    5.0f      /* max residual for observable=true (A) */
+
+/** Handoff-specific thresholds (can be tighter than runtime) */
+#define SMO_CONF_MIN_HANDOFF     0.15f
+#define SMO_RESIDUAL_MAX_HANDOFF 3.0f
+#define SMO_BEMF_MIN_HANDOFF     0.01f  /* min BEMF mag for handoff (V) */
+
+/** PLL speed-adaptive bandwidth tunables.
+ *  BW scales linearly from bw_min at ω=0 to bw_max at ω=omega_bw_ref.
+ *  Rule of thumb: PLL BW should be ~10-25% of electrical frequency.
+ *  20 Hz min → 60 Hz max covers handoff (262-500 rad/s) to full speed. */
+#define SMO_PLL_BW_MIN_HZ   20.0f    /* Min BW at low speed (Hz) */
+#define SMO_PLL_BW_MAX_HZ   60.0f    /* Max BW at high speed (Hz) */
+#define SMO_PLL_BW_REF_FRAC 0.5f     /* BW=max at this fraction of omega_max */
 
 /* -- Startup Mode Flags ------------------------------------------ */
 
@@ -511,6 +563,21 @@
 
 /** Max Iq reference in closed-loop speed-PI mode (A). */
 #define CL_IQ_MAX_A            MOTOR_MAX_CURRENT_A
+
+/* -- CL ↔ V/f Assist hysteresis --------------------------------- */
+/** Enter CL when omega > CL_ENTER_RAD_S with good SMO health.
+ *  Equal to handoff speed — proven reliable for initial CL entry. */
+#define CL_ENTER_RAD_S         STARTUP_HANDOFF_RAD_S
+
+/** Exit CL to V/f assist when omega < CL_EXIT_RAD_S.
+ *  Must be < CL_ENTER to provide hysteresis band.
+ *  300 rad/s = 60% of handoff — innovation ~0.6 rad at this speed,
+ *  still acceptable for maintaining loose SMO tracking. */
+#define CL_EXIT_RAD_S          300.0f
+
+/** V/f assist speed floor — minimum speed to hold in V/f assist.
+ *  Below this, throttle=0 causes full stop (re-arm). */
+#define VF_ASSIST_MIN_RAD_S    100.0f
 
 /* -- Throttle (POT ADC on RA11 / AD1CH1) ------------------------- */
 

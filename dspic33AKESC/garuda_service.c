@@ -1415,7 +1415,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
         /* Release PWM overrides when entering active modes */
         {
             static bool v3_ovr_released = false;
-            if (s_foc_v3.mode >= V3_ALIGN && s_foc_v3.mode <= V3_CLOSED_LOOP) {
+            if (s_foc_v3.mode >= V3_ALIGN && s_foc_v3.mode <= V3_VF_ASSIST) {
                 if (!v3_ovr_released) {
                     HAL_PWM_ReleaseAllOverrides();
                     v3_ovr_released = true;
@@ -1435,6 +1435,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
             case V3_ALIGN:        garudaData.state = ESC_ALIGN; break;
             case V3_OL_RAMP:      garudaData.state = ESC_OL_RAMP; break;
             case V3_CLOSED_LOOP:  garudaData.state = ESC_CLOSED_LOOP; break;
+            case V3_VF_ASSIST:    garudaData.state = ESC_OL_RAMP; break;  /* Map to OL for compat */
             case V3_FAULT:        garudaData.state = ESC_FAULT; break;
             default:              garudaData.state = ESC_FAULT; break;
         }
@@ -1460,10 +1461,10 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
         garudaData.focVd       = s_foc_v3.vd;
         garudaData.focVq       = s_foc_v3.vq;
         /* SMO internals → flux telemetry fields (repurposed) */
-        garudaData.focFluxAlpha   = s_foc_v3.smo.e_alpha_filt;
-        garudaData.focFluxBeta    = s_foc_v3.smo.e_beta_filt;
-        garudaData.focLambdaEst   = 0.0f;
-        garudaData.focObsGain     = s_foc_v3.smo.K_base;
+        garudaData.focFluxAlpha   = s_foc_v3.smo.e2_alpha;
+        garudaData.focFluxBeta    = s_foc_v3.smo.e2_beta;
+        garudaData.focLambdaEst   = s_foc_v3.omega;  /* LP-filtered speed (speed PI feedback) */
+        garudaData.focObsGain     = s_foc_v3.smo.k_base;
         garudaData.focPidDInteg   = s_foc_v3.pid_d.integral;
         garudaData.focPidQInteg   = s_foc_v3.pid_q.integral;
         garudaData.focPidSpdInteg = s_foc_v3.pid_spd.integral;
@@ -1479,6 +1480,15 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
         garudaData.focSubState = s_foc_v3.sub_state;
         garudaData.focOffsetIa = (uint16_t)s_foc_v3.ia_offset;
         garudaData.focOffsetIb = (uint16_t)s_foc_v3.ib_offset;
+
+        /* V4 observer diagnostics */
+        garudaData.smoResidual    = s_foc_v3.smo.residual;
+        garudaData.pllInnovation  = s_foc_v3.pll.innovation_lpf;
+        garudaData.pllOmega       = s_foc_v3.pll.omega_est;
+        garudaData.omegaOl        = (s_foc_v3.mode == V3_CLOSED_LOOP)
+                                  ? s_foc_v3.omega : s_foc_v3.omega_ol;
+        garudaData.handoffCtr     = (uint16_t)s_foc_v3.handoff_ctr;
+        garudaData.smoObservable  = s_foc_v3.smo.observable ? 1 : 0;
 
         /* Duty for telemetry */
         {
@@ -1499,8 +1509,8 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
             ss.vd    = (int16_t)(s_foc_v3.vd * 100.0f);
             ss.vq    = (int16_t)(s_foc_v3.vq * 100.0f);
             ss.theta = (int16_t)(s_foc_v3.theta * 10000.0f);
-            ss.obs_x1 = (int16_t)(s_foc_v3.smo.e_alpha_filt * 100000.0f);
-            ss.obs_x2 = (int16_t)(s_foc_v3.smo.e_beta_filt * 100000.0f);
+            ss.obs_x1 = (int16_t)(s_foc_v3.smo.e2_alpha * 100000.0f);
+            ss.obs_x2 = (int16_t)(s_foc_v3.smo.e2_beta * 100000.0f);
             {
                 float omega_clamped = s_foc_v3.omega_pll;
                 if (omega_clamped > 32767.0f) omega_clamped = 32767.0f;

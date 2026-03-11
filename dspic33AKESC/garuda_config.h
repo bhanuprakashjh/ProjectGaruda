@@ -101,7 +101,7 @@ extern "C" {
  * All motor-dependent parameters are grouped here for easy swapping.
  * Board-specific and feature-tuning parameters are below.
  *──────────────────────────────────────────────────────────────────────────*/
-#define MOTOR_PROFILE  0
+#define MOTOR_PROFILE  1
 
 #if MOTOR_PROFILE == 0
 /* === Hurst DMB2424B10002 (long Hurst, MCLV-48V-300W bench motor) ===
