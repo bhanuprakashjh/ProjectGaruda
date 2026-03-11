@@ -73,16 +73,16 @@ static const GSP_PARAMS_T profileDefaults[4] = {
         /* FOC motor model: Hurst DMB2424B10002 (Long Hurst / Hurst300)
          * Rs=0.534Ω (measured), Ls=359µH, Ke=0.00742 V·s/rad, 5PP, 24V */
         .focRsMilliOhm       = 534,    /* 0.534 Ω (auto-detect measured) */
-        .focLsMicroH          = 359,    /* 0.359 mH */
+        .focLsMicroH          = 471,    /* 0.471 mH (auto-detect measured) */
         .focKeUvSRad          = 7420,   /* 0.00742 V·s/rad (per-phase λ_pm) */
         .focVbusNomCentiV     = 2400,   /* 24.0V */
         .focMaxCurrentCentiA  = 1000,   /* 10.0A (2x rated peak) */
         .focMaxElecRadS       = 2000,
-        .focKpDqMilli         = 1200,   /* 1.20 (~530Hz BW, pole cancel with measured Rs) */
+        .focKpDqMilli         = 1570,   /* 1.57 (ωbw×Ls = 2π×530×0.000471) */
         .focKiDq              = 1778,   /* Ki = ωbw × Rs = 2π×530 × 0.534 */
         .focObsLpfAlphaMilli  = 80,     /* 0.08 */
         .focAlignIqCentiA     = 100,    /* 1.0A (Microchip LOCK_CURRENT) */
-        .focRampIqCentiA      = 100,    /* 1.0A (Microchip OPEN_LOOP_CURRENT) */
+        .focRampIqCentiA      = 150,    /* 1.5A — margin for SMO angle error */
         .focAlignTimeMs       = 500,
         .focIqRampTimeMs      = 200,
         .focRampRateRps2      = 500,

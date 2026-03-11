@@ -33,8 +33,8 @@ extern "C" {
 
 /* FOC (Field-Oriented Control) — compile-time alternative to 6-step */
 #define FEATURE_FOC              0  /* Phase I: OLD FOC v1 (reference, deprecated) */
-#define FEATURE_FOC_V2           1  /* Phase I v2: closed-loop current control + MXLEMMING */
-#define FEATURE_FOC_V3           0  /* Phase J: FOC v3 — SMO observer + OL ramp startup */
+#define FEATURE_FOC_V2           0  /* Phase I v2: closed-loop current control + MXLEMMING */
+#define FEATURE_FOC_V3           1  /* Phase J: FOC v3 — SMO observer + OL ramp startup */
 #define FEATURE_SMO              0  /* 0=PLL only, 1=PLL+SMO parallel (v1 only) */
 #define FEATURE_MXLEMMING        0  /* 0=PLL chain, 1=MXLEMMING flux observer (v1 only) */
 #define FEATURE_LEARN_MODULES    0  /* master: ring buffer + quality + health */

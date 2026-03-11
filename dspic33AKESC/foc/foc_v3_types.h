@@ -72,8 +72,11 @@ typedef struct {
 typedef struct {
     float theta_est;         /* PLL angle tracking (rad) */
     float omega_est;         /* PLL speed estimate (rad/s) */
-    float kp, ki;            /* PLL PI gains */
+    float kp, ki;            /* PLL PI gains (current, speed-adaptive) */
     float omega_max;         /* Speed clamp magnitude (rad/s) */
+    float bw_min_hz;         /* Min BW at low speed (Hz) */
+    float bw_max_hz;         /* Max BW at high speed (Hz) */
+    float omega_bw_ref;      /* Speed at which BW = bw_max (rad/s) */
 } SMO_PLL_t;
 
 /* ── FOC v3 state machine ────────────────────────────────────── */
@@ -107,6 +110,7 @@ typedef struct {
     /* Current/voltage references */
     float iq_ref, id_ref;
     float vd, vq;            /* Last PI outputs (V) */
+    float da_prev, db_prev, dc_prev;  /* Previous tick duty cycles [0..1] */
 
     /* Open-loop startup state */
     float omega_ol;          /* OL forced speed (rad/s) */
@@ -114,9 +118,12 @@ typedef struct {
     uint32_t align_ctr;      /* Alignment ticks elapsed */
     uint32_t ramp_ctr;       /* OL ramp ticks elapsed */
     uint32_t handoff_ctr;    /* Ticks at handoff speed (for dwell) */
+    uint32_t angle_ok_ctr;   /* Ticks where SMO angle ≈ theta_ol */
 
     /* CL state */
     bool cl_active;          /* SMO driving commutation */
+    float handoff_offset;    /* SMO-OL angle offset at handoff (rad) */
+    uint32_t blend_ctr;      /* Ticks since CL entry (for angle blend) */
 
     /* Slow loop divider */
     uint16_t slow_div_ctr;
@@ -143,6 +150,7 @@ typedef struct {
     float handoff_rad_s;
     float fault_oc_a;
     float max_elec_rad_s;
+    bool use_vf_startup;     /* 1=V/f (low-Rs), 0=I/f (PI current control) */
 
     /* Overcurrent debounce */
     uint16_t oc_debounce_ctr;

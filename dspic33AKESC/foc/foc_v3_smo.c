@@ -50,13 +50,17 @@ void v3_smo_init(SMO_Observer_t *smo,
      * K_max = Vbus — ceiling for safety.
      * At runtime: K = max(K_base, 1.5·λ·ω) — scales with BEMF at speed.
      *
-     * For A2212 (Ls=30µH): K_base = 1.5×30e-6/41.67e-6 = 1.08V
-     * For Hurst  (Ls=359µH): K_base = 1.5×359e-6/41.67e-6 = 12.9V
+     * Cap K_base at 25% Vbus to prevent BEMF drowning on high-Ls motors:
+     *   Hurst (Ls=359µH): uncapped=12.9V ≈ Vbus → capped to 6.0V
+     *   A2212 (Ls=30µH):  uncapped=1.08V → unchanged (< 3V cap)
      *
-     * With K=1.08V: G×K = 1.5A. Sigmoid partially saturates.
-     * Duty cycle properly encodes BEMF. LPF extracts clean angle.
-     * (K=Vbus=12V gave G×K=16.7A → complete saturation → no BEMF info) */
+     * K too high → sigmoid always saturated → switching duty cycle
+     * doesn't encode BEMF → LPF output is noise, not BEMF angle. */
     smo->K_base = 1.5f * Ls / dt;
+    {
+        float k_cap = vbus_nom * 0.25f;
+        if (smo->K_base > k_cap) smo->K_base = k_cap;
+    }
     smo->K_max = vbus_nom;
     smo->lambda_pm = lambda_pm;
 
@@ -165,10 +169,10 @@ void v3_smo_update(SMO_Observer_t *smo,
      * The SMO switching signal Z converges to the actual BEMF,
      * so after filtering: θ = atan2(-E_α_filt, E_β_filt).
      *
-     * Phase compensation: the cascaded 2nd-order LPF introduces
-     * phase lag. AN1078 uses a constant 90° offset, but that only
-     * works at one speed. We use the PLL to track the true angle
-     * with implicit lag compensation. */
+     * Note: AN1078 adds a constant +90° here, but our SMO already
+     * LEADS the forced angle by ~70° (sigmoid + adaptive K + Ls
+     * model error). The residual offset is captured at handoff and
+     * subtracted during CL commutation. No constant shift needed. */
     float theta_raw = atan2f(-smo->e_alpha_filt, smo->e_beta_filt);
     if (theta_raw < 0.0f)
         theta_raw += FOC_TWO_PI;
@@ -191,10 +195,22 @@ void v3_smo_update(SMO_Observer_t *smo,
 
 void v3_smo_pll_init(SMO_PLL_t *pll, float bw_hz, float omega_max)
 {
-    /* Critically damped 2nd-order PLL:
-     * Kp = 2 × 2π × BW
-     * Ki = Kp² / 4 */
-    pll->kp = 2.0f * FOC_TWO_PI * bw_hz;
+    /* Speed-adaptive PLL: BW scales linearly with speed.
+     * At low speed (handoff), BW = bw_min → heavy filtering.
+     * At high speed, BW = bw_max → fast tracking.
+     *
+     * Rule of thumb: PLL BW should be ~10-25% of electrical freq.
+     * Hurst: f_elec_handoff = 262/(2π) = 42 Hz → BW_min = 10 Hz.
+     *         f_elec_max = 1500/(2π) = 239 Hz → BW_max = 60 Hz.
+     *
+     * bw_hz parameter becomes bw_max. */
+    pll->bw_min_hz  = bw_hz * 0.33f;   /* 33% of max BW = 20 Hz min */
+    pll->bw_max_hz  = bw_hz;
+    pll->omega_bw_ref = omega_max * 0.5f;  /* BW=max at 50% max speed */
+
+    /* Initialize gains at min BW (startup) */
+    float bw_init = pll->bw_min_hz;
+    pll->kp = 2.0f * FOC_TWO_PI * bw_init;
     pll->ki = pll->kp * pll->kp * 0.25f;
     pll->theta_est = 0.0f;
     pll->omega_est = 0.0f;
@@ -209,6 +225,23 @@ void v3_smo_pll_reset(SMO_PLL_t *pll)
 
 float v3_smo_pll_update(SMO_PLL_t *pll, float theta_meas, float dt)
 {
+    /* Speed-adaptive bandwidth: scale BW linearly with |omega|.
+     * Low speed → narrow BW → reject SMO noise.
+     * High speed → wide BW → track speed changes quickly.
+     * Recompute Kp/Ki every tick (cheap: 2 multiplies + 1 clamp). */
+    {
+        float abs_w = pll->omega_est;
+        if (abs_w < 0.0f) abs_w = -abs_w;
+        float frac = abs_w / pll->omega_bw_ref;
+        if (frac > 1.0f) frac = 1.0f;
+
+        /* Slightly overdamped (ζ=1.2) for smoother transients */
+        float bw = pll->bw_min_hz + frac * (pll->bw_max_hz - pll->bw_min_hz);
+        float w_n = FOC_TWO_PI * bw;
+        pll->kp = 2.0f * 1.2f * w_n;       /* 2·ζ·ωn */
+        pll->ki = w_n * w_n;                 /* ωn² */
+    }
+
     /* Phase error */
     float delta = theta_meas - pll->theta_est;
     if (delta >  FOC_PI_F) delta -= FOC_TWO_PI;
@@ -217,9 +250,11 @@ float v3_smo_pll_update(SMO_PLL_t *pll, float theta_meas, float dt)
     /* PI update */
     pll->omega_est += pll->ki * delta * dt;
 
-    /* Clamp speed */
-    if (pll->omega_est >  pll->omega_max) pll->omega_est =  pll->omega_max;
-    if (pll->omega_est < -pll->omega_max) pll->omega_est = -pll->omega_max;
+    /* Clamp speed: unidirectional drive — motor doesn't reverse.
+     * Allowing negative omega_est causes PLL to lock onto the wrong
+     * direction at low speed, creating a positive feedback desync. */
+    if (pll->omega_est > pll->omega_max) pll->omega_est = pll->omega_max;
+    if (pll->omega_est < 0.0f) pll->omega_est = 0.0f;
 
     /* Advance angle */
     pll->theta_est += (pll->omega_est + pll->kp * delta) * dt;

@@ -510,7 +510,7 @@ static void HandleRxInject(const uint8_t *payload, uint8_t payloadLen)
      * don't race our injected mailbox values (RD8 noise). */
     if (!rxInjectActive)
     {
-        _CCT4IE = 0;
+        _CCP4IE = 0;
 #if FEATURE_RX_DSHOT
         DMA0CHbits.CHEN = 0;
         _DMA0IE = 0;

@@ -278,7 +278,7 @@ uint8_t GSP_ParamsGetActiveProfile(void);
 
 #define GSP_PERSIST_V1_MARKER  0xA1
 #define GSP_PERSIST_V2_MARKER  0xA2
-#define GSP_PERSIST_V3_MARKER  0xA5  /* Bumped: forces reload of updated FOC startup params */
+#define GSP_PERSIST_V3_MARKER  0xA6  /* Bumped: force reload after MOTOR_PROFILE change */
 
 /* V2 packed persist struct — 48 bytes, fills GARUDA_CONFIG_T.reserved */
 typedef struct __attribute__((packed)) {

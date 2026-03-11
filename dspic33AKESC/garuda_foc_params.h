@@ -43,8 +43,9 @@
  *  observer convergence depends critically on accurate Rs. */
 #define MOTOR_RS_OHM            0.534f
 /** Phase inductance (H). Microchip reference: 359µH.
- *  Auto-detect measured 471µH (31% higher). */
-#define MOTOR_LS_H              0.000359f
+ *  Auto-detect measured 471µH — use measured value for SMO accuracy.
+ *  SMO coefficients F,G depend directly on Ls (31% error → divergence). */
+#define MOTOR_LS_H              0.000471f
 /** Per-phase flux linkage λ_pm (V·s/rad, electrical).
  *  Ke_LL = 6.7316 Vpk/kRPM (Microchip hurst300.h).
  *  KV = 1000/6.7316 = 148.6 RPM/V.
@@ -62,27 +63,31 @@
 #define MOTOR_FLUX_LINKAGE      0.00742f
 
 /* D/Q Current Loop PI (BW ~ 530 Hz, parallel form, Tustin integration)
- *   Kp = ωbw × Ls = 2π×530 × 0.000359 = 1.195 ≈ 1.20
+ *   Kp = ωbw × Ls = 2π×530 × 0.000471 = 1.568 ≈ 1.57
  *   Ki = ωbw × Rs = 2π×530 × 0.534 = 1778
- *   PI zero = Ki/Kp = 1778/1.20 = 1482 ≈ Rs/Ls = 0.534/0.000359 = 1488
- *   → pole cancellation with measured Rs. */
-#define KP_DQ                   1.20f
+ *   PI zero = Ki/Kp = 1778/1.57 = 1132 ≈ Rs/Ls = 0.534/0.000471 = 1134
+ *   → pole cancellation with measured Rs and Ls. */
+#define KP_DQ                   1.57f
 #define KI_DQ                   1778.0f
 
 /* Speed Loop PI (outer loop — active after CL handoff)
  *   Kt_FOC = (3/2)×5×0.00742 = 0.0557 N·m/A.
- *   Microchip reference: Kp=0.00573, Ki=0.0000129.
- *   Using slightly higher for better pot response. */
-#define KP_SPD                  0.010f
-#define KI_SPD                  1.0f
+ *   Previous Kp=0.010, Ki=1.0 was too aggressive: at 100 rad/s error,
+ *   Ki integrates 0.1A/ms → hits 10A clamp in 100ms → OC at high speed.
+ *   Reduced: at 100 rad/s error, Kp gives 0.3A, Ki integrates 0.01A/ms
+ *   → 1A in 100ms. Hurst no-load needs ~0.3A; under load, ~2A. */
+#define KP_SPD                  0.003f
+#define KI_SPD                  0.1f
 
 /* I/f (Current-Forced) Startup
  * Microchip reference: OPEN_LOOP_CURRENT=1.0A, LOCK_CURRENT=1.0A,
  * handoff at 500 RPM, ramp rate 2000 RPM/s. */
 /** Alignment Id (A) — 1.0A matches Microchip reference LOCK_CURRENT. */
 #define STARTUP_ALIGN_IQ_A      1.0f
-/** OL running Iq (A) — 1.0A matches Microchip OPEN_LOOP_CURRENT. */
-#define STARTUP_RAMP_IQ_A       1.0f
+/** OL running Iq (A). Microchip reference: 1.0A.
+ *  Using 1.5A for margin during CL entry — SMO residual angle error
+ *  reduces effective torque. 1.5A×Kt=84mN·m, friction≈50mN·m. */
+#define STARTUP_RAMP_IQ_A       1.5f
 /** Iq ramp ticks (24kHz).  4800 = 200ms — smooth d→q rotation. */
 #define STARTUP_IQ_RAMP_TICKS   4800U
 /** Alignment dwell (ticks).  12000 = 500ms (matches Microchip LOCK_TIME). */
@@ -104,12 +109,19 @@
 #define FAULT_OC_A              10.0f
 #define FAULT_STALL_RAD_S       10.0f
 
+/** Startup mode: 0=I/f (PI current control), 1=V/f (direct voltage).
+ *  Hurst Rs=0.534Ω: I/f produces noisy PI voltages during OL ramp
+ *  that confuse the SMO (PLL tracks backwards). V/f gives clean,
+ *  predictable voltages. V/f curve: VF_BOOST + Ke×ω = 0.5+1.94 = 2.44V
+ *  at handoff. */
+#define STARTUP_USE_VF          1
+
 /* Observer LPF -- long Hurst (moderate-speed motor)
  * Max elec freq = 2000/(2pi) = 318 Hz.
  * Microchip BEMF filter cutoff: 250 Hz → alpha ≈ 0.065.
  * Using 0.08: slightly faster than short Hurst (0.06). */
 #define OBS_LPF_ALPHA           0.08f
-#define SMO_LPF_ALPHA           0.20f
+#define SMO_LPF_ALPHA           0.08f
 
 #elif MOTOR_PROFILE == 1
 /* ----------------------------------------------------------------
@@ -190,6 +202,10 @@
 /** At 12V: Vbus/Ke = 12/0.000975 = 12308, cap at 85% → 10000. */
 #define STARTUP_MAX_OL_RAD_S    10000.0f
 
+/** Startup mode: V/f required. Rs=65mΩ → PI at 4A gives only 0.26V.
+ *  V/f at 1.0V provides 15A starting torque. */
+#define STARTUP_USE_VF          1
+
 /* Fault Thresholds */
 #define FAULT_OC_A              25.0f
 #define FAULT_STALL_RAD_S       50.0f
@@ -265,6 +281,9 @@
 #define STARTUP_MIN_OL_RAD_S    1500.0f     /* ~2045 RPM mech */
 /** At 14.8V: Vbus/Ke = 14.8/0.001050 = 14095, cap at 85% → 12000. */
 #define STARTUP_MAX_OL_RAD_S    12000.0f
+
+/** Startup: V/f needed (Rs=80mΩ, low like A2212). */
+#define STARTUP_USE_VF          1
 
 /* Fault Thresholds */
 #define FAULT_OC_A              35.0f
@@ -348,6 +367,9 @@
 #define STARTUP_MIN_OL_RAD_S    1200.0f
 /** At 14.8V: Vbus/Ke = 14.8/0.001355 = 10923, cap at 80%. */
 #define STARTUP_MAX_OL_RAD_S    8700.0f
+
+/** Startup: V/f needed (Rs=50mΩ, very low). */
+#define STARTUP_USE_VF          1
 
 /* Fault Thresholds */
 #define FAULT_OC_A              30.0f

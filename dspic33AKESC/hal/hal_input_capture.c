@@ -5,7 +5,7 @@
  *
  * RD8/RP57 -> ICM4R -> SCCP4 IC (every rise/fall, 32-bit @ 100 MHz).
  *
- * PWM mode:  _CCT4Interrupt captures rise/fall pairs -> seqlock mailbox.
+ * PWM mode:  _CCP4Interrupt captures rise/fall pairs -> seqlock mailbox.
  * DShot mode: DMA ping-pong captures 32 edges -> _DMA0Interrupt decodes.
  * Detection:  ISR captures edges, RX_Service() classifies protocol.
  *
@@ -199,7 +199,7 @@ void HAL_IC4_Init(void)
     CCP4CON1bits.CLKSEL = 0b000; /* SCCP bus clock = 100 MHz */
 
     /* ISR priority 4 (below ADC prio 6, below commutation prio 7) */
-    _CCT4IP = 4;
+    _CCP4IP = 4;
 
     /* Clear state */
     rxMailbox.seqNum = 0;
@@ -218,16 +218,16 @@ void HAL_IC4_Init(void)
 
 void HAL_IC4_Enable(void)
 {
-    _CCT4IF = 0;
-    _CCT4IE = 1;
+    _CCP4IF = 0;
+    _CCP4IE = 1;
     CCP4CON1bits.ON = 1;
 }
 
 void HAL_IC4_Disable(void)
 {
     CCP4CON1bits.ON = 0;
-    _CCT4IE = 0;
-    _CCT4IF = 0;
+    _CCP4IE = 0;
+    _CCP4IF = 0;
 }
 
 /* ── Switch IC4 mode ──────────────────────────────────────────────── */
@@ -249,7 +249,7 @@ void HAL_IC4_SetModeDetect(void)
 void HAL_IC4_ConfigDmaDshot(void)
 {
     /* Disable IC ISR — DMA takes over capture */
-    _CCT4IE = 0;
+    _CCP4IE = 0;
 
     /* Initialize DMA state */
     dmaActiveBuf = 0;
@@ -260,17 +260,28 @@ void HAL_IC4_ConfigDmaDshot(void)
     dshotConsecCrcFail = 0;
 
     /* Configure DMA channel 0:
-     * Source: CCP4BUF (IC4 capture buffer)
+     * Source: CCP4BUF (IC4 capture buffer, 32-bit)
      * Dest: dmaEdgeBuf[0] (first ping-pong buffer)
-     * Count: RX_DSHOT_DMA_COUNT transfers per block */
+     * Count: RX_DSHOT_DMA_COUNT transfers per block
+     *
+     * CRITICAL: POR defaults leave SIZE=byte, DAMODE=unchanged.
+     * Must explicitly set 32-bit transfers and dest increment. */
 
     DMA0CHbits.CHEN = 0;           /* Disable channel during config */
+
+    /* Transfer mode: 32-bit, one-shot, source fixed, dest incremented */
+    DMA0CHbits.SIZE   = 0b10;     /* 32-bit transfer (CCP4BUF is uint32_t) */
+    DMA0CHbits.SAMODE = 0b00;     /* Source addr unchanged (SFR register) */
+    DMA0CHbits.DAMODE = 0b01;     /* Dest addr incremented (fill buffer) */
+    DMA0CHbits.TRMODE = 0b00;     /* One-shot (ISR reloads for ping-pong) */
+    DMA0CHbits.FLWCON = 0b00;     /* Read SRC, write DST */
+
     DMA0SRC = (uint32_t)&CCP4BUF;  /* Source: IC4 capture register */
     DMA0DST = (uint32_t)&dmaEdgeBuf[0][0];  /* Dest: buffer A */
     DMA0CNT = RX_DSHOT_DMA_COUNT;  /* Transfers per block */
 
     /* DMA trigger: SCCP4 IC capture event
-     * Table 13-2 (DS70005539): CCP4 IC/OC = CHSEL 0x1B */
+     * DS70005539C Table 13-2: CCP4 IC/OC = CHSEL 0x1B */
     DMA0SELbits.CHSEL = 0x1B;
 
     /* Enable DMA transfer-complete interrupt */
@@ -291,15 +302,15 @@ void HAL_IC4_DisableDma(void)
     _DMA0IF = 0;
 
     /* Re-enable IC4 ISR for detection */
-    _CCT4IF = 0;
-    _CCT4IE = 1;
+    _CCP4IF = 0;
+    _CCP4IE = 1;
     icMode = IC_MODE_DETECT;
 }
 #endif /* FEATURE_RX_DSHOT */
 
 /* ── SCCP4 Input Capture ISR ──────────────────────────────────────── */
 
-void __attribute__((__interrupt__, no_auto_psv)) _CCT4Interrupt(void)
+void __attribute__((__interrupt__, no_auto_psv)) _CCP4Interrupt(void)
 {
     uint32_t capture = CCP4BUF;  /* MUST read to clear data-ready */
 
@@ -356,7 +367,7 @@ void __attribute__((__interrupt__, no_auto_psv)) _CCT4Interrupt(void)
             break;
     }
 
-    _CCT4IF = 0;
+    _CCP4IF = 0;
 }
 
 /* ── DMA Transfer-Complete ISR (DShot mode) ───────────────────────── */
@@ -453,7 +464,7 @@ uint8_t HAL_IC4_GetDetectEdgeCount(void)
 
 void HAL_IC4_GetDetectEdges(uint32_t *buf, uint8_t *count)
 {
-    _CCT4IE = 0;  /* brief ISR disable for consistent copy */
+    _CCP4IE = 0;  /* brief ISR disable for consistent copy */
     uint8_t n = detectEdgeCount;
     uint8_t start = (detectEdgeHead - n) & (DETECT_EDGE_BUF_SIZE - 1);
     for (uint8_t i = 0; i < n; i++)
@@ -463,7 +474,7 @@ void HAL_IC4_GetDetectEdges(uint32_t *buf, uint8_t *count)
     *count = n;
     detectEdgeCount = 0;
     detectEdgeHead = 0;
-    _CCT4IE = 1;
+    _CCP4IE = 1;
 }
 
 #endif /* FEATURE_RX_PWM || FEATURE_RX_DSHOT || FEATURE_RX_AUTO */
