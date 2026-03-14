@@ -19,6 +19,7 @@
  *   i  — GPIO pin state dump (PORTA/B/C/D)
  *   m  — SPI loopback: write/read ATA6847 WUCR register
  *   v  — Verbose continuous mode toggle (100ms status)
+ *   x  — IC ZC stats (FEATURE_IC_ZC only)
  */
 
 #include <xc.h>
@@ -57,6 +58,10 @@ static void PrintReg8(const char *name, uint8_t val)
     HAL_UART_WriteByte(' ');
 }
 
+#if FEATURE_IC_ZC
+static void CmdIcStats(void);
+#endif
+
 /* ── 'h' — Help ───────────────────────────────────────────────────── */
 static void CmdHelp(void)
 {
@@ -72,6 +77,10 @@ static void CmdHelp(void)
     HAL_UART_NewLine();
     HAL_UART_WriteString("i=GPIO pins m=SPI test v=Verbose");
     HAL_UART_NewLine();
+#if FEATURE_IC_ZC
+    HAL_UART_WriteString("x=IC ZC stats");
+    HAL_UART_NewLine();
+#endif
 }
 
 /* ── 'a' — ATA6847 register dump ──────────────────────────────────── */
@@ -364,6 +373,10 @@ static void CmdState(void)
 
     /* Also show BEMF pins and nIRQ */
     CmdBemfPins();
+
+#if FEATURE_IC_ZC
+    CmdIcStats();
+#endif
 }
 
 /* ── 'g' — GDU power-up test ──────────────────────────────────────── */
@@ -594,6 +607,61 @@ static void CmdSpiTest(void)
     HAL_ATA6847_WriteReg(ATA_WUCR, orig);
 }
 
+#if FEATURE_IC_ZC
+/* ── 'x' — IC ZC diagnostics ─────────────────────────────────────── */
+static void CmdIcStats(void)
+{
+    static const char *phaseNames[] = {
+        "BLANK", "ARMED", "PEND", "CONF", "DONE"
+    };
+
+    HAL_UART_WriteString("=== IC ZC Stats ===");
+    HAL_UART_NewLine();
+
+    HAL_UART_WriteString("Phase: ");
+    if (gData.icZc.phase <= IC_ZC_DONE)
+        HAL_UART_WriteString(phaseNames[gData.icZc.phase]);
+    HAL_UART_WriteString("  Chan=");
+    if (gData.icZc.activeChannel < 3)
+        HAL_UART_WriteByte('A' + gData.icZc.activeChannel);
+    else
+        HAL_UART_WriteByte('-');
+    HAL_UART_NewLine();
+
+    HAL_UART_WriteString("Accepted=");
+    HAL_UART_WriteU16(gData.icZc.diagAccepted);
+    HAL_UART_WriteString(" FalseZC=");
+    HAL_UART_WriteU16(gData.icZc.diagFalseZc);
+    HAL_UART_WriteString(" Chatter=");
+    HAL_UART_WriteU16(gData.icZc.diagChatter);
+    HAL_UART_WriteString(" Captures=");
+    HAL_UART_WriteU16(gData.icZc.diagCaptures);
+    HAL_UART_NewLine();
+
+    HAL_UART_WriteString("BlankEnd=");
+    HAL_UART_WriteU16(gData.icZc.blankingEndTick);
+    HAL_UART_WriteString(" CapTick=");
+    HAL_UART_WriteU16(gData.icZc.captureTick);
+    HAL_UART_WriteString(" CapT1=");
+    HAL_UART_WriteU16(gData.icZc.captureTimer1);
+    HAL_UART_WriteString(" Guard=");
+    HAL_UART_WriteU16(gData.icZc.guardCountdown);
+    HAL_UART_NewLine();
+
+    /* Acceptance ratio */
+    if (gData.icZc.diagCaptures > 0)
+    {
+        uint16_t pct = (uint16_t)((uint32_t)gData.icZc.diagAccepted * 100 / gData.icZc.diagCaptures);
+        HAL_UART_WriteString("Accept%=");
+        HAL_UART_WriteU16(pct);
+        HAL_UART_WriteString("  False%=");
+        pct = (uint16_t)((uint32_t)gData.icZc.diagFalseZc * 100 / gData.icZc.diagCaptures);
+        HAL_UART_WriteU16(pct);
+    }
+    HAL_UART_NewLine();
+}
+#endif /* FEATURE_IC_ZC */
+
 /* ── 'v' — Verbose toggle ─────────────────────────────────────────── */
 static void CmdVerbose(void)
 {
@@ -625,6 +693,9 @@ void DIAG_ProcessCommand(uint8_t cmd)
         case 'i': case 'I': CmdGpio(); break;
         case 'm': case 'M': CmdSpiTest(); break;
         case 'v': case 'V': CmdVerbose(); break;
+#if FEATURE_IC_ZC
+        case 'x': case 'X': CmdIcStats(); break;
+#endif
         case '\r': case '\n': break;  /* Ignore newlines */
         default:
             HAL_UART_WriteString("? '");

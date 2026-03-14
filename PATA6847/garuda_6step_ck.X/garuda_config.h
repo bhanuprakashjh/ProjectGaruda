@@ -79,6 +79,23 @@
 #define VBUS_OV_THRESHOLD   (3200U * 16U)  /* ~30V → 51200 in 16-bit */
 #define VBUS_UV_THRESHOLD   (700U * 16U)   /* ~7V  → 11200 in 16-bit */
 
+/* ── Feature Flags ─────────────────────────────────────────────────── */
+#ifndef FEATURE_IC_ZC
+#define FEATURE_IC_ZC           1   /* 1 = SCCP IC + AM32-style polling validation, 0 = ADC ISR polling */
+#endif
+
+/* ── SCCP Input Capture ZC (FEATURE_IC_ZC=1) ──────────────────────── */
+#if FEATURE_IC_ZC
+#define IC_ZC_PRESCALER         0b11    /* 1:64 → Fp/64 = 1.5625 MHz, 640 ns/tick */
+#define IC_ZC_TICKS_PER_US      1.5625f /* For reference only — not used at runtime */
+#define IC_ZC_ISR_PRIORITY      4       /* Above ADC(3), below Timer1(5) */
+/* Guard window: 1 Timer1 tick (50 µs) — minimum with Timer1-based confirmation.
+ * Rejects chatter edges within this window after first post-blanking capture. */
+#define IC_ZC_FILTER_LEVEL      24U     /* AM32-style: poll comparator N times in ISR.
+                                         * All must match expected state. 24 reads ≈ 2.4µs.
+                                         * AM32 doubles filter for low-KV (<500) motors. */
+#endif
+
 /* ── Desync Recovery ───────────────────────────────────────────────── */
 #define DESYNC_RESTART_MAX  3U
 #define RECOVERY_TIME_MS    200U

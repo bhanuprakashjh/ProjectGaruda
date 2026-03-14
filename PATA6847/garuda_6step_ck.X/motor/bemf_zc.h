@@ -25,4 +25,23 @@ bool BEMF_ZC_Poll(volatile GARUDA_DATA_T *pData);
 ZC_TIMEOUT_RESULT_T BEMF_ZC_CheckTimeout(volatile GARUDA_DATA_T *pData);
 void BEMF_ZC_ScheduleCommutation(volatile GARUDA_DATA_T *pData);
 
+#if FEATURE_IC_ZC
+/**
+ * @brief Handle an IC capture event from an SCCP ISR.
+ * Implements the post-blanking guard state machine.
+ * @param pData ESC runtime data
+ * @param channel Which SCCP fired: 0=A, 1=B, 2=C
+ * @param captureTick Raw SCCP timer capture value (640 ns ticks)
+ */
+void BEMF_ZC_IC_OnCapture(volatile GARUDA_DATA_T *pData,
+                           uint8_t channel, uint16_t captureTick);
+
+/**
+ * @brief Timer1 tick handler for IC ZC: blanking release and guard confirmation.
+ * Called from Timer1 ISR every 50 µs.
+ * @return true if ZC was just confirmed (caller should schedule commutation)
+ */
+bool BEMF_ZC_IC_TimerTick(volatile GARUDA_DATA_T *pData);
+#endif
+
 #endif /* BEMF_ZC_H */

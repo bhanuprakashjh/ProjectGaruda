@@ -70,6 +70,31 @@ typedef enum {
     ZC_TIMEOUT_DESYNC
 } ZC_TIMEOUT_RESULT_T;
 
+/* IC ZC detection state (FEATURE_IC_ZC) */
+#if FEATURE_IC_ZC
+typedef enum {
+    IC_ZC_BLANKING = 0, /* Waiting for blanking period to expire */
+    IC_ZC_ARMED,        /* IC enabled, waiting for first capture */
+    IC_ZC_PENDING,      /* First capture received, guard window open */
+    IC_ZC_CONFIRMED,    /* Guard passed, ZC accepted */
+    IC_ZC_DONE          /* IC disabled for this step */
+} IC_ZC_PHASE_T;
+
+typedef struct {
+    IC_ZC_PHASE_T phase;        /* State machine phase */
+    uint16_t blankingEndTick;   /* Timer1 tick when blanking expires */
+    uint16_t captureTick;       /* Raw SCCP capture value (640 ns ticks) */
+    uint16_t captureTimer1;     /* Timer1 tick at capture ISR entry */
+    uint8_t  guardCountdown;    /* Timer1 ticks remaining in guard window */
+    uint8_t  activeChannel;     /* Which SCCP is active: 0=A, 1=B, 2=C */
+    /* Diagnostics — counters for test/debug (no ISR overhead beyond increment) */
+    uint16_t diagAccepted;      /* ZCs accepted (guard + comparator passed) */
+    uint16_t diagChatter;       /* Chatter: stale FIFO entries in PENDING */
+    uint16_t diagCaptures;      /* Total IC captures processed */
+    uint16_t diagFalseZc;       /* Comparator validation failures at guard expiry */
+} IC_ZC_STATE_T;
+#endif
+
 /* Fault codes */
 typedef enum {
     FAULT_NONE = 0,
@@ -108,6 +133,9 @@ typedef struct {
     /* Sub-structures */
     BEMF_STATE_T   bemf;
     TIMING_STATE_T timing;
+#if FEATURE_IC_ZC
+    IC_ZC_STATE_T  icZc;
+#endif
 } GARUDA_DATA_T;
 
 #endif /* GARUDA_TYPES_H */

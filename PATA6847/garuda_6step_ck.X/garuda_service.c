@@ -30,6 +30,9 @@
 #include "motor/commutation.h"
 #include "motor/startup.h"
 #include "motor/bemf_zc.h"
+#if FEATURE_IC_ZC
+#include "hal/hal_ic.h"
+#endif
 
 /* Global ESC runtime data */
 volatile GARUDA_DATA_T gData;
@@ -100,6 +103,9 @@ static void EnterFaultISR(FAULT_CODE_T code)
     gData.state = ESC_FAULT;
     gData.faultCode = code;
     HAL_PWM_DisableOutputs();
+#if FEATURE_IC_ZC
+    HAL_IC_DisableAll();
+#endif
     deferredFault = code;  /* main loop will do SPI standby */
     LED_FAULT = 1;
     LED_RUN = 0;
@@ -236,6 +242,9 @@ void GarudaService_StopMotor(void)
     gData.runCommandActive = false;
 
     HAL_PWM_DisableOutputs();
+#if FEATURE_IC_ZC
+    HAL_IC_DisableAll();
+#endif
     /* Don't stop Timer1 — systemTick must keep running for UART debug */
     /* Don't disable ADC — pot/Vbus polling needs it during IDLE */
     HAL_ADC_InterruptDisable();
@@ -361,6 +370,12 @@ void __attribute__((interrupt, auto_psv)) _T1Interrupt(void)
                 gData.timing.consecutiveMissedSteps = 0;
                 slewedDuty = gData.duty;  /* Seed slew from ramp exit duty */
                 clSettleCounter = CL_SETTLE_TICKS;
+#if FEATURE_IC_ZC
+                /* Reset ZC tracking for IC mode — polling timestamps
+                 * from OL_RAMP must not seed IC interval calculations.
+                 * First IC edge establishes fresh baseline. */
+                gData.timing.hasPrevZc = false;
+#endif
             }
             else if (rampDone && !gData.timing.zcSynced)
             {
@@ -427,6 +442,15 @@ void __attribute__((interrupt, auto_psv)) _T1Interrupt(void)
 
             /* Commutation deadline is now checked in ADC ISR (20 kHz)
              * for better timing resolution. See _ADCInterrupt. */
+
+#if FEATURE_IC_ZC
+            /* IC ZC: handle blanking release and guard confirmation */
+            if (BEMF_ZC_IC_TimerTick((volatile GARUDA_DATA_T *)&gData))
+            {
+                /* ZC confirmed — schedule commutation */
+                BEMF_ZC_ScheduleCommutation((volatile GARUDA_DATA_T *)&gData);
+            }
+#endif
 
             /* Check for ZC timeout */
             ZC_TIMEOUT_RESULT_T tout = BEMF_ZC_CheckTimeout(
@@ -498,14 +522,25 @@ void __attribute__((interrupt, auto_psv)) _ADCInterrupt(void)
     (void)ib;
     (void)ic;
 
-    /* BEMF zero-crossing detection (digital comparator polling) */
+    /* BEMF zero-crossing detection */
     if (gData.state == ESC_OL_RAMP || gData.state == ESC_CLOSED_LOOP)
     {
+#if FEATURE_IC_ZC
+        /* Hybrid: polling during OL_RAMP (robust at low BEMF),
+         * IC during CL (lower jitter at speed). */
+        if (gData.state == ESC_OL_RAMP)
+        {
+            if (BEMF_ZC_Poll((volatile GARUDA_DATA_T *)&gData))
+                BEMF_ZC_ScheduleCommutation((volatile GARUDA_DATA_T *)&gData);
+        }
+#else
+        /* Polling mode: read digital comparators at 20 kHz */
         if (BEMF_ZC_Poll((volatile GARUDA_DATA_T *)&gData))
         {
             /* ZC detected — schedule next commutation */
             BEMF_ZC_ScheduleCommutation((volatile GARUDA_DATA_T *)&gData);
         }
+#endif
 
         /* Commutation deadline check at 20 kHz.
          * Deadline is in timer1Tick units. Checking at 20 kHz catches
@@ -544,3 +579,42 @@ void __attribute__((interrupt, auto_psv)) _ADCInterrupt(void)
     /* Clear ADC interrupt flag at END of ISR */
     IFS5bits.ADCIF = 0;
 }
+
+/* ── SCCP Input Capture ISRs (FEATURE_IC_ZC) ─────────────────────── */
+#if FEATURE_IC_ZC
+
+/**
+ * @brief Shared IC capture handler.
+ * Reads ALL SCCP FIFO entries and forwards each to the ZC state machine.
+ * Multiple edges in the FIFO = chatter, which OnCapture detects by
+ * transitioning PENDING → ARMED on each contradicting edge.
+ */
+static inline void IC_HandleCapture(uint8_t channel,
+                                     volatile uint16_t *bufReg,
+                                     volatile uint16_t *statReg)
+{
+    do {
+        uint16_t cap = *bufReg;
+        BEMF_ZC_IC_OnCapture((volatile GARUDA_DATA_T *)&gData, channel, cap);
+    } while (*statReg & 0x0001);  /* ICBNE is bit 0 of CCPxSTAT */
+}
+
+void __attribute__((interrupt, no_auto_psv)) _CCP1Interrupt(void)
+{
+    IC_HandleCapture(0, &CCP1BUFL, &CCP1STAT);
+    _CCP1IF = 0;
+}
+
+void __attribute__((interrupt, no_auto_psv)) _CCP2Interrupt(void)
+{
+    IC_HandleCapture(1, &CCP2BUFL, &CCP2STAT);
+    _CCP2IF = 0;
+}
+
+void __attribute__((interrupt, no_auto_psv)) _CCP3Interrupt(void)
+{
+    IC_HandleCapture(2, &CCP3BUFL, &CCP3STAT);
+    _CCP3IF = 0;
+}
+
+#endif /* FEATURE_IC_ZC */

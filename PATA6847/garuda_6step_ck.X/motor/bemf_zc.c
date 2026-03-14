@@ -21,6 +21,9 @@
 #include "commutation.h"
 #include "../garuda_config.h"
 #include "../hal/port_config.h"
+#if FEATURE_IC_ZC
+#include "../hal/hal_ic.h"
+#endif
 
 /**
  * @brief Read the digital BEMF comparator output for a given phase.
@@ -44,6 +47,20 @@ void BEMF_ZC_Init(volatile GARUDA_DATA_T *pData)
     pData->bemf.cmpPrev = 0xFF;  /* Unknown */
     pData->bemf.cmpExpected = 0;
     pData->bemf.filterCount = 0;
+
+#if FEATURE_IC_ZC
+    pData->icZc.phase = IC_ZC_BLANKING;
+    pData->icZc.blankingEndTick = 0;
+    pData->icZc.captureTick = 0;
+    pData->icZc.captureTimer1 = 0;
+    pData->icZc.guardCountdown = 0;
+    pData->icZc.activeChannel = 0xFF;
+    pData->icZc.diagAccepted = 0;
+    pData->icZc.diagChatter = 0;
+    pData->icZc.diagCaptures = 0;
+    pData->icZc.diagFalseZc = 0;
+    HAL_IC_DisableAll();
+#endif
 
     pData->timing.stepPeriod = INITIAL_STEP_PERIOD;
     pData->timing.lastCommTick = 0;
@@ -86,11 +103,32 @@ void BEMF_ZC_OnCommutation(volatile GARUDA_DATA_T *pData)
     /* Set forced commutation timeout: ZC_TIMEOUT_MULT * stepPeriod */
     pData->timing.forcedCountdown =
         (uint16_t)(pData->timing.stepPeriod * ZC_TIMEOUT_MULT);
+
+#if FEATURE_IC_ZC
+    /* IC only active during CL — during OL_RAMP, polling handles ZC.
+     * BEMF is too weak during ramp for clean IC edges; polling's 3-sample
+     * filter rejects PWM noise that IC would capture as false ZCs. */
+    if (pData->state == ESC_CLOSED_LOOP)
+    {
+        if (pData->icZc.activeChannel < 3)
+            HAL_IC_Disable(pData->icZc.activeChannel);
+
+        pData->icZc.phase = IC_ZC_BLANKING;
+        pData->icZc.activeChannel = step->floatingPhase;
+        pData->icZc.guardCountdown = 0;
+
+        uint16_t blankingTicks = (uint16_t)(
+            (uint32_t)pData->timing.stepPeriod * ZC_BLANKING_PERCENT / 100);
+        if (blankingTicks < 3) blankingTicks = 3;
+        pData->icZc.blankingEndTick = pData->timer1Tick + blankingTicks;
+    }
+#endif
 }
 
 /**
  * @brief Poll the BEMF comparator for zero-crossing.
  * Called from ADC ISR at 20 kHz. Handles blanking and digital filtering.
+ * Used during OL_RAMP (always) and CL (when FEATURE_IC_ZC=0).
  *
  * @return true when a valid zero-crossing is detected
  */
@@ -301,3 +339,165 @@ void BEMF_ZC_ScheduleCommutation(volatile GARUDA_DATA_T *pData)
     pData->timing.commDeadline = pData->timing.lastZcTick + delay;
     pData->timing.deadlineActive = true;
 }
+
+/* ── SCCP Input Capture ZC Detection ──────────────────────────────── */
+#if FEATURE_IC_ZC
+
+/**
+ * @brief Record ZC timing and update step period IIR.
+ * @param pData ESC data
+ * @param zcTick Timer1 tick at which ZC occurred
+ */
+static void RecordZcTiming(volatile GARUDA_DATA_T *pData, uint16_t zcTick)
+{
+    if (pData->timing.hasPrevZc)
+    {
+        uint16_t interval = zcTick - pData->timing.lastZcTick;
+
+        /* Reject impossibly short intervals — PWM noise, not real BEMF.
+         * A real motor can't accelerate more than ~2x in one step.
+         * Absolute floor of 8 ticks (400µs = 25000 eRPM) for safety.
+         * CRITICAL: don't update lastZcTick on rejection — keeps the
+         * baseline anchored to the last good ZC so noise can't creep
+         * the timestamp forward and eventually pass the check. */
+        uint16_t minInterval = pData->timing.stepPeriod / 2;
+        if (minInterval < 8) minInterval = 8;
+        if (interval < minInterval)
+        {
+            pData->icZc.diagFalseZc++;
+            pData->bemf.zeroCrossDetected = false;
+            return;
+        }
+
+        /* Interval valid — commit timestamps */
+        pData->timing.prevZcTick = pData->timing.lastZcTick;
+        pData->timing.lastZcTick = zcTick;
+        pData->timing.stepsSinceLastZc = 0;
+
+        pData->timing.prevZcInterval = pData->timing.zcInterval;
+        pData->timing.zcInterval = interval;
+
+        /* 2-step averaging + IIR: same as polling path */
+        if (interval > 0 && interval < 10000 &&
+            pData->timing.prevZcInterval > 0)
+        {
+            uint16_t avgInterval =
+                (interval + pData->timing.prevZcInterval) / 2;
+            pData->timing.stepPeriod =
+                (pData->timing.stepPeriod * 3 + avgInterval) >> 2;
+        }
+        else if (interval > 0 && interval < 10000)
+        {
+            pData->timing.stepPeriod =
+                (pData->timing.stepPeriod * 3 + interval) >> 2;
+        }
+    }
+    else
+    {
+        /* First ZC — just record the timestamp */
+        pData->timing.lastZcTick = zcTick;
+        pData->timing.stepsSinceLastZc = 0;
+    }
+    pData->timing.hasPrevZc = true;
+
+    pData->timing.goodZcCount++;
+    pData->timing.consecutiveMissedSteps = 0;
+
+    if (pData->timing.goodZcCount >= ZC_SYNC_THRESHOLD)
+        pData->timing.zcSynced = true;
+}
+
+/**
+ * @brief Handle an IC capture event — AM32-style immediate validation.
+ *
+ * On each edge capture, immediately poll the comparator in a tight loop
+ * (filter_level times). If ANY read doesn't match the expected post-ZC
+ * state, reject and return (IC stays armed for next edge/bounce).
+ * If all reads match, accept as real ZC.
+ *
+ * This approach embraces the ATA6847's ~32 bounces per ZC: early bounce
+ * ISRs fail the polling check (comparator still oscillating), but after
+ * the bounce settles (~60µs), the final ISR sees consistent state → accept.
+ *
+ * PWM noise: brief transient (<1µs), comparator returns to original state
+ * before tight loop completes → mismatch → rejected.
+ *
+ * Called from SCCP ISR (priority 4).
+ */
+void BEMF_ZC_IC_OnCapture(volatile GARUDA_DATA_T *pData,
+                           uint8_t channel, uint16_t captureTick)
+{
+    /* Ignore captures from non-active channels */
+    if (channel != pData->icZc.activeChannel)
+        return;
+
+    if (pData->icZc.phase != IC_ZC_ARMED)
+        return;
+
+    pData->icZc.diagCaptures++;
+
+    /* AM32-style tight polling: read comparator filter_level times.
+     * At 100 MHz FCY, each read ~100ns. 24 reads ≈ 2.4µs.
+     * If any read doesn't match expected state → noise, reject. */
+    const COMMUTATION_STEP_T *step = &commutationTable[pData->currentStep];
+    uint8_t expected = pData->bemf.cmpExpected;
+    uint8_t phase = step->floatingPhase;
+    uint8_t filterN = IC_ZC_FILTER_LEVEL;
+
+    uint8_t i;
+    for (i = 0; i < filterN; i++)
+    {
+        if (ReadBEMFComparator(phase) != expected)
+        {
+            /* Mismatch — noise or bounce. Return without disabling IC.
+             * Next edge/bounce will trigger another ISR attempt. */
+            pData->icZc.diagChatter++;
+            return;
+        }
+    }
+
+    /* All reads matched — real ZC confirmed.
+     * Disable IC to stop further chatter ISRs this step. */
+    HAL_IC_Disable(pData->icZc.activeChannel);
+    pData->icZc.phase = IC_ZC_DONE;
+    pData->bemf.zeroCrossDetected = true;
+    pData->icZc.diagAccepted++;
+
+    RecordZcTiming(pData, pData->timer1Tick);
+}
+
+/**
+ * @brief Timer1 tick handler for IC ZC: blanking release only.
+ *
+ * ZC confirmation now happens immediately in OnCapture (AM32 approach).
+ * Timer1 only manages blanking → arm transition.
+ *
+ * @return true if ZC was confirmed by IC ISR since last call
+ */
+bool BEMF_ZC_IC_TimerTick(volatile GARUDA_DATA_T *pData)
+{
+    if (pData->icZc.phase == IC_ZC_BLANKING)
+    {
+        int16_t dt = (int16_t)(pData->timer1Tick - pData->icZc.blankingEndTick);
+        if (dt >= 0)
+        {
+            /* Blanking done — arm IC for the floating phase */
+            const COMMUTATION_STEP_T *step =
+                &commutationTable[pData->currentStep];
+            bool rising = (step->zcPolarity > 0);
+            HAL_IC_Arm(pData->icZc.activeChannel, rising);
+            pData->icZc.phase = IC_ZC_ARMED;
+        }
+        return false;
+    }
+
+    /* ZC confirmed by IC ISR — schedule commutation */
+    if (pData->icZc.phase == IC_ZC_DONE && pData->bemf.zeroCrossDetected)
+    {
+        return true;
+    }
+
+    return false;
+}
+
+#endif /* FEATURE_IC_ZC */

@@ -6,6 +6,7 @@
 #define HAL_PORT_CONFIG_H
 
 #include <xc.h>
+#include "../garuda_config.h"
 
 /* ── Pin Macros ────────────────────────────────────────────────────── */
 

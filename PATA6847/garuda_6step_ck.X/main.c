@@ -25,6 +25,9 @@
 #include "hal/hal_opa.h"
 #include "hal/hal_pwm.h"
 #include "hal/hal_timer1.h"
+#if FEATURE_IC_ZC
+#include "hal/hal_ic.h"
+#endif
 #include "hal/board_service.h"
 
 /* Debug print rate limiter */
@@ -92,6 +95,18 @@ static void PrintStatus(void)
         HAL_UART_WriteHex16(PG2IOCONL);
         HAL_UART_WriteByte('/');
         HAL_UART_WriteHex16(PG3IOCONL);
+
+#if FEATURE_IC_ZC
+        if (DIAG_IsVerbose())
+        {
+            HAL_UART_WriteString(" IC:");
+            HAL_UART_WriteU16(gData.icZc.diagAccepted);
+            HAL_UART_WriteByte('/');
+            HAL_UART_WriteU16(gData.icZc.diagFalseZc);
+            HAL_UART_WriteByte('/');
+            HAL_UART_WriteU16(gData.icZc.diagCaptures);
+        }
+#endif
     }
 
     if (gData.state == ESC_FAULT)
@@ -160,8 +175,14 @@ int main(void)
     HAL_PWM_Init();
     HAL_UART_WriteString("PWM.");
 
-    /* 8. Timer1 — 100 µs tick for state machine */
+    /* 8. Timer1 — 50 µs tick for state machine */
     HAL_Timer1_Init();
+
+#if FEATURE_IC_ZC
+    /* 8b. SCCP Input Capture for BEMF ZC detection */
+    HAL_IC_Init();
+    HAL_UART_WriteString("IC.");
+#endif
 
     /* 9. Board service + ESC service */
     BoardServiceInit();
