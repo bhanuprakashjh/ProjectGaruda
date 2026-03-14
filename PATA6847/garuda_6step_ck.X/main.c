@@ -1,0 +1,272 @@
+/**
+ * @file main.c
+ * @brief Entry point for 6-step BLDC ESC on dsPIC33CK + ATA6847.
+ *
+ * Target: EV43F54A board (dsPIC33CK64MP205 + ATA6847)
+ * Motor:  Hurst DMB2424B10002 (10 poles, 24V)
+ *
+ * Debug UART: 115200 baud on RC8(RX)/RC9(TX) via USB-UART converter.
+ * Type 'h' in terminal for diagnostic command list.
+ *
+ * Button 1: Start motor
+ * Button 2: Stop motor
+ */
+
+#include <xc.h>
+#include "garuda_config.h"
+#include "garuda_service.h"
+#include "hal/clock.h"
+#include "hal/port_config.h"
+#include "hal/hal_uart.h"
+#include "hal/hal_diag.h"
+#include "hal/hal_spi.h"
+#include "hal/hal_ata6847.h"
+#include "hal/hal_adc.h"
+#include "hal/hal_opa.h"
+#include "hal/hal_pwm.h"
+#include "hal/hal_timer1.h"
+#include "hal/board_service.h"
+
+/* Debug print rate limiter */
+static volatile uint32_t lastDebugTick = 0;
+#define DEBUG_INTERVAL_MS       500
+#define DEBUG_INTERVAL_IDLE_MS  5000   /* Slow prints during IDLE */
+#define DEBUG_INTERVAL_VERBOSE  100
+
+/* Heartbeat: blinks LED_RUN ~1Hz when IDLE, solid when running */
+static volatile uint32_t heartbeatCounter = 0;
+#define HEARTBEAT_PERIOD  50000UL  /* main loop iterations (~500ms at 100MHz) */
+
+static void PrintStatus(void)
+{
+    uint32_t interval;
+    if (DIAG_IsVerbose())
+        interval = DEBUG_INTERVAL_VERBOSE;
+    else if (gData.state == ESC_IDLE || gData.state == ESC_FAULT)
+        interval = DEBUG_INTERVAL_IDLE_MS;
+    else
+        interval = DEBUG_INTERVAL_MS;
+    if ((gData.systemTick - lastDebugTick) < interval)
+        return;
+    lastDebugTick = gData.systemTick;
+
+    static const char *stateNames[] = {
+        "IDLE", "ARMED", "ALIGN", "OL_RAMP", "CL", "RECOV", "FAULT"
+    };
+
+    HAL_UART_WriteString("S:");
+    if (gData.state <= ESC_FAULT)
+        HAL_UART_WriteString(stateNames[gData.state]);
+    else
+        HAL_UART_WriteU16(gData.state);
+
+    HAL_UART_WriteString(" P:");
+    HAL_UART_WriteU16(gData.potRaw);
+    HAL_UART_WriteString(" V:");
+    HAL_UART_WriteU16(gData.vbusRaw);
+    HAL_UART_WriteString(" D:");
+    HAL_UART_WriteU32(gData.duty);
+    HAL_UART_WriteString(" St:");
+    HAL_UART_WriteU16(gData.currentStep);
+
+    if (gData.state >= ESC_OL_RAMP)
+    {
+        HAL_UART_WriteString(" Tp:");
+        HAL_UART_WriteU16(gData.timing.stepPeriod);
+        HAL_UART_WriteString(" ZC:");
+        HAL_UART_WriteU16(gData.timing.goodZcCount);
+        HAL_UART_WriteString(gData.timing.zcSynced ? " SYN" : " ---");
+        HAL_UART_WriteString(" Miss:");
+        HAL_UART_WriteU16(gData.timing.consecutiveMissedSteps);
+        HAL_UART_WriteString(" B:");
+        HAL_UART_WriteByte(BEMF_A_GetValue() ? '1' : '0');
+        HAL_UART_WriteByte(BEMF_B_GetValue() ? '1' : '0');
+        HAL_UART_WriteByte(BEMF_C_GetValue() ? '1' : '0');
+
+        /* HW register readback for PWM debug */
+        HAL_UART_WriteString(" DC1:");
+        HAL_UART_WriteU16(PG1DC);
+        HAL_UART_WriteString(" IO:");
+        HAL_UART_WriteHex16(PG1IOCONL);
+        HAL_UART_WriteByte('/');
+        HAL_UART_WriteHex16(PG2IOCONL);
+        HAL_UART_WriteByte('/');
+        HAL_UART_WriteHex16(PG3IOCONL);
+    }
+
+    if (gData.state == ESC_FAULT)
+    {
+        HAL_UART_WriteString(" F:");
+        HAL_UART_WriteU16(gData.faultCode);
+    }
+
+    HAL_UART_NewLine();
+}
+
+int main(void)
+{
+    /* 1. Clock — FRC → PLL → 200 MHz */
+    CLOCK_Initialize();
+
+    /* 2. GPIO — PPS assignments, analog/digital, I/O direction */
+    SetupGPIOPorts();
+
+    /* 3. UART — debug output via onboard USB-UART */
+    HAL_UART_Init();
+
+    HAL_UART_NewLine();
+    HAL_UART_WriteString("=============================");
+    HAL_UART_NewLine();
+    HAL_UART_WriteString("Garuda 6-Step CK v1.0");
+    HAL_UART_NewLine();
+    HAL_UART_WriteString("dsPIC33CK64MP205 + ATA6847");
+    HAL_UART_NewLine();
+    HAL_UART_WriteString("=============================");
+    HAL_UART_NewLine();
+    HAL_UART_WriteString("Init: ");
+
+    /* 4. SPI — for ATA6847 communication */
+    HAL_SPI_Init();
+    HAL_UART_WriteString("SPI.");
+
+    /* 5. ATA6847 — gate driver register configuration */
+    HAL_ATA6847_Init();
+    HAL_UART_WriteString("ATA.");
+
+    /* Verify ATA6847 communication by reading DSR1 */
+    {
+        uint8_t dsr1 = HAL_ATA6847_ReadReg(ATA_DSR1);
+        HAL_UART_WriteString("DSR1=0x");
+        HAL_UART_WriteHex8(dsr1);
+        if (dsr1 == 0xFF)
+        {
+            HAL_UART_WriteString(" !!SPI_ERR!! ");
+        }
+        else if (dsr1 == 0x00)
+        {
+            HAL_UART_WriteString(" (GDU off-OK) ");
+        }
+        HAL_UART_WriteByte(' ');
+    }
+
+    /* 6a. Internal op-amps for current sensing */
+    HAL_OPA_Init();
+
+    /* 6b. ADC — phase currents, pot, Vbus */
+    HAL_ADC_Init();
+    HAL_UART_WriteString("ADC.");
+
+    /* 7. PWM — center-aligned complementary, 20 kHz */
+    HAL_PWM_Init();
+    HAL_UART_WriteString("PWM.");
+
+    /* 8. Timer1 — 100 µs tick for state machine */
+    HAL_Timer1_Init();
+
+    /* 9. Board service + ESC service */
+    BoardServiceInit();
+    GarudaService_Init();
+
+    HAL_UART_WriteString("OK");
+    HAL_UART_NewLine();
+
+    /* Print computed constants for verification */
+    HAL_UART_WriteString("MPER=");
+    HAL_UART_WriteU16(LOOPTIME_TCY);
+    HAL_UART_WriteString(" DT=");
+    HAL_UART_WriteU16(DEADTIME_TCY);
+    HAL_UART_WriteString(" MaxDuty=");
+    HAL_UART_WriteU16(MAX_DUTY);
+    HAL_UART_WriteString(" AlignDuty=");
+    HAL_UART_WriteU16(ALIGN_DUTY);
+    HAL_UART_NewLine();
+
+    HAL_UART_WriteString("AlignTime=");
+    HAL_UART_WriteU16(ALIGN_TIME_COUNTS);
+    HAL_UART_WriteString(" InitStep=");
+    HAL_UART_WriteU16(INITIAL_STEP_PERIOD);
+    HAL_UART_WriteString(" MinStep=");
+    HAL_UART_WriteU16(MIN_STEP_PERIOD);
+    HAL_UART_WriteString(" RampCap=");
+    HAL_UART_WriteU16(RAMP_DUTY_CAP);
+    HAL_UART_NewLine();
+
+    HAL_UART_WriteString("PLL LOCK=");
+    HAL_UART_WriteByte(OSCCONbits.LOCK ? '1' : '0');
+    HAL_UART_WriteString(" COSC=");
+    HAL_UART_WriteU16(OSCCONbits.COSC);
+    HAL_UART_NewLine();
+
+    HAL_UART_NewLine();
+    HAL_UART_WriteString("BTN1=Start BTN2=Stop  h=Diag help");
+    HAL_UART_NewLine();
+
+    /* LEDs off at startup */
+    LED_RUN = 0;
+    LED_FAULT = 0;
+
+    /* Main loop */
+    while (1)
+    {
+        BoardService();
+
+        /* Poll pot/Vbus via software trigger during IDLE (no PWM triggers) */
+        if (gData.state == ESC_IDLE)
+        {
+            HAL_ADC_PollPotVbus((uint16_t *)&gData.potRaw,
+                                (uint16_t *)&gData.vbusRaw);
+        }
+
+        /* Process UART commands */
+        if (HAL_UART_IsRxReady())
+        {
+            uint8_t cmd = HAL_UART_ReadByte();
+            DIAG_ProcessCommand(cmd);
+        }
+
+        /* Button 1: Start motor */
+        if (IsPressed_Button1())
+        {
+            if (gData.state == ESC_IDLE)
+            {
+                HAL_UART_WriteString(">> START");
+                HAL_UART_NewLine();
+                GarudaService_StartMotor();
+            }
+        }
+
+        /* Button 2: Stop motor */
+        if (IsPressed_Button2())
+        {
+            HAL_UART_WriteString(">> STOP");
+            HAL_UART_NewLine();
+            GarudaService_StopMotor();
+        }
+
+        /* Log state transitions immediately */
+        if (gStateChanged)
+        {
+            gStateChanged = false;
+            HAL_UART_WriteString("-> ");
+            PrintStatus();
+            lastDebugTick = gData.systemTick;
+        }
+
+        /* Periodic status output (IDLE: every 5s, active: every 500ms) */
+        PrintStatus();
+
+        /* Heartbeat LED — blink when IDLE, solid ON when running */
+        heartbeatCounter++;
+        if (heartbeatCounter >= HEARTBEAT_PERIOD)
+        {
+            heartbeatCounter = 0;
+            if (gData.state == ESC_IDLE)
+                LED_RUN ^= 1;   /* toggle ~1Hz blink */
+        }
+
+        /* Housekeeping */
+        GarudaService_MainLoop();
+    }
+
+    return 0;
+}
