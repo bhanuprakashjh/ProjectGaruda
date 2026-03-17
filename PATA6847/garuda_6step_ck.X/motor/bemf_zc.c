@@ -6,15 +6,14 @@
  * RC6 (Phase A), RC7 (Phase B), RD10 (Phase C). GDUCR1.BEMFEN=1
  * enables these comparators.
  *
- * Detection logic:
- *   1. After commutation, blank for ZC_BLANKING_PERCENT of step period
- *   2. Read the digital comparator output for the floating phase
- *   3. Detect transition (rising or falling per commutation table polarity)
- *   4. Filter: require ZC_FILTER_THRESHOLD consecutive matching reads
- *   5. On confirmed ZC, schedule next commutation at ZC + half step period
- *   6. Track sync: after ZC_SYNC_THRESHOLD good ZCs, motor is synchronized
+ * Detection modes:
+ *   FEATURE_IC_ZC=1: SCCP1 fast poll timer (100kHz) with adaptive deglitch.
+ *     Primary ZC detection during closed-loop. SCCP4-based blanking (640ns).
+ *     ADC ISR 20kHz poll as backup. Timer1 handles timeout/forced steps.
+ *   FEATURE_IC_ZC=0: ADC ISR polling at 20kHz (every PWM cycle).
  *
- * Called from ADC ISR at 20 kHz (every PWM cycle).
+ * During OL_RAMP, always uses ADC ISR polling (BEMF too weak for fast poll,
+ * forced commutation handles timing).
  */
 
 #include "bemf_zc.h"
@@ -23,6 +22,7 @@
 #include "../hal/port_config.h"
 #if FEATURE_IC_ZC
 #include "../hal/hal_ic.h"
+#include "../hal/hal_com_timer.h"
 #endif
 
 /**
@@ -50,16 +50,18 @@ void BEMF_ZC_Init(volatile GARUDA_DATA_T *pData)
 
 #if FEATURE_IC_ZC
     pData->icZc.phase = IC_ZC_BLANKING;
-    pData->icZc.blankingEndTick = 0;
-    pData->icZc.captureTick = 0;
-    pData->icZc.captureTimer1 = 0;
-    pData->icZc.guardCountdown = 0;
     pData->icZc.activeChannel = 0xFF;
+    pData->icZc.pollFilter = 0;
+    pData->icZc.filterLevel = ZC_DEGLITCH_MAX;
+    pData->icZc.blankingEndHR = 0;
+    pData->icZc.lastCommHR = 0;
+    pData->icZc.zcCandidateHR = 0;
+    pData->icZc.zcCandidateT1 = 0;
     pData->icZc.diagAccepted = 0;
-    pData->icZc.diagChatter = 0;
-    pData->icZc.diagCaptures = 0;
+    pData->icZc.diagLcoutAccepted = 0;
     pData->icZc.diagFalseZc = 0;
-    HAL_IC_DisableAll();
+    pData->icZc.diagPollCycles = 0;
+    HAL_ZcTimer_Stop();
 #endif
 
     pData->timing.stepPeriod = INITIAL_STEP_PERIOD;
@@ -76,12 +78,39 @@ void BEMF_ZC_Init(volatile GARUDA_DATA_T *pData)
     pData->timing.zcSynced = false;
     pData->timing.deadlineActive = false;
     pData->timing.hasPrevZc = false;
+
+#if FEATURE_IC_ZC
+    pData->timing.lastZcTickHR = 0;
+    pData->timing.prevZcTickHR = 0;
+    pData->timing.zcIntervalHR = 0;
+    pData->timing.prevZcIntervalHR = 0;
+    pData->timing.stepPeriodHR = 0;
+    pData->timing.hasPrevZcHR = false;
+#endif
 }
+
+#if FEATURE_IC_ZC
+/**
+ * @brief Compute adaptive deglitch filter level from step period.
+ * Scales linearly: ZC_DEGLITCH_MIN at Tp <= FAST, ZC_DEGLITCH_MAX at Tp >= SLOW.
+ */
+static inline uint8_t ComputeFilterLevel(uint16_t stepPeriod)
+{
+    if (stepPeriod <= ZC_DEGLITCH_FAST_TP)
+        return ZC_DEGLITCH_MIN;
+    if (stepPeriod >= ZC_DEGLITCH_SLOW_TP)
+        return ZC_DEGLITCH_MAX;
+    return ZC_DEGLITCH_MIN +
+        (uint8_t)((uint16_t)(stepPeriod - ZC_DEGLITCH_FAST_TP) *
+                  (ZC_DEGLITCH_MAX - ZC_DEGLITCH_MIN) /
+                  (ZC_DEGLITCH_SLOW_TP - ZC_DEGLITCH_FAST_TP));
+}
+#endif
 
 /**
  * @brief Called after each commutation step to prepare for next ZC detection.
  * Resets filter, sets up expected comparator transition direction,
- * and starts the blanking window.
+ * and configures blanking.
  */
 void BEMF_ZC_OnCommutation(volatile GARUDA_DATA_T *pData)
 {
@@ -100,27 +129,77 @@ void BEMF_ZC_OnCommutation(volatile GARUDA_DATA_T *pData)
     pData->timing.stepsSinceLastZc++;
     pData->timing.deadlineActive = false;
 
-    /* Set forced commutation timeout: ZC_TIMEOUT_MULT * stepPeriod */
-    pData->timing.forcedCountdown =
-        (uint16_t)(pData->timing.stepPeriod * ZC_TIMEOUT_MULT);
+#if FEATURE_IC_ZC
+    /* Cancel any pending hardware commutation timer (forced step preempts) */
+    HAL_ComTimer_Cancel();
+#endif
+
+    /* Set forced commutation timeout: ZC_TIMEOUT_MULT * stepPeriod.
+     * When stepPeriod is clamped at MIN_CL_STEP_PERIOD (Timer1 quantization
+     * limit), use stepPeriodHR to derive a more accurate timeout.
+     * HR ticks → Timer1 ticks: t1 = hrTicks × 8 / 625 (640ns → 50µs). */
+    {
+        uint16_t timeoutT1;
+#if FEATURE_IC_ZC
+        if (pData->state == ESC_CLOSED_LOOP &&
+            pData->timing.stepPeriodHR > 0 &&
+            pData->timing.hasPrevZcHR)
+        {
+            /* Convert HR step period to Timer1 ticks, then apply multiplier.
+             * This gives accurate timeout even when Tp is clamped. */
+            uint32_t spT1 = ((uint32_t)pData->timing.stepPeriodHR *
+                             COM_TIMER_T1_DENOM + COM_TIMER_T1_NUMER / 2) /
+                            COM_TIMER_T1_NUMER;
+            if (spT1 < 1) spT1 = 1;
+            uint32_t tout = spT1 * ZC_TIMEOUT_MULT;
+            timeoutT1 = (tout > 65535U) ? 65535U : (uint16_t)tout;
+        }
+        else
+#endif
+        {
+            timeoutT1 = (uint16_t)(pData->timing.stepPeriod * ZC_TIMEOUT_MULT);
+        }
+        if (timeoutT1 < 2) timeoutT1 = 2;
+        pData->timing.forcedCountdown = timeoutT1;
+    }
 
 #if FEATURE_IC_ZC
-    /* IC only active during CL — during OL_RAMP, polling handles ZC.
-     * BEMF is too weak during ramp for clean IC edges; polling's 3-sample
-     * filter rejects PWM noise that IC would capture as false ZCs. */
     if (pData->state == ESC_CLOSED_LOOP)
     {
-        if (pData->icZc.activeChannel < 3)
-            HAL_IC_Disable(pData->icZc.activeChannel);
+        /* Record commutation time in SCCP4 ticks for HR blanking */
+        pData->icZc.lastCommHR = HAL_ComTimer_ReadTimer();
 
-        pData->icZc.phase = IC_ZC_BLANKING;
+        /* Compute blanking end in SCCP4 ticks (640 ns resolution).
+         * blanking = stepPeriodHR * ZC_BLANKING_PERCENT / 100.
+         * Falls back to Timer1-derived estimate if HR not yet valid. */
+        uint16_t blankHR;
+        if (pData->timing.stepPeriodHR > 0 &&
+            pData->timing.stepPeriod < HR_MAX_STEP_PERIOD)
+        {
+            blankHR = (uint16_t)(
+                (uint32_t)pData->timing.stepPeriodHR * ZC_BLANKING_PERCENT / 100);
+        }
+        else
+        {
+            /* Convert Timer1 blanking to SCCP4 ticks */
+            uint16_t blankT1 = (uint16_t)(
+                (uint32_t)pData->timing.stepPeriod * ZC_BLANKING_PERCENT / 100);
+            if (blankT1 < 2) blankT1 = 2;
+            blankHR = (uint16_t)((uint32_t)blankT1 *
+                                  COM_TIMER_T1_NUMER / COM_TIMER_T1_DENOM);
+        }
+        if (blankHR < 39) blankHR = 39;  /* Minimum ~25µs blanking (was 50µs).
+                                          * 25µs > half a PWM cycle (25µs at 20kHz).
+                                          * At TpHR=232 (67k eRPM, 148µs step), old
+                                          * 50µs floor ate 34% of the step leaving
+                                          * only 2-3 polls before ZC. Now 20% blanking
+                                          * applies correctly at high speed. */
+
+        pData->icZc.blankingEndHR = pData->icZc.lastCommHR + blankHR;
         pData->icZc.activeChannel = step->floatingPhase;
-        pData->icZc.guardCountdown = 0;
-
-        uint16_t blankingTicks = (uint16_t)(
-            (uint32_t)pData->timing.stepPeriod * ZC_BLANKING_PERCENT / 100);
-        if (blankingTicks < 3) blankingTicks = 3;
-        pData->icZc.blankingEndTick = pData->timer1Tick + blankingTicks;
+        pData->icZc.pollFilter = 0;
+        pData->icZc.filterLevel = ComputeFilterLevel(pData->timing.stepPeriod);
+        pData->icZc.phase = IC_ZC_BLANKING;
     }
 #endif
 }
@@ -128,7 +207,7 @@ void BEMF_ZC_OnCommutation(volatile GARUDA_DATA_T *pData)
 /**
  * @brief Poll the BEMF comparator for zero-crossing.
  * Called from ADC ISR at 20 kHz. Handles blanking and digital filtering.
- * Used during OL_RAMP (always) and CL (when FEATURE_IC_ZC=0).
+ * Used during OL_RAMP (always) and CL (as backup when FEATURE_IC_ZC=1).
  *
  * @return true when a valid zero-crossing is detected
  */
@@ -181,9 +260,7 @@ bool BEMF_ZC_Poll(volatile GARUDA_DATA_T *pData)
     {
         /* Bounce tolerance: decrement instead of reset.
          * A single noise spike costs 2 samples (one lost + one to recover)
-         * instead of restarting the entire filter. This handles BEMF
-         * comparator noise at mid-speed where PWM switching creates
-         * transients near the zero-crossing threshold. */
+         * instead of restarting the entire filter. */
         if (pData->bemf.filterCount > 0)
             pData->bemf.filterCount--;
     }
@@ -207,28 +284,34 @@ bool BEMF_ZC_Poll(volatile GARUDA_DATA_T *pData)
             pData->timing.zcInterval =
                 pData->timing.lastZcTick - pData->timing.prevZcTick;
 
-            /* 2-step averaging cancels the alternating short/long pattern
-             * caused by BEMF comparator threshold offset from true neutral.
-             * Rising-edge ZCs fire early, falling-edge late (or vice versa),
-             * creating a period-2 oscillation that a per-step IIR can't filter.
-             * Averaging consecutive pairs eliminates this perfectly.
-             * Then IIR smooths remaining noise: 3/4 old + 1/4 new. */
+            /* REJECT multi-step intervals from IIR (AM32-inspired). */
+            uint16_t maxInterval = pData->timing.stepPeriod +
+                                   (pData->timing.stepPeriod >> 1); /* 1.5× */
+            if (maxInterval < 12) maxInterval = 12;
+
             if (pData->timing.zcInterval > 0 &&
-                pData->timing.zcInterval < 10000 &&
-                pData->timing.prevZcInterval > 0)
+                pData->timing.zcInterval <= maxInterval &&
+                pData->timing.zcInterval < 10000)
             {
-                uint16_t avgInterval =
-                    (pData->timing.zcInterval + pData->timing.prevZcInterval) / 2;
-                pData->timing.stepPeriod =
-                    (pData->timing.stepPeriod * 3 + avgInterval) >> 2;
+                if (pData->timing.prevZcInterval > 0 &&
+                    pData->timing.prevZcInterval <= maxInterval)
+                {
+                    uint16_t avgInterval =
+                        (pData->timing.zcInterval +
+                         pData->timing.prevZcInterval) / 2;
+                    pData->timing.stepPeriod =
+                        (pData->timing.stepPeriod * 3 + avgInterval) >> 2;
+                }
+                else
+                {
+                    pData->timing.stepPeriod =
+                        (pData->timing.stepPeriod * 3 +
+                         pData->timing.zcInterval) >> 2;
+                }
             }
-            else if (pData->timing.zcInterval > 0 &&
-                     pData->timing.zcInterval < 10000)
-            {
-                /* First valid interval — no pair yet, use single value */
-                pData->timing.stepPeriod =
-                    (pData->timing.stepPeriod * 3 + pData->timing.zcInterval) >> 2;
-            }
+            /* Floor: prevent runaway IIR */
+            if (pData->timing.stepPeriod < MIN_CL_STEP_PERIOD)
+                pData->timing.stepPeriod = MIN_CL_STEP_PERIOD;
         }
         pData->timing.hasPrevZc = true;
 
@@ -259,27 +342,35 @@ ZC_TIMEOUT_RESULT_T BEMF_ZC_CheckTimeout(volatile GARUDA_DATA_T *pData)
     if (pData->timing.deadlineActive)
         return ZC_TIMEOUT_NONE;  /* Waiting for scheduled commutation */
 
-    /* Decrement the timeout counter.
-     * This is called from Timer1 ISR at 20 kHz (same rate as forcedCountdown units). */
     if (pData->timing.forcedCountdown > 0)
     {
         pData->timing.forcedCountdown--;
         if (pData->timing.forcedCountdown == 0)
         {
             /* Timeout — no ZC detected within allowed window.
-             * Soft penalty: halve goodZcCount instead of zeroing.
-             * A single missed step shouldn't destroy sync confidence
-             * and slam duty to idle — that causes worse roughness
-             * than the missed step itself. Only clear zcSynced after
-             * multiple consecutive misses (ZC_DESYNC_THRESH). */
+             * Soft penalty: halve goodZcCount instead of zeroing. */
             pData->timing.consecutiveMissedSteps++;
-            pData->timing.goodZcCount >>= 1;  /* Halve, don't zero */
+            pData->timing.goodZcCount >>= 1;
 
             if (pData->timing.consecutiveMissedSteps >= ZC_DESYNC_THRESH)
                 pData->timing.zcSynced = false;
 
             if (pData->timing.consecutiveMissedSteps >= ZC_MISS_LIMIT)
                 return ZC_TIMEOUT_DESYNC;
+
+            /* Decelerate forced commutation when desynced.
+             * Without this, forced steps keep firing at the stale high-speed
+             * stepPeriod while the motor decelerates, producing false ZCs
+             * that prevent recovery. Increase stepPeriod by 12.5% per forced
+             * step so forced comm slows down to match actual motor speed. */
+            if (!pData->timing.zcSynced)
+            {
+                uint16_t inc = pData->timing.stepPeriod >> 3;
+                if (inc < 1) inc = 1;
+                pData->timing.stepPeriod += inc;
+                if (pData->timing.stepPeriod > INITIAL_STEP_PERIOD)
+                    pData->timing.stepPeriod = INITIAL_STEP_PERIOD;
+            }
 
             return ZC_TIMEOUT_FORCE_STEP;
         }
@@ -290,32 +381,48 @@ ZC_TIMEOUT_RESULT_T BEMF_ZC_CheckTimeout(volatile GARUDA_DATA_T *pData)
 
 /**
  * @brief Schedule the next commutation based on ZC timing.
- * Called after BEMF_ZC_Poll returns true.
+ * Called after ZC detection (fast poll, ADC poll, or backup).
  *
  * Uses the IIR-averaged stepPeriod for scheduling. This gives consistent
  * commutation timing even when individual ZC intervals alternate due to
- * comparator threshold offset from true neutral. The 2-step averaging
- * in the step period IIR cancels the alternation, so stepPeriod tracks
- * the true mean period.
+ * comparator threshold offset from true neutral.
  *
- * Timing advance: linear by eRPM (matches dspic33AKESC 6-step).
- *   0° below TIMING_ADVANCE_START_ERPM, linearly ramps to
- *   TIMING_ADVANCE_MAX_DEG at MAX_CLOSED_LOOP_ERPM.
- *   Delay = stepPeriod * (30 - advDeg) / 60.
+ * Timing advance: linear by eRPM.
  */
 void BEMF_ZC_ScheduleCommutation(volatile GARUDA_DATA_T *pData)
 {
+    /* Guard: don't re-schedule if a commutation is already pending. */
+    if (pData->timing.deadlineActive)
+        return;
+
     uint16_t sp = pData->timing.stepPeriod;
 
-    /* Compute eRPM for timing advance lookup.
-     * eRPM = TIMER1_FREQ_HZ * 10 / stepPeriod */
-    #define ERPM_CONST_SCHED ((uint32_t)TIMER1_FREQ_HZ * 10UL)
-    uint32_t eRPM = ERPM_CONST_SCHED / sp;
+    /* Acceleration tracking: use minimum of IIR and latest 2-step average. */
+    if (pData->timing.zcInterval > 0 && pData->timing.prevZcInterval > 0)
+    {
+        uint16_t avgInterval =
+            (pData->timing.zcInterval + pData->timing.prevZcInterval) / 2;
+        if (avgInterval > 0 && avgInterval < sp)
+            sp = avgInterval;
+    }
 
-    /* Linear timing advance by eRPM:
-     *   advDeg = MIN at eRPM <= TIMING_ADVANCE_START_ERPM
-     *   advDeg = MAX at eRPM >= MAX_CLOSED_LOOP_ERPM
-     *   linear interpolation in between */
+    /* Compute eRPM for timing advance lookup.
+     * Prefer HR when available (78x better resolution than Timer1). */
+    uint32_t eRPM;
+#if FEATURE_IC_ZC
+    if (pData->timing.stepPeriodHR > 0 && pData->timing.hasPrevZcHR)
+    {
+        /* eRPM = 15625000 / stepPeriodHR (from 640ns tick base) */
+        eRPM = 15625000UL / pData->timing.stepPeriodHR;
+    }
+    else
+#endif
+    {
+        #define ERPM_CONST_SCHED ((uint32_t)TIMER1_FREQ_HZ * 10UL)
+        eRPM = ERPM_CONST_SCHED / sp;
+    }
+
+    /* Linear timing advance by eRPM */
     uint16_t advDeg = TIMING_ADVANCE_MIN_DEG;
     if (eRPM >= MAX_CLOSED_LOOP_ERPM)
     {
@@ -330,38 +437,93 @@ void BEMF_ZC_ScheduleCommutation(volatile GARUDA_DATA_T *pData)
                        * pos / range);
     }
 
-    /* Delay = sp * (30 - advDeg) / 60.
-     * At 0° advance: delay = sp/2 (standard 30° ZC-to-commutation).
-     * At 8° advance: delay = sp * 22/60. */
+    /* Delay = sp * (30 - advDeg) / 60 */
     uint16_t delay = (uint16_t)((uint32_t)sp * (30 - advDeg) / 60);
     if (delay < 1) delay = 1;
+
+#if FEATURE_IC_ZC
+    /* Hardware com timer with high-resolution timing. */
+    if (pData->state == ESC_CLOSED_LOOP)
+    {
+        if (pData->timing.hasPrevZcHR &&
+            pData->timing.stepPeriodHR > 0 &&
+            pData->timing.stepPeriod < HR_MAX_STEP_PERIOD)
+        {
+            /* True HR path: delay computed directly in SCCP4 ticks. */
+            uint16_t spHR = pData->timing.stepPeriodHR;
+            if (pData->timing.zcIntervalHR > 0 &&
+                pData->timing.prevZcIntervalHR > 0)
+            {
+                uint16_t avgHR =
+                    (pData->timing.zcIntervalHR +
+                     pData->timing.prevZcIntervalHR) / 2;
+                if (avgHR > 0 && avgHR < spHR)
+                    spHR = avgHR;
+            }
+
+            uint16_t delayHR = (uint16_t)(
+                (uint32_t)spHR * (30 - advDeg) / 60);
+            if (delayHR < 32) delayHR = 32;  /* Min ~20µs (fast poll, no CLC latency) */
+
+            uint16_t targetHR = pData->timing.lastZcTickHR + delayHR;
+
+            /* Check if target is in the past.
+             * At high speed (TpHR < 200), filter + compute latency can
+             * exceed the ZC-to-commutation delay. If we miss the window,
+             * commutate ASAP via hardware timer rather than falling through
+             * to the imprecise Timer1 path (50µs jitter at Tp:2). */
+            int16_t margin = (int16_t)(targetHR - HAL_ComTimer_ReadTimer());
+            if (margin <= 0)
+                targetHR = HAL_ComTimer_ReadTimer() + 2;  /* Fire ASAP */
+            HAL_ComTimer_ScheduleAbsolute(targetHR);
+            pData->timing.commDeadline = pData->timing.lastZcTick + delay;
+            pData->timing.deadlineActive = true;
+            return;
+        }
+        else
+        {
+            /* HR not yet valid — use Timer1→SCCP4 conversion (coarse). */
+            uint16_t elapsed = pData->timer1Tick - pData->timing.lastZcTick;
+            uint16_t remaining = (delay > elapsed) ? (delay - elapsed) : 1;
+            uint32_t delayCT = (uint32_t)remaining *
+                               COM_TIMER_T1_NUMER / COM_TIMER_T1_DENOM;
+            if (delayCT > 0 && delayCT <= 65535U)
+            {
+                uint16_t targetHR = HAL_ComTimer_ReadTimer() + (uint16_t)delayCT;
+                HAL_ComTimer_ScheduleAbsolute(targetHR);
+                pData->timing.commDeadline = pData->timing.lastZcTick + delay;
+                pData->timing.deadlineActive = true;
+                return;
+            }
+        }
+    }
+#endif
 
     pData->timing.commDeadline = pData->timing.lastZcTick + delay;
     pData->timing.deadlineActive = true;
 }
 
-/* ── SCCP Input Capture ZC Detection ──────────────────────────────── */
+/* ── SCCP1 Fast Poll ZC Detection ──────────────────────────────────── */
 #if FEATURE_IC_ZC
 
 /**
  * @brief Record ZC timing and update step period IIR.
- * @param pData ESC data
- * @param zcTick Timer1 tick at which ZC occurred
+ * Tracks both Timer1 (50µs) and SCCP4 HR (640ns) timestamps.
  */
-static void RecordZcTiming(volatile GARUDA_DATA_T *pData, uint16_t zcTick)
+static void RecordZcTiming(volatile GARUDA_DATA_T *pData,
+                           uint16_t zcTick, uint16_t hrTick)
 {
     if (pData->timing.hasPrevZc)
     {
         uint16_t interval = zcTick - pData->timing.lastZcTick;
 
         /* Reject impossibly short intervals — PWM noise, not real BEMF.
-         * A real motor can't accelerate more than ~2x in one step.
-         * Absolute floor of 8 ticks (400µs = 25000 eRPM) for safety.
-         * CRITICAL: don't update lastZcTick on rejection — keeps the
-         * baseline anchored to the last good ZC so noise can't creep
-         * the timestamp forward and eventually pass the check. */
+         * Floor must be below stepPeriod to accept valid ZCs at high speed.
+         * At Tp:5, Timer1 intervals are 4-5 ticks. Beyond Tp:5 (67k eRPM),
+         * intervals drop to 2-3 ticks. Floor of 2 accepts all valid ZCs
+         * while the deglitch filter handles noise rejection. */
         uint16_t minInterval = pData->timing.stepPeriod / 2;
-        if (minInterval < 8) minInterval = 8;
+        if (minInterval < 2) minInterval = 2;
         if (interval < minInterval)
         {
             pData->icZc.diagFalseZc++;
@@ -377,26 +539,80 @@ static void RecordZcTiming(volatile GARUDA_DATA_T *pData, uint16_t zcTick)
         pData->timing.prevZcInterval = pData->timing.zcInterval;
         pData->timing.zcInterval = interval;
 
-        /* 2-step averaging + IIR: same as polling path */
-        if (interval > 0 && interval < 10000 &&
-            pData->timing.prevZcInterval > 0)
+        /* REJECT multi-step intervals from IIR — AM32-inspired. */
+        uint16_t maxInterval = pData->timing.stepPeriod +
+                               (pData->timing.stepPeriod >> 1); /* 1.5× */
+        if (maxInterval < 12) maxInterval = 12;
+
+        if (interval <= maxInterval)
         {
-            uint16_t avgInterval =
-                (interval + pData->timing.prevZcInterval) / 2;
-            pData->timing.stepPeriod =
-                (pData->timing.stepPeriod * 3 + avgInterval) >> 2;
+            if (interval > 0 && interval < 10000 &&
+                pData->timing.prevZcInterval > 0 &&
+                pData->timing.prevZcInterval <= maxInterval)
+            {
+                uint16_t avgInterval =
+                    (interval + pData->timing.prevZcInterval) / 2;
+                pData->timing.stepPeriod =
+                    (pData->timing.stepPeriod * 3 + avgInterval) >> 2;
+            }
+            else if (interval > 0 && interval < 10000)
+            {
+                pData->timing.stepPeriod =
+                    (pData->timing.stepPeriod * 3 + interval) >> 2;
+            }
         }
-        else if (interval > 0 && interval < 10000)
+
+        /* Floor: prevent step period from going below physical limit.
+         * If IIR tracks below MIN_CL_STEP_PERIOD, it's accepting false
+         * ZCs at a rate the motor can't physically achieve. */
+        if (pData->timing.stepPeriod < MIN_CL_STEP_PERIOD)
+            pData->timing.stepPeriod = MIN_CL_STEP_PERIOD;
+
+        /* High-resolution step period tracking via SCCP4 timer. */
+        if (pData->timing.stepPeriod < HR_MAX_STEP_PERIOD &&
+            pData->timing.hasPrevZcHR)
         {
-            pData->timing.stepPeriod =
-                (pData->timing.stepPeriod * 3 + interval) >> 2;
+            uint16_t intervalHR = hrTick - pData->timing.lastZcTickHR;
+
+            pData->timing.prevZcTickHR = pData->timing.lastZcTickHR;
+            pData->timing.lastZcTickHR = hrTick;
+            pData->timing.prevZcIntervalHR = pData->timing.zcIntervalHR;
+            pData->timing.zcIntervalHR = intervalHR;
+
+            uint16_t maxHR = pData->timing.stepPeriodHR +
+                             (pData->timing.stepPeriodHR >> 1);
+            if (maxHR < 100) maxHR = 100;
+
+            if (intervalHR <= maxHR)
+            {
+                if (intervalHR > 0 && pData->timing.prevZcIntervalHR > 0 &&
+                    pData->timing.prevZcIntervalHR <= maxHR)
+                {
+                    uint16_t avgHR =
+                        (intervalHR + pData->timing.prevZcIntervalHR) / 2;
+                    pData->timing.stepPeriodHR = (uint16_t)(
+                        ((uint32_t)pData->timing.stepPeriodHR * 3 + avgHR) >> 2);
+                }
+                else if (intervalHR > 0)
+                {
+                    pData->timing.stepPeriodHR = (uint16_t)(
+                        ((uint32_t)pData->timing.stepPeriodHR * 3 + intervalHR) >> 2);
+                }
+            }
         }
+        else
+        {
+            pData->timing.lastZcTickHR = hrTick;
+        }
+        pData->timing.hasPrevZcHR = true;
     }
     else
     {
-        /* First ZC — just record the timestamp */
+        /* First ZC — just record timestamps */
         pData->timing.lastZcTick = zcTick;
+        pData->timing.lastZcTickHR = hrTick;
         pData->timing.stepsSinceLastZc = 0;
+        pData->timing.hasPrevZcHR = false;
     }
     pData->timing.hasPrevZc = true;
 
@@ -408,93 +624,82 @@ static void RecordZcTiming(volatile GARUDA_DATA_T *pData, uint16_t zcTick)
 }
 
 /**
- * @brief Handle an IC capture event — AM32-style immediate validation.
+ * @brief Fast poll ZC detection — called from SCCP1 timer ISR at 100kHz.
  *
- * On each edge capture, immediately poll the comparator in a tight loop
- * (filter_level times). If ANY read doesn't match the expected post-ZC
- * state, reject and return (IC stays armed for next edge/bounce).
- * If all reads match, accept as real ZC.
+ * State machine:
+ *   BLANKING: check SCCP4 timestamp against blankingEndHR → ARMED
+ *   ARMED:    read comparator, adaptive deglitch filter → DONE
+ *   DONE:     idle (ZC accepted, wait for next commutation)
  *
- * This approach embraces the ATA6847's ~32 bounces per ZC: early bounce
- * ISRs fail the polling check (comparator still oscillating), but after
- * the bounce settles (~60µs), the final ISR sees consistent state → accept.
+ * Deglitch: consecutive matching reads in expected state. First match
+ * records the SCCP4 timestamp as ZC candidate (eliminates filter delay
+ * from timing). On mismatch, filter resets to 0.
  *
- * PWM noise: brief transient (<1µs), comparator returns to original state
- * before tight loop completes → mismatch → rejected.
- *
- * Called from SCCP ISR (priority 4).
+ * @return true when ZC confirmed (caller schedules commutation)
  */
-void BEMF_ZC_IC_OnCapture(volatile GARUDA_DATA_T *pData,
-                           uint8_t channel, uint16_t captureTick)
+bool BEMF_ZC_FastPoll(volatile GARUDA_DATA_T *pData)
 {
-    /* Ignore captures from non-active channels */
-    if (channel != pData->icZc.activeChannel)
-        return;
+    if (pData->bemf.zeroCrossDetected)
+        return false;
 
-    if (pData->icZc.phase != IC_ZC_ARMED)
-        return;
+    pData->icZc.diagPollCycles++;
 
-    pData->icZc.diagCaptures++;
-
-    /* AM32-style tight polling: read comparator filter_level times.
-     * At 100 MHz FCY, each read ~100ns. 24 reads ≈ 2.4µs.
-     * If any read doesn't match expected state → noise, reject. */
-    const COMMUTATION_STEP_T *step = &commutationTable[pData->currentStep];
-    uint8_t expected = pData->bemf.cmpExpected;
-    uint8_t phase = step->floatingPhase;
-    uint8_t filterN = IC_ZC_FILTER_LEVEL;
-
-    uint8_t i;
-    for (i = 0; i < filterN; i++)
-    {
-        if (ReadBEMFComparator(phase) != expected)
-        {
-            /* Mismatch — noise or bounce. Return without disabling IC.
-             * Next edge/bounce will trigger another ISR attempt. */
-            pData->icZc.diagChatter++;
-            return;
-        }
-    }
-
-    /* All reads matched — real ZC confirmed.
-     * Disable IC to stop further chatter ISRs this step. */
-    HAL_IC_Disable(pData->icZc.activeChannel);
-    pData->icZc.phase = IC_ZC_DONE;
-    pData->bemf.zeroCrossDetected = true;
-    pData->icZc.diagAccepted++;
-
-    RecordZcTiming(pData, pData->timer1Tick);
-}
-
-/**
- * @brief Timer1 tick handler for IC ZC: blanking release only.
- *
- * ZC confirmation now happens immediately in OnCapture (AM32 approach).
- * Timer1 only manages blanking → arm transition.
- *
- * @return true if ZC was confirmed by IC ISR since last call
- */
-bool BEMF_ZC_IC_TimerTick(volatile GARUDA_DATA_T *pData)
-{
+    /* BLANKING → ARMED transition using SCCP4 HR timestamps (640ns) */
     if (pData->icZc.phase == IC_ZC_BLANKING)
     {
-        int16_t dt = (int16_t)(pData->timer1Tick - pData->icZc.blankingEndTick);
-        if (dt >= 0)
-        {
-            /* Blanking done — arm IC for the floating phase */
-            const COMMUTATION_STEP_T *step =
-                &commutationTable[pData->currentStep];
-            bool rising = (step->zcPolarity > 0);
-            HAL_IC_Arm(pData->icZc.activeChannel, rising);
-            pData->icZc.phase = IC_ZC_ARMED;
-        }
-        return false;
+        int16_t dt = (int16_t)(HAL_ComTimer_ReadTimer() -
+                               pData->icZc.blankingEndHR);
+        if (dt < 0)
+            return false;  /* Still blanking */
+
+        pData->icZc.phase = IC_ZC_ARMED;
+        pData->icZc.pollFilter = 0;
     }
 
-    /* ZC confirmed by IC ISR — schedule commutation */
-    if (pData->icZc.phase == IC_ZC_DONE && pData->bemf.zeroCrossDetected)
+    if (pData->icZc.phase != IC_ZC_ARMED)
+        return false;
+
+    /* Read comparator for the floating phase */
+    uint8_t cmp = ReadBEMFComparator(pData->icZc.activeChannel);
+
+    if (cmp == pData->bemf.cmpExpected)
     {
-        return true;
+        if (pData->icZc.pollFilter == 0)
+        {
+            /* First matching read — record candidate ZC timestamp.
+             * This is the closest approximation of the actual ZC time.
+             * Using this instead of the confirmation time eliminates
+             * the deglitch filter delay from commutation scheduling. */
+            pData->icZc.zcCandidateHR = HAL_ComTimer_ReadTimer();
+            pData->icZc.zcCandidateT1 = pData->timer1Tick;
+        }
+        pData->icZc.pollFilter++;
+
+        if (pData->icZc.pollFilter >= pData->icZc.filterLevel)
+        {
+            /* ZC confirmed! */
+            pData->bemf.zeroCrossDetected = true;
+            RecordZcTiming(pData, pData->icZc.zcCandidateT1,
+                           pData->icZc.zcCandidateHR);
+
+            if (pData->bemf.zeroCrossDetected)
+            {
+                pData->icZc.diagAccepted++;
+                pData->icZc.phase = IC_ZC_DONE;
+                return true;
+            }
+            /* RecordZcTiming rejected (too-short interval) — reset */
+            pData->icZc.pollFilter = 0;
+        }
+    }
+    else
+    {
+        /* Mismatch — bounce-tolerant decrement instead of hard reset.
+         * A single noise spike costs 2 polls (one lost + one to recover)
+         * instead of throwing away the entire filter. Critical at Tp:5
+         * where only ~20 polls are available after blanking. */
+        if (pData->icZc.pollFilter > 0)
+            pData->icZc.pollFilter--;
     }
 
     return false;
