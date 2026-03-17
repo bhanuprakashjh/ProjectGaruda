@@ -68,6 +68,10 @@ FIELD_DEFS = [
     ("Frc:",  "forced_steps",    "u16"),
     ("eRPM:", "erpm",            "u32"),
     ("D%:",   "duty_pct_x10",    "u16"),
+    # Current sensing (signed)
+    ("Ia:",   "ia_raw",          "s16"),
+    ("Ib:",   "ib_raw",          "s16"),
+    ("Ibus:", "ibus_raw",        "s16"),
     # Fault
     ("F:",    "fault_code",      "u16"),
 ]
@@ -82,6 +86,8 @@ CSV_COLUMNS = [
     "ic_accepted", "ic_lcout_accepted", "ic_false", "ic_captures", "ic_chatter",
     "tp_hr", "zc_interval", "zc_interval_hr", "prev_zc_interval",
     "ic_phase", "ic_filter_level", "forced_steps", "erpm", "duty_pct_x10",
+    "ia_raw", "ib_raw", "ibus_raw",
+    "ia_mA", "ib_mA", "ibus_mA",
     "fault_code",
 ]
 
@@ -103,6 +109,11 @@ def parse_line(line: str) -> dict | None:
     for tag, col, fmt in FIELD_DEFS:
         if fmt in ("u16", "u32"):
             pattern = re.escape(tag) + r"(\d+)"
+            m = re.search(pattern, line)
+            if m:
+                row[col] = int(m.group(1))
+        elif fmt == "s16":
+            pattern = re.escape(tag) + r"(-?\d+)"
             m = re.search(pattern, line)
             if m:
                 row[col] = int(m.group(1))
@@ -230,11 +241,32 @@ def main():
     time.sleep(0.3)  # Wait for connection to stabilize
     ser.reset_input_buffer()
 
-    # Enable verbose mode
+    # Enable verbose mode — retry until "Verbose: ON" is confirmed.
     if not args.no_verbose:
-        ser.write(b"v")
-        time.sleep(0.1)
-        print("Sent 'v' to enable verbose mode (100ms telemetry)")
+        ser.write(b"\r")
+        time.sleep(0.3)
+        ser.reset_input_buffer()
+
+        verbose_ok = False
+        for attempt in range(6):
+            ser.write(b"v")
+            time.sleep(0.4)
+            resp = b""
+            deadline = time.monotonic() + 0.5
+            while time.monotonic() < deadline:
+                if ser.in_waiting:
+                    resp += ser.read(ser.in_waiting)
+                time.sleep(0.02)
+            if b"ON" in resp:
+                print(f"Verbose mode enabled (attempt {attempt + 1})")
+                verbose_ok = True
+                break
+            # Got "OFF" — means it was ON and we toggled it off. Send again.
+            if b"OFF" in resp:
+                continue  # Next iteration will send 'v' again to toggle ON
+        if not verbose_ok:
+            print("WARNING: Verbose mode may not be active — try 'v' manually")
+        ser.reset_input_buffer()
 
     print("Capturing... (Ctrl+C to stop)\n")
 
@@ -312,6 +344,17 @@ def main():
                 row["ic_accept_rate"] = ""
                 row["ic_false_rate"] = ""
 
+            # Current conversion: raw signed ADC (fractional 12-bit in 16-bit) → milliamps
+            # ADC fractional: Voffset = raw × 3.3V / 65536
+            # All channels use Gain_16 (CSCR.GAIN=0b01) with 3mΩ shunt:
+            #   mA = raw × 3300 / 65536 / (0.003 × 16) = raw × 1.049
+            for key, scale in (("ia_raw", 1.049), ("ib_raw", 1.049),
+                               ("ibus_raw", 1.049)):
+                raw = row.get(key)
+                if raw is not None:
+                    ma_key = key.replace("_raw", "_mA")
+                    row[ma_key] = round(raw * scale)
+
             writer.writerow(row)
 
             # Live summary on stdout (compact, one line)
@@ -331,14 +374,17 @@ def main():
             d_cht = row.get("d_ic_chatter", 0)
             acc_r = row.get("ic_accept_rate", "")
 
+            ia_mA = row.get("ia_mA", "")
+            ib_mA = row.get("ib_mA", "")
+            ibus_mA = row.get("ibus_mA", "")
+
             if state in ("CL", "OL_RAMP"):
                 print(
                     f"\r{elapsed:6.1f}s  {state:7s}  "
                     f"D:{duty:<5}  Tp:{tp:<4}  TpHR:{tp_hr:<5}  "
                     f"eRPM:{erpm:<6}  ZC:{zc:<5} {syn}  "
                     f"Miss:{miss}  Frc:{frc}  "
-                    f"dIC:{d_acc} dLCO:{d_lco} dF:{d_fls} dCap:{d_cap}  "
-                    f"AccR:{acc_r}%",
+                    f"Ia:{ia_mA}mA Ib:{ib_mA}mA Ibus:{ibus_mA}mA",
                     end="", flush=True,
                 )
             else:

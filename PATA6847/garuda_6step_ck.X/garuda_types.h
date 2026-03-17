@@ -45,7 +45,7 @@ typedef struct {
     uint8_t  filterCount;     /* Consecutive matching reads */
 } BEMF_STATE_T;
 
-/* Commutation timing — all in Timer1 ticks (20 kHz = 50 µs) */
+/* Commutation timing — Timer1 ticks (50 us) + high-res SCCP4 ticks (640 ns) */
 typedef struct {
     uint16_t stepPeriod;            /* Current step period in Timer1 ticks */
     uint16_t lastCommTick;          /* Timer1 tick at last commutation */
@@ -53,7 +53,7 @@ typedef struct {
     uint16_t prevZcTick;
     uint16_t zcInterval;
     uint16_t prevZcInterval;        /* Previous zcInterval for 2-step averaging */
-    uint16_t commDeadline;          /* Timer1 tick for next commutation */
+    uint16_t commDeadline;          /* Timer1 tick for next commutation (fallback) */
     uint16_t forcedCountdown;
     uint16_t goodZcCount;
     uint8_t  consecutiveMissedSteps;
@@ -61,6 +61,17 @@ typedef struct {
     bool     zcSynced;
     bool     deadlineActive;
     bool     hasPrevZc;
+#if FEATURE_IC_ZC
+    /* High-resolution timing via SCCP4 free-running timer (640 ns/tick).
+     * stepPeriodHR provides 78x better resolution than Timer1-based stepPeriod.
+     * At Tp:9 (22k eRPM): Timer1 = 9 ticks, HR = 703 ticks. */
+    uint16_t lastZcTickHR;          /* SCCP4 tick at last ZC */
+    uint16_t prevZcTickHR;
+    uint16_t zcIntervalHR;
+    uint16_t prevZcIntervalHR;
+    uint16_t stepPeriodHR;          /* Step period in SCCP4 ticks (640 ns each) */
+    bool     hasPrevZcHR;
+#endif
 } TIMING_STATE_T;
 
 /* ZC timeout result */
@@ -70,28 +81,28 @@ typedef enum {
     ZC_TIMEOUT_DESYNC
 } ZC_TIMEOUT_RESULT_T;
 
-/* IC ZC detection state (FEATURE_IC_ZC) */
+/* ZC fast-poll state (FEATURE_IC_ZC) — SCCP1 periodic timer model */
 #if FEATURE_IC_ZC
 typedef enum {
     IC_ZC_BLANKING = 0, /* Waiting for blanking period to expire */
-    IC_ZC_ARMED,        /* IC enabled, waiting for first capture */
-    IC_ZC_PENDING,      /* First capture received, guard window open */
-    IC_ZC_CONFIRMED,    /* Guard passed, ZC accepted */
-    IC_ZC_DONE          /* IC disabled for this step */
+    IC_ZC_ARMED,        /* Polling active, waiting for ZC */
+    IC_ZC_DONE          /* ZC accepted, polling idle for this step */
 } IC_ZC_PHASE_T;
 
 typedef struct {
     IC_ZC_PHASE_T phase;        /* State machine phase */
-    uint16_t blankingEndTick;   /* Timer1 tick when blanking expires */
-    uint16_t captureTick;       /* Raw SCCP capture value (640 ns ticks) */
-    uint16_t captureTimer1;     /* Timer1 tick at capture ISR entry */
-    uint8_t  guardCountdown;    /* Timer1 ticks remaining in guard window */
-    uint8_t  activeChannel;     /* Which SCCP is active: 0=A, 1=B, 2=C */
-    /* Diagnostics — counters for test/debug (no ISR overhead beyond increment) */
-    uint16_t diagAccepted;      /* ZCs accepted (guard + comparator passed) */
-    uint16_t diagChatter;       /* Chatter: stale FIFO entries in PENDING */
-    uint16_t diagCaptures;      /* Total IC captures processed */
-    uint16_t diagFalseZc;       /* Comparator validation failures at guard expiry */
+    uint8_t  activeChannel;     /* Which phase to poll: 0=A, 1=B, 2=C */
+    uint8_t  pollFilter;        /* Consecutive matching reads (deglitch) */
+    uint8_t  filterLevel;       /* Current deglitch threshold (adaptive) */
+    uint16_t blankingEndHR;     /* SCCP4 tick when blanking expires */
+    uint16_t lastCommHR;        /* SCCP4 tick at last commutation */
+    uint16_t zcCandidateHR;     /* SCCP4 tick at first matching read */
+    uint16_t zcCandidateT1;     /* Timer1 tick at first matching read */
+    /* Diagnostics */
+    uint16_t diagAccepted;      /* ZCs accepted via fast poll */
+    uint16_t diagLcoutAccepted; /* ZCs accepted via ADC ISR backup */
+    uint16_t diagFalseZc;       /* Rejected by RecordZcTiming */
+    uint16_t diagPollCycles;    /* Total poll ISR invocations */
 } IC_ZC_STATE_T;
 #endif
 
@@ -130,12 +141,22 @@ typedef struct {
     uint8_t  desyncRestartAttempts;
     uint32_t recoveryCounter;
 
+    /* Current sensing (ADC, 20kHz PWM-center triggered, signed 12-bit fractional)
+     * Shunt: 3mΩ (RS1/RS2/RS3 on EV43F54A inverter sheet)
+     * Phase A (IS1): OA2 Gt=16 → AN1 (ADCBUF1)
+     * Phase B (IS2): OA3 Gt=16 → AN4 (ADCBUF4)
+     * DC Bus (IBus): ATA6847 OPO3 Gt=8 → OA1 → AN0 (ADCBUF0) */
+    int16_t  iaRaw;             /* Phase A current (AN1, OA2, signed) */
+    int16_t  ibRaw;             /* Phase B current (AN4, OA3, signed) */
+    int16_t  ibusRaw;           /* DC bus current  (AN0, OA1, signed) */
+
     /* Sub-structures */
     BEMF_STATE_T   bemf;
     TIMING_STATE_T timing;
 #if FEATURE_IC_ZC
     IC_ZC_STATE_T  icZc;
 #endif
+
 } GARUDA_DATA_T;
 
 #endif /* GARUDA_TYPES_H */

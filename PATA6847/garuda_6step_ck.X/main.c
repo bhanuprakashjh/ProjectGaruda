@@ -3,7 +3,8 @@
  * @brief Entry point for 6-step BLDC ESC on dsPIC33CK + ATA6847.
  *
  * Target: EV43F54A board (dsPIC33CK64MP205 + ATA6847)
- * Motor:  Hurst DMB2424B10002 (10 poles, 24V)
+ * Motor:  Selected by MOTOR_PROFILE in garuda_config.h
+ *         0=Hurst DMB2424B10002 (5PP, 24V), 1=A2212 1400KV (7PP, 12V)
  *
  * Debug UART: 115200 baud on RC8(RX)/RC9(TX) via USB-UART converter.
  * Type 'h' in terminal for diagnostic command list.
@@ -27,6 +28,7 @@
 #include "hal/hal_timer1.h"
 #if FEATURE_IC_ZC
 #include "hal/hal_ic.h"
+#include "hal/hal_com_timer.h"
 #endif
 #include "hal/board_service.h"
 
@@ -99,12 +101,77 @@ static void PrintStatus(void)
 #if FEATURE_IC_ZC
         if (DIAG_IsVerbose())
         {
-            HAL_UART_WriteString(" IC:");
+            HAL_UART_WriteString(" FP:");
             HAL_UART_WriteU16(gData.icZc.diagAccepted);
+            HAL_UART_WriteString("/BK:");
+            HAL_UART_WriteU16(gData.icZc.diagLcoutAccepted);
             HAL_UART_WriteByte('/');
             HAL_UART_WriteU16(gData.icZc.diagFalseZc);
-            HAL_UART_WriteByte('/');
-            HAL_UART_WriteU16(gData.icZc.diagCaptures);
+            HAL_UART_WriteString(" Cyc:");
+            HAL_UART_WriteU16(gData.icZc.diagPollCycles);
+
+            /* High-resolution timing */
+            HAL_UART_WriteString(" TpHR:");
+            HAL_UART_WriteU16(gData.timing.stepPeriodHR);
+            HAL_UART_WriteString(" ZcI:");
+            HAL_UART_WriteU16(gData.timing.zcInterval);
+            HAL_UART_WriteString(" ZcIHR:");
+            HAL_UART_WriteU16(gData.timing.zcIntervalHR);
+            HAL_UART_WriteString(" PZcI:");
+            HAL_UART_WriteU16(gData.timing.prevZcInterval);
+
+            /* Poll state machine + forced step tracking */
+            HAL_UART_WriteString(" Ph:");
+            HAL_UART_WriteU16(gData.icZc.phase);
+            HAL_UART_WriteString(" FL:");
+            HAL_UART_WriteU16(gData.icZc.filterLevel);
+            HAL_UART_WriteString(" Frc:");
+            HAL_UART_WriteU16(gData.timing.stepsSinceLastZc);
+
+            /* eRPM: prefer HR when available (78x better resolution) */
+            {
+                uint32_t eRPM = 0;
+#if FEATURE_IC_ZC
+                if (gData.timing.stepPeriodHR > 0 &&
+                    gData.timing.hasPrevZcHR)
+                {
+                    /* HR: eRPM = 10 / (stepPeriodHR × 640ns)
+                     * = 10 / (stepPeriodHR × 640e-9)
+                     * = 15625000 / stepPeriodHR */
+                    eRPM = 15625000UL / gData.timing.stepPeriodHR;
+                }
+                else
+#endif
+                if (gData.timing.stepPeriod > 0)
+                {
+                    eRPM = (uint32_t)TIMER1_FREQ_HZ * 10UL /
+                           gData.timing.stepPeriod;
+                }
+                if (eRPM > 0)
+                {
+                    HAL_UART_WriteString(" eRPM:");
+                    HAL_UART_WriteU32(eRPM);
+                }
+            }
+
+            /* Duty as percent (×10 for 1 decimal place) */
+            {
+                uint32_t dutyPct10 = gData.duty * 1000UL / LOOPTIME_TCY;
+                HAL_UART_WriteString(" D%:");
+                HAL_UART_WriteU16((uint16_t)dutyPct10);
+            }
+
+            /* Current sensing: raw signed ADC values.
+             * Ia=Phase A (OA2, Gt=16), Ib=Phase B (OA3, Gt=16),
+             * Ibus=DC bus (OA1, ATA6847 Gt=8). All via 3mΩ shunts.
+             * Convert to mA: phase_mA = raw * 3300 / 4096 / 0.048
+             *                ibus_mA  = raw * 3300 / 4096 / 0.024 */
+            HAL_UART_WriteString(" Ia:");
+            HAL_UART_WriteS16(gData.iaRaw);
+            HAL_UART_WriteString(" Ib:");
+            HAL_UART_WriteS16(gData.ibRaw);
+            HAL_UART_WriteString(" Ibus:");
+            HAL_UART_WriteS16(gData.ibusRaw);
         }
 #endif
     }
@@ -179,9 +246,13 @@ int main(void)
     HAL_Timer1_Init();
 
 #if FEATURE_IC_ZC
-    /* 8b. SCCP Input Capture for BEMF ZC detection */
-    HAL_IC_Init();
-    HAL_UART_WriteString("IC.");
+    /* 8b. SCCP1 fast poll timer for BEMF ZC detection */
+    HAL_ZcTimer_Init();
+    HAL_UART_WriteString("ZC.");
+
+    /* 8c. SCCP4 commutation timer (hardware-timed commutation) */
+    HAL_ComTimer_Init();
+    HAL_UART_WriteString("CT.");
 #endif
 
     /* 9. Board service + ESC service */

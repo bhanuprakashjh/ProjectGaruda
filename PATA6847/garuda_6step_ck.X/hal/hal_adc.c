@@ -94,12 +94,16 @@ void HAL_ADC_Init(void)
     ADC_Core1PowerEnable();
 
     /* Trigger sources:
-     * AN0 → no trigger (sampled by Core0 on PWM trigger)
-     * AN1 → PWM1 Trigger1
-     * AN4 → PWM1 Trigger1
-     * AN6 → PWM1 Trigger2
-     * AN9 → PWM1 Trigger2 */
-    ADTRIG0L = 0x0400;   /* TRGSRC1=PWM1 Trig1 */
+     * AN0 → No trigger (Core0 simultaneous sampling with Core1 via SAMC0EN)
+     * AN1 → PWM1 Trigger1 (center) — Phase A current via OA2
+     * AN4 → PWM1 Trigger1 (center) — Phase B current via OA3
+     * AN6 → PWM1 Trigger2           — Pot (speed reference)
+     * AN9 → PWM1 Trigger2           — Vbus voltage
+     *
+     * ADCON4L bit 0 (SAMC0EN=1): Core0 samples simultaneously when
+     * Core1 is triggered. So AN0 converts at PWM center alongside AN1.
+     * This matches the Microchip reference firmware (TRGSRC0=None). */
+    ADTRIG0L = 0x0404;   /* TRGSRC0=PWM1 Trig1 (belt+suspenders), TRGSRC1=PWM1 Trig1 */
     ADTRIG0H = 0x0000;
     ADTRIG1L = 0x0004;   /* TRGSRC4=PWM1 Trig1 */
     ADTRIG1H = 0x0005;   /* TRGSRC6=PWM1 Trig2 */

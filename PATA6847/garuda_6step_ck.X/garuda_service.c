@@ -32,6 +32,7 @@
 #include "motor/bemf_zc.h"
 #if FEATURE_IC_ZC
 #include "hal/hal_ic.h"
+#include "hal/hal_com_timer.h"
 #endif
 
 /* Global ESC runtime data */
@@ -104,7 +105,8 @@ static void EnterFaultISR(FAULT_CODE_T code)
     gData.faultCode = code;
     HAL_PWM_DisableOutputs();
 #if FEATURE_IC_ZC
-    HAL_IC_DisableAll();
+    HAL_ZcTimer_Stop();
+    HAL_ComTimer_Cancel();
 #endif
     deferredFault = code;  /* main loop will do SPI standby */
     LED_FAULT = 1;
@@ -125,6 +127,10 @@ static void EnterFault(FAULT_CODE_T code)
 static void EnterRecovery(void)
 {
     HAL_PWM_DisableOutputs();
+#if FEATURE_IC_ZC
+    HAL_ZcTimer_Stop();
+    HAL_ComTimer_Cancel();
+#endif
     gData.state = ESC_RECOVERY;
     gData.recoveryCounter = RECOVERY_COUNTS;
 }
@@ -147,7 +153,6 @@ void GarudaService_Init(void)
     gData.runCommandActive = false;
     gData.desyncRestartAttempts = 0;
     gData.recoveryCounter = 0;
-
     BEMF_ZC_Init((volatile GARUDA_DATA_T *)&gData);
 
     /* Start Timer1 for systemTick — always runs */
@@ -243,7 +248,8 @@ void GarudaService_StopMotor(void)
 
     HAL_PWM_DisableOutputs();
 #if FEATURE_IC_ZC
-    HAL_IC_DisableAll();
+    HAL_ZcTimer_Stop();
+    HAL_ComTimer_Cancel();
 #endif
     /* Don't stop Timer1 — systemTick must keep running for UART debug */
     /* Don't disable ADC — pot/Vbus polling needs it during IDLE */
@@ -370,11 +376,22 @@ void __attribute__((interrupt, auto_psv)) _T1Interrupt(void)
                 gData.timing.consecutiveMissedSteps = 0;
                 slewedDuty = gData.duty;  /* Seed slew from ramp exit duty */
                 clSettleCounter = CL_SETTLE_TICKS;
+
 #if FEATURE_IC_ZC
-                /* Reset ZC tracking for IC mode — polling timestamps
-                 * from OL_RAMP must not seed IC interval calculations.
-                 * First IC edge establishes fresh baseline. */
-                gData.timing.hasPrevZc = false;
+                /* Carry polling ZC history into CL.
+                 * Seed stepPeriodHR from Timer1 stepPeriod for initial
+                 * HR blanking/scheduling. First real HR ZC will replace. */
+                gData.timing.hasPrevZcHR = false;
+                {
+                    uint32_t seedHR = (uint32_t)gData.timing.stepPeriod *
+                                      COM_TIMER_T1_NUMER / COM_TIMER_T1_DENOM;
+                    gData.timing.stepPeriodHR =
+                        (seedHR <= 65535U) ? (uint16_t)seedHR : 0;
+                }
+                /* Set up fast poll for the current step */
+                BEMF_ZC_OnCommutation((volatile GARUDA_DATA_T *)&gData);
+                /* Start SCCP1 fast poll timer */
+                HAL_ZcTimer_Start();
 #endif
             }
             else if (rampDone && !gData.timing.zcSynced)
@@ -440,17 +457,8 @@ void __attribute__((interrupt, auto_psv)) _T1Interrupt(void)
                 HAL_PWM_SetDutyCycle(gData.duty);
             }
 
-            /* Commutation deadline is now checked in ADC ISR (20 kHz)
+            /* Commutation deadline is checked in ADC ISR (20 kHz)
              * for better timing resolution. See _ADCInterrupt. */
-
-#if FEATURE_IC_ZC
-            /* IC ZC: handle blanking release and guard confirmation */
-            if (BEMF_ZC_IC_TimerTick((volatile GARUDA_DATA_T *)&gData))
-            {
-                /* ZC confirmed — schedule commutation */
-                BEMF_ZC_ScheduleCommutation((volatile GARUDA_DATA_T *)&gData);
-            }
-#endif
 
             /* Check for ZC timeout */
             ZC_TIMEOUT_RESULT_T tout = BEMF_ZC_CheckTimeout(
@@ -471,7 +479,16 @@ void __attribute__((interrupt, auto_psv)) _T1Interrupt(void)
             }
             else if (tout == ZC_TIMEOUT_FORCE_STEP)
             {
-                /* Force a commutation step */
+                /* Force a commutation step.
+                 * Gate out higher-priority ISRs (SCCP1/SCCP4) during the
+                 * transition to prevent race conditions where they see
+                 * partially-updated state (old cmpExpected + new step). */
+#if FEATURE_IC_ZC
+                gData.bemf.zeroCrossDetected = true;  /* Block SCCP1 polling */
+                gData.icZc.phase = IC_ZC_DONE;        /* Block FastPoll */
+                HAL_ComTimer_Cancel();                 /* Cancel pending SCCP4 */
+                gData.timing.deadlineActive = false;
+#endif
                 COMMUTATION_AdvanceStep((volatile GARUDA_DATA_T *)&gData);
                 BEMF_ZC_OnCommutation((volatile GARUDA_DATA_T *)&gData);
             }
@@ -514,24 +531,73 @@ void __attribute__((interrupt, auto_psv)) _ADCInterrupt(void)
     gData.potRaw = (uint16_t)ADCBUF_POT;    /* AN6 */
     gData.vbusRaw = (uint16_t)ADCBUF_VBUS;  /* AN9 */
 
-    /* Phase currents — read to clear */
-    volatile uint16_t ia = ADCBUF0;  /* AN0: Phase C current */
-    volatile uint16_t ib = ADCBUF1;  /* AN1: Phase A current */
-    volatile uint16_t ic = ADCBUF4;  /* AN4: Phase B current */
-    (void)ia;
-    (void)ib;
-    (void)ic;
+    /* Current sensing — read all buffers (clears data-ready flags).
+     * EV43F54A: RS1/RS2/RS3 = 3mΩ shunts.
+     * AN0 (ADCBUF0) = DC bus current via ATA6847 OPO3 (Gt=8) → OA1
+     * AN1 (ADCBUF1) = Phase A current via OA2 (Gt=16)
+     * AN4 (ADCBUF4) = Phase B current via OA3 (Gt=16)
+     * Signed 12-bit fractional format. */
+    /* Current sensing — read all buffers (clears data-ready flags).
+     * AN0 (ADCBUF0): not usable for IBus — ATA6847 CSA3 is internal only,
+     *   no external pin. OA1 R46=12k feedback creates ~7000x gain → saturates.
+     *   Microchip reference (EV43F54A_SMO_Lib) also doesn't use OA1 (AMPEN1=0).
+     * AN1 (ADCBUF1): Phase A current via OA2 (Gt=16, 3mΩ shunt RS1)
+     * AN4 (ADCBUF4): Phase B current via OA3 (Gt=16, 3mΩ shunt RS2)
+     * Phase C has no external shunt — reconstructed as Ic = -(Ia + Ib).
+     *
+     * IBus: computed per commutation step — the PWM-active phase carries
+     * the full DC bus current:
+     *   Steps 0,5: A=PWM → IBus = |Ia|
+     *   Steps 3,4: B=PWM → IBus = |Ib|
+     *   Steps 1,2: C=PWM → IBus = |-(Ia+Ib)| = |Ia+Ib| */
+    (void)ADCBUF0;                      /* AN0: read to clear, not used */
+    gData.iaRaw = (int16_t)ADCBUF1;    /* AN1: Phase A (IS1) */
+    gData.ibRaw = (int16_t)ADCBUF4;    /* AN4: Phase B (IS2) */
+
+    /* Compute IBus from the active PWM phase per commutation step. */
+    {
+        int16_t ibus;
+        switch (gData.currentStep)
+        {
+            case 0: case 5:  /* Phase A is PWM → Ia = IBus */
+                ibus = gData.iaRaw;
+                break;
+            case 3: case 4:  /* Phase B is PWM → Ib = IBus */
+                ibus = gData.ibRaw;
+                break;
+            default:         /* Steps 1,2: Phase C is PWM → Ic = -(Ia+Ib) */
+                ibus = -(gData.iaRaw + gData.ibRaw);
+                break;
+        }
+        gData.ibusRaw = ibus < 0 ? -ibus : ibus;
+    }
 
     /* BEMF zero-crossing detection */
     if (gData.state == ESC_OL_RAMP || gData.state == ESC_CLOSED_LOOP)
     {
 #if FEATURE_IC_ZC
         /* Hybrid: polling during OL_RAMP (robust at low BEMF),
-         * IC during CL (lower jitter at speed). */
+         * IC + PWM-center poll during CL. */
         if (gData.state == ESC_OL_RAMP)
         {
             if (BEMF_ZC_Poll((volatile GARUDA_DATA_T *)&gData))
                 BEMF_ZC_ScheduleCommutation((volatile GARUDA_DATA_T *)&gData);
+        }
+        else if (gData.state == ESC_CLOSED_LOOP)
+        {
+            /* ADC ISR backup poll at 20 kHz (PWM center).
+             * Primary ZC detection is the fast poll timer (100 kHz).
+             * This catches rare cases where the fast poll misses ZC
+             * (e.g., ISR preemption). Uses the same bounce-tolerant
+             * filter as OL_RAMP polling. */
+            if (!gData.bemf.zeroCrossDetected &&
+                gData.icZc.phase == IC_ZC_ARMED &&
+                BEMF_ZC_Poll((volatile GARUDA_DATA_T *)&gData))
+            {
+                gData.icZc.diagLcoutAccepted++;
+                gData.icZc.phase = IC_ZC_DONE;
+                BEMF_ZC_ScheduleCommutation((volatile GARUDA_DATA_T *)&gData);
+            }
         }
 #else
         /* Polling mode: read digital comparators at 20 kHz */
@@ -542,14 +608,21 @@ void __attribute__((interrupt, auto_psv)) _ADCInterrupt(void)
         }
 #endif
 
-        /* Commutation deadline check at 20 kHz.
-         * Deadline is in timer1Tick units. Checking at 20 kHz catches
-         * the timer1Tick crossing within 50 µs. */
+        /* Commutation deadline check at 20 kHz (50 us resolution).
+         * With FEATURE_IC_ZC: com timer (640 ns) fires first in CL, but
+         * this serves as a safety fallback if com timer hasn't fired yet
+         * (e.g., delay already elapsed when scheduled). Uses absolute
+         * deadline timestamp so it correctly handles elapsed time. */
         if (gData.timing.deadlineActive)
         {
             int16_t dt = (int16_t)(gData.timer1Tick - gData.timing.commDeadline);
             if (dt >= 0)
             {
+#if FEATURE_IC_ZC
+                /* Gate out SCCP1/SCCP4 during transition */
+                gData.icZc.phase = IC_ZC_DONE;
+                HAL_ComTimer_Cancel();
+#endif
                 gData.timing.deadlineActive = false;
                 COMMUTATION_AdvanceStep((volatile GARUDA_DATA_T *)&gData);
                 BEMF_ZC_OnCommutation((volatile GARUDA_DATA_T *)&gData);
@@ -580,41 +653,65 @@ void __attribute__((interrupt, auto_psv)) _ADCInterrupt(void)
     IFS5bits.ADCIF = 0;
 }
 
-/* ── SCCP Input Capture ISRs (FEATURE_IC_ZC) ─────────────────────── */
+/* ── SCCP1 Fast Poll Timer ISR (FEATURE_IC_ZC) ───────────────────── */
 #if FEATURE_IC_ZC
 
 /**
- * @brief Shared IC capture handler.
- * Reads ALL SCCP FIFO entries and forwards each to the ZC state machine.
- * Multiple edges in the FIFO = chatter, which OnCapture detects by
- * transitioning PENDING → ARMED on each contradicting edge.
+ * @brief SCCP1 timer period ISR — fires at ZC_POLL_FREQ_HZ (100 kHz).
+ *
+ * Polls the ATA6847 BEMF comparator for the floating phase every 10µs.
+ * Adaptive deglitch filter confirms ZC after 2-8 consecutive matching reads.
+ * SCCP4-based blanking provides 640ns resolution (vs 50µs with Timer1).
+ *
+ * Only active during closed-loop. OL_RAMP uses ADC ISR polling.
+ *
+ * CPU budget: ~15-20 instructions per call when blanking/idle (150-200ns),
+ * plus ~50-100 instructions once per step for RecordZcTiming + scheduling.
+ * At 100kHz: ~2% CPU idle, <3% peak. Replaces 3 IC ISRs that were
+ * consuming up to 30% CPU from 14000+ bounce captures per run.
  */
-static inline void IC_HandleCapture(uint8_t channel,
-                                     volatile uint16_t *bufReg,
-                                     volatile uint16_t *statReg)
+void __attribute__((interrupt, no_auto_psv)) _CCT1Interrupt(void)
 {
-    do {
-        uint16_t cap = *bufReg;
-        BEMF_ZC_IC_OnCapture((volatile GARUDA_DATA_T *)&gData, channel, cap);
-    } while (*statReg & 0x0001);  /* ICBNE is bit 0 of CCPxSTAT */
+    _CCT1IF = 0;
+
+    if (gData.state != ESC_CLOSED_LOOP)
+        return;
+
+    if (BEMF_ZC_FastPoll((volatile GARUDA_DATA_T *)&gData))
+    {
+        /* ZC confirmed — schedule commutation via SCCP4 output compare */
+        BEMF_ZC_ScheduleCommutation((volatile GARUDA_DATA_T *)&gData);
+    }
 }
 
-void __attribute__((interrupt, no_auto_psv)) _CCP1Interrupt(void)
+/**
+ * @brief SCCP4 output compare ISR — fires at exact ZC+delay moment.
+ *
+ * SCCP4 runs as free-running timer (640 ns/tick). When ZC is detected,
+ * ScheduleCommutation sets CCP4RA to the target tick. When CCP4TMRL
+ * matches CCP4RA, this ISR fires at the precise commutation point.
+ *
+ * One-shot: disable CCP4IE to prevent re-fire on next period wrap.
+ *
+ * Resolution: 640 ns vs 50 us = 78x improvement.
+ */
+void __attribute__((interrupt, no_auto_psv)) _CCP4Interrupt(void)
 {
-    IC_HandleCapture(0, &CCP1BUFL, &CCP1STAT);
-    _CCP1IF = 0;
-}
+    /* One-shot: disable compare interrupt (timer keeps running) */
+    _CCP4IE = 0;
 
-void __attribute__((interrupt, no_auto_psv)) _CCP2Interrupt(void)
-{
-    IC_HandleCapture(1, &CCP2BUFL, &CCP2STAT);
-    _CCP2IF = 0;
-}
+    /* Fire commutation — but only if no other ISR has already handled
+     * this step (deadlineActive is the one-shot gate). */
+    if (gData.timing.deadlineActive)
+    {
+        /* Gate out SCCP1 fast poll during transition */
+        gData.icZc.phase = IC_ZC_DONE;
+        gData.timing.deadlineActive = false;
+        COMMUTATION_AdvanceStep((volatile GARUDA_DATA_T *)&gData);
+        BEMF_ZC_OnCommutation((volatile GARUDA_DATA_T *)&gData);
+    }
 
-void __attribute__((interrupt, no_auto_psv)) _CCP3Interrupt(void)
-{
-    IC_HandleCapture(2, &CCP3BUFL, &CCP3STAT);
-    _CCP3IF = 0;
+    _CCP4IF = 0;
 }
 
 #endif /* FEATURE_IC_ZC */

@@ -32,6 +32,24 @@
  * is minimal. Reference firmware uses 0x14 = 20 counts = 50ns. */
 #define DEADTIME_TCY        0x14U
 
+/* ── Current Sensing (EV43F54A inverter board) ─────────────────────── */
+/* Shunt: RS1/RS2/RS3 = 3mΩ (0.003R) on each phase + DC bus return.
+ * Phase A (IS1): dsPIC OA2, Gt = 1 + R46/(R57+R58) = 1+12k/800 = 16
+ * Phase B (IS2): dsPIC OA3, same topology, Gt = 16
+ * DC Bus (IBus): ATA6847 OPO3 Gt=8 → dsPIC OA1
+ * ADC: 12-bit signed fractional, 3.3V ref → ±1.65V range after offset.
+ * ADC is 12-bit signed fractional (left-justified in 16-bit: /65536 not /4096)
+ * Phase current: V = raw × 3.3 / 65536, I = V / (0.003 × 16)
+ *   → I_mA = raw × 3300 / 65536 / 0.048 = raw × 1.049
+ * Bus current:   V = raw × 3.3 / 65536, I = V / (0.003 × 8)
+ *   → I_mA = raw × 3300 / 65536 / 0.024 = raw × 2.098 */
+#define CURRENT_SHUNT_MOHM      3U      /* 3mΩ shunt resistors */
+#define CURRENT_PHASE_GAIN      16U     /* OA2/OA3 gain for phase currents */
+#define CURRENT_IBUS_GAIN       16U     /* ATA6847 CSA3 gain (CSCR.GAIN=0b01=Gain_16)
+                                         * Note: dsPIC OA1 is NOT used (OA1IN- shares
+                                         * pin with AN9/Vbus). AN0 reads CSA3 output
+                                         * directly through RC filter. */
+
 /* ── Timer1 (50 µs tick) ───────────────────────────────────────────── */
 #define TIMER1_PRESCALE     8U
 #define TIMER1_FREQ_HZ      20000U       /* 50 µs period — matches ADC ISR rate */

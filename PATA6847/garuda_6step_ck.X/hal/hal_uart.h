@@ -19,6 +19,7 @@ void     HAL_UART_WriteString(const char *str);
 void     HAL_UART_WriteHex8(uint8_t val);
 void     HAL_UART_WriteHex16(uint16_t val);
 void     HAL_UART_WriteU16(uint16_t val);
+void     HAL_UART_WriteS16(int16_t val);
 void     HAL_UART_WriteU32(uint32_t val);
 void     HAL_UART_NewLine(void);
 bool     HAL_UART_IsRxReady(void);

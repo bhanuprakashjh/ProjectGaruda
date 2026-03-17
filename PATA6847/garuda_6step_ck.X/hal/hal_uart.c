@@ -106,6 +106,19 @@ void HAL_UART_WriteU16(uint16_t val)
         HAL_UART_WriteByte((uint8_t)buf[--i]);
 }
 
+void HAL_UART_WriteS16(int16_t val)
+{
+    if (val < 0)
+    {
+        HAL_UART_WriteByte('-');
+        HAL_UART_WriteU16((uint16_t)(-val));
+    }
+    else
+    {
+        HAL_UART_WriteU16((uint16_t)val);
+    }
+}
+
 void HAL_UART_WriteU32(uint32_t val)
 {
     char buf[11];
