@@ -198,7 +198,15 @@ void BEMF_ZC_OnCommutation(volatile GARUDA_DATA_T *pData)
         pData->icZc.blankingEndHR = pData->icZc.lastCommHR + blankHR;
         pData->icZc.activeChannel = step->floatingPhase;
         pData->icZc.pollFilter = 0;
-        pData->icZc.filterLevel = ComputeFilterLevel(pData->timing.stepPeriod);
+        /* Use the larger of IIR stepPeriod and latest ZC interval for FL.
+         * During decel, IIR lags — raw interval is more current and ensures
+         * FL re-increases promptly instead of staying stuck at the min. */
+        {
+            uint16_t flTp = pData->timing.stepPeriod;
+            if (pData->timing.zcInterval > flTp)
+                flTp = pData->timing.zcInterval;
+            pData->icZc.filterLevel = ComputeFilterLevel(flTp);
+        }
         pData->icZc.phase = IC_ZC_BLANKING;
     }
 #endif
