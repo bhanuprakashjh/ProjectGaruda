@@ -297,6 +297,61 @@ void GarudaService_MainLoop(void)
         HAL_ATA6847_EnterGduStandby();
     }
 
+    /* ATA6847 fault decode — nIRQ was asserted, read SIR1 via SPI.
+     * The ATA6847 has already taken protective action (chopping or shutdown)
+     * before we get here. We just need to decode and respond. */
+    if (gData.ataFaultPending)
+    {
+        gData.ataFaultPending = false;
+        uint8_t sir1 = HAL_ATA6847_ReadReg(ATA_SIR1);
+        gData.ataLastSIR1 = sir1;
+
+        if (sir1 & 0x10)  /* ILIM — current limit chopping */
+        {
+            /* Informational: motor is running at current limit.
+             * Don't stop — chopping mode keeps motor safe. Log it. */
+            gData.ataIlimActive = true;
+            /* Clear the ILIM flag */
+            HAL_ATA6847_WriteReg(ATA_SIR1, 0x10);
+        }
+
+        if (sir1 & 0x02)  /* VDSSC — VDS short circuit */
+        {
+            /* Critical: a MOSFET has desaturated. GDU already shut down. */
+            uint8_t sir3 = HAL_ATA6847_ReadReg(ATA_SIR3);
+            HAL_UART_WriteString("\r\n!ATA SC:");
+            HAL_UART_WriteHex8(sir3);
+            HAL_UART_NewLine();
+            HAL_ATA6847_ClearFaults();
+            EnterFault(FAULT_ATA6847);
+        }
+
+        if (sir1 & 0x04)  /* OVTF — over-temperature */
+        {
+            HAL_UART_WriteString("\r\n!ATA OVT\r\n");
+            HAL_ATA6847_ClearFaults();
+            EnterFault(FAULT_ATA6847);
+        }
+
+        if (sir1 & 0x80)  /* VSUPF — supply failure */
+        {
+            HAL_UART_WriteString("\r\n!ATA VSUP\r\n");
+            HAL_ATA6847_ClearFaults();
+            EnterFault(FAULT_ATA6847);
+        }
+
+        if (sir1 & 0x01)  /* VGSUV — gate under-voltage */
+        {
+            HAL_UART_WriteString("\r\n!ATA VGSUV\r\n");
+            HAL_ATA6847_ClearFaults();
+            EnterFault(FAULT_ATA6847);
+        }
+    }
+    else
+    {
+        gData.ataIlimActive = false;
+    }
+
     /* Fault state: auto-clear after deferred fault handler runs.
      * User can press BTN1 again to retry, or BTN2 to stop. */
     if (gData.state == ESC_FAULT)
@@ -321,6 +376,13 @@ void __attribute__((interrupt, auto_psv)) _T1Interrupt(void)
         tickDiv = 0;
         gData.systemTick++;
     }
+
+    /* ATA6847 nIRQ poll — active low when any enabled fault occurs.
+     * Latency: ≤50µs (one Timer1 tick). The ATA6847 has already taken
+     * protective action (gate chopping or shutdown) before we read this.
+     * Main loop decodes the specific fault via SPI. */
+    if (!nIRQ_GetValue() && gData.state >= ESC_OL_RAMP)
+        gData.ataFaultPending = true;
 
     switch (gData.state)
     {

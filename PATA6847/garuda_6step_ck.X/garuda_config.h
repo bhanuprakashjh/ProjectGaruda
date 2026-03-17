@@ -92,6 +92,13 @@
 #define RAMP_TARGET_ERPM     3000U       /* OL→CL handoff speed */
 #define CL_IDLE_DUTY_PERCENT 8U          /* Minimum duty in CL (idle floor) */
 
+/* ATA6847 Hardware Current Limit — cycle-by-cycle chopping.
+ * DAC formula: VILIM_TH = 3.3V × DAC / 128
+ * Trip current: I = (VILIM_TH - 1.65V) / (Gain × Rshunt)
+ *             = (3.3 × DAC / 128 - 1.65) / (16 × 0.003)
+ * Hurst rated 3.4A, max 5A. DAC=80 → 8.6A trip (2.5× rated). */
+#define ILIM_DAC            80U     /* 8.6A trip for Hurst */
+
 /* Vbus Fault Thresholds (24V system) */
 #define VBUS_OV_THRESHOLD   (3200U * 16U)  /* ~30V → 51200 in 16-bit */
 #define VBUS_UV_THRESHOLD   (700U * 16U)   /* ~7V  → 11200 in 16-bit */
@@ -158,6 +165,12 @@
                                           * Tp:2 = 100k eRPM. Below Tp:2, Timer1 quantization
                                           * is too coarse; HR timing handles sub-tick precision. */
 #define RAMP_TARGET_ERPM     4000U       /* OL→CL handoff speed (~571 mech RPM) */
+/* ATA6847 Hardware Current Limit — cycle-by-cycle chopping.
+ * TEST VALUE: DAC=75 → 5.3A peak trip. At ~50% duty, DC bus limit
+ * ≈ 2.6A — easily triggered on bench with prop.
+ * PRODUCTION: raise to DAC=95 (16.6A) for flight. */
+#define ILIM_DAC            85U     /* TEST: calibrating actual trip point */
+
 #define CL_IDLE_DUTY_PERCENT 10U         /* Higher idle for prop drag (10% of 12V) */
 
 /* Vbus Fault Thresholds (12V / 3S LiPo system)

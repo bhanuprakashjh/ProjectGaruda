@@ -172,6 +172,8 @@ static void PrintStatus(void)
             HAL_UART_WriteS16(gData.ibRaw);
             HAL_UART_WriteString(" Ibus:");
             HAL_UART_WriteS16(gData.ibusRaw);
+            if (gData.ataIlimActive)
+                HAL_UART_WriteString(" ILIM!");
         }
 #endif
     }

@@ -62,9 +62,17 @@ void HAL_ATA6847_Init(void)
     /* Wake-up control */
     HAL_ATA6847_WriteReg(ATA_WUCR, 0x03);
 
-    /* Current limitation */
-    HAL_ATA6847_WriteReg(ATA_ILIMCR, (0 << 7) | (4 << 3) | (1 << 2));
-    HAL_ATA6847_WriteReg(ATA_ILIMTH, 73);
+    /* Current limitation — cycle-by-cycle chopping mode.
+     * ILIMEN=1: hardware current limiter ENABLED
+     * ILIMSDEN=0: CHOPPING mode (not shutdown) — motor keeps running,
+     *   ATA6847 chops the active gate when current exceeds threshold.
+     *   Critical for drones: shutdown mode = instant crash mid-flight.
+     * ILIMFLT=4: 1000ns deglitch filter (avoids trips on PWM transients)
+     * DAC threshold set per motor profile in garuda_config.h. */
+    HAL_ATA6847_WriteReg(ATA_ILIMCR, (1 << 7) | (6 << 3) | (0 << 2));
+    /* ILIMFLT=6 (1750ns) — was 4 (1000ns). Longer filter avoids
+     * nuisance trips on PWM switching transients at 20kHz. */
+    HAL_ATA6847_WriteReg(ATA_ILIMTH, ILIM_DAC);
 
     /* Short circuit protection */
     HAL_ATA6847_WriteReg(ATA_SCPCR, (1 << 7) | (5 << 3) | 1);
