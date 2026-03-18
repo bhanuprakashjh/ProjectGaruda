@@ -246,6 +246,104 @@ def test_get_snapshot(ser) -> bool:
         return False
 
 
+def test_motor_run(ser, duration=15) -> bool:
+    """Start motor, stream telemetry while running, stop motor."""
+    print(f"\n=== TEST: MOTOR RUN ({duration}s) ===")
+    print("  Press BTN1 on board to start motor, or this will start via GSP...")
+
+    # Start motor via GSP
+    resp = send_and_recv(ser, CMD_START_MOTOR, label="START_MOTOR")
+    if resp is None:
+        print("  START_MOTOR failed — start manually with BTN1")
+    elif resp[0] == CMD_ERROR:
+        print(f"  START_MOTOR error: 0x{resp[1][0]:02X} — may already be running")
+    else:
+        print("  Motor START commanded")
+
+    time.sleep(0.5)
+
+    # Start telemetry at 10Hz
+    resp = send_and_recv(ser, CMD_TELEM_START, bytes([10]), label="TELEM_START")
+    if resp is None:
+        print("  TELEM_START FAILED")
+        return False
+
+    print(f"  Streaming at {resp[1][0]}Hz — increase pot for speed/current...")
+    print(f"  {'Time':>6s}  {'State':7s}  {'eRPM':>6s}  {'Duty':>4s}  "
+          f"{'Ia_mA':>7s}  {'Ib_mA':>7s}  {'IBus_mA':>8s}  "
+          f"{'Vbus':>5s}  {'ZC':>5s}  {'Sync':4s}  {'FL':2s}  {'ILIM':4s}")
+    print("  " + "-" * 90)
+
+    frames = 0
+    max_ibus = 0
+    max_erpm = 0
+    start = time.monotonic()
+
+    while time.monotonic() - start < duration:
+        r = parse_response(ser, timeout=0.2)
+        if r and r[0] == CMD_TELEM_FRAME:
+            frames += 1
+            data = r[1]
+            if len(data) >= 50:
+                # Decode CK snapshot (offset 2 for seq header)
+                state = data[2]
+                fault = data[3]
+                step = data[4]
+                ata_st = data[5]
+                pot = struct.unpack_from("<H", data, 6)[0]
+                duty_pct = data[8]
+                zc_syn = data[9]
+                vbus = struct.unpack_from("<H", data, 10)[0]
+                ia = struct.unpack_from("<h", data, 12)[0]
+                ib = struct.unpack_from("<h", data, 14)[0]
+                ibus = struct.unpack_from("<h", data, 16)[0]
+                duty = struct.unpack_from("<H", data, 18)[0]
+                tp = struct.unpack_from("<H", data, 22)[0]
+                tp_hr = struct.unpack_from("<H", data, 24)[0]
+                erpm = struct.unpack_from("<H", data, 26)[0]
+                good_zc = struct.unpack_from("<H", data, 28)[0]
+                zc_int = struct.unpack_from("<H", data, 30)[0]
+                ic_acc = struct.unpack_from("<H", data, 34)[0]
+                ic_false = struct.unpack_from("<H", data, 36)[0]
+                fl = data[38]
+                missed = data[39]
+                forced = data[40]
+                ilim = data[41]
+
+                state_names = ["IDLE", "ARMED", "ALIGN", "OL_RAMP", "CL", "RECOV", "FAULT"]
+                s = state_names[state] if state < len(state_names) else f"?{state}"
+                syn = "SYN" if zc_syn else "---"
+                ilim_s = "ILIM" if ilim else ""
+
+                ia_mA = int(ia * 1.049)
+                ib_mA = int(ib * 1.049)
+                ibus_mA = int(ibus * 1.049)
+
+                if abs(ibus_mA) > max_ibus:
+                    max_ibus = abs(ibus_mA)
+                if erpm > max_erpm:
+                    max_erpm = erpm
+
+                elapsed = time.monotonic() - start
+                print(f"\r  {elapsed:5.1f}s  {s:7s}  {erpm:6d}  {duty_pct:3d}%  "
+                      f"{ia_mA:7d}  {ib_mA:7d}  {ibus_mA:8d}  "
+                      f"{vbus:5d}  {good_zc:5d}  {syn:4s}  {fl:2d}  {ilim_s:4s}",
+                      end="", flush=True)
+
+    # Stop telemetry
+    send_and_recv(ser, CMD_TELEM_STOP, label="TELEM_STOP")
+
+    # Stop motor
+    send_and_recv(ser, CMD_STOP_MOTOR, label="STOP_MOTOR")
+
+    elapsed = time.monotonic() - start
+    rate = frames / elapsed if elapsed > 0 else 0
+    print(f"\n\n  Capture: {frames} frames in {elapsed:.1f}s ({rate:.1f} Hz)")
+    print(f"  Peak IBus: {max_ibus} mA")
+    print(f"  Peak eRPM: {max_erpm}")
+    return frames > 0
+
+
 def test_telemetry_stream(ser, duration=3) -> bool:
     print(f"\n=== TEST: TELEMETRY STREAM ({duration}s) ===")
 
@@ -302,6 +400,10 @@ def main():
     parser = argparse.ArgumentParser(description="GSP CK Board Test")
     parser.add_argument("-p", "--port", help="Serial port")
     parser.add_argument("-b", "--baud", type=int, default=115200)
+    parser.add_argument("--motor", action="store_true",
+                        help="Run motor test (15s with telemetry)")
+    parser.add_argument("-d", "--duration", type=int, default=15,
+                        help="Motor test duration in seconds (default 15)")
     args = parser.parse_args()
 
     port = args.port or find_port()
@@ -323,8 +425,14 @@ def main():
     passed = 0
     failed = 0
 
-    for test_fn in [test_ping, test_get_info, test_get_snapshot,
-                    test_telemetry_stream]:
+    if args.motor:
+        tests = [test_ping, test_get_info,
+                 lambda s: test_motor_run(s, args.duration)]
+    else:
+        tests = [test_ping, test_get_info, test_get_snapshot,
+                 test_telemetry_stream]
+
+    for test_fn in tests:
         try:
             if test_fn(ser):
                 passed += 1
