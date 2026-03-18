@@ -51,17 +51,17 @@ OBJECTDIR=build/${CND_CONF}/${IMAGE_TYPE}
 DISTDIR=dist/${CND_CONF}/${IMAGE_TYPE}
 
 # Source Files Quoted if spaced
-SOURCEFILES_QUOTED_IF_SPACED=main.c garuda_service.c hal/clock.c hal/port_config.c hal/hal_uart.c hal/hal_diag.c hal/hal_spi.c hal/hal_ata6847.c hal/hal_adc.c hal/hal_opa.c hal/hal_pwm.c hal/hal_timer1.c hal/hal_ic.c hal/board_service.c motor/commutation.c motor/startup.c motor/bemf_zc.c
+SOURCEFILES_QUOTED_IF_SPACED=main.c garuda_service.c hal/clock.c hal/port_config.c hal/hal_uart.c hal/hal_diag.c hal/hal_spi.c hal/hal_ata6847.c hal/hal_adc.c hal/hal_opa.c hal/hal_pwm.c hal/hal_timer1.c hal/hal_ic.c hal/hal_com_timer.c hal/hal_clc.c hal/hal_trap.c hal/board_service.c motor/commutation.c motor/startup.c motor/bemf_zc.c gsp/gsp.c gsp/gsp_commands.c gsp/gsp_snapshot.c
 
 # Object Files Quoted if spaced
-OBJECTFILES_QUOTED_IF_SPACED=${OBJECTDIR}/main.o ${OBJECTDIR}/garuda_service.o ${OBJECTDIR}/hal/clock.o ${OBJECTDIR}/hal/port_config.o ${OBJECTDIR}/hal/hal_uart.o ${OBJECTDIR}/hal/hal_diag.o ${OBJECTDIR}/hal/hal_spi.o ${OBJECTDIR}/hal/hal_ata6847.o ${OBJECTDIR}/hal/hal_adc.o ${OBJECTDIR}/hal/hal_opa.o ${OBJECTDIR}/hal/hal_pwm.o ${OBJECTDIR}/hal/hal_timer1.o ${OBJECTDIR}/hal/hal_ic.o ${OBJECTDIR}/hal/board_service.o ${OBJECTDIR}/motor/commutation.o ${OBJECTDIR}/motor/startup.o ${OBJECTDIR}/motor/bemf_zc.o
-POSSIBLE_DEPFILES=${OBJECTDIR}/main.o.d ${OBJECTDIR}/garuda_service.o.d ${OBJECTDIR}/hal/clock.o.d ${OBJECTDIR}/hal/port_config.o.d ${OBJECTDIR}/hal/hal_uart.o.d ${OBJECTDIR}/hal/hal_diag.o.d ${OBJECTDIR}/hal/hal_spi.o.d ${OBJECTDIR}/hal/hal_ata6847.o.d ${OBJECTDIR}/hal/hal_adc.o.d ${OBJECTDIR}/hal/hal_opa.o.d ${OBJECTDIR}/hal/hal_pwm.o.d ${OBJECTDIR}/hal/hal_timer1.o.d ${OBJECTDIR}/hal/hal_ic.o.d ${OBJECTDIR}/hal/board_service.o.d ${OBJECTDIR}/motor/commutation.o.d ${OBJECTDIR}/motor/startup.o.d ${OBJECTDIR}/motor/bemf_zc.o.d
+OBJECTFILES_QUOTED_IF_SPACED=${OBJECTDIR}/main.o ${OBJECTDIR}/garuda_service.o ${OBJECTDIR}/hal/clock.o ${OBJECTDIR}/hal/port_config.o ${OBJECTDIR}/hal/hal_uart.o ${OBJECTDIR}/hal/hal_diag.o ${OBJECTDIR}/hal/hal_spi.o ${OBJECTDIR}/hal/hal_ata6847.o ${OBJECTDIR}/hal/hal_adc.o ${OBJECTDIR}/hal/hal_opa.o ${OBJECTDIR}/hal/hal_pwm.o ${OBJECTDIR}/hal/hal_timer1.o ${OBJECTDIR}/hal/hal_ic.o ${OBJECTDIR}/hal/hal_com_timer.o ${OBJECTDIR}/hal/hal_clc.o ${OBJECTDIR}/hal/hal_trap.o ${OBJECTDIR}/hal/board_service.o ${OBJECTDIR}/motor/commutation.o ${OBJECTDIR}/motor/startup.o ${OBJECTDIR}/motor/bemf_zc.o ${OBJECTDIR}/gsp/gsp.o ${OBJECTDIR}/gsp/gsp_commands.o ${OBJECTDIR}/gsp/gsp_snapshot.o
+POSSIBLE_DEPFILES=${OBJECTDIR}/main.o.d ${OBJECTDIR}/garuda_service.o.d ${OBJECTDIR}/hal/clock.o.d ${OBJECTDIR}/hal/port_config.o.d ${OBJECTDIR}/hal/hal_uart.o.d ${OBJECTDIR}/hal/hal_diag.o.d ${OBJECTDIR}/hal/hal_spi.o.d ${OBJECTDIR}/hal/hal_ata6847.o.d ${OBJECTDIR}/hal/hal_adc.o.d ${OBJECTDIR}/hal/hal_opa.o.d ${OBJECTDIR}/hal/hal_pwm.o.d ${OBJECTDIR}/hal/hal_timer1.o.d ${OBJECTDIR}/hal/hal_ic.o.d ${OBJECTDIR}/hal/hal_com_timer.o.d ${OBJECTDIR}/hal/hal_clc.o.d ${OBJECTDIR}/hal/hal_trap.o.d ${OBJECTDIR}/hal/board_service.o.d ${OBJECTDIR}/motor/commutation.o.d ${OBJECTDIR}/motor/startup.o.d ${OBJECTDIR}/motor/bemf_zc.o.d ${OBJECTDIR}/gsp/gsp.o.d ${OBJECTDIR}/gsp/gsp_commands.o.d ${OBJECTDIR}/gsp/gsp_snapshot.o.d
 
 # Object Files
-OBJECTFILES=${OBJECTDIR}/main.o ${OBJECTDIR}/garuda_service.o ${OBJECTDIR}/hal/clock.o ${OBJECTDIR}/hal/port_config.o ${OBJECTDIR}/hal/hal_uart.o ${OBJECTDIR}/hal/hal_diag.o ${OBJECTDIR}/hal/hal_spi.o ${OBJECTDIR}/hal/hal_ata6847.o ${OBJECTDIR}/hal/hal_adc.o ${OBJECTDIR}/hal/hal_opa.o ${OBJECTDIR}/hal/hal_pwm.o ${OBJECTDIR}/hal/hal_timer1.o ${OBJECTDIR}/hal/hal_ic.o ${OBJECTDIR}/hal/board_service.o ${OBJECTDIR}/motor/commutation.o ${OBJECTDIR}/motor/startup.o ${OBJECTDIR}/motor/bemf_zc.o
+OBJECTFILES=${OBJECTDIR}/main.o ${OBJECTDIR}/garuda_service.o ${OBJECTDIR}/hal/clock.o ${OBJECTDIR}/hal/port_config.o ${OBJECTDIR}/hal/hal_uart.o ${OBJECTDIR}/hal/hal_diag.o ${OBJECTDIR}/hal/hal_spi.o ${OBJECTDIR}/hal/hal_ata6847.o ${OBJECTDIR}/hal/hal_adc.o ${OBJECTDIR}/hal/hal_opa.o ${OBJECTDIR}/hal/hal_pwm.o ${OBJECTDIR}/hal/hal_timer1.o ${OBJECTDIR}/hal/hal_ic.o ${OBJECTDIR}/hal/hal_com_timer.o ${OBJECTDIR}/hal/hal_clc.o ${OBJECTDIR}/hal/hal_trap.o ${OBJECTDIR}/hal/board_service.o ${OBJECTDIR}/motor/commutation.o ${OBJECTDIR}/motor/startup.o ${OBJECTDIR}/motor/bemf_zc.o ${OBJECTDIR}/gsp/gsp.o ${OBJECTDIR}/gsp/gsp_commands.o ${OBJECTDIR}/gsp/gsp_snapshot.o
 
 # Source Files
-SOURCEFILES=main.c garuda_service.c hal/clock.c hal/port_config.c hal/hal_uart.c hal/hal_diag.c hal/hal_spi.c hal/hal_ata6847.c hal/hal_adc.c hal/hal_opa.c hal/hal_pwm.c hal/hal_timer1.c hal/hal_ic.c hal/board_service.c motor/commutation.c motor/startup.c motor/bemf_zc.c
+SOURCEFILES=main.c garuda_service.c hal/clock.c hal/port_config.c hal/hal_uart.c hal/hal_diag.c hal/hal_spi.c hal/hal_ata6847.c hal/hal_adc.c hal/hal_opa.c hal/hal_pwm.c hal/hal_timer1.c hal/hal_ic.c hal/hal_com_timer.c hal/hal_clc.c hal/hal_trap.c hal/board_service.c motor/commutation.c motor/startup.c motor/bemf_zc.c gsp/gsp.c gsp/gsp_commands.c gsp/gsp_snapshot.c
 
 
 
@@ -167,6 +167,24 @@ ${OBJECTDIR}/hal/hal_ic.o: hal/hal_ic.c  .generated_files/flags/default/8ed5a6cf
 	@${RM} ${OBJECTDIR}/hal/hal_ic.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  hal/hal_ic.c  -o ${OBJECTDIR}/hal/hal_ic.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/hal/hal_ic.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PK5=1  -mno-eds-warn  -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -msmart-io=1 -Wall -msfr-warn=off   
 	
+${OBJECTDIR}/hal/hal_com_timer.o: hal/hal_com_timer.c  .generated_files/flags/default/8f20192fe3f369109234829d341f97b12263791a .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+	@${MKDIR} "${OBJECTDIR}/hal" 
+	@${RM} ${OBJECTDIR}/hal/hal_com_timer.o.d 
+	@${RM} ${OBJECTDIR}/hal/hal_com_timer.o 
+	${MP_CC} $(MP_EXTRA_CC_PRE)  hal/hal_com_timer.c  -o ${OBJECTDIR}/hal/hal_com_timer.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/hal/hal_com_timer.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PK5=1  -mno-eds-warn  -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -msmart-io=1 -Wall -msfr-warn=off   
+	
+${OBJECTDIR}/hal/hal_clc.o: hal/hal_clc.c  .generated_files/flags/default/eaae6cc33a66d36a9e96d3fd3ea480b11a69d7b8 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+	@${MKDIR} "${OBJECTDIR}/hal" 
+	@${RM} ${OBJECTDIR}/hal/hal_clc.o.d 
+	@${RM} ${OBJECTDIR}/hal/hal_clc.o 
+	${MP_CC} $(MP_EXTRA_CC_PRE)  hal/hal_clc.c  -o ${OBJECTDIR}/hal/hal_clc.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/hal/hal_clc.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PK5=1  -mno-eds-warn  -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -msmart-io=1 -Wall -msfr-warn=off   
+	
+${OBJECTDIR}/hal/hal_trap.o: hal/hal_trap.c  .generated_files/flags/default/26e19f1f453b3030df74bd9d645dc933ad90a6ba .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+	@${MKDIR} "${OBJECTDIR}/hal" 
+	@${RM} ${OBJECTDIR}/hal/hal_trap.o.d 
+	@${RM} ${OBJECTDIR}/hal/hal_trap.o 
+	${MP_CC} $(MP_EXTRA_CC_PRE)  hal/hal_trap.c  -o ${OBJECTDIR}/hal/hal_trap.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/hal/hal_trap.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PK5=1  -mno-eds-warn  -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -msmart-io=1 -Wall -msfr-warn=off   
+	
 ${OBJECTDIR}/hal/board_service.o: hal/board_service.c  .generated_files/flags/default/a39f9f484e3953cad5b10676917237e47e32f838 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/hal" 
 	@${RM} ${OBJECTDIR}/hal/board_service.o.d 
@@ -190,6 +208,24 @@ ${OBJECTDIR}/motor/bemf_zc.o: motor/bemf_zc.c  .generated_files/flags/default/58
 	@${RM} ${OBJECTDIR}/motor/bemf_zc.o.d 
 	@${RM} ${OBJECTDIR}/motor/bemf_zc.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  motor/bemf_zc.c  -o ${OBJECTDIR}/motor/bemf_zc.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/motor/bemf_zc.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PK5=1  -mno-eds-warn  -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -msmart-io=1 -Wall -msfr-warn=off   
+	
+${OBJECTDIR}/gsp/gsp.o: gsp/gsp.c  .generated_files/flags/default/9cb06544e652b42a65aad322085616fe6068096 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+	@${MKDIR} "${OBJECTDIR}/gsp" 
+	@${RM} ${OBJECTDIR}/gsp/gsp.o.d 
+	@${RM} ${OBJECTDIR}/gsp/gsp.o 
+	${MP_CC} $(MP_EXTRA_CC_PRE)  gsp/gsp.c  -o ${OBJECTDIR}/gsp/gsp.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/gsp/gsp.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PK5=1  -mno-eds-warn  -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -msmart-io=1 -Wall -msfr-warn=off   
+	
+${OBJECTDIR}/gsp/gsp_commands.o: gsp/gsp_commands.c  .generated_files/flags/default/faf01d72cdfd2b81b45b6385e0c1470b09ccff75 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+	@${MKDIR} "${OBJECTDIR}/gsp" 
+	@${RM} ${OBJECTDIR}/gsp/gsp_commands.o.d 
+	@${RM} ${OBJECTDIR}/gsp/gsp_commands.o 
+	${MP_CC} $(MP_EXTRA_CC_PRE)  gsp/gsp_commands.c  -o ${OBJECTDIR}/gsp/gsp_commands.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/gsp/gsp_commands.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PK5=1  -mno-eds-warn  -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -msmart-io=1 -Wall -msfr-warn=off   
+	
+${OBJECTDIR}/gsp/gsp_snapshot.o: gsp/gsp_snapshot.c  .generated_files/flags/default/549b82b16e6f1345a8f2215895beea2b189d694f .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+	@${MKDIR} "${OBJECTDIR}/gsp" 
+	@${RM} ${OBJECTDIR}/gsp/gsp_snapshot.o.d 
+	@${RM} ${OBJECTDIR}/gsp/gsp_snapshot.o 
+	${MP_CC} $(MP_EXTRA_CC_PRE)  gsp/gsp_snapshot.c  -o ${OBJECTDIR}/gsp/gsp_snapshot.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/gsp/gsp_snapshot.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PK5=1  -mno-eds-warn  -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -msmart-io=1 -Wall -msfr-warn=off   
 	
 else
 ${OBJECTDIR}/main.o: main.c  .generated_files/flags/default/c91184e68b13327efde5182ea7d96a52d3a2ff2e .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
@@ -270,6 +306,24 @@ ${OBJECTDIR}/hal/hal_ic.o: hal/hal_ic.c  .generated_files/flags/default/64c29179
 	@${RM} ${OBJECTDIR}/hal/hal_ic.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  hal/hal_ic.c  -o ${OBJECTDIR}/hal/hal_ic.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/hal/hal_ic.o.d"      -mno-eds-warn  -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -msmart-io=1 -Wall -msfr-warn=off   
 	
+${OBJECTDIR}/hal/hal_com_timer.o: hal/hal_com_timer.c  .generated_files/flags/default/b7e0dfca89aa06964fbc2329095dffef7eb5672a .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+	@${MKDIR} "${OBJECTDIR}/hal" 
+	@${RM} ${OBJECTDIR}/hal/hal_com_timer.o.d 
+	@${RM} ${OBJECTDIR}/hal/hal_com_timer.o 
+	${MP_CC} $(MP_EXTRA_CC_PRE)  hal/hal_com_timer.c  -o ${OBJECTDIR}/hal/hal_com_timer.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/hal/hal_com_timer.o.d"      -mno-eds-warn  -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -msmart-io=1 -Wall -msfr-warn=off   
+	
+${OBJECTDIR}/hal/hal_clc.o: hal/hal_clc.c  .generated_files/flags/default/49356239ceb293dad69d40566470e3764c0c4d92 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+	@${MKDIR} "${OBJECTDIR}/hal" 
+	@${RM} ${OBJECTDIR}/hal/hal_clc.o.d 
+	@${RM} ${OBJECTDIR}/hal/hal_clc.o 
+	${MP_CC} $(MP_EXTRA_CC_PRE)  hal/hal_clc.c  -o ${OBJECTDIR}/hal/hal_clc.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/hal/hal_clc.o.d"      -mno-eds-warn  -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -msmart-io=1 -Wall -msfr-warn=off   
+	
+${OBJECTDIR}/hal/hal_trap.o: hal/hal_trap.c  .generated_files/flags/default/307f253d8f130f3272e1f7b1b691c3bff43a6a03 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+	@${MKDIR} "${OBJECTDIR}/hal" 
+	@${RM} ${OBJECTDIR}/hal/hal_trap.o.d 
+	@${RM} ${OBJECTDIR}/hal/hal_trap.o 
+	${MP_CC} $(MP_EXTRA_CC_PRE)  hal/hal_trap.c  -o ${OBJECTDIR}/hal/hal_trap.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/hal/hal_trap.o.d"      -mno-eds-warn  -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -msmart-io=1 -Wall -msfr-warn=off   
+	
 ${OBJECTDIR}/hal/board_service.o: hal/board_service.c  .generated_files/flags/default/25cfcf9e9a578dd4d840f1e585db325fa99f1c40 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/hal" 
 	@${RM} ${OBJECTDIR}/hal/board_service.o.d 
@@ -293,6 +347,24 @@ ${OBJECTDIR}/motor/bemf_zc.o: motor/bemf_zc.c  .generated_files/flags/default/38
 	@${RM} ${OBJECTDIR}/motor/bemf_zc.o.d 
 	@${RM} ${OBJECTDIR}/motor/bemf_zc.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  motor/bemf_zc.c  -o ${OBJECTDIR}/motor/bemf_zc.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/motor/bemf_zc.o.d"      -mno-eds-warn  -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -msmart-io=1 -Wall -msfr-warn=off   
+	
+${OBJECTDIR}/gsp/gsp.o: gsp/gsp.c  .generated_files/flags/default/5c17156fc78f48d1f1f19f4485875d2394797e82 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+	@${MKDIR} "${OBJECTDIR}/gsp" 
+	@${RM} ${OBJECTDIR}/gsp/gsp.o.d 
+	@${RM} ${OBJECTDIR}/gsp/gsp.o 
+	${MP_CC} $(MP_EXTRA_CC_PRE)  gsp/gsp.c  -o ${OBJECTDIR}/gsp/gsp.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/gsp/gsp.o.d"      -mno-eds-warn  -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -msmart-io=1 -Wall -msfr-warn=off   
+	
+${OBJECTDIR}/gsp/gsp_commands.o: gsp/gsp_commands.c  .generated_files/flags/default/39e0c5d1dd2539cf94df2257c13dc6aef930098b .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+	@${MKDIR} "${OBJECTDIR}/gsp" 
+	@${RM} ${OBJECTDIR}/gsp/gsp_commands.o.d 
+	@${RM} ${OBJECTDIR}/gsp/gsp_commands.o 
+	${MP_CC} $(MP_EXTRA_CC_PRE)  gsp/gsp_commands.c  -o ${OBJECTDIR}/gsp/gsp_commands.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/gsp/gsp_commands.o.d"      -mno-eds-warn  -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -msmart-io=1 -Wall -msfr-warn=off   
+	
+${OBJECTDIR}/gsp/gsp_snapshot.o: gsp/gsp_snapshot.c  .generated_files/flags/default/54c2954b168ef39814faa9eaedbdf6156b74cd67 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+	@${MKDIR} "${OBJECTDIR}/gsp" 
+	@${RM} ${OBJECTDIR}/gsp/gsp_snapshot.o.d 
+	@${RM} ${OBJECTDIR}/gsp/gsp_snapshot.o 
+	${MP_CC} $(MP_EXTRA_CC_PRE)  gsp/gsp_snapshot.c  -o ${OBJECTDIR}/gsp/gsp_snapshot.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/gsp/gsp_snapshot.o.d"      -mno-eds-warn  -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -msmart-io=1 -Wall -msfr-warn=off   
 	
 endif
 

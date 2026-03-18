@@ -40,6 +40,7 @@ SRCS = main.c \
        hal/hal_timer1.c \
        hal/hal_ic.c \
        hal/hal_com_timer.c \
+       hal/hal_clc.c \
        hal/hal_trap.c \
        hal/board_service.c \
        motor/commutation.c \

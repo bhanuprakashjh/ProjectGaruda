@@ -1,0 +1,9 @@
+# MPLAB X build artifacts
+build/
+dist/
+.generated_files/
+
+# MPLAB X user-specific files (regenerated per-machine)
+nbproject/private/
+nbproject/Makefile-local-default.mk
+nbproject/Makefile-genesis.properties
