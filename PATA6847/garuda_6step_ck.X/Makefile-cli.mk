@@ -38,10 +38,16 @@ SRCS = main.c \
        hal/hal_opa.c \
        hal/hal_pwm.c \
        hal/hal_timer1.c \
+       hal/hal_ic.c \
+       hal/hal_com_timer.c \
+       hal/hal_trap.c \
        hal/board_service.c \
        motor/commutation.c \
        motor/startup.c \
-       motor/bemf_zc.c
+       motor/bemf_zc.c \
+       gsp/gsp.c \
+       gsp/gsp_commands.c \
+       gsp/gsp_snapshot.c
 
 OBJS = $(SRCS:%.c=$(BUILDDIR)/%.o)
 ELF  = $(DISTDIR)/garuda_6step_ck.X.$(IMAGE_TYPE).elf
@@ -58,7 +64,7 @@ $(HEX): $(ELF)
 $(ELF): $(OBJS) | $(DISTDIR)
 	$(CC) $(LDFLAGS) -o $@ $(OBJS)
 
-$(BUILDDIR)/%.o: %.c | $(BUILDDIR)/hal $(BUILDDIR)/motor
+$(BUILDDIR)/%.o: %.c | $(BUILDDIR)/hal $(BUILDDIR)/motor $(BUILDDIR)/gsp
 	$(CC) $(CFLAGS) -c $< -o $@ -MP -MMD -MF $@.d
 
 $(BUILDDIR):
@@ -68,6 +74,9 @@ $(BUILDDIR)/hal: | $(BUILDDIR)
 	mkdir -p $@
 
 $(BUILDDIR)/motor: | $(BUILDDIR)
+	mkdir -p $@
+
+$(BUILDDIR)/gsp: | $(BUILDDIR)
 	mkdir -p $@
 
 $(DISTDIR):

@@ -206,6 +206,12 @@
 #define FEATURE_IC_ZC           1   /* 1 = fast poll timer ZC, 0 = ADC ISR polling only */
 #endif
 
+#ifndef FEATURE_GSP
+#define FEATURE_GSP             0   /* 1 = GSP binary protocol on UART1 (disables debug prints)
+                                     * 0 = debug UART text output (default for development)
+                                     * Set to 1 when using GUI or gsp_ck_test.py */
+#endif
+
 /* ── SCCP1 Fast ZC Polling Timer (FEATURE_IC_ZC=1) ────────────────── */
 /* Replaces edge-triggered IC with periodic timer that polls ATA6847
  * BEMF comparator directly. Step 0 experiment confirmed comparator

@@ -56,6 +56,25 @@ void HAL_UART_Disable(void)
     U1MODEbits.URXEN = 0;
 }
 
+/* When FEATURE_GSP=1, functions compile as empty stubs so GSP owns UART1.
+ * When FEATURE_GSP=0, normal debug output. */
+
+#if FEATURE_GSP
+/* ── GSP mode: empty stubs (UART1 reserved for binary protocol) ── */
+void HAL_UART_WriteByte(uint8_t data) { (void)data; }
+void HAL_UART_WriteString(const char *str) { (void)str; }
+void HAL_UART_WriteHex8(uint8_t val) { (void)val; }
+void HAL_UART_WriteHex16(uint16_t val) { (void)val; }
+void HAL_UART_WriteU16(uint16_t val) { (void)val; }
+void HAL_UART_WriteS16(int16_t val) { (void)val; }
+void HAL_UART_WriteU32(uint32_t val) { (void)val; }
+void HAL_UART_NewLine(void) { }
+bool HAL_UART_IsRxReady(void) { return false; }
+uint8_t HAL_UART_ReadByte(void) { return 0; }
+
+#else
+/* ── Debug mode: normal UART output ── */
+
 void HAL_UART_WriteByte(uint8_t data)
 {
     while (U1STAHbits.UTXBF);
@@ -159,3 +178,5 @@ uint8_t HAL_UART_ReadByte(void)
 
     return (uint8_t)U1RXREG;
 }
+
+#endif /* !FEATURE_GSP */
