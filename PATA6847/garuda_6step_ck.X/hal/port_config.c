@@ -70,12 +70,8 @@ void SetupGPIOPorts(void)
     RPINR1bits.INT3R  = 0x0030;     /* RC0 → EXT_INT:INT3 (SW1) */
     RPINR1bits.INT2R  = 0x004D;     /* RD13 → EXT_INT:INT2 (SW2) */
 
-#if FEATURE_IC_ZC
-    /* SCCP Input Capture for BEMF ZC detection */
-    RPINR3bits.ICM1R  = 54;         /* RC6/RP54 → SCCP1 IC (BEMF_A) */
-    RPINR4bits.ICM2R  = 55;         /* RC7/RP55 → SCCP2 IC (BEMF_B) */
-    RPINR5bits.ICM3R  = 74;         /* RD10/RP74 → SCCP3 IC (BEMF_C) */
-#endif
+    /* SCCP1 is in timer mode (fast poll) — no PPS routing needed.
+     * BEMF comparator pins (RC6/RC7/RD10) are read as GPIO directly. */
 
     __builtin_write_RPCON(0x0800);  /* lock */
 }

@@ -77,7 +77,9 @@ void HAL_PWM_Init(void)
     CMBTRIGL = 0x00;
     CMBTRIGH = 0x00;
     LOGCONA = LOGCONB = LOGCONC = LOGCOND = LOGCONE = LOGCONF = 0x00;
-    PWMEVTA = PWMEVTB = PWMEVTC = PWMEVTD = PWMEVTE = PWMEVTF = 0x00;
+    PWMEVTB = PWMEVTC = PWMEVTD = PWMEVTE = PWMEVTF = 0x00;
+
+    PWMEVTA = 0x00;
 
     /* PG1 (Phase A) — Master */
     PG1CONL = 0x000C;       /* Center-aligned, master clock, ON */

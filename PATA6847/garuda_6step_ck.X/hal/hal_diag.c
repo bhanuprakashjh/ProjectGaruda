@@ -628,35 +628,35 @@ static void CmdIcStats(void)
         HAL_UART_WriteByte('-');
     HAL_UART_NewLine();
 
-    HAL_UART_WriteString("Accepted=");
+    HAL_UART_WriteString("FP_Acc=");
     HAL_UART_WriteU16(gData.icZc.diagAccepted);
+    HAL_UART_WriteString(" Backup_Acc=");
+    HAL_UART_WriteU16(gData.icZc.diagLcoutAccepted);
     HAL_UART_WriteString(" FalseZC=");
     HAL_UART_WriteU16(gData.icZc.diagFalseZc);
-    HAL_UART_WriteString(" Chatter=");
-    HAL_UART_WriteU16(gData.icZc.diagChatter);
-    HAL_UART_WriteString(" Captures=");
-    HAL_UART_WriteU16(gData.icZc.diagCaptures);
+    HAL_UART_WriteString(" PollCyc=");
+    HAL_UART_WriteU16(gData.icZc.diagPollCycles);
     HAL_UART_NewLine();
 
-    HAL_UART_WriteString("BlankEnd=");
-    HAL_UART_WriteU16(gData.icZc.blankingEndTick);
-    HAL_UART_WriteString(" CapTick=");
-    HAL_UART_WriteU16(gData.icZc.captureTick);
-    HAL_UART_WriteString(" CapT1=");
-    HAL_UART_WriteU16(gData.icZc.captureTimer1);
-    HAL_UART_WriteString(" Guard=");
-    HAL_UART_WriteU16(gData.icZc.guardCountdown);
+    HAL_UART_WriteString("BlankEndHR=");
+    HAL_UART_WriteU16(gData.icZc.blankingEndHR);
+    HAL_UART_WriteString(" FilterLvl=");
+    HAL_UART_WriteU16(gData.icZc.filterLevel);
+    HAL_UART_WriteString(" PollFilt=");
+    HAL_UART_WriteU16(gData.icZc.pollFilter);
     HAL_UART_NewLine();
 
-    /* Acceptance ratio */
-    if (gData.icZc.diagCaptures > 0)
+    /* Acceptance ratio: fast poll vs ADC backup */
     {
-        uint16_t pct = (uint16_t)((uint32_t)gData.icZc.diagAccepted * 100 / gData.icZc.diagCaptures);
-        HAL_UART_WriteString("Accept%=");
-        HAL_UART_WriteU16(pct);
-        HAL_UART_WriteString("  False%=");
-        pct = (uint16_t)((uint32_t)gData.icZc.diagFalseZc * 100 / gData.icZc.diagCaptures);
-        HAL_UART_WriteU16(pct);
+        uint16_t totalAcc = gData.icZc.diagAccepted + gData.icZc.diagLcoutAccepted;
+        if (totalAcc > 0)
+        {
+            uint16_t fpPct = (uint16_t)((uint32_t)gData.icZc.diagAccepted * 100 / totalAcc);
+            HAL_UART_WriteString("FP%=");
+            HAL_UART_WriteU16(fpPct);
+            HAL_UART_WriteString(" Backup%=");
+            HAL_UART_WriteU16(100 - fpPct);
+        }
     }
     HAL_UART_NewLine();
 }

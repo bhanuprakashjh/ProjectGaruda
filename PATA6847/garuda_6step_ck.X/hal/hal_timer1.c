@@ -24,7 +24,8 @@ void HAL_Timer1_Init(void)
     PR1 = TIMER1_PR;        /* 100 µs period */
 
     IFS0bits.T1IF = 0;      /* Clear flag */
-    IPC0bits.T1IP = 5;      /* Priority 5 */
+    IPC0bits.T1IP = 4;      /* Priority 4 — below IC(5) so hardware
+                             * ZC captures preempt LCOUT fallback */
     IEC0bits.T1IE = 1;      /* Enable interrupt */
 }
 

@@ -1,14 +1,14 @@
 /**
  * @file hal_ic.h
- * @brief SCCP Input Capture HAL for BEMF zero-crossing detection.
+ * @brief SCCP1 ZC polling timer HAL for BEMF zero-crossing detection.
  *
- * Uses SCCP1/2/3 mapped via PPS to ATA6847 digital BEMF comparator outputs:
- *   SCCP1 ← RC6/RP54 (BEMF_A)
- *   SCCP2 ← RC7/RP55 (BEMF_B)
- *   SCCP3 ← RD10/RP74 (BEMF_C)
+ * Replaces edge-triggered Input Capture with periodic timer polling.
+ * SCCP1 fires at ZC_POLL_FREQ_HZ (default 100 kHz). The ISR reads
+ * the ATA6847 BEMF comparator for the floating phase and applies an
+ * adaptive deglitch filter (2-8 consecutive matching reads).
  *
- * Only the floating phase's SCCP is active at any time.
- * Timer: 1:64 prescaler → 640 ns/tick, 41.9 ms 16-bit range.
+ * SCCP4 free-running timer provides high-resolution timestamps (640 ns)
+ * for both blanking and commutation scheduling.
  *
  * Enabled by FEATURE_IC_ZC=1 in garuda_config.h.
  */
@@ -25,31 +25,23 @@
 #include <stdbool.h>
 
 /**
- * @brief Initialize SCCP1/2/3 for Input Capture mode.
- * Configures timers, prescaler, and IC mode but leaves all channels disabled.
- * PPS mapping must be done in SetupGPIOPorts() before calling this.
+ * @brief Initialize SCCP1 as periodic ZC polling timer.
+ * Configures timer at ZC_POLL_FREQ_HZ but leaves interrupt disabled.
+ * Timer starts running immediately (free-running).
  */
-void HAL_IC_Init(void);
+void HAL_ZcTimer_Init(void);
 
 /**
- * @brief Arm a specific IC channel for ZC detection.
- * Sets the edge mode (rising/falling) and clears ICDIS to enable capture.
- * @param channel 0=SCCP1(A), 1=SCCP2(B), 2=SCCP3(C)
- * @param risingEdge true for rising ZC, false for falling ZC
+ * @brief Start ZC polling (enable SCCP1 timer interrupt).
+ * Call at CL entry.
  */
-void HAL_IC_Arm(uint8_t channel, bool risingEdge);
+void HAL_ZcTimer_Start(void);
 
 /**
- * @brief Disable capture on a specific IC channel.
- * Sets MOD=0 to prevent further capture events.
- * @param channel 0=SCCP1(A), 1=SCCP2(B), 2=SCCP3(C)
+ * @brief Stop ZC polling (disable SCCP1 timer interrupt).
+ * Call at motor stop, fault, or recovery.
  */
-void HAL_IC_Disable(uint8_t channel);
-
-/**
- * @brief Disable all IC channels. Called at motor stop.
- */
-void HAL_IC_DisableAll(void);
+void HAL_ZcTimer_Stop(void);
 
 #endif /* FEATURE_IC_ZC */
 #endif /* HAL_IC_H */

@@ -381,8 +381,13 @@ void __attribute__((interrupt, auto_psv)) _T1Interrupt(void)
      * Latency: ≤50µs (one Timer1 tick). The ATA6847 has already taken
      * protective action (gate chopping or shutdown) before we read this.
      * Main loop decodes the specific fault via SPI. */
-    if (!nIRQ_GetValue() && gData.state >= ESC_OL_RAMP)
-        gData.ataFaultPending = true;
+    /* nIRQ poll — disabled pending SPI timeout fix.
+     * Confirmed: nIRQ + blocking SPI read causes MCU hang at high speed
+     * due to EMI on SPI bus. Need to add SPI read timeout before
+     * re-enabling. See 5010 24V no-load test (2026-03-19). */
+    /* TODO: Add SPI timeout, then re-enable:
+     * if (!nIRQ_GetValue() && gData.state >= ESC_OL_RAMP)
+     *     gData.ataFaultPending = true; */
 
     switch (gData.state)
     {

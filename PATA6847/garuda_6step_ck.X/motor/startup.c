@@ -45,10 +45,20 @@ bool STARTUP_Align(volatile GARUDA_DATA_T *pData)
     {
         pData->alignCounter--;
 
-        /* Gradually ramp duty during alignment to avoid inrush */
-        uint32_t elapsed = ALIGN_TIME_COUNTS - pData->alignCounter;
-        uint32_t rampDuty = MIN_DUTY +
-            ((uint32_t)(ALIGN_DUTY - MIN_DUTY) * elapsed) / ALIGN_TIME_COUNTS;
+        /* Gradually ramp duty during alignment to avoid inrush.
+         * Guard: if ALIGN_DUTY <= MIN_DUTY, just hold MIN_DUTY
+         * (prevents unsigned underflow on low-Rs motors). */
+        uint32_t rampDuty;
+        if (ALIGN_DUTY > MIN_DUTY)
+        {
+            uint32_t elapsed = ALIGN_TIME_COUNTS - pData->alignCounter;
+            rampDuty = MIN_DUTY +
+                ((uint32_t)(ALIGN_DUTY - MIN_DUTY) * elapsed) / ALIGN_TIME_COUNTS;
+        }
+        else
+        {
+            rampDuty = (uint32_t)ALIGN_DUTY;
+        }
         pData->duty = rampDuty;
         HAL_PWM_SetDutyCycle(rampDuty);
 

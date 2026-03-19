@@ -219,9 +219,10 @@
 #define MIN_CL_STEP_PERIOD   2U
 #define RAMP_TARGET_ERPM     2500U       /* Lower handoff speed (heavier rotor) */
 
-/* ATA6847 Hardware Current Limit — bench testing on EV43F54A.
- * DAC=85 same as A2212 test. Raise for production 4S setup. */
-#define ILIM_DAC            85U
+/* ATA6847 Hardware Current Limit — 5010 at 24V needs more headroom.
+ * DAC=85 was chopping at mid-speed causing speed-sticking.
+ * DAC=110 → ~4A DC bench (empirical 0.15A/count). */
+#define ILIM_DAC            110U
 
 #define CL_IDLE_DUTY_PERCENT 10U
 
