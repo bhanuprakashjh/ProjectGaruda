@@ -182,6 +182,7 @@
 
 #elif MOTOR_PROFILE == 2
 /* ── Motor: Flycat 5010 750KV (large drone motor) ────────────────── */
+/* TEST: reduced blanking + faster poll to fix Frc:3 at 78k eRPM */
 /* 12N14P, 14 poles (7PP), 14.8V (4S LiPo), ~30A burst
  * Large rotor inertia: needs slow ramp, gentle startup.
  * Very low Rs (80mΩ): high current at low duty.
@@ -204,8 +205,11 @@
 #define RAMP_ACCEL_ERPM_S   300U         /* eRPM/s — gentle for heavy rotor */
 #define RAMP_DUTY_CAP       (LOOPTIME_TCY / 20)    /* Max ~5% duty during OL ramp (~7.5A peak) */
 
-/* ZC Detection */
-#define ZC_BLANKING_PERCENT 20U
+/* ZC Detection — 18% blanking balances noise rejection vs high-speed.
+ * 20% baseline: stable to 79k, 15% test: 101k but 5680 false ZCs.
+ * 18% is the compromise for no-load testing. With prop load the motor
+ * stays well within the stable zone regardless of blanking %. */
+#define ZC_BLANKING_PERCENT 18U
 #define ZC_FILTER_THRESHOLD 3U
 
 /* Timing Advance — 5010 at 24V reaches 126k eRPM no-load.
@@ -278,7 +282,9 @@
  * At 100 kHz, worst-case idle CPU = 2%. ZC detection + scheduling
  * adds ~1-2 µs once per step (negligible). */
 #if FEATURE_IC_ZC
-#define ZC_POLL_FREQ_HZ         100000U     /* 100 kHz polling rate */
+#define ZC_POLL_FREQ_HZ         100000U     /* 100 kHz polling rate.
+                                              * 200kHz tested: extends speed but 5680 false ZCs.
+                                              * Keep 100kHz for reliability. */
 #define ZC_POLL_PERIOD          (FCY / ZC_POLL_FREQ_HZ)  /* 1000 ticks at 100MHz Fp */
 #define ZC_POLL_ISR_PRIORITY    5           /* Above Timer1(4), below ComTimer(6) */
 
