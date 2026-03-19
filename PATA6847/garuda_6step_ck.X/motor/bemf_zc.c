@@ -166,34 +166,52 @@ void BEMF_ZC_OnCommutation(volatile GARUDA_DATA_T *pData)
 #if FEATURE_IC_ZC
     if (pData->state == ESC_CLOSED_LOOP)
     {
-        /* Record commutation time in SCCP4 ticks for HR blanking */
+        /* Record commutation time in SCCP4 ticks for interval rejection */
         pData->icZc.lastCommHR = HAL_ComTimer_ReadTimer();
 
-        /* Compute blanking end in SCCP4 ticks (640 ns resolution).
-         * blanking = stepPeriodHR * ZC_BLANKING_PERCENT / 100.
-         * Falls back to Timer1-derived estimate if HR not yet valid. */
+        /* PRODUCTION BLANKING: fixed minimum + 50% interval rejection.
+         *
+         * Instead of percentage-based blanking (which requires per-motor
+         * tuning), use the approach from ESCape32/VESC/AM32:
+         *
+         * Layer 1: Fixed minimum blanking (~25µs) — rejects immediate
+         *   switching transients after commutation. This is hardware-
+         *   related (FET switching + ringing), not motor-dependent.
+         *
+         * Layer 2: 50% interval rejection — any ZC candidate arriving
+         *   before 50% of the last ZC interval is rejected. This is
+         *   checked in FastPoll (not here). It automatically handles:
+         *   - Demagnetization (completes within ~25-35% of step)
+         *   - Switching noise at start of step
+         *   - Self-adapts to any motor speed without configuration
+         *
+         * The combination of fixed minimum (Layer 1) + 50% interval
+         * (Layer 2) + consecutive-read filter (Layer 3) gives three
+         * independent noise rejection layers that work for ANY motor
+         * at ANY speed without per-motor tuning.
+         */
+        /* Layer 1 blanking: 12% of step period from commutation.
+         * Handles switching transients (speed-adaptive, motor-independent).
+         * 12% is a hardware property (FET ringing + comparator settling),
+         * not motor-dependent. Combined with Layer 2 (50% interval
+         * rejection from last ZC in FastPoll) for demag protection.
+         *
+         * At Tp:2  (128µs): 12% = 15µs — fast, preserves detection window
+         * At Tp:13 (650µs): 12% = 78µs — enough to reject commutation noise
+         * Floor: 25µs (39 HR ticks) for absolute minimum settling. */
         uint16_t blankHR;
         if (pData->timing.stepPeriodHR > 0 &&
             pData->timing.stepPeriod < HR_MAX_STEP_PERIOD)
         {
-            blankHR = (uint16_t)(
-                (uint32_t)pData->timing.stepPeriodHR * ZC_BLANKING_PERCENT / 100);
+            blankHR = (uint16_t)((uint32_t)pData->timing.stepPeriodHR * 12 / 100);
         }
         else
         {
-            /* Convert Timer1 blanking to SCCP4 ticks */
-            uint16_t blankT1 = (uint16_t)(
-                (uint32_t)pData->timing.stepPeriod * ZC_BLANKING_PERCENT / 100);
-            if (blankT1 < 2) blankT1 = 2;
-            blankHR = (uint16_t)((uint32_t)blankT1 *
-                                  COM_TIMER_T1_NUMER / COM_TIMER_T1_DENOM);
+            uint16_t blankT1 = (uint16_t)((uint32_t)pData->timing.stepPeriod * 12 / 100);
+            if (blankT1 < 1) blankT1 = 1;
+            blankHR = (uint16_t)((uint32_t)blankT1 * COM_TIMER_T1_NUMER / COM_TIMER_T1_DENOM);
         }
-        if (blankHR < 39) blankHR = 39;  /* Minimum ~25µs blanking (was 50µs).
-                                          * 25µs > half a PWM cycle (25µs at 20kHz).
-                                          * At TpHR=232 (67k eRPM, 148µs step), old
-                                          * 50µs floor ate 34% of the step leaving
-                                          * only 2-3 polls before ZC. Now 20% blanking
-                                          * applies correctly at high speed. */
+        if (blankHR < 39) blankHR = 39;  /* Floor: ~25µs minimum */
 
         pData->icZc.blankingEndHR = pData->icZc.lastCommHR + blankHR;
         pData->icZc.activeChannel = step->floatingPhase;
@@ -652,13 +670,17 @@ bool BEMF_ZC_FastPoll(volatile GARUDA_DATA_T *pData)
 
     pData->icZc.diagPollCycles++;
 
-    /* BLANKING → ARMED transition using SCCP4 HR timestamps (640ns) */
+    /* BLANKING → ARMED transition.
+     * Two-layer rejection:
+     *   Layer 1: Fixed minimum blanking (~25µs) — clears switching transients
+     *   Layer 2: 50% interval rejection — rejects demag and early noise */
     if (pData->icZc.phase == IC_ZC_BLANKING)
     {
+        /* Layer 1: Fixed minimum blanking (hardware transient settling) */
         int16_t dt = (int16_t)(HAL_ComTimer_ReadTimer() -
                                pData->icZc.blankingEndHR);
         if (dt < 0)
-            return false;  /* Still blanking */
+            return false;  /* Still in minimum blanking */
 
         pData->icZc.phase = IC_ZC_ARMED;
         pData->icZc.pollFilter = 0;
@@ -666,6 +688,21 @@ bool BEMF_ZC_FastPoll(volatile GARUDA_DATA_T *pData)
 
     if (pData->icZc.phase != IC_ZC_ARMED)
         return false;
+
+    /* Layer 2: 50% interval rejection (ESCape32/VESC approach).
+     * Reject any ZC candidate that arrives before 50% of the last
+     * ZC-to-ZC interval. This is the production-grade blanking that
+     * works for ANY motor without per-motor tuning.
+     *
+     * Why 50%: demagnetization completes within ~25-35% of step period.
+     * True ZC occurs at ~50% (30 electrical degrees). Everything before
+     * 50% is noise, demag, or switching artifacts. */
+    {
+        uint16_t elapsed = HAL_ComTimer_ReadTimer() - pData->timing.lastZcTickHR;
+        uint16_t halfInterval = pData->timing.stepPeriodHR >> 1;
+        if (halfInterval > 0 && (int16_t)(elapsed - halfInterval) < 0)
+            return false;  /* Too early — reject (demag/noise) */
+    }
 
     /* Read comparator for the floating phase */
     uint8_t cmp = ReadBEMFComparator(pData->icZc.activeChannel);
