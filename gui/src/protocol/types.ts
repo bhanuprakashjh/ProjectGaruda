@@ -72,6 +72,62 @@ export interface GspSnapshot {
   focOffsetIb: number;
 }
 
+/* ── Board IDs ─────────────────────────────────────────────── */
+export const BOARD_ID_AK = 0x0001;  /* MCLV-48V-300W (dsPIC33AK) */
+export const BOARD_ID_CK = 0x0002;  /* EV43F54A (dsPIC33CK + ATA6847) */
+
+export const BOARD_NAMES: Record<number, string> = {
+  [BOARD_ID_AK]: 'MCLV-48V-300W (AK)',
+  [BOARD_ID_CK]: 'EV43F54A (CK)',
+};
+
+export function isCkBoard(boardId: number): boolean {
+  return boardId === BOARD_ID_CK;
+}
+
+/* ── CK Board Snapshot (48 bytes) ────────────────────────────── */
+export interface CkSnapshot {
+  state: number;
+  faultCode: number;
+  currentStep: number;
+  ataStatus: number;
+  potRaw: number;
+  dutyPct: number;
+  zcSynced: boolean;
+  vbusRaw: number;
+  iaRaw: number;
+  ibRaw: number;
+  ibusRaw: number;
+  duty: number;
+  stepPeriod: number;
+  stepPeriodHR: number;
+  eRpm: number;
+  goodZcCount: number;
+  zcInterval: number;
+  prevZcInterval: number;
+  icAccepted: number;
+  icFalse: number;
+  filterLevel: number;
+  missedSteps: number;
+  forcedSteps: number;
+  ilimActive: boolean;
+  systemTick: number;
+  uptimeSec: number;
+}
+
+export const CK_ESC_STATES = ['IDLE', 'ARMED', 'ALIGN', 'OL_RAMP', 'CLOSED_LOOP', 'RECOVERY', 'FAULT'] as const;
+export const CK_FAULT_CODES = ['NONE', 'OVERVOLTAGE', 'UNDERVOLTAGE', 'STALL', 'DESYNC', 'STARTUP_TIMEOUT', 'ATA6847'] as const;
+
+export const CK_PROFILE_NAMES = ['Hurst Long', 'A2212 1400KV', '2810 1350KV', 'Custom'] as const;
+
+/* Current scaling: raw signed ADC (fractional 12-bit) to milliamps.
+ * Phase (OA2/OA3 Gt=16, 3mΩ): mA = raw × 1.049
+ * IBus: reconstructed per step, same scaling */
+export const CK_CURRENT_SCALE = 1.049;
+
+/* Vbus scaling: raw ADC to volts. EV43F54A divider ~1211 raw/V */
+export const CK_VBUS_SCALE = 1211;
+
 export interface ParamDescriptor {
   id: number;
   type: number;

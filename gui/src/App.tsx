@@ -11,7 +11,9 @@ import { ParamPanel } from './components/ParamPanel';
 import { ParamModal } from './components/ParamModal';
 import { HelpPanel, MicrochipIcon } from './components/HelpPanel';
 import { MotorTuningPanel } from './components/MotorTuningPanel';
+import { CkDashboard } from './components/CkDashboard';
 import { useEscStore, type TabId } from './store/useEscStore';
+import { isCkBoard, BOARD_NAMES } from './protocol/types';
 
 class ErrorBoundary extends Component<{ children: ReactNode }, { error: string | null }> {
   state = { error: null as string | null };
@@ -99,9 +101,16 @@ function TabBar() {
 }
 
 function DashboardTab() {
+  const info = useEscStore(s => s.info);
+  const isCk = info && isCkBoard(info.boardId);
+
+  if (isCk) {
+    return <CkDashboard />;
+  }
+
   return (
     <>
-      {/* Top row: Status + Gauges */}
+      {/* Top row: Status + Gauges (AK board) */}
       <div style={{ display: 'grid', gridTemplateColumns: '240px 1fr', gap: 16 }}>
         <StatusPanel />
         <GaugePanel />
@@ -202,7 +211,7 @@ export default function App() {
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, opacity: 0.6 }}>
             <MicrochipIcon size={14} />
             <span style={{ fontSize: 9, color: 'var(--text-muted)', letterSpacing: '0.5px' }}>
-              dsPIC33AK
+              {info ? (BOARD_NAMES[info.boardId] || `Board 0x${info.boardId.toString(16)}`) : 'dsPIC'}
             </span>
           </div>
 
@@ -235,7 +244,7 @@ export default function App() {
         }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
             <MicrochipIcon size={12} />
-            <span>Powered by Microchip dsPIC33AK128MC106</span>
+            <span>Powered by Microchip {info && isCkBoard(info.boardId) ? 'dsPIC33CK64MP205 + ATA6847' : 'dsPIC33AK128MC106'}</span>
           </div>
           <div>
             Garuda ESC Project &middot; WebSerial GUI &middot; GSP Protocol v2

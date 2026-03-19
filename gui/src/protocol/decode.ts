@@ -1,4 +1,4 @@
-import type { GspInfo, GspSnapshot, GspRxStatus, ParamDescriptor, ParamListPage } from './types';
+import type { GspInfo, GspSnapshot, GspRxStatus, CkSnapshot, ParamDescriptor, ParamListPage } from './types';
 
 export function decodeInfo(data: Uint8Array): GspInfo {
   const v = new DataView(data.buffer, data.byteOffset, data.byteLength);
@@ -81,6 +81,40 @@ export function decodeSnapshot(data: Uint8Array): GspSnapshot {
     focSubState: hasDiag ? v.getUint8(144) : (hasFocVdVq ? v.getUint8(108) : (hasFoc ? v.getUint8(100) : 0)),
     focOffsetIa: hasDiag ? v.getUint16(146, true) : (hasFocVdVq ? v.getUint16(110, true) : (hasFoc ? v.getUint16(102, true) : 0)),
     focOffsetIb: hasDiag ? v.getUint16(148, true) : (hasFocVdVq ? v.getUint16(112, true) : (hasFoc ? v.getUint16(104, true) : 0)),
+  };
+}
+
+/** CK board snapshot: 48 bytes, different layout from AK board */
+export function decodeCkSnapshot(data: Uint8Array): CkSnapshot {
+  const v = new DataView(data.buffer, data.byteOffset, data.byteLength);
+  return {
+    state: v.getUint8(0),
+    faultCode: v.getUint8(1),
+    currentStep: v.getUint8(2),
+    ataStatus: v.getUint8(3),
+    potRaw: v.getUint16(4, true),
+    dutyPct: v.getUint8(6),
+    zcSynced: v.getUint8(7) !== 0,
+    vbusRaw: v.getUint16(8, true),
+    iaRaw: v.getInt16(10, true),
+    ibRaw: v.getInt16(12, true),
+    ibusRaw: v.getInt16(14, true),
+    duty: v.getUint16(16, true),
+    // bytes 18-19: pad
+    stepPeriod: v.getUint16(20, true),
+    stepPeriodHR: v.getUint16(22, true),
+    eRpm: v.getUint16(24, true),
+    goodZcCount: v.getUint16(26, true),
+    zcInterval: v.getUint16(28, true),
+    prevZcInterval: v.getUint16(30, true),
+    icAccepted: v.getUint16(32, true),
+    icFalse: v.getUint16(34, true),
+    filterLevel: v.getUint8(36),
+    missedSteps: v.getUint8(37),
+    forcedSteps: v.getUint8(38),
+    ilimActive: v.getUint8(39) !== 0,
+    systemTick: v.getUint32(40, true),
+    uptimeSec: v.getUint32(44, true),
   };
 }
 

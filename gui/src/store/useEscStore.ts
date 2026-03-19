@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { GspInfo, GspSnapshot, GspRxStatus, ParamDescriptor, ScopeSample, ScopeStatus } from '../protocol/types';
+import type { GspInfo, GspSnapshot, GspRxStatus, CkSnapshot, ParamDescriptor, ScopeSample, ScopeStatus } from '../protocol/types';
 
 export type TabId = 'dashboard' | 'scope' | 'motor' | 'params' | 'help';
 
@@ -18,8 +18,10 @@ interface EscStore {
   connected: boolean;
   info: GspInfo | null;
   snapshot: GspSnapshot | null;
+  ckSnapshot: CkSnapshot | null;
   lastSnapshotMs: number;
   history: GspSnapshot[];
+  ckHistory: CkSnapshot[];
   params: Map<number, ParamValue>;
   activeProfile: number;
   rxStatus: GspRxStatus | null;
@@ -35,6 +37,7 @@ interface EscStore {
   setConnected: (v: boolean) => void;
   setInfo: (info: GspInfo) => void;
   pushSnapshot: (s: GspSnapshot) => void;
+  pushCkSnapshot: (s: CkSnapshot) => void;
   setParams: (descriptors: ParamDescriptor[]) => void;
   mergeParams: (descriptors: ParamDescriptor[]) => void;
   setParamValue: (id: number, value: number) => void;
@@ -61,8 +64,10 @@ export const useEscStore = create<EscStore>((set) => ({
   connected: false,
   info: null,
   snapshot: null,
+  ckSnapshot: null,
   lastSnapshotMs: 0,
   history: [],
+  ckHistory: [],
   params: new Map(),
   activeProfile: 0,
   rxStatus: null,
@@ -81,6 +86,11 @@ export const useEscStore = create<EscStore>((set) => ({
     const history = [...state.history, s];
     if (history.length > MAX_HISTORY) history.shift();
     return { snapshot: s, lastSnapshotMs: Date.now(), history };
+  }),
+  pushCkSnapshot: (s) => set((state) => {
+    const ckHistory = [...state.ckHistory, s];
+    if (ckHistory.length > MAX_HISTORY) ckHistory.shift();
+    return { ckSnapshot: s, lastSnapshotMs: Date.now(), ckHistory };
   }),
   setParams: (descriptors) => set(() => {
     const params = new Map<number, ParamValue>();
@@ -120,8 +130,8 @@ export const useEscStore = create<EscStore>((set) => ({
   clearScopeSamples: () => set({ scopeSamples: [], scopeReading: false }),
   setScopeReading: (v) => set({ scopeReading: v }),
   reset: () => set({
-    connected: false, info: null, snapshot: null, lastSnapshotMs: 0,
-    history: [], params: new Map(), activeProfile: 0, rxStatus: null,
+    connected: false, info: null, snapshot: null, ckSnapshot: null, lastSnapshotMs: 0,
+    history: [], ckHistory: [], params: new Map(), activeProfile: 0, rxStatus: null,
     throttleSource: 'ADC', telemActive: false, toasts: [],
     paramModalOpen: false, activeTab: 'dashboard',
     scopeStatus: null, scopeSamples: [], scopeReading: false,
