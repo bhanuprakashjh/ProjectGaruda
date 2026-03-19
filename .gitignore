@@ -30,6 +30,7 @@ debug/
 *.code-workspace
 **/nbproject/private/
 **/nbproject/Makefile-local-*.mk
+**/nbproject/Makefile-genesis.properties
 
 # OS files
 .DS_Store

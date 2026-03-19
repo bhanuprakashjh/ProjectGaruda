@@ -492,7 +492,7 @@ extern "C" {
 #define RX_LOCK_COUNT           10
 #define RX_TIMEOUT_MS           200
 #define RX_DSHOT_CMD_MAX        47
-#define RX_DSHOT_EDGES          32   /* wire truth: 16 bits x 2 edges */
+#define RX_DSHOT_EDGES          64   /* wire truth: 16 bits x 2 edges */
 #define RX_DSHOT_DMA_COUNT      RX_DSHOT_EDGES  /* DMA register load;
     change to (RX_DSHOT_EDGES - 1) if count-1 semantics confirmed in M0 */
 #define RX_ALIGN_MAX_SHIFTS_PER_CALL  4

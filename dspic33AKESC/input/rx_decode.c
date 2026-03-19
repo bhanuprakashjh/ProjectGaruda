@@ -40,7 +40,7 @@ static uint8_t dshotTotalShifts;  /* total shift attempts across calls */
 /* ── Cached throttle (ADC ISR reads these) ────────────────────────── */
 
 volatile uint16_t rxCachedThrottleAdc = 0;
-volatile uint8_t  rxCachedLocked = 0;
+volatile bool  rxCachedLocked = 0;
 
 /* ── Lock FSM state ───────────────────────────────────────────────── */
 
@@ -73,14 +73,17 @@ static RX_PROTOCOL_T DetectProtocol(void)
         if (delta < minDelta)
             minDelta = delta;
     }
-
+    if (minDelta == UINT32_MAX)
+    return RX_PROTO_NONE;  /* only gaps found, no valid edges */
     /* DShot: fast edges, min delta < 5us */
     if (minDelta < 500)
     {
         /* Estimate rate from bit period */
-        if (minDelta < 200)
+        if (minDelta < 50)
+            return RX_PROTO_DSHOT1200;
+        else if (minDelta < 100)
             return RX_PROTO_DSHOT600;  /* ~167 counts */
-        else if (minDelta < 400)
+        else if (minDelta < 200)
             return RX_PROTO_DSHOT300;  /* ~333 counts */
         else
             return RX_PROTO_DSHOT150;  /* ~667 counts */
@@ -214,7 +217,9 @@ void RX_Service(void)
                         lastValidTick = garudaData.systemTick;
 
                         /* Set rate for telemetry */
-                        if (proto == RX_PROTO_DSHOT600)
+                        if (proto == RX_PROTO_DSHOT1200)
+                         garudaData.rxDshotRate = 12;  /* 1200 */
+                        else if (proto == RX_PROTO_DSHOT600)
                             garudaData.rxDshotRate = 6;  /* 600 */
                         else if (proto == RX_PROTO_DSHOT300)
                             garudaData.rxDshotRate = 3;  /* 300 */
@@ -314,7 +319,7 @@ void RX_Service(void)
                     /* Try decode at this offset */
                     uint16_t thr;
                     uint8_t telem;
-                    if (DshotDecodeFrame(dshotRingBuf, offset,
+                    if (DshotDecodeFrame(dshotRingBuf, RX_DSHOT_EDGES,
                                          &thr, &telem))
                     {
                         /* Found valid alignment */

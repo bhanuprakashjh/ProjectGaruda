@@ -62,14 +62,14 @@ void HAL_IC4_GetDetectEdges(uint32_t *buf, uint8_t *count);
 
 #if FEATURE_RX_DSHOT
 /**
- * @brief Decode a 16-bit DShot frame from 32 edge timestamps in ring buffer.
- * @param edges   64-edge ring buffer.
- * @param offset  Bit offset (0-15) within the ring.
+ * @brief Decode a 16-bit DShot frame from edge timestamps.
+ * @param edges     Edge timestamp buffer.
+ * @param edgeCount Number of edges in the buffer.
  * @param[out] throttle  Decoded throttle 0-2047.
  * @param[out] telemetry Telemetry request bit.
  * @return true if CRC passes.
  */
-bool DshotDecodeFrame(const volatile uint32_t *edges, uint8_t offset,
+bool DshotDecodeFrame(const volatile uint32_t *edges, uint8_t edgeCount,
                        uint16_t *throttle, uint8_t *telemetry);
 
 /**

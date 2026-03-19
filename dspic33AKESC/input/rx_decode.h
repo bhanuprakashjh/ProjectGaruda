@@ -35,7 +35,7 @@ extern volatile RX_MAILBOX_T rxMailbox;
 /* Cached throttle for ADC ISR consumption (write-ordered by RX_Service).
  * ADC ISR reads rxCachedLocked FIRST, then rxCachedThrottleAdc. */
 extern volatile uint16_t rxCachedThrottleAdc;  /* 0-4095 scaled */
-extern volatile uint8_t  rxCachedLocked;       /* 0 or 1 */
+extern volatile bool  rxCachedLocked;       /* 0 or 1 */
 
 /**
  * @brief Initialize RX decode state. Called once at startup.

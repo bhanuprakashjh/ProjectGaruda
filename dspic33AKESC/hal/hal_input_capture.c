@@ -46,8 +46,8 @@ static bool     pwmGotRise;
 /* ── DShot DMA state ──────────────────────────────────────────────── */
 
 #if FEATURE_RX_DSHOT
-/* Ping-pong DMA buffers (32 edges each) */
-static uint32_t dmaEdgeBuf[2][RX_DSHOT_EDGES];
+/* Ping-pong DMA buffers (64 edges each) */
+static volatile uint32_t dmaEdgeBuf[2][64] __attribute__((aligned(4)));
 static uint8_t  dmaActiveBuf;  /* 0 or 1: which buffer DMA is writing */
 
 /* 64-edge overlap ring for rolling CRC alignment */
@@ -110,61 +110,74 @@ static IC_MODE_T icMode = IC_MODE_DETECT;
 
 #if FEATURE_RX_DSHOT
 /**
- * @brief Decode a 16-bit DShot frame from 32 edge timestamps.
- * @param edges Array of 32 edge timestamps (alternating rise/fall).
- * @param offset Bit offset within the edge array (0-15).
+ * @brief Decode a 16-bit DShot frame from edge timestamps.
+ * @param edges     Array of edge timestamps (alternating rise/fall).
+ * @param edgeCount Number of edges in the array.
  * @param[out] throttle Decoded throttle value (0-2047).
  * @param[out] telemetry Telemetry request bit.
  * @return true if CRC passes.
  */
-bool DshotDecodeFrame(const volatile uint32_t *edges, uint8_t offset,
-                       uint16_t *throttle, uint8_t *telemetry)
+bool DshotDecodeFrame(const volatile uint32_t *edges, uint8_t edgeCount,
+                      uint16_t *throttle, uint8_t *telemetry)
 {
+    /* --- Find frame start by locating the inter-frame gap --- */
+    uint8_t frameStart = 0;
+    bool    gapFound   = false;
+
+    for (uint8_t i = 0; i < edgeCount; i++)
+    {
+        uint8_t  fallIdx     = (i * 2 + 1) % edgeCount;
+        uint8_t  nextRiseIdx = (fallIdx + 1) % edgeCount;
+        uint32_t gap         = edges[nextRiseIdx] - edges[fallIdx];
+
+        if (gap > 2000)   /* >20us at 100MHz = inter-frame gap */
+        {
+            frameStart = nextRiseIdx;
+            gapFound   = true;
+            break;
+        }
+    }
+
+    if (!gapFound)
+        return false;   /* no frame boundary found — buffer not ready */
+
+    /* --- Detect bit period from first two rises, compute threshold --- */
+    uint8_t  rise0Idx = frameStart;
+    uint8_t  rise1Idx = (frameStart + 2) % edgeCount;  /* next rise = +2 edges */
+    uint32_t period   = edges[rise1Idx] - edges[rise0Idx];
+
+    if (period == 0)
+        return false;
+
+    /* Threshold = 56.25% of bit period (midpoint between bit=0 at 37.5% and bit=1 at 75%) */
+    uint32_t threshold = (period * 9) / 16;
+
+    /* --- Decode 16 bits --- */
     uint16_t raw = 0;
-    uint8_t baseIdx = offset * 2;  /* each bit = 2 edges (rise+fall) */
 
     for (uint8_t bit = 0; bit < 16; bit++)
     {
-        uint8_t idx = (baseIdx + bit * 2) & 63;  /* wrap in 64-edge ring */
-        uint8_t idxNext = (idx + 1) & 63;
+        uint8_t riseIdx = (frameStart + bit * 2) % edgeCount;
+        uint8_t fallIdx = (riseIdx + 1)           % edgeCount;
 
-        uint32_t rise = edges[idx];
-        uint32_t fall = edges[idxNext];
+        uint32_t rise     = edges[riseIdx];
+        uint32_t fall     = edges[fallIdx];
         uint32_t highTime = fall - rise;
 
-        /* Next bit's rise gives the period */
-        uint8_t idxNextRise = (idx + 2) & 63;
-        uint32_t period = edges[idxNextRise] - rise;
-
-        /* If this is the last bit, use previous period estimate */
-        if (bit == 15)
-        {
-            /* Last bit: duty threshold only, period from previous */
-            raw <<= 1;
-            /* threshold: >62.5% duty = bit 1 */
-            if (period > 0 && highTime * 16 > period * 10)
-                raw |= 1;
-            continue;
-        }
-
-        if (period == 0) return false;  /* degenerate */
-
         raw <<= 1;
-        /* threshold: >62.5% duty = bit 1, <50% = bit 0 */
-        if (highTime * 16 > period * 10)
+        if (highTime >= threshold)
             raw |= 1;
     }
 
-    /* CRC check: XOR the three data nibbles (top 12 bits), compare to
-     * the CRC nibble (bottom 4 bits).  Previous code included the CRC
-     * nibble in the XOR chain, which reduced to checking nibble1 ^
-     * nibble2 ^ nibble3 == 0 — wrong (accepts/rejects wrong frames). */
-    uint16_t data12 = raw >> 4;
-    uint8_t crc = (data12 ^ (data12 >> 4) ^ (data12 >> 8)) & 0x0F;
-    if (crc != (raw & 0x0F))
+    /* --- CRC check --- */
+    uint16_t data12  = raw >> 4;
+    uint8_t crc_calc = (uint8_t)((data12 ^ (data12 >> 4) ^ (data12 >> 8)) & 0x0F);
+    uint8_t crc_recv = (uint8_t)(raw & 0x0F);
+
+    if (crc_calc != crc_recv)
         return false;
 
-    *throttle = (raw >> 5) & 0x07FF;
+    *throttle  = (raw >> 5) & 0x07FF;
     *telemetry = (raw >> 4) & 0x01;
     return true;
 }
@@ -197,6 +210,7 @@ void HAL_IC4_Init(void)
     CCP4CON1bits.T32 = 1;       /* 32-bit timer */
     CCP4CON1bits.MOD = 0b0011;  /* Every edge (rise + fall) */
     CCP4CON1bits.CLKSEL = 0b000; /* SCCP bus clock = 100 MHz */
+    CCP4STATbits.ICOV = 0;
 
     /* ISR priority 4 (below ADC prio 6, below commutation prio 7) */
     _CCP4IP = 4;
@@ -259,38 +273,35 @@ void HAL_IC4_ConfigDmaDshot(void)
     dshotPendingShift = 0;
     dshotConsecCrcFail = 0;
 
-    /* Configure DMA channel 0:
-     * Source: CCP4BUF (IC4 capture buffer, 32-bit)
+/* Configure DMA channel 0:
+     * Source: CCP4BUF (IC4 capture buffer)
      * Dest: dmaEdgeBuf[0] (first ping-pong buffer)
-     * Count: RX_DSHOT_DMA_COUNT transfers per block
-     *
-     * CRITICAL: POR defaults leave SIZE=byte, DAMODE=unchanged.
-     * Must explicitly set 32-bit transfers and dest increment. */
-
-    DMA0CHbits.CHEN = 0;           /* Disable channel during config */
-
-    /* Transfer mode: 32-bit, one-shot, source fixed, dest incremented */
-    DMA0CHbits.SIZE   = 0b10;     /* 32-bit transfer (CCP4BUF is uint32_t) */
-    DMA0CHbits.SAMODE = 0b00;     /* Source addr unchanged (SFR register) */
-    DMA0CHbits.DAMODE = 0b01;     /* Dest addr incremented (fill buffer) */
-    DMA0CHbits.TRMODE = 0b00;     /* One-shot (ISR reloads for ping-pong) */
-    DMA0CHbits.FLWCON = 0b00;     /* Read SRC, write DST */
-
+     * Count: RX_DSHOT_DMA_COUNT transfers per block */
+    DMACONbits.ON = 1;
+    DMA0CHbits.CHEN = 0;
+    DMA0CHbits.SIZE = 0b10;
+    DMA0CHbits.SAMODE = 0b00;    /* 32-bit transfers (CCP4BUF is 32-bit) */
+    DMA0CHbits.DAMODE = 0b01;  /* Increment destination address */
+    DMA0CHbits.TRMODE = 0b00;
+    DMA0CHbits.DONEEN = 1;
+    DMALOW= 0x0000UL;
+    DMAHIGH= 0x00FFFFFFUL;
     DMA0SRC = (uint32_t)&CCP4BUF;  /* Source: IC4 capture register */
     DMA0DST = (uint32_t)&dmaEdgeBuf[0][0];  /* Dest: buffer A */
     DMA0CNT = RX_DSHOT_DMA_COUNT;  /* Transfers per block */
 
     /* DMA trigger: SCCP4 IC capture event
-     * DS70005539C Table 13-2: CCP4 IC/OC = CHSEL 0x1B */
+     * Table 13-2 (DS70005539): CCP4 IC/OC = CHSEL 0x1B */
     DMA0SELbits.CHSEL = 0x1B;
 
     /* Enable DMA transfer-complete interrupt */
-    _DMA0IP = 4;    /* Same priority as IC4 ISR */
+    _DMA0IP = 1;    /* Low priority — below IC4/ADC/commutation */
     _DMA0IF = 0;
     _DMA0IE = 1;
 
     /* Enable DMA channel */
     DMA0CHbits.CHEN = 1;
+
 
     icMode = IC_MODE_DSHOT_DMA;
 }
@@ -313,6 +324,8 @@ void HAL_IC4_DisableDma(void)
 void __attribute__((__interrupt__, no_auto_psv)) _CCP4Interrupt(void)
 {
     uint32_t capture = CCP4BUF;  /* MUST read to clear data-ready */
+
+    _CCP4IF = 0;
 
     switch (icMode)
     {
@@ -367,7 +380,6 @@ void __attribute__((__interrupt__, no_auto_psv)) _CCP4Interrupt(void)
             break;
     }
 
-    _CCP4IF = 0;
 }
 
 /* ── DMA Transfer-Complete ISR (DShot mode) ───────────────────────── */
@@ -403,10 +415,13 @@ void __attribute__((__interrupt__, no_auto_psv)) _DMA0Interrupt(void)
     /* Re-arm (CHEN still enabled unless c0Done) */
 
 #else
-    /* Normal DShot operation: copy edges to ring, attempt decode */
+    if (CCP4STATbits.ICOV)
+    {
+          CCP4STATbits.ICOV = 0;  // clear overflow
+    }
 
     /* Copy completed buffer into 64-edge ring */
-    uint8_t completedBuf = dmaActiveBuf ^ 1;  /* just-completed buffer */
+    uint8_t completedBuf = dmaActiveBuf;  /* just-completed buffer */
     uint8_t head = dshotRingHead;
     for (uint8_t i = 0; i < RX_DSHOT_EDGES; i++)
     {
@@ -415,17 +430,18 @@ void __attribute__((__interrupt__, no_auto_psv)) _DMA0Interrupt(void)
     }
     dshotRingHead = head;
 
-    /* Swap ping-pong for next DMA transfer */
-    dmaActiveBuf ^= 1;
+   dmaActiveBuf ^= 1;
+    DMA0SRC = (uint32_t)&CCP4BUF;  /* Source: IC4 capture register */
     DMA0DST = (uint32_t)&dmaEdgeBuf[dmaActiveBuf][0];
     DMA0CNT = RX_DSHOT_DMA_COUNT;
+    DMA0CHbits.CHEN = 1;
 
     /* O(1) decode attempt at current offset */
     if (dshotAligned)
     {
         uint16_t throttle;
         uint8_t telemetry;
-        if (DshotDecodeFrame(dshotRingBuf, dshotAlignOffset,
+        if (DshotDecodeFrame(dshotRingBuf, RX_DSHOT_EDGES,
                              &throttle, &telemetry))
         {
             dshotConsecCrcFail = 0;
