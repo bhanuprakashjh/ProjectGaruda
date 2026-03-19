@@ -14,7 +14,7 @@
 
 /* ── Motor Profile Selection ──────────────────────────────────────── */
 #ifndef MOTOR_PROFILE
-#define MOTOR_PROFILE   2   /* 0=Hurst, 1=A2212, 2=5010 */
+#define MOTOR_PROFILE   2   /* 0=Hurst, 1=A2212, 2=2810 */
 #endif
 
 /* ── Clock ─────────────────────────────────────────────────────────── */
@@ -181,64 +181,59 @@
 #define VBUS_UV_THRESHOLD   (606U * 16U)   /* ~8V  → 9696 in 16-bit */
 
 #elif MOTOR_PROFILE == 2
-/* ── Motor: Flycat 5010 750KV (large drone motor) ────────────────── */
-/* TEST: reduced blanking + faster poll to fix Frc:3 at 78k eRPM */
-/* 12N14P, 14 poles (7PP), 14.8V (4S LiPo), ~30A burst
- * Large rotor inertia: needs slow ramp, gentle startup.
- * Very low Rs (80mΩ): high current at low duty.
- * Strong BEMF at moderate speed: excellent ZC quality.
- * From dsPIC33AK ESC GSP profile GSP_PROFILE_5010. */
+/* ── Motor: 2810 1350KV (7-8" FPV/cine drone motor) ─────────────── */
+/* 12N14P, 14 poles (7PP), 5-6S LiPo (18.5-25.2V)
+ * Stator: 28mm dia × 10mm height. Similar to A2212 in KV/PP.
+ * Rs: 43-61mΩ (varies by manufacturer: GEPRC=43, T-Motor=61)
+ * Max power: ~1240W, peak current: ~61A
+ * Recommended prop: 7-8 inch
+ *
+ * Refs: GEPRC EM2810, T-Motor F100, BrotherHobby Avenger 2810 */
 #define MOTOR_POLE_PAIRS    7U
-#define MOTOR_RS_MILLIOHM   80U          /* Phase resistance */
-#define MOTOR_LS_MICROH     30U          /* Phase inductance */
-#define MOTOR_KV            750U         /* RPM/V */
+#define MOTOR_RS_MILLIOHM   50U          /* Phase resistance (avg of 43-61mΩ) */
+#define MOTOR_LS_MICROH     25U          /* Phase inductance (estimated) */
+#define MOTOR_KV            1350U        /* RPM/V */
 
-/* Startup — large rotor needs slow, gentle ramp.
- * CRITICAL: 5010 has Rs=80mΩ. On 12V bench supply:
- *   5% duty → V=0.60V → I=0.60/0.080 = 7.5A peak (OK for brief ramp)
- *   2% align → V=0.24V → I=0.24/0.080 = 3.0A (safe alignment)
- * EV43F54A board limit ~5A DC, so keep ramp duty very low. */
-#define ALIGN_TIME_MS       300U         /* Heavier rotor needs more settling */
-#define ALIGN_DUTY          (LOOPTIME_TCY / 50)    /* ~2% duty (~3A into 80mΩ) */
-#define INITIAL_STEP_PERIOD 1200U        /* Timer1 ticks (60ms = ~167 eRPM, very slow) */
+/* Startup — gentle ramp proven to work on this motor.
+ * Low Rs (50mΩ) means high current at moderate duty.
+ * At 13V, 5% duty → I = 0.05 × 13 / 0.050 = 13A peak (brief ramp). */
+#define ALIGN_TIME_MS       200U
+#define ALIGN_DUTY          (LOOPTIME_TCY / 40)    /* ~2.5% duty */
+#define INITIAL_STEP_PERIOD 1000U        /* Timer1 ticks (50ms = ~200 eRPM) */
 #define MIN_STEP_PERIOD     50U          /* Timer1 ticks (2.5ms = ~4000 eRPM) */
-#define RAMP_ACCEL_ERPM_S   300U         /* eRPM/s — gentle for heavy rotor */
-#define RAMP_DUTY_CAP       (LOOPTIME_TCY / 20)    /* Max ~5% duty during OL ramp (~7.5A peak) */
+#define RAMP_ACCEL_ERPM_S   500U         /* eRPM/s — moderate, proven on this motor */
+#define RAMP_DUTY_CAP       (LOOPTIME_TCY / 15)    /* Max ~7% duty during OL ramp */
 
-/* ZC Detection — 18% blanking balances noise rejection vs high-speed.
- * 20% baseline: stable to 79k, 15% test: 101k but 5680 false ZCs.
- * 18% is the compromise for no-load testing. With prop load the motor
- * stays well within the stable zone regardless of blanking %. */
-#define ZC_BLANKING_PERCENT 18U
+/* ZC Detection */
+#define ZC_BLANKING_PERCENT 20U          /* For OL_RAMP ADC backup poll only.
+                                          * CL uses 12% + 50% interval rejection. */
 #define ZC_FILTER_THRESHOLD 3U
 
-/* Timing Advance — 5010 at 24V reaches 126k eRPM no-load.
- * Needs same advance range as A2212 for high-speed stability. */
+/* Timing Advance */
 #define TIMING_ADVANCE_MIN_DEG      0U
-#define TIMING_ADVANCE_MAX_DEG      20U  /* Same as A2212 — 15° was too low */
+#define TIMING_ADVANCE_MAX_DEG      20U
 #define TIMING_ADVANCE_START_ERPM   5000U
 
-/* Closed-Loop */
-#define MAX_CLOSED_LOOP_ERPM 130000U     /* 750KV × 24V × 7PP ≈ 126k eRPM */
+/* Closed-Loop
+ * At 25.2V (6S full): 1350 × 25.2 = 34020 RPM = 238k eRPM theoretical.
+ * Practical max ~130k eRPM with losses. */
+#define MAX_CLOSED_LOOP_ERPM 150000U
 #define MIN_CL_STEP_PERIOD   2U
-#define RAMP_TARGET_ERPM     2500U       /* Lower handoff speed (heavier rotor) */
+#define RAMP_TARGET_ERPM     3000U       /* Lower than A2212 — gentler handoff */
 
-/* ATA6847 Hardware Current Limit — 5010 at 24V needs more headroom.
- * DAC=85 was chopping at mid-speed causing speed-sticking.
- * DAC=110 → ~4A DC bench (empirical 0.15A/count). */
-#define ILIM_DAC            110U
+/* ATA6847 Hardware Current Limit */
+#define ILIM_DAC            95U          /* ~16.6A peak — same as A2212 */
 
 #define CL_IDLE_DUTY_PERCENT 10U
 
-/* Vbus Fault Thresholds (4S LiPo: 14.8V nom, 16.8V charged)
- * OV: 20V (allows fully charged 4S + margin)
- * UV: 12V (3.0V/cell cutoff)
- * EV43F54A divider: ~1211 raw/V */
-#define VBUS_OV_THRESHOLD   (33908U)       /* ~28V: 28 × 1211 = 33908 */
-#define VBUS_UV_THRESHOLD   (14532U)       /* ~12V: 12 × 1211 = 14532 */
+/* Vbus Fault Thresholds (6S LiPo: 22.2V nom, 25.2V charged)
+ * OV: 28V (margin above fully charged 6S)
+ * UV: 16V (3.2V/cell cutoff for 5S, safe for 6S too) */
+#define VBUS_OV_THRESHOLD   (33908U)       /* ~28V */
+#define VBUS_UV_THRESHOLD   (14532U)       /* ~12V (conservative) */
 
 #else
-#error "Unknown MOTOR_PROFILE — select 0 (Hurst), 1 (A2212), or 2 (5010)"
+#error "Unknown MOTOR_PROFILE — select 0 (Hurst), 1 (A2212), or 2 (2810)"
 #endif
 
 /* ================================================================
