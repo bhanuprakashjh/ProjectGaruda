@@ -306,7 +306,13 @@ void GarudaService_MainLoop(void)
         uint8_t sir1 = HAL_ATA6847_ReadReg(ATA_SIR1);
         gData.ataLastSIR1 = sir1;
 
-        if (sir1 & 0x10)  /* ILIM — current limit chopping */
+        /* SPI timeout returns 0xFF — bail out, don't cascade more SPI reads */
+        if (sir1 == 0xFF)
+        {
+            gData.ataFaultPending = false;
+            /* Skip fault decode — SPI unreliable at high speed (EMI) */
+        }
+        else if (sir1 & 0x10)  /* ILIM — current limit chopping */
         {
             /* Informational: motor is running at current limit.
              * Don't stop — chopping mode keeps motor safe. Log it. */
@@ -381,13 +387,18 @@ void __attribute__((interrupt, auto_psv)) _T1Interrupt(void)
      * Latency: ≤50µs (one Timer1 tick). The ATA6847 has already taken
      * protective action (gate chopping or shutdown) before we read this.
      * Main loop decodes the specific fault via SPI. */
-    /* nIRQ poll — disabled pending SPI timeout fix.
-     * Confirmed: nIRQ + blocking SPI read causes MCU hang at high speed
-     * due to EMI on SPI bus. Need to add SPI read timeout before
-     * re-enabling. See 5010 24V no-load test (2026-03-19). */
-    /* TODO: Add SPI timeout, then re-enable:
-     * if (!nIRQ_GetValue() && gData.state >= ESC_OL_RAMP)
-     *     gData.ataFaultPending = true; */
+    /* nIRQ poll — rate-limited to every 200 ticks (10ms at 20kHz).
+     * At high motor speed, EMI can cause spurious nIRQ assertions.
+     * Checking every tick wastes CPU on SPI reads that time out. */
+    {
+        static uint16_t nirqDiv = 0;
+        if (++nirqDiv >= 200)
+        {
+            nirqDiv = 0;
+            if (!nIRQ_GetValue() && gData.state >= ESC_OL_RAMP)
+                gData.ataFaultPending = true;
+        }
+    }
 
     switch (gData.state)
     {

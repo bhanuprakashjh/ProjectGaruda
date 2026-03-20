@@ -62,20 +62,20 @@ void HAL_ATA6847_Init(void)
     /* Wake-up control */
     HAL_ATA6847_WriteReg(ATA_WUCR, 0x03);
 
-    /* Current limitation — cycle-by-cycle chopping mode.
-     * ILIMEN=1: hardware current limiter ENABLED
-     * ILIMSDEN=0: CHOPPING mode (not shutdown) — motor keeps running,
-     *   ATA6847 chops the active gate when current exceeds threshold.
-     *   Critical for drones: shutdown mode = instant crash mid-flight.
-     * ILIMFLT=4: 1000ns deglitch filter (avoids trips on PWM transients)
-     * DAC threshold set per motor profile in garuda_config.h. */
-    HAL_ATA6847_WriteReg(ATA_ILIMCR, (1 << 7) | (6 << 3) | (0 << 2));
-    /* ILIMFLT=6 (1750ns) — was 4 (1000ns). Longer filter avoids
-     * nuisance trips on PWM switching transients at 20kHz. */
+    /* Current limitation — DISABLED.
+     * HW ILIM gate chopping disrupts BEMF sensing (causes Frc:3).
+     * Use software PD current limit instead (Phase 1 roadmap).
+     * VDS short-circuit protection (SCPCR) remains active. */
+    HAL_ATA6847_WriteReg(ATA_ILIMCR, (0 << 7) | (6 << 3) | (0 << 2));
     HAL_ATA6847_WriteReg(ATA_ILIMTH, ILIM_DAC);
 
     /* Short circuit protection */
-    HAL_ATA6847_WriteReg(ATA_SCPCR, (1 << 7) | (5 << 3) | 1);
+    HAL_ATA6847_WriteReg(ATA_SCPCR, (1 << 7) | (5 << 3) | 5);
+    /* SCTHSEL=5 (1500mV). VDS spikes scale with Vbus — at 24V the
+     * switching transients exceed 1000mV even at moderate current.
+     * Confirmed: 500mV trips at 10A, 1000mV trips at ~26A spike.
+     * 1500mV gives headroom for 24V operation.
+     * Still protects against real shorts (VDS > 1.5V = dead short). */
 
     /* Current sense: disabled, gain=16, offset=VRef/2 */
     HAL_ATA6847_WriteReg(ATA_CSCR, (0x00 << 5) | (0x03 << 2) | 0x01);

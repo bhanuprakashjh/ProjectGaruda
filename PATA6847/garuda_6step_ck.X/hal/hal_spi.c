@@ -28,10 +28,19 @@ void HAL_SPI_Init(void)
 
 uint16_t HAL_SPI_Exchange16(uint16_t data)
 {
-    while (SPI1STATLbits.SPITBF);
+    volatile uint16_t timeout;
+
+    timeout = 10000;
+    while (SPI1STATLbits.SPITBF && --timeout);
+    if (!timeout) return 0xFFFF;
+
     nCS_Enable();
     SPI1BUFL = data;
-    while (SPI1STATLbits.SPIRBE);
+
+    timeout = 10000;
+    while (SPI1STATLbits.SPIRBE && --timeout);
     nCS_Disable();
+
+    if (!timeout) return 0xFFFF;
     return SPI1BUFL;
 }

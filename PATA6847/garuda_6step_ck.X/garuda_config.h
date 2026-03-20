@@ -295,7 +295,9 @@
  * FL=2 was too thin at 100k eRPM — 7.7% false IC rate. FL=3 requires
  * 3 consecutive matching reads (30µs), still fits in the ~80µs post-
  * blanking window at Tp:2. */
-#define ZC_DEGLITCH_MIN         3U          /* At Tp <= ZC_DEGLITCH_FAST_TP */
+#define ZC_DEGLITCH_MIN         3U          /* FL:2 tested on 2810: Frc shifted 3→2 but
+                                             * still desyncs. Motor needs ADC-based BEMF.
+                                             * Keep FL:3 for A2212 reliability. */
 #define ZC_DEGLITCH_MAX         8U          /* At Tp >= ZC_DEGLITCH_SLOW_TP */
 #define ZC_DEGLITCH_FAST_TP     5U          /* Tp threshold for min filter (was 10) */
 #define ZC_DEGLITCH_SLOW_TP     50U         /* Tp threshold for max filter */

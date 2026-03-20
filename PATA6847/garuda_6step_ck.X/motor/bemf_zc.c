@@ -707,7 +707,16 @@ bool BEMF_ZC_FastPoll(volatile GARUDA_DATA_T *pData)
     /* Read comparator for the floating phase */
     uint8_t cmp = ReadBEMFComparator(pData->icZc.activeChannel);
 
-    if (cmp == pData->bemf.cmpExpected)
+    /* Match expected comparator polarity for ZC confirmation.
+     * After 2+ forced steps (Frc>=2), the rotor position may have
+     * drifted from the commutation table, making cmpExpected wrong.
+     * In this case, accept EITHER comparator state as a valid ZC
+     * (the deglitch filter still requires consecutive stable reads). */
+    uint8_t expected = pData->bemf.cmpExpected;
+    if (pData->timing.stepsSinceLastZc >= 2)
+        expected = cmp;  /* Accept whatever state we see after 2 forced steps */
+
+    if (cmp == expected)
     {
         if (pData->icZc.pollFilter == 0)
         {
