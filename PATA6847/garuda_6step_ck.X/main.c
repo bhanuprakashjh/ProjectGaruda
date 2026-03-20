@@ -33,6 +33,7 @@
 #include "hal/board_service.h"
 #if FEATURE_GSP
 #include "gsp/gsp.h"
+#include "gsp/gsp_ck_params.h"
 #endif
 
 /* Debug print rate limiter */
@@ -265,6 +266,7 @@ int main(void)
     GarudaService_Init();
 
 #if FEATURE_GSP
+    CK_ParamsInitDefaults();
     GSP_Init();
 #endif
 

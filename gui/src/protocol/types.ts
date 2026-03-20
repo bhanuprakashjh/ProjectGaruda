@@ -119,6 +119,123 @@ export const CK_ESC_STATES = ['IDLE', 'ARMED', 'ALIGN', 'OL_RAMP', 'CLOSED_LOOP'
 export const CK_FAULT_CODES = ['NONE', 'OVERVOLTAGE', 'UNDERVOLTAGE', 'STALL', 'DESYNC', 'STARTUP_TIMEOUT', 'ATA6847'] as const;
 
 export const CK_PROFILE_NAMES = ['Hurst Long', 'A2212 1400KV', '2810 1350KV', 'Custom'] as const;
+export const CK_PROFILE_COUNT = 3;
+
+/* ── CK Board Parameter Groups ──────────────────────────────── */
+export const CK_PARAM_GROUPS: Record<number, { name: string; color: string }> = {
+  0: { name: 'Motor Identity', color: '#3b82f6' },
+  1: { name: 'Startup & Ramp', color: '#f59e0b' },
+  2: { name: 'Closed-Loop', color: '#10b981' },
+  3: { name: 'ATA6847 Protection', color: '#ef4444' },
+  4: { name: 'ATA6847 GDU', color: '#8b5cf6' },
+  5: { name: 'ZC Detection', color: '#06b6d4' },
+  6: { name: 'Voltage Protection', color: '#f97316' },
+  7: { name: 'Recovery', color: '#64748b' },
+};
+
+export const CK_PARAM_NAMES: Record<number, { display: string; variable: string }> = {
+  // Group 0: Motor Identity
+  0xC0: { display: 'Pole Pairs', variable: 'polePairs' },
+  0xC1: { display: 'Motor KV', variable: 'motorKv' },
+  0xC2: { display: 'Phase Resistance', variable: 'motorRsMilliOhm' },
+  0xC3: { display: 'Phase Inductance', variable: 'motorLsMicroH' },
+  // Group 1: Startup & Ramp
+  0xC4: { display: 'Align Time', variable: 'alignTimeMs' },
+  0xC5: { display: 'Align Duty', variable: 'alignDutyPctX10' },
+  0xC6: { display: 'Initial Step Period', variable: 'initialStepPeriod' },
+  0xC7: { display: 'Min Step Period', variable: 'minStepPeriod' },
+  0xC8: { display: 'Ramp Acceleration', variable: 'rampAccelErpmS' },
+  0xC9: { display: 'Ramp Duty Cap', variable: 'rampDutyPctX10' },
+  0xCA: { display: 'Ramp Target eRPM', variable: 'rampTargetErpm' },
+  // Group 2: Closed-Loop
+  0xCB: { display: 'CL Idle Duty', variable: 'clIdleDutyPct' },
+  0xCC: { display: 'Timing Adv Min', variable: 'timingAdvMinDeg' },
+  0xCD: { display: 'Timing Adv Max', variable: 'timingAdvMaxDeg' },
+  0xCE: { display: 'Timing Adv Start', variable: 'timingAdvStartErpm' },
+  0xCF: { display: 'Max CL eRPM', variable: 'maxClosedLoopErpm' },
+  0xD0: { display: 'Duty Slew Up', variable: 'dutySlewUp' },
+  0xD1: { display: 'Duty Slew Down', variable: 'dutySlewDown' },
+  // Group 3: ATA6847 Protection
+  0xD2: { display: 'ILIM Enable', variable: 'ilimEnable' },
+  0xD3: { display: 'ILIM Shutdown', variable: 'ilimShutdownEnable' },
+  0xD4: { display: 'ILIM DAC', variable: 'ilimDac' },
+  0xD5: { display: 'ILIM Filter Time', variable: 'ilimFilterTime' },
+  0xD6: { display: 'SC Enable', variable: 'scEnable' },
+  0xD7: { display: 'SC Threshold', variable: 'scThreshold' },
+  0xD8: { display: 'SC Filter Time', variable: 'scFilterTime' },
+  // Group 4: ATA6847 GDU
+  0xD9: { display: 'BEMF Enable', variable: 'bemfEnable' },
+  0xDA: { display: 'Cross-Cond Time', variable: 'crossConductionTime' },
+  0xDB: { display: 'Edge Blanking', variable: 'edgeBlankingTime' },
+  0xDC: { display: 'CSA Gain', variable: 'csaGain' },
+  // Group 5: ZC Detection
+  0xDD: { display: 'ZC Deglitch Min', variable: 'zcDeglitchMin' },
+  0xDE: { display: 'ZC Deglitch Max', variable: 'zcDeglitchMax' },
+  0xDF: { display: 'ZC Timeout Mult', variable: 'zcTimeoutMult' },
+  0xE0: { display: 'ZC Desync Thresh', variable: 'zcDesyncThresh' },
+  0xE1: { display: 'ZC Miss Limit', variable: 'zcMissLimit' },
+  // Group 6: Voltage Protection
+  0xE2: { display: 'Vbus OV Threshold', variable: 'vbusOvThreshold' },
+  0xE3: { display: 'Vbus UV Threshold', variable: 'vbusUvThreshold' },
+  // Group 7: Recovery
+  0xE4: { display: 'Max Restart Attempts', variable: 'desyncRestartMax' },
+  0xE5: { display: 'Recovery Time', variable: 'recoveryTimeMs' },
+};
+
+export const CK_PARAM_UNITS: Record<number, string> = {
+  0xC0: 'pairs', 0xC1: 'RPM/V', 0xC2: 'm\u03A9', 0xC3: '\u00B5H',
+  0xC4: 'ms', 0xC5: '\u00D70.1%', 0xC6: 'ticks', 0xC7: 'ticks',
+  0xC8: 'eRPM/s', 0xC9: '\u00D70.1%', 0xCA: 'eRPM',
+  0xCB: '%', 0xCC: '\u00B0', 0xCD: '\u00B0', 0xCE: 'eRPM',
+  0xCF: 'eRPM', 0xD0: 'cnt/tick', 0xD1: 'cnt/tick',
+  0xD2: '', 0xD3: '', 0xD4: '0-127', 0xD5: '0-7',
+  0xD6: '', 0xD7: '0-7', 0xD8: '0-7',
+  0xD9: '', 0xDA: '0-7', 0xDB: '0-3', 0xDC: '8/16/32/64\u00D7',
+  0xDD: 'reads', 0xDE: 'reads', 0xDF: '\u00D7', 0xE0: 'steps', 0xE1: 'steps',
+  0xE2: 'ADC', 0xE3: 'ADC',
+  0xE4: 'count', 0xE5: 'ms',
+};
+
+export const CK_PARAM_TOOLTIPS: Record<number, string> = {
+  0xC0: 'Number of magnetic pole pairs.',
+  0xC1: 'Motor velocity constant (RPM per volt).',
+  0xC2: 'Phase resistance in milliohms.',
+  0xC3: 'Phase inductance in microhenries.',
+  0xC4: 'Rotor alignment dwell time.',
+  0xC5: 'Alignment duty in 0.1% units (25 = 2.5%). Higher = more alignment current.',
+  0xC6: 'Initial forced commutation period (Timer1 ticks). Lower = faster initial speed.',
+  0xC7: 'Minimum step period for OL ramp termination. Determines OL\u2192CL handoff speed.',
+  0xC8: 'Open-loop ramp acceleration in eRPM/s.',
+  0xC9: 'Maximum duty during OL ramp in 0.1% units (170 = 17%). Limits startup current.',
+  0xCA: 'Target eRPM for OL\u2192CL handoff (informational).',
+  0xCB: 'Minimum duty when motor is running at zero throttle.',
+  0xCC: 'Timing advance at low speed (degrees).',
+  0xCD: 'Timing advance at max speed (degrees).',
+  0xCE: 'eRPM where timing advance ramp begins.',
+  0xCF: 'Timing advance curve endpoint. Also affects step period floor.',
+  0xD0: 'Duty increase rate (PWM counts per Timer1 tick). Higher = faster throttle response.',
+  0xD1: 'Duty decrease rate (PWM counts per Timer1 tick). Lower = gentler deceleration.',
+  0xD2: 'Enable ATA6847 hardware current limit (cycle-by-cycle chopping).',
+  0xD3: 'ILIM shutdown mode: 0=chop (motor keeps running), 1=shutdown (motor stops).',
+  0xD4: 'ILIM DAC threshold (0-127). Trip current = (3.3\u00D7DAC/128 - 1.65) / (Gain\u00D7Rshunt).',
+  0xD5: 'ILIM filter time (0-7). Higher = more noise rejection, slower response.',
+  0xD6: 'Enable VDS short-circuit protection.',
+  0xD7: 'SC voltage threshold (0-7). 7=2000mV max. Lower = more sensitive.',
+  0xD8: 'SC filter time (0-7). Higher = more noise rejection.',
+  0xD9: 'Enable BEMF comparators for ZC detection.',
+  0xDA: 'Cross-conduction prevention time (0-7). Prevents shoot-through.',
+  0xDB: 'Edge blanking time (0-3). Blanks gate driver after switching.',
+  0xDC: 'Current sense amplifier gain: 0=8\u00D7, 1=16\u00D7, 2=32\u00D7, 3=64\u00D7.',
+  0xDD: 'Minimum deglitch filter at high speed. Consecutive reads to confirm ZC.',
+  0xDE: 'Maximum deglitch filter at low speed.',
+  0xDF: 'Forced commutation timeout multiplier (e.g., 2 = timeout at 2\u00D7 step period).',
+  0xE0: 'Consecutive missed ZCs to clear sync lock.',
+  0xE1: 'Consecutive missed ZCs to declare desync fault.',
+  0xE2: 'Overvoltage fault threshold (raw ADC, 16-bit scaled). ~1211 counts/V.',
+  0xE3: 'Undervoltage fault threshold (raw ADC, 16-bit scaled). ~1211 counts/V.',
+  0xE4: 'Maximum restart attempts after desync before permanent fault.',
+  0xE5: 'Recovery dwell time between desync and restart.',
+};
 
 /* Current scaling: raw signed ADC (fractional 12-bit) to milliamps.
  * Phase (OA2/OA3 Gt=16, 3mΩ): mA = raw × 1.049

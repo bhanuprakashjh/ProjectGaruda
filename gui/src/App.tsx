@@ -12,6 +12,7 @@ import { ParamModal } from './components/ParamModal';
 import { HelpPanel, MicrochipIcon } from './components/HelpPanel';
 import { MotorTuningPanel } from './components/MotorTuningPanel';
 import { CkDashboard } from './components/CkDashboard';
+import { CkMotorSetup } from './components/CkMotorSetup';
 import { useEscStore, type TabId } from './store/useEscStore';
 import { isCkBoard, BOARD_NAMES } from './protocol/types';
 
@@ -138,6 +139,10 @@ function ScopeTab() {
 }
 
 function MotorTab() {
+  const info = useEscStore(s => s.info);
+  if (info && isCkBoard(info.boardId)) {
+    return <CkMotorSetup />;
+  }
   return <MotorTuningPanel />;
 }
 

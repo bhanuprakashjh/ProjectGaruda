@@ -48,7 +48,8 @@ SRCS = main.c \
        motor/bemf_zc.c \
        gsp/gsp.c \
        gsp/gsp_commands.c \
-       gsp/gsp_snapshot.c
+       gsp/gsp_snapshot.c \
+       gsp/gsp_ck_params.c
 
 OBJS = $(SRCS:%.c=$(BUILDDIR)/%.o)
 ELF  = $(DISTDIR)/garuda_6step_ck.X.$(IMAGE_TYPE).elf

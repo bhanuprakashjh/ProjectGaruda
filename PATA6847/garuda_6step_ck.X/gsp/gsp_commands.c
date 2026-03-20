@@ -18,6 +18,7 @@
 #include "gsp_commands.h"
 #include "gsp.h"
 #include "gsp_snapshot.h"
+#include "gsp_ck_params.h"
 #include "../garuda_types.h"
 #include "../garuda_service.h"
 
@@ -78,11 +79,11 @@ static void HandleGetInfo(const uint8_t *payload, uint8_t payloadLen)
     info.fwMinor         = GSP_FW_MINOR;
     info.fwPatch         = GSP_FW_PATCH;
     info.boardId         = GSP_BOARD_EV43F54A;
-    info.motorProfile    = MOTOR_PROFILE;
-    info.motorPolePairs  = MOTOR_POLE_PAIRS;
+    info.motorProfile    = ckParams.activeProfile;
+    info.motorPolePairs  = ckParams.polePairs;
     info.featureFlags    = BuildFeatureFlags();
     info.pwmFrequency    = PWMFREQUENCY_HZ;
-    info.maxErpm         = MAX_CLOSED_LOOP_ERPM;
+    info.maxErpm         = ckParams.maxClosedLoopErpm;
 
     GSP_SendResponse(GSP_CMD_GET_INFO, (const uint8_t *)&info, sizeof(info));
 }
@@ -188,6 +189,154 @@ void GSP_TelemTick(void)
     GSP_SendResponse(GSP_CMD_TELEM_FRAME, buf, sizeof(buf));
 }
 
+/* ── Parameter handlers ──────────────────────────────────────────── */
+
+static void HandleGetParam(const uint8_t *payload, uint8_t payloadLen)
+{
+    (void)payloadLen;
+    uint16_t paramId = (uint16_t)payload[0] | ((uint16_t)payload[1] << 8);
+
+    bool ok;
+    uint32_t val = CK_ParamGet(paramId, &ok);
+    if (!ok) {
+        SendError(GSP_ERR_UNKNOWN_PARAM);
+        return;
+    }
+
+    uint8_t resp[6];
+    resp[0] = (uint8_t)(paramId & 0xFF);
+    resp[1] = (uint8_t)(paramId >> 8);
+    resp[2] = (uint8_t)(val & 0xFF);
+    resp[3] = (uint8_t)((val >> 8) & 0xFF);
+    resp[4] = (uint8_t)((val >> 16) & 0xFF);
+    resp[5] = (uint8_t)((val >> 24) & 0xFF);
+    GSP_SendResponse(GSP_CMD_GET_PARAM, resp, 6);
+}
+
+static void HandleSetParam(const uint8_t *payload, uint8_t payloadLen)
+{
+    (void)payloadLen;
+
+    if (gData.state != ESC_IDLE) {
+        SendError(GSP_ERR_WRONG_STATE);
+        return;
+    }
+
+    uint16_t paramId = (uint16_t)payload[0] | ((uint16_t)payload[1] << 8);
+    uint32_t value = (uint32_t)payload[2] |
+                     ((uint32_t)payload[3] << 8) |
+                     ((uint32_t)payload[4] << 16) |
+                     ((uint32_t)payload[5] << 24);
+
+    if (!CK_ParamSet(paramId, value)) {
+        SendError(GSP_ERR_OUT_OF_RANGE);
+        return;
+    }
+
+    if (!CK_ParamsCrossValidate()) {
+        /* Revert not implemented yet — just warn */
+        SendError(GSP_ERR_CROSS_VALIDATION);
+        return;
+    }
+
+    CK_RecomputeDerived();
+
+    /* Echo back the set value */
+    uint8_t resp[6];
+    resp[0] = payload[0];
+    resp[1] = payload[1];
+    resp[2] = payload[2];
+    resp[3] = payload[3];
+    resp[4] = payload[4];
+    resp[5] = payload[5];
+    GSP_SendResponse(GSP_CMD_SET_PARAM, resp, 6);
+}
+
+static void HandleSaveConfig(const uint8_t *payload, uint8_t payloadLen)
+{
+    (void)payload;
+    (void)payloadLen;
+    /* RAM-only for now — no NVM persistence */
+    GSP_SendResponse(GSP_CMD_SAVE_CONFIG, NULL, 0);
+}
+
+static void HandleLoadDefaults(const uint8_t *payload, uint8_t payloadLen)
+{
+    (void)payload;
+    (void)payloadLen;
+
+    if (gData.state != ESC_IDLE) {
+        SendError(GSP_ERR_WRONG_STATE);
+        return;
+    }
+
+    CK_ParamsLoadProfile(ckParams.activeProfile);
+    GSP_SendResponse(GSP_CMD_LOAD_DEFAULTS, NULL, 0);
+}
+
+static void HandleGetParamList(const uint8_t *payload, uint8_t payloadLen)
+{
+    uint8_t startIndex = 0;
+    if (payloadLen >= 1)
+        startIndex = payload[0];
+
+    uint8_t totalCount;
+    const CK_PARAM_DESC_T *table = CK_GetDescriptorTable(&totalCount);
+
+    if (startIndex >= totalCount) {
+        SendError(GSP_ERR_OUT_OF_RANGE);
+        return;
+    }
+
+    /* Max 20 entries per page (20 * 12 = 240 + 3 header = 243 < 249 max) */
+    uint8_t remaining = totalCount - startIndex;
+    uint8_t pageSize = (remaining > 20) ? 20 : remaining;
+
+    uint8_t buf[3 + 20 * 12];  /* max page */
+    buf[0] = totalCount;
+    buf[1] = startIndex;
+    buf[2] = pageSize;
+
+    uint8_t i;
+    for (i = 0; i < pageSize; i++) {
+        const CK_PARAM_DESC_T *d = &table[startIndex + i];
+        uint8_t off = 3 + i * 12;
+        buf[off + 0] = (uint8_t)(d->id & 0xFF);
+        buf[off + 1] = (uint8_t)(d->id >> 8);
+        buf[off + 2] = d->type;
+        buf[off + 3] = d->group;
+        buf[off + 4] = (uint8_t)(d->min & 0xFF);
+        buf[off + 5] = (uint8_t)((d->min >> 8) & 0xFF);
+        buf[off + 6] = (uint8_t)((d->min >> 16) & 0xFF);
+        buf[off + 7] = (uint8_t)((d->min >> 24) & 0xFF);
+        buf[off + 8] = (uint8_t)(d->max & 0xFF);
+        buf[off + 9] = (uint8_t)((d->max >> 8) & 0xFF);
+        buf[off + 10] = (uint8_t)((d->max >> 16) & 0xFF);
+        buf[off + 11] = (uint8_t)((d->max >> 24) & 0xFF);
+    }
+
+    GSP_SendResponse(GSP_CMD_GET_PARAM_LIST, buf, 3 + pageSize * 12);
+}
+
+static void HandleLoadProfile(const uint8_t *payload, uint8_t payloadLen)
+{
+    (void)payloadLen;
+
+    if (gData.state != ESC_IDLE) {
+        SendError(GSP_ERR_WRONG_STATE);
+        return;
+    }
+
+    uint8_t profileId = payload[0];
+    if (profileId >= CK_PROFILE_COUNT) {
+        SendError(GSP_ERR_OUT_OF_RANGE);
+        return;
+    }
+
+    CK_ParamsLoadProfile(profileId);
+    GSP_SendResponse(GSP_CMD_LOAD_PROFILE, &profileId, 1);
+}
+
 /* ── Dispatch table ──────────────────────────────────────────────── */
 
 typedef struct {
@@ -209,6 +358,13 @@ static const CMD_ENTRY_T cmdTable[] = {
     /* Phase 1: telemetry */
     { GSP_CMD_TELEM_START,     1, HandleTelemStart     },
     { GSP_CMD_TELEM_STOP,      0, HandleTelemStop      },
+    /* Phase 2: parameters */
+    { GSP_CMD_GET_PARAM,       2, HandleGetParam       },
+    { GSP_CMD_SET_PARAM,       6, HandleSetParam       },
+    { GSP_CMD_SAVE_CONFIG,     0, HandleSaveConfig     },
+    { GSP_CMD_LOAD_DEFAULTS,   0, HandleLoadDefaults   },
+    { GSP_CMD_GET_PARAM_LIST,  0xFF, HandleGetParamList },
+    { GSP_CMD_LOAD_PROFILE,    1, HandleLoadProfile    },
 };
 
 #define CMD_TABLE_SIZE (sizeof(cmdTable) / sizeof(cmdTable[0]))

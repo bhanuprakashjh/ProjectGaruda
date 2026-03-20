@@ -44,6 +44,8 @@ typedef enum {
     GSP_CMD_LOAD_DEFAULTS   = 0x13,
     GSP_CMD_TELEM_START     = 0x14,
     GSP_CMD_TELEM_STOP      = 0x15,
+    GSP_CMD_GET_PARAM_LIST  = 0x16,
+    GSP_CMD_LOAD_PROFILE    = 0x17,
     GSP_CMD_TELEM_FRAME     = 0x80,
     GSP_CMD_ERROR           = 0xFF
 } GSP_CMD_ID_T;
@@ -55,6 +57,8 @@ typedef enum {
     GSP_ERR_BUSY             = 0x03,
     GSP_ERR_WRONG_STATE      = 0x04,
     GSP_ERR_OUT_OF_RANGE     = 0x05,
+    GSP_ERR_UNKNOWN_PARAM    = 0x06,
+    GSP_ERR_CROSS_VALIDATION = 0x07,
 } GSP_ERR_CODE_T;
 
 /* GSP_INFO_T — 20 bytes, same as AK board (protocol-compatible) */

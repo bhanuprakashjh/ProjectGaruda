@@ -27,6 +27,7 @@
       <itemPath>gsp/gsp.h</itemPath>
       <itemPath>gsp/gsp_commands.h</itemPath>
       <itemPath>gsp/gsp_snapshot.h</itemPath>
+      <itemPath>gsp/gsp_ck_params.h</itemPath>
     </logicalFolder>
     <logicalFolder name="ExternalFiles"
                    displayName="Important Files"
@@ -63,6 +64,7 @@
       <itemPath>gsp/gsp.c</itemPath>
       <itemPath>gsp/gsp_commands.c</itemPath>
       <itemPath>gsp/gsp_snapshot.c</itemPath>
+      <itemPath>gsp/gsp_ck_params.c</itemPath>
     </logicalFolder>
   </logicalFolder>
   <sourceRootList>

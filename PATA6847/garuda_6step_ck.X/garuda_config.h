@@ -14,7 +14,7 @@
 
 /* ── Motor Profile Selection ──────────────────────────────────────── */
 #ifndef MOTOR_PROFILE
-#define MOTOR_PROFILE   2   /* 0=Hurst, 1=A2212, 2=2810 */
+#define MOTOR_PROFILE   1   /* 0=Hurst, 1=A2212, 2=2810 */
 #endif
 
 /* ── Clock ─────────────────────────────────────────────────────────── */
@@ -259,7 +259,7 @@
 #endif
 
 #ifndef FEATURE_GSP
-#define FEATURE_GSP             0   /* 1 = GSP binary protocol on UART1 (disables debug prints)
+#define FEATURE_GSP             1   /* 1 = GSP binary protocol on UART1 (disables debug prints)
                                      * 0 = debug UART text output (default for development)
                                      * Set to 1 when using GUI or gsp_ck_test.py */
 #endif

@@ -293,8 +293,16 @@ void GSP_Service(void)
 {
     PumpRx();
     ParserProcess();
-    GSP_TelemTick();
     PumpTx();
+
+    /* Telemetry: only run every other service call to reduce main loop
+     * time during high-speed commutation. PumpTx still drains every call. */
+    static uint8_t telemDiv = 0;
+    if (++telemDiv >= 2)
+    {
+        telemDiv = 0;
+        GSP_TelemTick();
+    }
 }
 
 #endif /* FEATURE_GSP */
