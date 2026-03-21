@@ -274,6 +274,14 @@ bool GSP_SendResponse(uint8_t cmdId, const uint8_t *payload, uint8_t len)
     return true;
 }
 
+/* ── Public: Flush TX ring ────────────────────────────────────────── */
+
+void GSP_FlushTx(void)
+{
+    txRing.head = 0;
+    txRing.tail = 0;
+}
+
 /* ── Public: Init ────────────────────────────────────────────────── */
 
 void GSP_Init(void)
@@ -283,8 +291,12 @@ void GSP_Init(void)
     ParserReset();
     parser.lastRxTick = 0;
 
-    /* UART1 is already initialized by HAL_UART_Init().
-     * GSP takes over RX/TX — debug prints are disabled when FEATURE_GSP=1. */
+    /* Clear any UART errors from boot sequence text output */
+    if (UART1_RxOverflow())
+    {
+        UART1_RxOverflowClear();
+        while (UART1_RxReady()) (void)UART1_RxRead();
+    }
 }
 
 /* ── Public: Service ─────────────────────────────────────────────── */

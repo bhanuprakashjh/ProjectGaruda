@@ -63,6 +63,13 @@ static void HandlePing(const uint8_t *payload, uint8_t payloadLen)
 {
     (void)payload;
     (void)payloadLen;
+
+    /* PING acts as a reconnect signal — stop any running telemetry
+     * and flush TX ring so the PING response gets through immediately.
+     * This fixes the "need to replug USB" issue after disconnect. */
+    telemStreaming = false;
+    GSP_FlushTx();  /* Clear stale telemetry frames from TX ring */
+
     GSP_SendResponse(GSP_CMD_PING, NULL, 0);
 }
 
@@ -122,6 +129,36 @@ static void HandleStopMotor(const uint8_t *payload, uint8_t payloadLen)
     GSP_SendResponse(GSP_CMD_STOP_MOTOR, NULL, 0);
 }
 
+/**
+ * SET_THROTTLE: 2-byte LE uint16 throttle value (0-65535, same scale as pot ADC).
+ * 0 = idle (pot dead zone applies). 65535 = full throttle.
+ * Activates GSP throttle override — pot is ignored while active.
+ * Send value 0xFFFF with flag byte 0x00 to release back to pot.
+ * Payload: [value_lo] [value_hi] or [value_lo] [value_hi] [flags]
+ *   flags: 0x01 = activate override, 0x00 = release to pot
+ */
+static void HandleSetThrottle(const uint8_t *payload, uint8_t payloadLen)
+{
+    if (payloadLen < 2) {
+        SendError(0x03);  /* Invalid payload */
+        return;
+    }
+
+    uint16_t value = (uint16_t)payload[0] | ((uint16_t)payload[1] << 8);
+
+    if (payloadLen >= 3 && payload[2] == 0x00) {
+        /* Release: return to pot control */
+        gData.gspThrottleActive = false;
+        gData.gspThrottleValue = 0;
+    } else {
+        /* Activate GSP throttle override */
+        gData.gspThrottleActive = true;
+        gData.gspThrottleValue = value;
+    }
+
+    GSP_SendResponse(GSP_CMD_SET_THROTTLE, (const uint8_t *)&value, 2);
+}
+
 static void HandleClearFault(const uint8_t *payload, uint8_t payloadLen)
 {
     (void)payload;
@@ -131,8 +168,7 @@ static void HandleClearFault(const uint8_t *payload, uint8_t payloadLen)
         SendError(GSP_ERR_WRONG_STATE);
         return;
     }
-    gData.state = ESC_IDLE;
-    gData.faultCode = FAULT_NONE;
+    GarudaService_ClearFault();
     GSP_SendResponse(GSP_CMD_CLEAR_FAULT, NULL, 0);
 }
 
@@ -353,6 +389,7 @@ static const CMD_ENTRY_T cmdTable[] = {
     /* Phase 1: motor control */
     { GSP_CMD_START_MOTOR,     0, HandleStartMotor     },
     { GSP_CMD_STOP_MOTOR,      0, HandleStopMotor      },
+    { GSP_CMD_SET_THROTTLE,    0xFF, HandleSetThrottle  },
     { GSP_CMD_CLEAR_FAULT,     0, HandleClearFault     },
     { GSP_CMD_HEARTBEAT,       0, HandleHeartbeat      },
     /* Phase 1: telemetry */

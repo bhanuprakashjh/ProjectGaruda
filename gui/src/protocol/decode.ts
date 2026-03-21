@@ -100,10 +100,9 @@ export function decodeCkSnapshot(data: Uint8Array): CkSnapshot {
     ibRaw: v.getInt16(12, true),
     ibusRaw: v.getInt16(14, true),
     duty: v.getUint16(16, true),
-    // bytes 18-19: pad
-    stepPeriod: v.getUint16(20, true),
-    stepPeriodHR: v.getUint16(22, true),
-    eRpm: v.getUint16(24, true),
+    stepPeriod: v.getUint16(18, true),
+    stepPeriodHR: v.getUint16(20, true),
+    eRpm: v.getUint32(22, true),
     goodZcCount: v.getUint16(26, true),
     zcInterval: v.getUint16(28, true),
     prevZcInterval: v.getUint16(30, true),

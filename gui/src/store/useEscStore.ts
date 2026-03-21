@@ -1,7 +1,45 @@
 import { create } from 'zustand';
 import type { GspInfo, GspSnapshot, GspRxStatus, CkSnapshot, ParamDescriptor, ScopeSample, ScopeStatus } from '../protocol/types';
 
-export type TabId = 'dashboard' | 'scope' | 'motor' | 'params' | 'help';
+/* ── Running-average filter for noisy CK current/voltage readings ── */
+const CK_AVG_WINDOW = 20; /* 20 samples @ 50Hz = 400ms window — smooths 6-step phase current swings */
+const ckAvgBuf = {
+  iaRaw:   [] as number[],
+  ibRaw:   [] as number[],
+  ibusRaw: [] as number[],
+  vbusRaw: [] as number[],
+  eRpm:    [] as number[],
+};
+
+function avgPush(buf: number[], val: number): number {
+  buf.push(val);
+  if (buf.length > CK_AVG_WINDOW) buf.shift();
+  let sum = 0;
+  for (let i = 0; i < buf.length; i++) sum += buf[i];
+  return Math.round(sum / buf.length);
+}
+
+function smoothCkSnapshot(s: CkSnapshot): CkSnapshot {
+  /* Reset all buffers when motor stops — don't carry stale averages */
+  if (s.state === 0) {
+    ckAvgBuf.iaRaw.length = 0;
+    ckAvgBuf.ibRaw.length = 0;
+    ckAvgBuf.ibusRaw.length = 0;
+    ckAvgBuf.vbusRaw.length = 0;
+    ckAvgBuf.eRpm.length = 0;
+    return s;
+  }
+  return {
+    ...s,
+    iaRaw:   avgPush(ckAvgBuf.iaRaw, s.iaRaw),
+    ibRaw:   avgPush(ckAvgBuf.ibRaw, s.ibRaw),
+    ibusRaw: avgPush(ckAvgBuf.ibusRaw, s.ibusRaw),
+    vbusRaw: avgPush(ckAvgBuf.vbusRaw, s.vbusRaw),
+    eRpm:    avgPush(ckAvgBuf.eRpm, s.eRpm),
+  };
+}
+
+export type TabId = 'dashboard' | 'scope' | 'test' | 'motor' | 'params' | 'help';
 
 interface ParamValue {
   descriptor: ParamDescriptor;
@@ -87,7 +125,8 @@ export const useEscStore = create<EscStore>((set) => ({
     if (history.length > MAX_HISTORY) history.shift();
     return { snapshot: s, lastSnapshotMs: Date.now(), history };
   }),
-  pushCkSnapshot: (s) => set((state) => {
+  pushCkSnapshot: (raw) => set((state) => {
+    const s = smoothCkSnapshot(raw);
     const ckHistory = [...state.ckHistory, s];
     if (ckHistory.length > MAX_HISTORY) ckHistory.shift();
     return { ckSnapshot: s, lastSnapshotMs: Date.now(), ckHistory };
@@ -129,11 +168,18 @@ export const useEscStore = create<EscStore>((set) => ({
   appendScopeSamples: (samples) => set((state) => ({ scopeSamples: [...state.scopeSamples, ...samples] })),
   clearScopeSamples: () => set({ scopeSamples: [], scopeReading: false }),
   setScopeReading: (v) => set({ scopeReading: v }),
-  reset: () => set({
+  reset: () => {
+    /* Clear running-average buffers */
+    ckAvgBuf.iaRaw.length = 0;
+    ckAvgBuf.ibRaw.length = 0;
+    ckAvgBuf.ibusRaw.length = 0;
+    ckAvgBuf.vbusRaw.length = 0;
+    ckAvgBuf.eRpm.length = 0;
+    return set({
     connected: false, info: null, snapshot: null, ckSnapshot: null, lastSnapshotMs: 0,
     history: [], ckHistory: [], params: new Map(), activeProfile: 0, rxStatus: null,
     throttleSource: 'ADC', telemActive: false, toasts: [],
     paramModalOpen: false, activeTab: 'dashboard',
     scopeStatus: null, scopeSamples: [], scopeReading: false,
-  }),
+  });},
 }));

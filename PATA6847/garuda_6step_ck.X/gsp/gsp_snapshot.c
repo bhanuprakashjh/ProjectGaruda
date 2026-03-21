@@ -47,17 +47,20 @@ void GSP_CaptureSnapshot(GSP_CK_SNAPSHOT_T *dst)
     dst->stepPeriodHR = src->timing.stepPeriodHR;
 #endif
 
-    /* Compute eRPM (cap at 65535 for uint16_t) */
+    /* Compute eRPM — only when motor is actually running (OL_RAMP or CL) */
     {
         uint32_t erpm = 0;
+        if (src->state >= ESC_OL_RAMP && src->state <= ESC_CLOSED_LOOP)
+        {
 #if FEATURE_IC_ZC
-        if (src->timing.stepPeriodHR > 0 && src->timing.hasPrevZcHR)
-            erpm = 15625000UL / src->timing.stepPeriodHR;
-        else
+            if (src->timing.stepPeriodHR > 0 && src->timing.hasPrevZcHR)
+                erpm = 15625000UL / src->timing.stepPeriodHR;
+            else
 #endif
-        if (src->timing.stepPeriod > 0)
-            erpm = (uint32_t)TIMER1_FREQ_HZ * 10UL / src->timing.stepPeriod;
-        dst->eRpm = (erpm > 65535UL) ? 65535U : (uint16_t)erpm;
+            if (src->timing.stepPeriod > 0)
+                erpm = (uint32_t)TIMER1_FREQ_HZ * 10UL / src->timing.stepPeriod;
+        }
+        dst->eRpm = erpm;
     }
 
     /* ZC diagnostics */

@@ -108,12 +108,11 @@ typedef struct __attribute__((packed)) {
     int16_t  ibRaw;             /* Phase B current (signed, fractional) */
     int16_t  ibusRaw;           /* Reconstructed bus current (abs value) */
     uint16_t duty;              /* Raw duty count */
-    uint16_t pad0;
 
-    /* Speed/timing (12B) */
+    /* Speed/timing (14B) */
     uint16_t stepPeriod;        /* Timer1 ticks */
     uint16_t stepPeriodHR;      /* SCCP4 HR ticks (640ns) */
-    uint16_t eRpm;              /* Computed eRPM (capped 65535) */
+    uint32_t eRpm;              /* Computed eRPM (full 32-bit, A2212 reaches 100k+) */
     uint16_t goodZcCount;
     uint16_t zcInterval;
     uint16_t prevZcInterval;

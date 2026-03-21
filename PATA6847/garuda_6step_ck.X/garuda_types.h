@@ -56,6 +56,11 @@ typedef struct {
     uint16_t commDeadline;          /* Timer1 tick for next commutation (fallback) */
     uint16_t forcedCountdown;
     uint16_t goodZcCount;
+    uint16_t checkpointStepPeriod;       /* Per-revolution checkpoint (ESCape32-style) */
+#if FEATURE_IC_ZC
+    uint16_t checkpointStepPeriodHR;    /* HR checkpoint for high-speed desync detection */
+#endif
+    uint8_t  revStepCount;               /* Steps since last revolution checkpoint (0-5) */
     uint8_t  consecutiveMissedSteps;
     uint8_t  stepsSinceLastZc;
     bool     zcSynced;
@@ -140,6 +145,11 @@ typedef struct {
     bool     runCommandActive;
     uint8_t  desyncRestartAttempts;
     uint32_t recoveryCounter;
+
+    /* GSP throttle override — when gspThrottleActive, potRaw is replaced
+     * with gspThrottleValue in MapThrottleToDuty. GUI motor testing. */
+    bool     gspThrottleActive;
+    uint16_t gspThrottleValue;      /* 0-65535 (same scale as potRaw) */
 
     /* ATA6847 fault monitoring */
     bool     ataFaultPending;       /* Set by Timer1 ISR when nIRQ asserted */

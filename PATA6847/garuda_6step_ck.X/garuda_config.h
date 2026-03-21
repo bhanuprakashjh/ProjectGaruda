@@ -14,7 +14,7 @@
 
 /* ── Motor Profile Selection ──────────────────────────────────────── */
 #ifndef MOTOR_PROFILE
-#define MOTOR_PROFILE   1   /* 0=Hurst, 1=A2212, 2=2810 */
+#define MOTOR_PROFILE   2   /* 0=Hurst, 1=A2212, 2=2810 */
 #endif
 
 /* ── Clock ─────────────────────────────────────────────────────────── */
@@ -175,10 +175,11 @@
 
 /* Vbus Fault Thresholds (12V / 3S LiPo system)
  * EV43F54A Vbus divider: ~1211 raw/V (from 24V→29072 calibration).
- * OV: 15V → 18165 raw. UV: 8V → 9690 raw.
- * Using 12-bit × 16 notation for consistency with Hurst profile. */
-#define VBUS_OV_THRESHOLD   (1136U * 16U)  /* ~15V → 18176 in 16-bit */
-#define VBUS_UV_THRESHOLD   (606U * 16U)   /* ~8V  → 9696 in 16-bit */
+ * Bench supply sags significantly under motor load (12V → 9V at full duty).
+ * OV: 18V (headroom for regen spikes + 4S compatibility)
+ * UV: 6V (only trips on actual supply disconnect, not load sag) */
+#define VBUS_OV_THRESHOLD   (1363U * 16U)  /* ~18V → 21808 in 16-bit */
+#define VBUS_UV_THRESHOLD   (454U * 16U)   /* ~6V  → 7264 in 16-bit */
 
 #elif MOTOR_PROFILE == 2
 /* ── Motor: 2810 1350KV (7-8" FPV/cine drone motor) ─────────────── */
@@ -209,16 +210,22 @@
                                           * CL uses 12% + 50% interval rejection. */
 #define ZC_FILTER_THRESHOLD 3U
 
-/* Timing Advance */
-#define TIMING_ADVANCE_MIN_DEG      0U
-#define TIMING_ADVANCE_MAX_DEG      20U
-#define TIMING_ADVANCE_START_ERPM   5000U
+/* Timing Advance — 2810 has low Ls (25µH), BEMF rises fast.
+ * Start advance earlier (3000 eRPM vs 5000) and ramp to 25° (vs 20°).
+ * Low-Ls motors benefit from more advance at high speed because the
+ * commutation delay (deglitch + scheduling) is a larger fraction of
+ * the electrical period. */
+#define TIMING_ADVANCE_MIN_DEG      2U    /* Small base advance even at low speed */
+#define TIMING_ADVANCE_MAX_DEG      25U   /* More advance for low-Ls motor */
+#define TIMING_ADVANCE_START_ERPM   3000U /* Start earlier — BEMF usable sooner */
 
 /* Closed-Loop
  * At 25.2V (6S full): 1350 × 25.2 = 34020 RPM = 238k eRPM theoretical.
  * Practical max ~130k eRPM with losses. */
 #define MAX_CLOSED_LOOP_ERPM 150000U
-#define MIN_CL_STEP_PERIOD   2U
+#define MIN_CL_STEP_PERIOD   2U          /* HR timer provides sub-tick precision.
+                                          * Per-rev desync check uses HR (0.4% error)
+                                          * instead of Timer1 (33% error at Tp=2). */
 #define RAMP_TARGET_ERPM     3000U       /* Lower than A2212 — gentler handoff */
 
 /* ATA6847 Hardware Current Limit */
@@ -226,11 +233,12 @@
 
 #define CL_IDLE_DUTY_PERCENT 10U
 
-/* Vbus Fault Thresholds (6S LiPo: 22.2V nom, 25.2V charged)
+/* Vbus Fault Thresholds
  * OV: 28V (margin above fully charged 6S)
- * UV: 16V (3.2V/cell cutoff for 5S, safe for 6S too) */
+ * UV: 10V (bench supply sags under desync current spikes;
+ *     production should use 16V for LiPo protection) */
 #define VBUS_OV_THRESHOLD   (33908U)       /* ~28V */
-#define VBUS_UV_THRESHOLD   (14532U)       /* ~12V (conservative) */
+#define VBUS_UV_THRESHOLD   (12110U)       /* ~10V → 1211*10 */
 
 #else
 #error "Unknown MOTOR_PROFILE — select 0 (Hurst), 1 (A2212), or 2 (2810)"
@@ -252,6 +260,19 @@
                                           * faster desync detection. */
 #define ZC_DESYNC_THRESH    3U           /* Consecutive misses before clearing zcSynced */
 #define ZC_MISS_LIMIT       12U          /* Consecutive misses → desync fault */
+
+/* Per-revolution desync detection (ESCape32/AM32-inspired).
+ * Every 6 commutation steps, compare stepPeriod against checkpoint.
+ * If changed by >50%, it's a false-ZC cascade — declare desync. */
+#define ZC_REV_DESYNC_RATIO_PCT 40U      /* If stepPeriod changes by >40% in one revolution → desync.
+                                          * ESCape32 uses 50%, but at high speed with Timer1
+                                          * quantization, tighter is safer. 62k→112k = 45% change. */
+
+/* Absolute minimum ZC interval in Timer1 ticks.
+ * Any ZC faster than this is physically impossible — reject regardless of IIR.
+ * At 100k eRPM (max practical for 7PP at 25V): Tp = 20000*10/100000 = 2 ticks.
+ * Floor of 1 tick allows full speed; the per-rev check catches false cascades. */
+#define ZC_ABSOLUTE_MIN_INTERVAL  1U
 
 /* ── Feature Flags ─────────────────────────────────────────────────── */
 #ifndef FEATURE_IC_ZC
@@ -277,9 +298,11 @@
  * At 100 kHz, worst-case idle CPU = 2%. ZC detection + scheduling
  * adds ~1-2 µs once per step (negligible). */
 #if FEATURE_IC_ZC
-#define ZC_POLL_FREQ_HZ         100000U     /* 100 kHz polling rate.
-                                              * 200kHz tested: extends speed but 5680 false ZCs.
-                                              * Keep 100kHz for reliability. */
+#define ZC_POLL_FREQ_HZ         200000U     /* 200 kHz polling rate.
+                                              * 100kHz desync'd 2810 at 36k eRPM (Tp=5).
+                                              * 200kHz doubles polls per step — FL=3 at Tp=5
+                                              * gets 50 polls (10 blanked) vs 25 at 100kHz.
+                                              * False ZC rate managed by per-rev desync check. */
 #define ZC_POLL_PERIOD          (FCY / ZC_POLL_FREQ_HZ)  /* 1000 ticks at 100MHz Fp */
 #define ZC_POLL_ISR_PRIORITY    5           /* Above Timer1(4), below ComTimer(6) */
 
@@ -295,9 +318,9 @@
  * FL=2 was too thin at 100k eRPM — 7.7% false IC rate. FL=3 requires
  * 3 consecutive matching reads (30µs), still fits in the ~80µs post-
  * blanking window at Tp:2. */
-#define ZC_DEGLITCH_MIN         3U          /* FL:2 tested on 2810: Frc shifted 3→2 but
-                                             * still desyncs. Motor needs ADC-based BEMF.
-                                             * Keep FL:3 for A2212 reliability. */
+#define ZC_DEGLITCH_MIN         3U          /* FL=2 tested: accepts false ZCs at 62k eRPM.
+                                             * At 200kHz, FL=3 = 15µs latency (vs 30µs at 100kHz).
+                                             * Tp=2 at 200kHz: 100µs step, 50µs usable, 15µs FL = OK. */
 #define ZC_DEGLITCH_MAX         8U          /* At Tp >= ZC_DEGLITCH_SLOW_TP */
 #define ZC_DEGLITCH_FAST_TP     5U          /* Tp threshold for min filter (was 10) */
 #define ZC_DEGLITCH_SLOW_TP     50U         /* Tp threshold for max filter */

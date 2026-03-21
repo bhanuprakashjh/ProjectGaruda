@@ -6,9 +6,11 @@ type ThrottleSrc = 'ADC' | 'GSP' | 'PWM' | 'DSHOT' | 'AUTO';
 const SRC_VALUES: Record<ThrottleSrc, number> = { ADC: 0, GSP: 1, PWM: 2, DSHOT: 3, AUTO: 4 };
 
 export function ControlPanel() {
-  const { connected, snapshot, info, throttleSource, setThrottleSource } = useEscStore();
-  const isIdle = !snapshot || snapshot.state === 0;
-  const isFault = snapshot?.state === 9;
+  const { connected, snapshot, ckSnapshot, info, throttleSource, setThrottleSource } = useEscStore();
+  /* Use CK snapshot state if available, otherwise AK snapshot */
+  const currentState = ckSnapshot?.state ?? snapshot?.state ?? 0;
+  const isIdle = currentState === 0;
+  const isFault = currentState === 6; /* ESC_FAULT for both CK and AK */
   const flags = info?.featureFlags ?? 0;
   const hasAdcPot = (flags & (1 << 19)) !== 0;
   const hasRxPwm = (flags & (1 << 20)) !== 0;

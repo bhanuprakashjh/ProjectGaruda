@@ -73,6 +73,11 @@ void BEMF_ZC_Init(volatile GARUDA_DATA_T *pData)
     pData->timing.commDeadline = 0;
     pData->timing.forcedCountdown = 0;
     pData->timing.goodZcCount = 0;
+    pData->timing.checkpointStepPeriod = INITIAL_STEP_PERIOD;
+#if FEATURE_IC_ZC
+    pData->timing.checkpointStepPeriodHR = 0;
+#endif
+    pData->timing.revStepCount = 0;
     pData->timing.consecutiveMissedSteps = 0;
     pData->timing.stepsSinceLastZc = 0;
     pData->timing.zcSynced = false;
@@ -115,6 +120,68 @@ static inline uint8_t ComputeFilterLevel(uint16_t stepPeriod)
 void BEMF_ZC_OnCommutation(volatile GARUDA_DATA_T *pData)
 {
     const COMMUTATION_STEP_T *step = &commutationTable[pData->currentStep];
+
+    /* ── Per-revolution desync check (ESCape32/AM32-inspired) ──────────
+     * Every 6 steps (one electrical revolution), compare current step period
+     * against the checkpoint. If changed by >2:1, false-ZC cascade detected.
+     *
+     * At high speed (Tp<=10), uses HR timer (640ns, 78x resolution) instead
+     * of Timer1 (50µs) to avoid quantization-induced false positives.
+     * Timer1 Tp=3 has 33% quantization error; HR Tp=234 has 0.4% error. */
+    pData->timing.revStepCount++;
+    if (pData->timing.revStepCount >= 6)
+    {
+        pData->timing.revStepCount = 0;
+        bool desyncDetected = false;
+
+#if FEATURE_IC_ZC
+        /* Prefer HR timer for desync check when available (high speed).
+         * Check if step period changed by >40% in one revolution. */
+        if (pData->timing.hasPrevZcHR &&
+            pData->timing.stepPeriodHR > 0 &&
+            pData->timing.checkpointStepPeriodHR > 0)
+        {
+            uint16_t cpHR = pData->timing.checkpointStepPeriodHR;
+            uint16_t spHR = pData->timing.stepPeriodHR;
+            uint16_t threshold = (uint16_t)((uint32_t)cpHR * ZC_REV_DESYNC_RATIO_PCT / 100);
+            uint16_t diff = (spHR > cpHR) ? (spHR - cpHR) : (cpHR - spHR);
+            if (diff > threshold)
+            {
+                desyncDetected = true;
+            }
+            pData->timing.checkpointStepPeriodHR = spHR;
+        }
+        else
+#endif
+        {
+            /* Fallback to Timer1 for low speed or no HR data */
+            uint16_t cp = pData->timing.checkpointStepPeriod;
+            uint16_t sp = pData->timing.stepPeriod;
+            if (cp > 0 && sp > 0)
+            {
+                uint16_t threshold = (uint16_t)((uint32_t)cp * ZC_REV_DESYNC_RATIO_PCT / 100);
+                uint16_t diff = (sp > cp) ? (sp - cp) : (cp - sp);
+                if (diff > threshold)
+                {
+                    desyncDetected = true;
+                }
+            }
+        }
+        pData->timing.checkpointStepPeriod = pData->timing.stepPeriod;
+
+        if (desyncDetected && pData->timing.zcSynced)
+        {
+            /* False-ZC cascade — reset to safe state */
+            pData->timing.zcSynced = false;
+            pData->timing.goodZcCount = 0;
+            pData->timing.stepPeriod = pData->timing.checkpointStepPeriod;
+            pData->timing.hasPrevZc = false;
+#if FEATURE_IC_ZC
+            pData->timing.hasPrevZcHR = false;
+            pData->timing.checkpointStepPeriodHR = 0;
+#endif
+        }
+    }
 
     pData->bemf.zeroCrossDetected = false;
     pData->bemf.filterCount = 0;
@@ -548,7 +615,31 @@ static void RecordZcTiming(volatile GARUDA_DATA_T *pData,
          * At Tp:5, Timer1 intervals are 4-5 ticks. Beyond Tp:5 (67k eRPM),
          * intervals drop to 2-3 ticks. Floor of 2 accepts all valid ZCs
          * while the deglitch filter handles noise rejection. */
-        uint16_t minInterval = pData->timing.stepPeriod / 2;
+        /* Reject impossibly short intervals using HR timer for precision.
+         * At Tp=3 Timer1, the HR equivalent is ~234 ticks — 0.4% error vs 33%.
+         * Uses HR checkpoint (per-revolution validated) so a corrupted IIR
+         * can't weaken this check. */
+        if (interval < ZC_ABSOLUTE_MIN_INTERVAL)
+        {
+            pData->icZc.diagFalseZc++;
+            pData->bemf.zeroCrossDetected = false;
+            return;
+        }
+        /* HR-based 50% rejection when available */
+        {
+            uint16_t hrElapsed = hrTick - pData->timing.lastZcTickHR;
+            uint16_t hrHalf = pData->timing.checkpointStepPeriodHR > 0
+                ? pData->timing.checkpointStepPeriodHR / 2
+                : pData->timing.stepPeriodHR / 2;
+            if (hrHalf > 0 && hrElapsed < hrHalf)
+            {
+                pData->icZc.diagFalseZc++;
+                pData->bemf.zeroCrossDetected = false;
+                return;
+            }
+        }
+        /* Fallback: Timer1-based 50% check */
+        uint16_t minInterval = pData->timing.checkpointStepPeriod / 2;
         if (minInterval < 2) minInterval = 2;
         if (interval < minInterval)
         {

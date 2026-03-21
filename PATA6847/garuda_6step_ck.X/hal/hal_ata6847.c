@@ -86,7 +86,9 @@ void HAL_ATA6847_Init(void)
     /* GDUCR1-4 (match reference byte values) */
     HAL_ATA6847_WriteReg(ATA_GDUCR1, (7 << 2) | (1 << 1) | 1);   /* 0x1F: BEMFEN=1 for 6-step ZC */
     HAL_ATA6847_WriteReg(ATA_GDUCR2, (1 << 7) | (1 << 6) | 5);   /* 0xC5 */
-    HAL_ATA6847_WriteReg(ATA_GDUCR3, (0x01 << 2));                /* 0x04 */
+    HAL_ATA6847_WriteReg(ATA_GDUCR3, (0x03 << 2));                /* 0x0C: edge blanking = max (~4µs)
+                                                                    * Was 0x01 (~1µs) — too short for
+                                                                    * 17-24V switching transients. */
     HAL_ATA6847_WriteReg(ATA_GDUCR4, (1 << 6) | (1 << 5) | (1 << 4) | 2); /* 0x72 */
 
     /* Interrupt masks */

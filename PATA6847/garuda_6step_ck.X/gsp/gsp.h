@@ -19,6 +19,7 @@ extern "C" {
 
 void GSP_Init(void);
 void GSP_Service(void);
+void GSP_FlushTx(void);
 bool GSP_SendResponse(uint8_t cmdId, const uint8_t *payload, uint8_t len);
 
 #ifdef __cplusplus

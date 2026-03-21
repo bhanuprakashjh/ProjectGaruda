@@ -15,5 +15,6 @@ void GarudaService_Init(void);
 void GarudaService_MainLoop(void);
 void GarudaService_StartMotor(void);
 void GarudaService_StopMotor(void);
+void GarudaService_ClearFault(void);
 
 #endif /* GARUDA_SERVICE_H */

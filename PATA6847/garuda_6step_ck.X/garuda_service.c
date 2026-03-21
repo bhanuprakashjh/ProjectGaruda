@@ -151,6 +151,8 @@ void GarudaService_Init(void)
     gData.timer1Tick = 0;
     gData.armCounter = 0;
     gData.runCommandActive = false;
+    gData.gspThrottleActive = false;
+    gData.gspThrottleValue = 0;
     gData.desyncRestartAttempts = 0;
     gData.recoveryCounter = 0;
     BEMF_ZC_Init((volatile GARUDA_DATA_T *)&gData);
@@ -259,9 +261,23 @@ void GarudaService_StopMotor(void)
 
     gData.state = ESC_IDLE;
     gData.duty = 0;
+    gData.faultCode = FAULT_NONE;
+    gData.gspThrottleActive = false;
+    gData.gspThrottleValue = 0;
 
     LED_RUN = 0;
     LED_FAULT = 0;
+}
+
+void GarudaService_ClearFault(void)
+{
+    if (gData.state == ESC_FAULT)
+    {
+        gData.state = ESC_IDLE;
+        gData.faultCode = FAULT_NONE;
+        gData.runCommandActive = false;
+        LED_FAULT = 0;
+    }
 }
 
 /* ── Main Loop (called from while(1) in main.c) ──────────────────── */
@@ -297,76 +313,59 @@ void GarudaService_MainLoop(void)
         HAL_ATA6847_EnterGduStandby();
     }
 
-    /* ATA6847 fault decode — nIRQ was asserted, read SIR1 via SPI.
-     * The ATA6847 has already taken protective action (chopping or shutdown)
-     * before we get here. We just need to decode and respond. */
+    /* ATA6847 fault decode — PWM is already OFF (killed by ISR),
+     * so SPI reads are safe (no EMI from switching). */
     if (gData.ataFaultPending)
     {
         gData.ataFaultPending = false;
+
+        /* Put GDU to standby (SPI write — safe, PWM is off) */
+        HAL_ATA6847_EnterGduStandby();
+
+        /* Now read fault details via SPI */
         uint8_t sir1 = HAL_ATA6847_ReadReg(ATA_SIR1);
         gData.ataLastSIR1 = sir1;
 
-        /* SPI timeout returns 0xFF — bail out, don't cascade more SPI reads */
-        if (sir1 == 0xFF)
+        /* Decode and log specific fault */
+        if (sir1 != 0xFF)  /* 0xFF = SPI timeout, skip decode */
         {
-            gData.ataFaultPending = false;
-            /* Skip fault decode — SPI unreliable at high speed (EMI) */
-        }
-        else if (sir1 & 0x10)  /* ILIM — current limit chopping */
-        {
-            /* Informational: motor is running at current limit.
-             * Don't stop — chopping mode keeps motor safe. Log it. */
-            gData.ataIlimActive = true;
-            /* Clear the ILIM flag */
-            HAL_ATA6847_WriteReg(ATA_SIR1, 0x10);
-        }
-
-        if (sir1 & 0x02)  /* VDSSC — VDS short circuit */
-        {
-            /* Critical: a MOSFET has desaturated. GDU already shut down. */
-            uint8_t sir3 = HAL_ATA6847_ReadReg(ATA_SIR3);
-            HAL_UART_WriteString("\r\n!ATA SC:");
-            HAL_UART_WriteHex8(sir3);
-            HAL_UART_NewLine();
-            HAL_ATA6847_ClearFaults();
-            EnterFault(FAULT_ATA6847);
-        }
-
-        if (sir1 & 0x04)  /* OVTF — over-temperature */
-        {
-            HAL_UART_WriteString("\r\n!ATA OVT\r\n");
-            HAL_ATA6847_ClearFaults();
-            EnterFault(FAULT_ATA6847);
-        }
-
-        if (sir1 & 0x80)  /* VSUPF — supply failure */
-        {
-            HAL_UART_WriteString("\r\n!ATA VSUP\r\n");
-            HAL_ATA6847_ClearFaults();
-            EnterFault(FAULT_ATA6847);
+            if (sir1 & 0x02)  /* VDSSC — VDS short circuit */
+            {
+                gData.faultCode = FAULT_ATA6847;
+                HAL_UART_WriteString("\r\n!ATA SC SIR3=");
+                HAL_UART_WriteHex8(HAL_ATA6847_ReadReg(ATA_SIR3));
+                HAL_UART_NewLine();
+            }
+            else if (sir1 & 0x04)  /* OVTF — over-temperature */
+            {
+                gData.faultCode = FAULT_ATA6847;
+                HAL_UART_WriteString("\r\n!ATA OVT\r\n");
+            }
+            else if (sir1 & 0x80)  /* VSUPF — supply failure */
+            {
+                gData.faultCode = FAULT_ATA6847;
+                HAL_UART_WriteString("\r\n!ATA VSUP\r\n");
+            }
+            else if (sir1 & 0x01)  /* VGSUV — gate under-voltage */
+            {
+                gData.faultCode = FAULT_ATA6847;
+                HAL_UART_WriteString("\r\n!ATA VGSUV\r\n");
+            }
+            else if (sir1 & 0x10)  /* ILIM — was just chopping, not critical */
+            {
+                /* ILIM triggered but not a hard fault — motor was stopped
+                 * by ISR as precaution. Could be spurious from EMI. */
+                gData.faultCode = FAULT_ATA6847;
+                HAL_UART_WriteString("\r\n!ATA ILIM\r\n");
+            }
         }
 
-        if (sir1 & 0x01)  /* VGSUV — gate under-voltage */
-        {
-            HAL_UART_WriteString("\r\n!ATA VGSUV\r\n");
-            HAL_ATA6847_ClearFaults();
-            EnterFault(FAULT_ATA6847);
-        }
-    }
-    else
-    {
-        gData.ataIlimActive = false;
+        /* Clear ATA6847 fault registers */
+        HAL_ATA6847_ClearFaults();
     }
 
-    /* Fault state: auto-clear after deferred fault handler runs.
-     * User can press BTN1 again to retry, or BTN2 to stop. */
-    if (gData.state == ESC_FAULT)
-    {
-        gData.runCommandActive = false;
-        gData.state = ESC_IDLE;
-        gData.faultCode = FAULT_NONE;
-        LED_FAULT = 0;
-    }
+    /* Fault state: do NOT auto-clear. User must press Clear Fault
+     * (GUI button or BTN2) to acknowledge and return to IDLE. */
 }
 
 /* ── Timer1 ISR (20 kHz = 50 µs) ─────────────────────────────────── */
@@ -383,20 +382,28 @@ void __attribute__((interrupt, auto_psv)) _T1Interrupt(void)
         gData.systemTick++;
     }
 
-    /* ATA6847 nIRQ poll — active low when any enabled fault occurs.
-     * Latency: ≤50µs (one Timer1 tick). The ATA6847 has already taken
-     * protective action (gate chopping or shutdown) before we read this.
-     * Main loop decodes the specific fault via SPI. */
-    /* nIRQ poll — rate-limited to every 200 ticks (10ms at 20kHz).
-     * At high motor speed, EMI can cause spurious nIRQ assertions.
-     * Checking every tick wastes CPU on SPI reads that time out. */
+    /* ATA6847 nIRQ — active low when fault occurs.
+     * Strategy: kill PWM IMMEDIATELY in ISR (no SPI — EMI would hang it).
+     * Main loop reads SPI fault details AFTER PWM is off (safe). */
     {
         static uint16_t nirqDiv = 0;
-        if (++nirqDiv >= 200)
+        if (++nirqDiv >= 200)  /* Check every 10ms (rate-limited for EMI) */
         {
             nirqDiv = 0;
             if (!nIRQ_GetValue() && gData.state >= ESC_OL_RAMP)
-                gData.ataFaultPending = true;
+            {
+                /* Kill PWM immediately — no SPI here, just registers */
+                HAL_PWM_DisableOutputs();
+#if FEATURE_IC_ZC
+                HAL_ZcTimer_Stop();
+                HAL_ComTimer_Cancel();
+#endif
+                gData.state = ESC_FAULT;
+                gData.faultCode = FAULT_ATA6847;
+                gData.ataFaultPending = true;  /* Main loop decodes via SPI */
+                LED_FAULT = 1;
+                LED_RUN = 0;
+            }
         }
     }
 
@@ -508,15 +515,20 @@ void __attribute__((interrupt, auto_psv)) _T1Interrupt(void)
 
                 if (gData.timing.zcSynced)
                 {
-                    /* Synced: pot-mapped with idle floor */
-                    target = MapThrottleToDuty(gData.potRaw);
+                    /* Synced: pot-mapped with idle floor.
+                     * GSP throttle override for GUI motor testing. */
+                    target = MapThrottleToDuty(
+                        gData.gspThrottleActive ? gData.gspThrottleValue : gData.potRaw);
                 }
                 else
                 {
-                    /* NOT synced: ramp down to idle for safety.
-                     * Motor is on forced commutation — reduce duty
-                     * to help ZC detection recover. */
+                    /* NOT synced (per-revolution check or missed steps).
+                     * Cut duty aggressively to reduce current and let motor
+                     * decelerate to a speed where ZC can re-acquire.
+                     * AM32-style: halve duty immediately, don't rely on slew. */
                     target = CL_IDLE_DUTY;
+                    if (slewedDuty > CL_IDLE_DUTY * 2)
+                        slewedDuty = slewedDuty / 2;  /* Fast cut, bypass slew */
                 }
 
                 /* Asymmetric slew: fast up, slow down */

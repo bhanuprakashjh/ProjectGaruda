@@ -1,16 +1,33 @@
 /**
  * CK Board Dashboard — real-time telemetry for dsPIC33CK + ATA6847 ESC.
  * Shows eRPM, phase currents, bus voltage, ZC diagnostics, ILIM status.
+ * Values use EMA smoothing for readable display.
  */
 
+import { useRef } from 'react';
 import { useEscStore } from '../store/useEscStore';
 import { CK_ESC_STATES, CK_FAULT_CODES, CK_CURRENT_SCALE, CK_VBUS_SCALE } from '../protocol/types';
 
-function Gauge({ label, value, unit, color, warn, max }: {
+/* EMA smoothing — factor 0.0-1.0, higher = more responsive.
+ * Snaps to zero instantly when raw is 0 (motor stopped). */
+function useSmoothed(raw: number, alpha = 0.15): number {
+  const ref = useRef<number>(raw);
+  if (raw === 0 || !Number.isFinite(raw)) {
+    ref.current = 0;
+  } else {
+    ref.current += alpha * (raw - ref.current);
+  }
+  return ref.current;
+}
+
+function Gauge({ label, value, unit, color, warn, max, decimals = 0 }: {
   label: string; value: number | string; unit: string;
-  color?: string; warn?: boolean; max?: number;
+  color?: string; warn?: boolean; max?: number; decimals?: number;
 }) {
   const pct = max && typeof value === 'number' ? Math.min(100, (value / max) * 100) : 0;
+  const display = typeof value === 'number'
+    ? (decimals > 0 ? value.toFixed(decimals) : value.toLocaleString())
+    : value;
   return (
     <div style={{
       background: 'var(--bg-card)', borderRadius: 'var(--radius)',
@@ -24,7 +41,7 @@ function Gauge({ label, value, unit, color, warn, max }: {
         fontSize: 24, fontWeight: 700, fontFamily: 'var(--font-mono)',
         color: warn ? 'var(--accent-red)' : (color || 'var(--text-primary)'),
       }}>
-        {typeof value === 'number' ? value.toLocaleString() : value}
+        {display}
         <span style={{ fontSize: 11, fontWeight: 400, marginLeft: 4, color: 'var(--text-muted)' }}>
           {unit}
         </span>
@@ -34,7 +51,7 @@ function Gauge({ label, value, unit, color, warn, max }: {
           <div style={{
             height: '100%', borderRadius: 2, width: `${pct}%`,
             background: warn ? 'var(--accent-red)' : (color || 'var(--accent-blue)'),
-            transition: 'width 0.15s',
+            transition: 'width 0.3s',
           }} />
         </div>
       ) : null}
@@ -63,6 +80,16 @@ export function CkDashboard() {
 
   const stale = Date.now() - lastMs > 2000;
 
+  /* Smoothed values — EMA with alpha=0.15 for gauges.
+   * Force zero when motor idle (state 0) so gauges reset on stop. */
+  const idle = !snap || snap.state === 0;
+  const smErpm = useSmoothed(idle ? 0 : (snap?.eRpm ?? 0), 0.15);
+  const smVbus = useSmoothed(snap ? snap.vbusRaw / CK_VBUS_SCALE : 0, 0.15);
+  const smDuty = useSmoothed(idle ? 0 : (snap?.dutyPct ?? 0), 0.2);
+  /* Bus current is the meaningful value — DC average power draw.
+   * Phase currents swing per commutation step; scope shows waveform detail. */
+  const smIbus = useSmoothed(idle ? 0 : (snap ? snap.ibusRaw * CK_CURRENT_SCALE : 0), 0.1);
+
   if (!snap) {
     return (
       <div style={{ padding: 24, textAlign: 'center', color: 'var(--text-muted)' }}>
@@ -73,11 +100,7 @@ export function CkDashboard() {
 
   const state = CK_ESC_STATES[snap.state] || `?${snap.state}`;
   const fault = CK_FAULT_CODES[snap.faultCode] || `?${snap.faultCode}`;
-  const iaMa = Math.round(snap.iaRaw * CK_CURRENT_SCALE);
-  const ibMa = Math.round(snap.ibRaw * CK_CURRENT_SCALE);
-  const ibusMa = Math.round(snap.ibusRaw * CK_CURRENT_SCALE);
-  const vbusV = (snap.vbusRaw / CK_VBUS_SCALE).toFixed(1);
-  const mechRpm = info ? Math.round(snap.eRpm / info.motorPolePairs) : snap.eRpm;
+  const mechRpm = info ? Math.round(smErpm / info.motorPolePairs) : Math.round(smErpm);
 
   return (
     <div style={{ opacity: stale ? 0.5 : 1, transition: 'opacity 0.3s' }}>
@@ -85,7 +108,7 @@ export function CkDashboard() {
       <div style={{
         display: 'flex', alignItems: 'center', gap: 8, marginBottom: 16,
         padding: '8px 12px', background: 'var(--bg-card)', borderRadius: 'var(--radius)',
-        border: '1px solid var(--border)',
+        border: '1px solid var(--border)', flexWrap: 'wrap',
       }}>
         <StatusBadge label={state} active={snap.state >= 3} color={
           snap.state === 6 ? '#ef4444' : snap.state >= 4 ? '#22c55e' : '#3b82f6'
@@ -106,20 +129,20 @@ export function CkDashboard() {
 
       {/* Main gauges */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12, marginBottom: 16 }}>
-        <Gauge label="eRPM" value={snap.eRpm} unit="" color="var(--accent-cyan)" max={info?.maxErpm || 100000} />
+        <Gauge label="eRPM" value={Math.round(smErpm)} unit="" color="var(--accent-cyan)" max={info?.maxErpm || 100000} />
         <Gauge label="Mech RPM" value={mechRpm} unit="RPM" color="var(--accent-blue)" />
-        <Gauge label="Duty" value={snap.dutyPct} unit="%" color="var(--accent-green)" max={100} />
-        <Gauge label="Vbus" value={vbusV} unit="V" color="var(--accent-yellow)"
+        <Gauge label="Duty" value={Math.round(smDuty)} unit="%" color="var(--accent-green)" max={100} />
+        <Gauge label="Vbus" value={smVbus} unit="V" color="var(--accent-yellow)" decimals={1}
           warn={snap.vbusRaw < 14000} />
         <Gauge label="Pot" value={snap.potRaw} unit="" max={65535} />
       </div>
 
-      {/* Current gauges */}
+      {/* Current & Power */}
       <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 12, marginBottom: 16 }}>
-        <Gauge label="Phase A (Ia)" value={iaMa} unit="mA" color="#60a5fa" />
-        <Gauge label="Phase B (Ib)" value={ibMa} unit="mA" color="#34d399" />
-        <Gauge label="Bus Current (IBus)" value={ibusMa} unit="mA" color="#f97316"
+        <Gauge label="Bus Current" value={Math.round(smIbus)} unit="mA" color="#f97316"
           warn={snap.ilimActive} max={20000} />
+        <Gauge label="Power" value={smVbus > 0 ? +(smVbus * smIbus / 1000).toFixed(1) : 0}
+          unit="W" color="#eab308" decimals={1} />
       </div>
 
       {/* ZC diagnostics */}
