@@ -76,7 +76,7 @@ CK_CURRENT_SCALE = 1.049
 CK_VBUS_SCALE = 1211.0
 
 def decode_ck_snapshot(data):
-    """Decode 48-byte CK snapshot."""
+    """Decode 48-52 byte CK snapshot (v2 adds 4 bytes of ZC diagnostics)."""
     if len(data) < 48:
         return None
     s = {}
@@ -106,6 +106,15 @@ def decode_ck_snapshot(data):
     s['ilimActive'] = data[39] != 0
     s['systemTick'] = struct.unpack_from('<I', data, 40)[0]
     s['uptime'] = struct.unpack_from('<I', data, 44)[0]
+    # v2 ZC diagnostics (backward-compatible)
+    if len(data) >= 52:
+        s['zcLatencyPct'] = data[48]
+        s['zcBlankPct'] = data[49]
+        s['zcBypassCount'] = struct.unpack_from('<H', data, 50)[0]
+    else:
+        s['zcLatencyPct'] = 0
+        s['zcBlankPct'] = 0
+        s['zcBypassCount'] = 0
     # Derived
     s['iaMa'] = round(s['iaRaw'] * CK_CURRENT_SCALE)
     s['ibMa'] = round(s['ibRaw'] * CK_CURRENT_SCALE)
@@ -227,12 +236,18 @@ def main():
             'fault': snap['fault'],
             'step_period': snap['stepPeriod'],
             'filter_level': snap['filterLevel'],
+            'zc_latency_pct': snap['zcLatencyPct'],
+            'zc_blank_pct': snap['zcBlankPct'],
+            'zc_bypass_count': snap['zcBypassCount'],
         })
         state_str = STATE_NAMES[snap['state']] if snap['state'] < len(STATE_NAMES) else f"?{snap['state']}"
         sync_str = "SYN" if snap['zcSynced'] else "---"
+        zc_lat = snap['zcLatencyPct']
+        lat_str = f"ZcLat={'TO' if zc_lat == 255 else f'{zc_lat * 100 // 255}%':>3s}"
         print(f"  t={t:6.1f}s  thr={throttle_pct:5.1f}%  eRPM={snap['eRpm']:7d}  duty={snap['dutyPct']:3d}%  "
               f"Ibus={snap['ibusMa']:6d}mA  Vbus={snap['vbusV']:5.1f}V  {state_str} {sync_str}  "
-              f"Miss={snap['missed']} Frc={snap['forced']} FL={snap['filterLevel']}")
+              f"Miss={snap['missed']} Frc={snap['forced']} FL={snap['filterLevel']} "
+              f"{lat_str} Blk={snap['zcBlankPct']}% Byp={snap['zcBypassCount']}")
         if snap['fault'] > 0:
             fname = FAULT_NAMES[snap['fault']] if snap['fault'] < len(FAULT_NAMES) else f"?{snap['fault']}"
             print(f"  *** FAULT: {fname} ***")

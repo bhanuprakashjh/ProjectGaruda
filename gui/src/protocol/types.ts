@@ -113,6 +113,9 @@ export interface CkSnapshot {
   ilimActive: boolean;
   systemTick: number;
   uptimeSec: number;
+  zcLatencyPct: number;
+  zcBlankPct: number;
+  zcBypassCount: number;
 }
 
 export const CK_ESC_STATES = ['IDLE', 'ARMED', 'ALIGN', 'OL_RAMP', 'CLOSED_LOOP', 'RECOVERY', 'FAULT'] as const;

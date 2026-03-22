@@ -473,6 +473,22 @@ void __attribute__((interrupt, auto_psv)) _T1Interrupt(void)
                     gData.timing.stepPeriodHR =
                         (seedHR <= 65535U) ? (uint16_t)seedHR : 0;
                 }
+                /* Seed HR checkpoint and lastZcTickHR so Layer 2 (50%
+                 * interval rejection in FastPoll) and Layer 3 (50%
+                 * checkpoint rejection in RecordZcTiming) are active
+                 * from the first CL step.
+                 *
+                 * Without this, lastZcTickHR is stale (0 from init),
+                 * causing elapsed to wrap large → Layer 2 bypassed →
+                 * demag tail accepted as false ZC → IIR poisoned.
+                 *
+                 * Seed lastZcTickHR = now - stepPeriodHR so the 50%
+                 * window opens at the right time: first valid ZC at
+                 * ~50% of step period will pass, demag at ~10-30% won't. */
+                gData.timing.checkpointStepPeriodHR =
+                    gData.timing.stepPeriodHR;
+                gData.timing.lastZcTickHR =
+                    HAL_ComTimer_ReadTimer() - gData.timing.stepPeriodHR;
                 /* Set up fast poll for the current step */
                 BEMF_ZC_OnCommutation((volatile GARUDA_DATA_T *)&gData);
                 /* Start SCCP1 fast poll timer */

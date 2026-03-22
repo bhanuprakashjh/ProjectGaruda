@@ -79,6 +79,11 @@
 /* ZC Detection */
 #define ZC_BLANKING_PERCENT 20U          /* % of step period to blank after commutation */
 #define ZC_FILTER_THRESHOLD 3U           /* Net matching reads to confirm ZC (bounce-tolerant) */
+/* Adaptive blanking knobs (used when FEATURE_IC_ZC_ADAPTIVE=1) */
+#define ZC_BLANK_PCT_SLOW   12U         /* Blanking % at low speed (sp >= 200 T1 ticks) */
+#define ZC_BLANK_PCT_FAST   10U         /* Blanking % at high speed (sp < 20 T1 ticks) */
+#define ZC_BLANK_FLOOR_US   25U         /* Absolute minimum blanking (µs) */
+#define ZC_BLANK_CAP_PCT    45U         /* Max blanking as % of step period */
 
 /* Timing Advance — Hurst has high inductance (471µH), moderate advance needed.
  * At max speed (Tp:11), total delay from real ZC = 3 + sp*(30-adv)/60.
@@ -142,6 +147,11 @@
  * ringing), but weaker signal at low speed. Same blanking %. */
 #define ZC_BLANKING_PERCENT 20U          /* % of step period to blank after commutation */
 #define ZC_FILTER_THRESHOLD 3U           /* Net matching reads to confirm ZC */
+/* Adaptive blanking knobs (used when FEATURE_IC_ZC_ADAPTIVE=1) */
+#define ZC_BLANK_PCT_SLOW   12U         /* Blanking % at low speed */
+#define ZC_BLANK_PCT_FAST   10U         /* Blanking % at high speed */
+#define ZC_BLANK_FLOOR_US   25U         /* Abs minimum blanking (µs). A2212 L/R=462µs */
+#define ZC_BLANK_CAP_PCT    45U         /* Max blanking as % of step period */
 
 /* Timing Advance — compensates commutation delay at high eRPM.
  *
@@ -209,6 +219,15 @@
 #define ZC_BLANKING_PERCENT 20U          /* For OL_RAMP ADC backup poll only.
                                           * CL uses 12% + 50% interval rejection. */
 #define ZC_FILTER_THRESHOLD 3U
+/* Adaptive blanking knobs (FEATURE_IC_ZC_ADAPTIVE=1 for 2810) */
+#define ZC_BLANK_PCT_SLOW   12U         /* Blanking % at low speed (same as fixed 12%) */
+#define ZC_BLANK_PCT_FAST    8U         /* Blanking % at high speed. Bench data: 12%+25µs
+                                         * floor = 25% at 100k eRPM → ZcLat=0-2% (over-
+                                         * blanked). 8% + 15µs floor → ~10% at 100k. */
+#define ZC_BLANK_FLOOR_US   15U         /* Reduced from 25µs. At 100k eRPM (Tp=100µs),
+                                         * 25µs = 25% of step — too much. 15µs = 15%. */
+#define ZC_BLANK_CAP_PCT    45U         /* Max blanking as % of step period */
+#define FEATURE_IC_ZC_ADAPTIVE 1        /* Enable adaptive blanking for 2810 */
 
 /* Timing Advance — 2810 has low Ls (25µH), BEMF rises fast.
  * Start advance earlier (3000 eRPM vs 5000) and ramp to 25° (vs 20°).
@@ -273,6 +292,33 @@
  * At 100k eRPM (max practical for 7PP at 25V): Tp = 20000*10/100000 = 2 ticks.
  * Floor of 1 tick allows full speed; the per-rev check catches false cascades. */
 #define ZC_ABSOLUTE_MIN_INTERVAL  1U
+
+/* ── Adaptive Blanking (derived constants + defaults) ──────────────── */
+/* HR floor: ZC_BLANK_FLOOR_US converted to SCCP4 ticks (640ns each).
+ * 1 µs = 25/16 HR ticks (1000ns / 640ns = 1.5625). */
+#define ZC_BLANK_FLOOR_HR   ((uint16_t)((uint32_t)ZC_BLANK_FLOOR_US * 25U / 16U))
+
+/* Defaults if a profile doesn't define these */
+#ifndef ZC_BLANK_PCT_SLOW
+#define ZC_BLANK_PCT_SLOW   12U
+#endif
+#ifndef ZC_BLANK_PCT_FAST
+#define ZC_BLANK_PCT_FAST   10U
+#endif
+#ifndef ZC_BLANK_CAP_PCT
+#define ZC_BLANK_CAP_PCT    45U
+#endif
+
+/* Feature gate for adaptive blanking + bypass guard.
+ * 0 = existing 12% blanking (Hurst/A2212 proven behavior).
+ * 1 = speed-adaptive blanking (for 2810 — reduces blanking at high speed). */
+#ifndef FEATURE_IC_ZC_ADAPTIVE
+#define FEATURE_IC_ZC_ADAPTIVE  0
+#endif
+
+/* Bypass guard bounds (used when FEATURE_IC_ZC_ADAPTIVE=1) */
+#define ZC_BYPASS_LO_PCT    40U     /* Min % of stepPeriodHR for bypass acceptance */
+#define ZC_BYPASS_HI_PCT   160U     /* Max % of stepPeriodHR for bypass acceptance */
 
 /* ── Feature Flags ─────────────────────────────────────────────────── */
 #ifndef FEATURE_IC_ZC

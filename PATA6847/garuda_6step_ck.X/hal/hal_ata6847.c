@@ -85,10 +85,17 @@ void HAL_ATA6847_Init(void)
 
     /* GDUCR1-4 (match reference byte values) */
     HAL_ATA6847_WriteReg(ATA_GDUCR1, (7 << 2) | (1 << 1) | 1);   /* 0x1F: BEMFEN=1 for 6-step ZC */
-    HAL_ATA6847_WriteReg(ATA_GDUCR2, (1 << 7) | (1 << 6) | 5);   /* 0xC5 */
-    HAL_ATA6847_WriteReg(ATA_GDUCR3, (0x03 << 2));                /* 0x0C: edge blanking = max (~4µs)
-                                                                    * Was 0x01 (~1µs) — too short for
-                                                                    * 17-24V switching transients. */
+    /* GDUCR2: Edge blanking time + standby behavior.
+     * EGBLT[3:0] = N → blanking = N × 250ns (0=off, 1=250ns, ..., 15=3750ns).
+     * Was 5 (1250ns). Increased to 12 (3000ns = 3µs) — at high speed the
+     * BEMF comparator sees switching transients during demag that pass
+     * the software deglitch filter. HW blanking suppresses the comparator
+     * output itself, which software blanking cannot do.
+     * HSOFF=1, LSOFF=1: HS/LS off in standby. TSWTO=0b00: 250ns adaptive. */
+    HAL_ATA6847_WriteReg(ATA_GDUCR2, (1 << 7) | (1 << 6) | 8);   /* 0xC8: EGBLT=8 (2µs) */
+    /* GDUCR3: Slew rate + adaptive dead-time. */
+    HAL_ATA6847_WriteReg(ATA_GDUCR3, (0x03 << 2));                /* 0x0C: ADDTHS=0, ADDTLS=0,
+                                                                    * HSSRC=0b11, LSSRC=0b00 */
     HAL_ATA6847_WriteReg(ATA_GDUCR4, (1 << 6) | (1 << 5) | (1 << 4) | 2); /* 0x72 */
 
     /* Interrupt masks */

@@ -128,6 +128,11 @@ typedef struct __attribute__((packed)) {
     /* System (8B) */
     uint32_t systemTick;        /* 1ms counter */
     uint32_t uptimeSec;
+
+    /* ZC diagnostics (4B) */
+    uint8_t  zcLatencyPct;      /* 0-255: ZC position in window, 0xFF=timeout */
+    uint8_t  zcBlankPct;        /* Layer 1 blanking as % of step period */
+    uint16_t zcBypassCount;     /* ZCs accepted via polarity bypass */
 } GSP_CK_SNAPSHOT_T;
 
 /* XC16 doesn't support _Static_assert. Verify size at compile time:

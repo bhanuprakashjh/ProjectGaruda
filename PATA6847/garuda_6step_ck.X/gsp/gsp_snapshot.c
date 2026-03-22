@@ -76,6 +76,15 @@ void GSP_CaptureSnapshot(GSP_CK_SNAPSHOT_T *dst)
     /* System */
     dst->systemTick = src->systemTick;
     dst->uptimeSec  = src->systemTick / 1000;
+
+    /* ZC diagnostics */
+    dst->zcLatencyPct  = src->zcDiag.zcLatencyPct;
+    if (src->timing.stepPeriodHR > 0)
+        dst->zcBlankPct = (uint8_t)((uint32_t)src->zcDiag.lastBlankingHR * 100
+                                     / src->timing.stepPeriodHR);
+    else
+        dst->zcBlankPct = 0;
+    dst->zcBypassCount = src->zcDiag.diagBypassAccepted;
 }
 
 #endif /* FEATURE_GSP */

@@ -64,6 +64,10 @@ void BEMF_ZC_Init(volatile GARUDA_DATA_T *pData)
     HAL_ZcTimer_Stop();
 #endif
 
+    pData->zcDiag.zcLatencyPct = 0;
+    pData->zcDiag.lastBlankingHR = 0;
+    pData->zcDiag.diagBypassAccepted = 0;
+
     pData->timing.stepPeriod = INITIAL_STEP_PERIOD;
     pData->timing.lastCommTick = 0;
     pData->timing.lastZcTick = 0;
@@ -257,29 +261,51 @@ void BEMF_ZC_OnCommutation(volatile GARUDA_DATA_T *pData)
          * independent noise rejection layers that work for ANY motor
          * at ANY speed without per-motor tuning.
          */
-        /* Layer 1 blanking: 12% of step period from commutation.
-         * Handles switching transients (speed-adaptive, motor-independent).
-         * 12% is a hardware property (FET ringing + comparator settling),
-         * not motor-dependent. Combined with Layer 2 (50% interval
-         * rejection from last ZC in FastPoll) for demag protection.
+        /* Layer 1 blanking: percentage of step period from commutation.
+         * Combined with Layer 2 (50% interval rejection in FastPoll).
          *
-         * At Tp:2  (128µs): 12% = 15µs — fast, preserves detection window
-         * At Tp:13 (650µs): 12% = 78µs — enough to reject commutation noise
-         * Floor: 25µs (39 HR ticks) for absolute minimum settling. */
+         * When FEATURE_IC_ZC_ADAPTIVE=0: fixed 12%, floor 25µs (proven).
+         * When FEATURE_IC_ZC_ADAPTIVE=1: speed-adaptive percentage that
+         * DECREASES at high speed to preserve detection window.
+         * Bench data (2810): fixed 12% + 25µs floor = 25% at 100k eRPM
+         * → ZcLat=0-2% (over-blanked). Adaptive reduces to ~10%. */
         uint16_t blankHR;
-        if (pData->timing.stepPeriodHR > 0 &&
-            pData->timing.stepPeriod < HR_MAX_STEP_PERIOD)
         {
-            blankHR = (uint16_t)((uint32_t)pData->timing.stepPeriodHR * 12 / 100);
-        }
-        else
-        {
-            uint16_t blankT1 = (uint16_t)((uint32_t)pData->timing.stepPeriod * 12 / 100);
-            if (blankT1 < 1) blankT1 = 1;
-            blankHR = (uint16_t)((uint32_t)blankT1 * COM_TIMER_T1_NUMER / COM_TIMER_T1_DENOM);
-        }
-        if (blankHR < 39) blankHR = 39;  /* Floor: ~25µs minimum */
+#if FEATURE_IC_ZC_ADAPTIVE
+            /* Speed-adaptive: lerp from SLOW% at sp>=200 to FAST% at sp<20.
+             * Interpolation over sp range [20..200]. */
+            uint16_t sp = pData->timing.stepPeriod;
+            uint16_t blankPct;
+            if (sp >= 200u)
+                blankPct = ZC_BLANK_PCT_SLOW;
+            else if (sp >= 20u)
+                blankPct = ZC_BLANK_PCT_FAST +
+                    (uint16_t)(((uint32_t)(ZC_BLANK_PCT_SLOW - ZC_BLANK_PCT_FAST)
+                                * (sp - 20u)) / 180u);
+            else
+                blankPct = ZC_BLANK_PCT_FAST;
+#else
+            uint16_t blankPct = 12u;  /* Fixed 12% — original behavior */
+#endif
 
+            if (pData->timing.stepPeriodHR > 0 &&
+                pData->timing.stepPeriod < HR_MAX_STEP_PERIOD)
+            {
+                blankHR = (uint16_t)((uint32_t)pData->timing.stepPeriodHR
+                                     * blankPct / 100u);
+            }
+            else
+            {
+                uint16_t blankT1 = (uint16_t)((uint32_t)pData->timing.stepPeriod
+                                               * blankPct / 100u);
+                if (blankT1 < 1u) blankT1 = 1u;
+                blankHR = (uint16_t)((uint32_t)blankT1 * COM_TIMER_T1_NUMER
+                                     / COM_TIMER_T1_DENOM);
+            }
+        }
+        if (blankHR < ZC_BLANK_FLOOR_HR) blankHR = ZC_BLANK_FLOOR_HR;
+
+        pData->zcDiag.lastBlankingHR = blankHR;
         pData->icZc.blankingEndHR = pData->icZc.lastCommHR + blankHR;
         pData->icZc.activeChannel = step->floatingPhase;
         pData->icZc.pollFilter = 0;
@@ -442,6 +468,7 @@ ZC_TIMEOUT_RESULT_T BEMF_ZC_CheckTimeout(volatile GARUDA_DATA_T *pData)
         {
             /* Timeout — no ZC detected within allowed window.
              * Soft penalty: halve goodZcCount instead of zeroing. */
+            pData->zcDiag.zcLatencyPct = 0xFFu;  /* 0xFF = timeout */
             pData->timing.consecutiveMissedSteps++;
             pData->timing.goodZcCount >>= 1;
 
@@ -653,6 +680,27 @@ static void RecordZcTiming(volatile GARUDA_DATA_T *pData,
         pData->timing.lastZcTick = zcTick;
         pData->timing.stepsSinceLastZc = 0;
 
+        /* Diagnostic: ZC position within detection window (0-255).
+         * Window = timeout (forcedCountdown in HR ticks) - blanking.
+         * Latency = ZC HR tick - blanking end HR tick. */
+        {
+            uint32_t timeoutHR = (uint32_t)pData->timing.forcedCountdown *
+                                  COM_TIMER_T1_NUMER / COM_TIMER_T1_DENOM;
+            uint16_t blkHR = pData->zcDiag.lastBlankingHR;
+            if (timeoutHR > blkHR)
+            {
+                uint16_t wnd = (uint16_t)(timeoutHR - blkHR);
+                uint16_t latency = hrTick - pData->icZc.blankingEndHR;
+                uint32_t pct = ((uint32_t)latency * 255u) / wnd;
+                pData->zcDiag.zcLatencyPct =
+                    (pct > 255u) ? 255u : (uint8_t)pct;
+            }
+            else
+            {
+                pData->zcDiag.zcLatencyPct = 0u;
+            }
+        }
+
         pData->timing.prevZcInterval = pData->timing.zcInterval;
         pData->timing.zcInterval = interval;
 
@@ -805,7 +853,11 @@ bool BEMF_ZC_FastPoll(volatile GARUDA_DATA_T *pData)
      * (the deglitch filter still requires consecutive stable reads). */
     uint8_t expected = pData->bemf.cmpExpected;
     if (pData->timing.stepsSinceLastZc >= 2)
+    {
         expected = cmp;  /* Accept whatever state we see after 2 forced steps */
+        if (pData->icZc.pollFilter == 0)
+            pData->zcDiag.diagBypassAccepted++;
+    }
 
     if (cmp == expected)
     {

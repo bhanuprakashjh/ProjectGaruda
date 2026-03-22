@@ -111,6 +111,13 @@ typedef struct {
 } IC_ZC_STATE_T;
 #endif
 
+/* ZC blanking diagnostics — lightweight, always present */
+typedef struct {
+    uint8_t  zcLatencyPct;       /* 0-255: ZC position in detection window (0xFF=timeout) */
+    uint16_t lastBlankingHR;     /* Layer 1 blanking duration applied (HR ticks) */
+    uint16_t diagBypassAccepted; /* ZCs accepted via polarity bypass */
+} ZC_DIAG_T;
+
 /* Fault codes */
 typedef enum {
     FAULT_NONE = 0,
@@ -171,6 +178,7 @@ typedef struct {
 #if FEATURE_IC_ZC
     IC_ZC_STATE_T  icZc;
 #endif
+    ZC_DIAG_T      zcDiag;
 
 } GARUDA_DATA_T;
 
