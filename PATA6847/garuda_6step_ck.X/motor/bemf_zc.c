@@ -70,6 +70,23 @@ void BEMF_ZC_Init(volatile GARUDA_DATA_T *pData)
     pData->zcDiag.diagRisingZcCount = 0;
     pData->zcDiag.diagFallingZcCount = 0;
     pData->zcDiag.diagIntervalReject = 0;
+    pData->zcDiag.actualForcedComm = 0;
+    pData->zcDiag.zcTimeoutCount = 0;
+    pData->zcDiag.diagRisingTimeouts = 0;
+    pData->zcDiag.diagFallingTimeouts = 0;
+    pData->zcDiag.diagRisingRejects = 0;
+    pData->zcDiag.diagFallingRejects = 0;
+
+    pData->zcCtrl.mode = ZC_MODE_ACQUIRE;
+    pData->zcCtrl.acquireGoodCount = 0;
+    pData->zcCtrl.recoverGoodCount = 0;
+    pData->zcCtrl.recoverAttempts = 0;
+    pData->zcCtrl.refIntervalHR = 0;
+    pData->zcCtrl.rawIntervalHR = 0;
+    pData->zcCtrl.refIntervalT1 = 0;
+    pData->zcCtrl.rawIntervalT1 = 0;
+    pData->zcCtrl.originalTimeoutHR = 0;
+    pData->zcCtrl.demagMetric = 0;
 
     pData->timing.stepPeriod = INITIAL_STEP_PERIOD;
     pData->timing.lastCommTick = 0;
@@ -310,6 +327,16 @@ void BEMF_ZC_OnCommutation(volatile GARUDA_DATA_T *pData)
         if (blankHR < ZC_BLANK_FLOOR_HR) blankHR = ZC_BLANK_FLOOR_HR;
 
         pData->zcDiag.lastBlankingHR = blankHR;
+        /* Capture original timeout in HR ticks at commutation time —
+         * used for accurate zcLatencyPct computation in RecordZcTiming.
+         * forcedCountdown is in Timer1 ticks and gets decremented during
+         * the step, so using it later overstates lateness. */
+        {
+            uint32_t toutHR = (uint32_t)pData->timing.forcedCountdown *
+                              COM_TIMER_T1_NUMER / COM_TIMER_T1_DENOM;
+            pData->zcCtrl.originalTimeoutHR =
+                (toutHR <= 65535u) ? (uint16_t)toutHR : 65535u;
+        }
         pData->icZc.blankingEndHR = pData->icZc.lastCommHR + blankHR;
         pData->icZc.activeChannel = step->floatingPhase;
         pData->icZc.pollFilter = 0;
@@ -473,6 +500,13 @@ ZC_TIMEOUT_RESULT_T BEMF_ZC_CheckTimeout(volatile GARUDA_DATA_T *pData)
             /* Timeout — no ZC detected within allowed window.
              * Soft penalty: halve goodZcCount instead of zeroing. */
             pData->zcDiag.zcLatencyPct = 0xFFu;  /* 0xFF = timeout */
+            pData->zcDiag.actualForcedComm++;
+            pData->zcDiag.zcTimeoutCount++;
+            /* Per-polarity timeout tracking */
+            if (commutationTable[pData->currentStep].zcPolarity > 0)
+                pData->zcDiag.diagRisingTimeouts++;
+            else
+                pData->zcDiag.diagFallingTimeouts++;
             pData->timing.consecutiveMissedSteps++;
             pData->timing.goodZcCount >>= 1;
 
@@ -653,6 +687,10 @@ static void RecordZcTiming(volatile GARUDA_DATA_T *pData,
         if (interval < ZC_ABSOLUTE_MIN_INTERVAL)
         {
             pData->icZc.diagFalseZc++;
+            if (commutationTable[pData->currentStep].zcPolarity > 0)
+                pData->zcDiag.diagRisingRejects++;
+            else
+                pData->zcDiag.diagFallingRejects++;
             pData->bemf.zeroCrossDetected = false;
             return;
         }
@@ -665,6 +703,10 @@ static void RecordZcTiming(volatile GARUDA_DATA_T *pData,
             if (hrHalf > 0 && hrElapsed < hrHalf)
             {
                 pData->icZc.diagFalseZc++;
+                if (commutationTable[pData->currentStep].zcPolarity > 0)
+                    pData->zcDiag.diagRisingRejects++;
+                else
+                    pData->zcDiag.diagFallingRejects++;
                 pData->bemf.zeroCrossDetected = false;
                 return;
             }
@@ -675,6 +717,10 @@ static void RecordZcTiming(volatile GARUDA_DATA_T *pData,
         if (interval < minInterval)
         {
             pData->icZc.diagFalseZc++;
+            if (commutationTable[pData->currentStep].zcPolarity > 0)
+                pData->zcDiag.diagRisingRejects++;
+            else
+                pData->zcDiag.diagFallingRejects++;
             pData->bemf.zeroCrossDetected = false;
             return;
         }
@@ -685,11 +731,13 @@ static void RecordZcTiming(volatile GARUDA_DATA_T *pData,
         pData->timing.stepsSinceLastZc = 0;
 
         /* Diagnostic: ZC position within detection window (0-255).
-         * Window = timeout (forcedCountdown in HR ticks) - blanking.
-         * Latency = ZC HR tick - blanking end HR tick. */
+         * Window = originalTimeoutHR (captured at commutation) - blanking.
+         * Latency = ZC HR tick - blanking end HR tick.
+         * Using originalTimeoutHR instead of current forcedCountdown
+         * gives an accurate percentage that doesn't shift as the step
+         * progresses. */
         {
-            uint32_t timeoutHR = (uint32_t)pData->timing.forcedCountdown *
-                                  COM_TIMER_T1_NUMER / COM_TIMER_T1_DENOM;
+            uint16_t timeoutHR = pData->zcCtrl.originalTimeoutHR;
             uint16_t blkHR = pData->zcDiag.lastBlankingHR;
             if (timeoutHR > blkHR)
             {

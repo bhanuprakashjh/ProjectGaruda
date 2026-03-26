@@ -85,6 +85,18 @@ void GSP_CaptureSnapshot(GSP_CK_SNAPSHOT_T *dst)
     else
         dst->zcBlankPct = 0;
     dst->zcBypassCount = src->zcDiag.diagBypassAccepted;
+
+    /* ZC V2 diagnostics */
+    dst->zcMode = (uint8_t)src->zcCtrl.mode;
+    {
+        uint16_t fc = src->zcDiag.actualForcedComm;
+        dst->actualForcedComm = (fc > 255u) ? 255u : (uint8_t)fc;
+    }
+    dst->zcTimeoutCount  = src->zcDiag.zcTimeoutCount;
+    dst->risingZcCount   = src->zcDiag.diagRisingZcCount;
+    dst->fallingZcCount  = src->zcDiag.diagFallingZcCount;
+    dst->risingTimeouts  = src->zcDiag.diagRisingTimeouts;
+    dst->fallingTimeouts = src->zcDiag.diagFallingTimeouts;
 }
 
 #endif /* FEATURE_GSP */

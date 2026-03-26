@@ -129,10 +129,19 @@ typedef struct __attribute__((packed)) {
     uint32_t systemTick;        /* 1ms counter */
     uint32_t uptimeSec;
 
-    /* ZC diagnostics (4B) */
+    /* ZC diagnostics v1 (4B) */
     uint8_t  zcLatencyPct;      /* 0-255: ZC position in window, 0xFF=timeout */
     uint8_t  zcBlankPct;        /* Layer 1 blanking as % of step period */
-    uint16_t zcBypassCount;     /* ZCs accepted via polarity bypass */
+    uint16_t zcBypassCount;     /* ZCs accepted via polarity bypass (legacy) */
+
+    /* ZC V2 diagnostics (12B) */
+    uint8_t  zcMode;            /* ZC_MODE_ACQUIRE/TRACK/RECOVER */
+    uint8_t  actualForcedComm;  /* true timeout-forced commutations (saturated 255) */
+    uint16_t zcTimeoutCount;    /* total ZC timeouts */
+    uint16_t risingZcCount;     /* rising polarity ZC accepts */
+    uint16_t fallingZcCount;    /* falling polarity ZC accepts */
+    uint16_t risingTimeouts;    /* rising polarity timeouts */
+    uint16_t fallingTimeouts;   /* falling polarity timeouts */
 } GSP_CK_SNAPSHOT_T;
 
 /* XC16 doesn't support _Static_assert. Verify size at compile time:

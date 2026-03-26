@@ -114,14 +114,43 @@ typedef struct {
 } IC_ZC_STATE_T;
 #endif
 
-/* ZC blanking diagnostics — lightweight, always present */
+/* ── ZC V2 Mode Enum (Phase 1 scaffolding) ──────────────────────────── */
+typedef enum {
+    ZC_MODE_ACQUIRE = 0,   /* CL entry / resync: conservative, building trust */
+    ZC_MODE_TRACK   = 1,   /* Normal CL: strict polarity, tight timing */
+    ZC_MODE_RECOVER = 2    /* Lost sync: wider timeout, no advance, hold duty */
+} ZC_MODE_T;
+
+/* ── ZC Controller State (Phase 2+ populates, Phase 1 declares) ────── */
 typedef struct {
-    uint8_t  zcLatencyPct;       /* 0-255: ZC position in detection window (0xFF=timeout) */
-    uint16_t lastBlankingHR;     /* Layer 1 blanking duration applied (HR ticks) */
-    uint16_t diagBypassAccepted; /* ZCs accepted via polarity bypass */
-    uint16_t diagRisingZcCount;  /* ZCs accepted on rising polarity steps */
-    uint16_t diagFallingZcCount; /* ZCs accepted on falling polarity steps */
-    uint16_t diagIntervalReject; /* ZC intervals rejected by 75-150% clamp */
+    ZC_MODE_T mode;
+    uint16_t  acquireGoodCount;    /* consecutive good ZCs in ACQUIRE */
+    uint16_t  recoverGoodCount;    /* consecutive good ZCs in RECOVER */
+    uint8_t   recoverAttempts;     /* RECOVER entries since last stable TRACK */
+    uint16_t  refIntervalHR;      /* protected reference interval (Phase 4+) */
+    uint16_t  rawIntervalHR;      /* last accepted raw interval (Phase 4+) */
+    uint16_t  refIntervalT1;      /* Timer1 protected reference (Phase 4+) */
+    uint16_t  rawIntervalT1;      /* Timer1 raw interval (Phase 4+) */
+    uint16_t  originalTimeoutHR;  /* timeout captured at commutation for latency */
+    uint16_t  demagMetric;        /* demag classification metric (Phase 6+) */
+} ZC_CTRL_T;
+
+/* ── ZC Diagnostics ─────────────────────────────────────────────────── */
+typedef struct {
+    /* Existing (keep for backward compat) */
+    uint8_t  zcLatencyPct;          /* 0-255: ZC window position (0xFF=timeout) */
+    uint16_t lastBlankingHR;        /* Layer 1 blanking applied (HR ticks) */
+    uint16_t diagBypassAccepted;    /* ZCs accepted via polarity bypass (legacy) */
+    uint16_t diagRisingZcCount;     /* ZCs accepted on rising polarity steps */
+    uint16_t diagFallingZcCount;    /* ZCs accepted on falling polarity steps */
+    uint16_t diagIntervalReject;    /* ZC intervals rejected by clamp */
+    /* V2 counters */
+    uint16_t actualForcedComm;      /* ONLY incremented on real timeout-forced comm */
+    uint16_t zcTimeoutCount;        /* total ZC timeouts */
+    uint16_t diagRisingTimeouts;    /* timeouts on rising ZC steps */
+    uint16_t diagFallingTimeouts;   /* timeouts on falling ZC steps */
+    uint16_t diagRisingRejects;     /* false ZCs rejected on rising steps */
+    uint16_t diagFallingRejects;    /* false ZCs rejected on falling steps */
 } ZC_DIAG_T;
 
 /* Fault codes */
@@ -185,6 +214,7 @@ typedef struct {
     IC_ZC_STATE_T  icZc;
 #endif
     ZC_DIAG_T      zcDiag;
+    ZC_CTRL_T      zcCtrl;
 
 } GARUDA_DATA_T;
 

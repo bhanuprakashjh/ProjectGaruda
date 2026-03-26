@@ -464,6 +464,9 @@ void __attribute__((interrupt, auto_psv)) _T1Interrupt(void)
                 gData.state = ESC_CLOSED_LOOP;
                 gData.timing.consecutiveMissedSteps = 0;
                 gData.timing.stepsSinceLastZc = 0;
+                gData.zcCtrl.mode = ZC_MODE_ACQUIRE;
+                gData.zcCtrl.acquireGoodCount = 0;
+                gData.zcCtrl.recoverAttempts = 0;
                 gData.timing.bypassSuppressed = true;  /* Suppress bypass
                     * until first confirmed CL ZC. Prevents polarity-
                     * blind acceptance during CL entry when the estimator

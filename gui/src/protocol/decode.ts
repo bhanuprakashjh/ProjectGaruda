@@ -84,11 +84,13 @@ export function decodeSnapshot(data: Uint8Array): GspSnapshot {
   };
 }
 
-/** CK board snapshot: 48-52 bytes, different layout from AK board.
- *  v2 adds 4 bytes of ZC diagnostics (zcLatencyPct, zcBlankPct, zcBypassCount). */
+/** CK board snapshot: 48-64 bytes.
+ *  v2 (52B): zcLatencyPct, zcBlankPct, zcBypassCount.
+ *  v3 (64B): zcMode, actualForcedComm, per-polarity counters. */
 export function decodeCkSnapshot(data: Uint8Array): CkSnapshot {
   const v = new DataView(data.buffer, data.byteOffset, data.byteLength);
   const hasDiag = data.byteLength >= 52;
+  const hasV3 = data.byteLength >= 64;
   return {
     state: v.getUint8(0),
     faultCode: v.getUint8(1),
@@ -119,6 +121,13 @@ export function decodeCkSnapshot(data: Uint8Array): CkSnapshot {
     zcLatencyPct: hasDiag ? v.getUint8(48) : 0,
     zcBlankPct: hasDiag ? v.getUint8(49) : 0,
     zcBypassCount: hasDiag ? v.getUint16(50, true) : 0,
+    zcMode: hasV3 ? v.getUint8(52) : 0,
+    actualForcedComm: hasV3 ? v.getUint8(53) : 0,
+    zcTimeoutCount: hasV3 ? v.getUint16(54, true) : 0,
+    risingZcCount: hasV3 ? v.getUint16(56, true) : 0,
+    fallingZcCount: hasV3 ? v.getUint16(58, true) : 0,
+    risingTimeouts: hasV3 ? v.getUint16(60, true) : 0,
+    fallingTimeouts: hasV3 ? v.getUint16(62, true) : 0,
   };
 }
 

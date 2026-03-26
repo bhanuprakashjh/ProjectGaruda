@@ -116,7 +116,16 @@ export interface CkSnapshot {
   zcLatencyPct: number;
   zcBlankPct: number;
   zcBypassCount: number;
+  zcMode: number;
+  actualForcedComm: number;
+  zcTimeoutCount: number;
+  risingZcCount: number;
+  fallingZcCount: number;
+  risingTimeouts: number;
+  fallingTimeouts: number;
 }
+
+export const CK_ZC_MODES = ['ACQ', 'TRK', 'RCV'] as const;
 
 export const CK_ESC_STATES = ['IDLE', 'ARMED', 'ALIGN', 'OL_RAMP', 'CLOSED_LOOP', 'RECOVERY', 'FAULT'] as const;
 export const CK_FAULT_CODES = ['NONE', 'OVERVOLTAGE', 'UNDERVOLTAGE', 'STALL', 'DESYNC', 'STARTUP_TIMEOUT', 'ATA6847'] as const;

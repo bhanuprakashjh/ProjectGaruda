@@ -112,6 +112,23 @@ def decode_ck_snapshot(data):
         s['zcLatencyPct'] = 0
         s['zcBlankPct'] = 0
         s['zcBypassCount'] = 0
+    # V3 ZC diagnostics
+    if len(data) >= 64:
+        s['zcMode'] = data[52]
+        s['actualForcedComm'] = data[53]
+        s['zcTimeoutCount'] = struct.unpack_from('<H', data, 54)[0]
+        s['risingZcCount'] = struct.unpack_from('<H', data, 56)[0]
+        s['fallingZcCount'] = struct.unpack_from('<H', data, 58)[0]
+        s['risingTimeouts'] = struct.unpack_from('<H', data, 60)[0]
+        s['fallingTimeouts'] = struct.unpack_from('<H', data, 62)[0]
+    else:
+        s['zcMode'] = 0
+        s['actualForcedComm'] = 0
+        s['zcTimeoutCount'] = 0
+        s['risingZcCount'] = 0
+        s['fallingZcCount'] = 0
+        s['risingTimeouts'] = 0
+        s['fallingTimeouts'] = 0
     # Derived
     s['iaMa'] = round(s['iaRaw'] * CK_CURRENT_SCALE)
     s['ibMa'] = round(s['ibRaw'] * CK_CURRENT_SCALE)
@@ -158,8 +175,9 @@ def main():
     print(f"  Control motor with SW1 (start) / SW2 (stop) and pot")
     print(f"  Press Ctrl+C to stop")
     print()
-    print(f"{'Time':>7s} {'State':>8s} {'eRPM':>7s} {'Duty':>4s} {'Pot':>5s} {'Ibus':>7s} {'Vbus':>6s} {'Syn':>3s} {'Miss':>4s} {'Frc':>3s} {'FL':>2s} {'ZcLat':>6s} {'Blk':>4s} {'Byp':>6s}")
-    print("-" * 95)
+    ZC_MODES = ['ACQ', 'TRK', 'RCV']
+    print(f"{'Time':>7s} {'State':>8s} {'ZcM':>3s} {'eRPM':>7s} {'Duty':>4s} {'Pot':>5s} {'Ibus':>7s} {'Vbus':>6s} {'FrcTO':>5s} {'R/F ZC':>10s} {'R/F TO':>10s} {'ZcLat':>6s}")
+    print("-" * 105)
 
     rows = []
     buf = b''
@@ -199,7 +217,7 @@ def main():
                 t = time.time() - t0
 
                 state_str = STATE_NAMES[snap['state']] if snap['state'] < len(STATE_NAMES) else f"?{snap['state']}"
-                sync_str = "SYN" if snap['zcSynced'] else "---"
+                zc_mode_str = ZC_MODES[snap['zcMode']] if snap['zcMode'] < len(ZC_MODES) else f"?{snap['zcMode']}"
                 zc_lat = snap['zcLatencyPct']
                 lat_str = " TO" if zc_lat == 255 else f"{zc_lat * 100 // 255:3d}%"
                 fault_str = ""
@@ -207,7 +225,9 @@ def main():
                     fname = FAULT_NAMES[snap['fault']] if snap['fault'] < len(FAULT_NAMES) else f"?{snap['fault']}"
                     fault_str = f"  *** FAULT: {fname} ***"
 
-                print(f"{t:7.1f} {state_str:>8s} {snap['eRpm']:7d} {snap['dutyPct']:3d}% {snap['potRaw']:5d} {snap['ibusMa']:6d}mA {snap['vbusV']:5.1f}V {sync_str:>3s} {snap['missed']:4d} {snap['forced']:3d} {snap['filterLevel']:2d} {lat_str:>6s} {snap['zcBlankPct']:3d}% {snap['zcBypassCount']:6d}{fault_str}")
+                rfc = f"{snap['risingZcCount']:5d}/{snap['fallingZcCount']:<5d}"
+                rft = f"{snap['risingTimeouts']:5d}/{snap['fallingTimeouts']:<5d}"
+                print(f"{t:7.1f} {state_str:>8s} {zc_mode_str:>3s} {snap['eRpm']:7d} {snap['dutyPct']:3d}% {snap['potRaw']:5d} {snap['ibusMa']:6d}mA {snap['vbusV']:5.1f}V {snap['actualForcedComm']:5d} {rfc:>10s} {rft:>10s} {lat_str:>6s}{fault_str}")
 
                 rows.append({
                     'time': round(t, 3),
@@ -233,6 +253,13 @@ def main():
                     'ic_false': snap['icFalse'],
                     'zc_interval': snap['zcInterval'],
                     'good_zc': snap['goodZc'],
+                    'zc_mode': snap['zcMode'],
+                    'actual_forced_comm': snap['actualForcedComm'],
+                    'zc_timeout_count': snap['zcTimeoutCount'],
+                    'rising_zc_count': snap['risingZcCount'],
+                    'falling_zc_count': snap['fallingZcCount'],
+                    'rising_timeouts': snap['risingTimeouts'],
+                    'falling_timeouts': snap['fallingTimeouts'],
                 })
 
             time.sleep(0.01)
