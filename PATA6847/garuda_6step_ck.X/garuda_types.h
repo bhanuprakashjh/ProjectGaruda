@@ -66,6 +66,9 @@ typedef struct {
     bool     zcSynced;
     bool     deadlineActive;
     bool     hasPrevZc;
+    bool     bypassSuppressed;     /* True from CL entry until first confirmed ZC.
+                                    * Prevents polarity bypass from arming before
+                                    * the estimator has a valid reference. */
 #if FEATURE_IC_ZC
     /* High-resolution timing via SCCP4 free-running timer (640 ns/tick).
      * stepPeriodHR provides 78x better resolution than Timer1-based stepPeriod.
@@ -116,6 +119,9 @@ typedef struct {
     uint8_t  zcLatencyPct;       /* 0-255: ZC position in detection window (0xFF=timeout) */
     uint16_t lastBlankingHR;     /* Layer 1 blanking duration applied (HR ticks) */
     uint16_t diagBypassAccepted; /* ZCs accepted via polarity bypass */
+    uint16_t diagRisingZcCount;  /* ZCs accepted on rising polarity steps */
+    uint16_t diagFallingZcCount; /* ZCs accepted on falling polarity steps */
+    uint16_t diagIntervalReject; /* ZC intervals rejected by 75-150% clamp */
 } ZC_DIAG_T;
 
 /* Fault codes */

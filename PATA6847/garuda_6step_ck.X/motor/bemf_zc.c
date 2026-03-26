@@ -67,6 +67,9 @@ void BEMF_ZC_Init(volatile GARUDA_DATA_T *pData)
     pData->zcDiag.zcLatencyPct = 0;
     pData->zcDiag.lastBlankingHR = 0;
     pData->zcDiag.diagBypassAccepted = 0;
+    pData->zcDiag.diagRisingZcCount = 0;
+    pData->zcDiag.diagFallingZcCount = 0;
+    pData->zcDiag.diagIntervalReject = 0;
 
     pData->timing.stepPeriod = INITIAL_STEP_PERIOD;
     pData->timing.lastCommTick = 0;
@@ -87,6 +90,7 @@ void BEMF_ZC_Init(volatile GARUDA_DATA_T *pData)
     pData->timing.zcSynced = false;
     pData->timing.deadlineActive = false;
     pData->timing.hasPrevZc = false;
+    pData->timing.bypassSuppressed = false;
 
 #if FEATURE_IC_ZC
     pData->timing.lastZcTickHR = 0;
@@ -711,6 +715,8 @@ static void RecordZcTiming(volatile GARUDA_DATA_T *pData,
 
         if (interval <= maxInterval)
         {
+            uint16_t oldPeriod = pData->timing.stepPeriod;
+
             if (interval > 0 && interval < 10000 &&
                 pData->timing.prevZcInterval > 0 &&
                 pData->timing.prevZcInterval <= maxInterval)
@@ -725,11 +731,24 @@ static void RecordZcTiming(volatile GARUDA_DATA_T *pData,
                 pData->timing.stepPeriod =
                     (pData->timing.stepPeriod * 3 + interval) >> 2;
             }
+
+            /* IIR shrink clamp — AM32-inspired max 25% decrease per update.
+             * Prevents a single false short ZC from halving the period.
+             * The 3:1 IIR alone allows ~25% change, but when the measured
+             * interval is ~50% of real (false ZC via bypass), the IIR
+             * output drops ~12.5% per step. Over several steps this
+             * compounds to the 300→140 collapse seen in bench data.
+             * Clamping at 75% of old value limits the damage.
+             * Growth (deceleration) is unclamped — motor must be able
+             * to slow down freely for safety. */
+            uint16_t minPeriod = oldPeriod - (oldPeriod >> 2);  /* 75% */
+            if (minPeriod < MIN_CL_STEP_PERIOD)
+                minPeriod = MIN_CL_STEP_PERIOD;
+            if (pData->timing.stepPeriod < minPeriod)
+                pData->timing.stepPeriod = minPeriod;
         }
 
-        /* Floor: prevent step period from going below physical limit.
-         * If IIR tracks below MIN_CL_STEP_PERIOD, it's accepting false
-         * ZCs at a rate the motor can't physically achieve. */
+        /* Floor: prevent step period from going below physical limit. */
         if (pData->timing.stepPeriod < MIN_CL_STEP_PERIOD)
             pData->timing.stepPeriod = MIN_CL_STEP_PERIOD;
 
@@ -745,11 +764,13 @@ static void RecordZcTiming(volatile GARUDA_DATA_T *pData,
             pData->timing.zcIntervalHR = intervalHR;
 
             uint16_t maxHR = pData->timing.stepPeriodHR +
-                             (pData->timing.stepPeriodHR >> 1);
+                             (pData->timing.stepPeriodHR >> 1);  /* 1.5× */
             if (maxHR < 100) maxHR = 100;
 
             if (intervalHR <= maxHR)
             {
+                uint16_t oldHR = pData->timing.stepPeriodHR;
+
                 if (intervalHR > 0 && pData->timing.prevZcIntervalHR > 0 &&
                     pData->timing.prevZcIntervalHR <= maxHR)
                 {
@@ -763,6 +784,12 @@ static void RecordZcTiming(volatile GARUDA_DATA_T *pData,
                     pData->timing.stepPeriodHR = (uint16_t)(
                         ((uint32_t)pData->timing.stepPeriodHR * 3 + intervalHR) >> 2);
                 }
+
+                /* HR IIR shrink clamp — max 25% decrease per update */
+                uint16_t minPeriodHR = oldHR - (oldHR >> 2);
+                if (minPeriodHR < 10) minPeriodHR = 10;
+                if (pData->timing.stepPeriodHR < minPeriodHR)
+                    pData->timing.stepPeriodHR = minPeriodHR;
             }
         }
         else
@@ -784,8 +811,17 @@ static void RecordZcTiming(volatile GARUDA_DATA_T *pData,
     pData->timing.goodZcCount++;
     pData->timing.consecutiveMissedSteps = 0;
 
+    /* Per-polarity diagnostic counters */
+    if (commutationTable[pData->currentStep].zcPolarity > 0)
+        pData->zcDiag.diagRisingZcCount++;
+    else
+        pData->zcDiag.diagFallingZcCount++;
+
     if (pData->timing.goodZcCount >= ZC_SYNC_THRESHOLD)
         pData->timing.zcSynced = true;
+
+    /* First confirmed CL ZC clears bypass suppression */
+    pData->timing.bypassSuppressed = false;
 }
 
 /**

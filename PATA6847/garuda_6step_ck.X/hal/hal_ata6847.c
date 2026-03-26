@@ -93,9 +93,13 @@ void HAL_ATA6847_Init(void)
      * output itself, which software blanking cannot do.
      * HSOFF=1, LSOFF=1: HS/LS off in standby. TSWTO=0b00: 250ns adaptive. */
     HAL_ATA6847_WriteReg(ATA_GDUCR2, (1 << 7) | (1 << 6) | 8);   /* 0xC8: EGBLT=8 (2µs) */
-    /* GDUCR3: Slew rate + adaptive dead-time. */
-    HAL_ATA6847_WriteReg(ATA_GDUCR3, (0x03 << 2));                /* 0x0C: ADDTHS=0, ADDTLS=0,
-                                                                    * HSSRC=0b11, LSSRC=0b00 */
+    /* GDUCR3: Slew rate + adaptive dead-time.
+     * HSSRC=0b11 (12.5%), LSSRC=0b00 (full speed), no adaptive dead time.
+     * Asymmetric by design — slow HS reduces ringing. Tested alternatives:
+     *   Both 50%: desync at 28k eRPM (slower LS = more noise)
+     *   Both full: desync at 45k eRPM (fast HS ringing)
+     *   Adaptive dead time: unreliable CL entry (3 attempts needed) */
+    HAL_ATA6847_WriteReg(ATA_GDUCR3, (0x03 << 2));                /* 0x0C */
     HAL_ATA6847_WriteReg(ATA_GDUCR4, (1 << 6) | (1 << 5) | (1 << 4) | 2); /* 0x72 */
 
     /* Interrupt masks */

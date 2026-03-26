@@ -59,8 +59,12 @@ static volatile uint8_t uvDebounce = 0;
  * UP: 25 counts/tick → full range in ~20ms
  * DOWN: 10 counts/tick → ramp-to-idle in ~17ms
  *   This prevents ZC desync during CL entry and pot-down sweeps. */
-#define DUTY_SLEW_UP    25U
-#define DUTY_SLEW_DOWN  10U
+#define DUTY_SLEW_UP     3U   /* ~200ms full range (was 25 = 20ms).
+                              * Slow enough for stepPeriod IIR to track.
+                              * Fast pot sweep at 25 caused acceleration
+                              * faster than ZC Layer 2 could follow →
+                              * real ZCs rejected as "too early" → desync. */
+#define DUTY_SLEW_DOWN   5U   /* ~100ms ramp down (was 10 = 50ms) */
 static volatile uint32_t slewedDuty = 0;
 
 /* CL settle: hold ramp duty for N ticks after CL entry before switching
@@ -459,6 +463,11 @@ void __attribute__((interrupt, auto_psv)) _T1Interrupt(void)
             {
                 gData.state = ESC_CLOSED_LOOP;
                 gData.timing.consecutiveMissedSteps = 0;
+                gData.timing.stepsSinceLastZc = 0;
+                gData.timing.bypassSuppressed = true;  /* Suppress bypass
+                    * until first confirmed CL ZC. Prevents polarity-
+                    * blind acceptance during CL entry when the estimator
+                    * has no valid reference yet. */
                 slewedDuty = gData.duty;  /* Seed slew from ramp exit duty */
                 clSettleCounter = CL_SETTLE_TICKS;
 
@@ -583,7 +592,47 @@ void __attribute__((interrupt, auto_psv)) _T1Interrupt(void)
                     EnterFaultISR(FAULT_DESYNC);
                 }
             }
-            else if (tout == ZC_TIMEOUT_FORCE_STEP)
+
+            /* Bypass-count desync detection. In healthy operation, bypass
+             * fires 0-1 times (CL entry only). During a false-ZC cascade,
+             * bypass fires hundreds of times per second as wrong-polarity
+             * ZCs are accepted. Detect via rate: if bypass count grows
+             * by >20 over a 10ms window, trigger recovery.
+             *
+             * Don't use DESYNC_RESTART_MAX — that causes permanent fault
+             * after 3 attempts. Instead always recover and let the user
+             * stop the motor via button if it keeps failing. */
+            {
+                static uint16_t prevBypassCount = 0;
+                static uint16_t bypassCheckDiv = 0;
+                if (++bypassCheckDiv >= 200)  /* Check every 10ms (200 × 50µs) */
+                {
+                    bypassCheckDiv = 0;
+                    uint16_t bypassDelta = gData.zcDiag.diagBypassAccepted
+                                         - prevBypassCount;
+                    prevBypassCount = gData.zcDiag.diagBypassAccepted;
+                    if (bypassDelta > 20)
+                    {
+                        EnterRecovery();
+                    }
+                }
+            }
+
+            /* Reset desync restart counter when stable in CL for 2 seconds */
+            if (gData.timing.zcSynced && gData.systemTick > 2000 &&
+                gData.desyncRestartAttempts > 0)
+            {
+                static uint32_t stableStartTick = 0;
+                if (stableStartTick == 0)
+                    stableStartTick = gData.systemTick;
+                else if (gData.systemTick - stableStartTick > 2000)
+                {
+                    gData.desyncRestartAttempts = 0;
+                    stableStartTick = 0;
+                }
+            }
+
+            if (tout == ZC_TIMEOUT_FORCE_STEP)
             {
                 /* Force a commutation step.
                  * Gate out higher-priority ISRs (SCCP1/SCCP4) during the
