@@ -41,6 +41,32 @@ static inline uint8_t ReadBEMFComparator(uint8_t phase)
     }
 }
 
+/* ── ZC V2 Mode Helpers (Phase 2) ─────────────────────────────────── */
+
+static void ZcEnterAcquire(volatile GARUDA_DATA_T *pData)
+{
+    pData->zcCtrl.mode = ZC_MODE_ACQUIRE;
+    pData->zcCtrl.acquireGoodCount = 0;
+    /* Phase 2: no behavior change — same detector, filter, advance, timeout.
+     * Phase 3+ will add mode-specific parameters here. */
+}
+
+static void ZcEnterTrack(volatile GARUDA_DATA_T *pData)
+{
+    pData->zcCtrl.mode = ZC_MODE_TRACK;
+    pData->zcCtrl.recoverAttempts = 0;  /* reset on successful lock */
+    /* Phase 2: no behavior change. Phase 3 removes bypass in TRACK. */
+}
+
+static void ZcEnterRecover(volatile GARUDA_DATA_T *pData)
+{
+    pData->zcCtrl.mode = ZC_MODE_RECOVER;
+    pData->zcCtrl.recoverGoodCount = 0;
+    if (pData->zcCtrl.recoverAttempts < 255u)
+        pData->zcCtrl.recoverAttempts++;
+    /* Phase 2: no behavior change. Phase 7 adds duty hold, wider timeout. */
+}
+
 void BEMF_ZC_Init(volatile GARUDA_DATA_T *pData)
 {
     pData->bemf.zeroCrossDetected = false;
@@ -205,6 +231,9 @@ void BEMF_ZC_OnCommutation(volatile GARUDA_DATA_T *pData)
             pData->timing.hasPrevZcHR = false;
             pData->timing.checkpointStepPeriodHR = 0;
 #endif
+            /* ZC V2: enter RECOVER on per-revolution desync detection */
+            if (pData->zcCtrl.mode == ZC_MODE_TRACK)
+                ZcEnterRecover(pData);
         }
     }
 
@@ -515,6 +544,15 @@ ZC_TIMEOUT_RESULT_T BEMF_ZC_CheckTimeout(volatile GARUDA_DATA_T *pData)
 
             if (pData->timing.consecutiveMissedSteps >= ZC_MISS_LIMIT)
                 return ZC_TIMEOUT_DESYNC;
+
+            /* ZC V2: mode transition on timeout.
+             * Phase 2: observation only — same behavior, just tracks mode.
+             * Phase 7 will add mode-specific timeout behavior. */
+            if (pData->zcCtrl.mode == ZC_MODE_TRACK)
+                ZcEnterRecover(pData);
+            /* ACQUIRE/RECOVER: reset good-ZC counters on timeout */
+            pData->zcCtrl.acquireGoodCount = 0;
+            pData->zcCtrl.recoverGoodCount = 0;
 
             /* Decelerate forced commutation when desynced.
              * Without this, forced steps keep firing at the stale high-speed
@@ -870,6 +908,26 @@ static void RecordZcTiming(volatile GARUDA_DATA_T *pData,
 
     /* First confirmed CL ZC clears bypass suppression */
     pData->timing.bypassSuppressed = false;
+
+    /* ZC V2 mode transitions on good ZC */
+    switch (pData->zcCtrl.mode)
+    {
+        case ZC_MODE_ACQUIRE:
+            pData->zcCtrl.acquireGoodCount++;
+            if (pData->zcCtrl.acquireGoodCount >= ZC_ACQUIRE_GOOD_ZC)
+                ZcEnterTrack(pData);
+            break;
+
+        case ZC_MODE_RECOVER:
+            pData->zcCtrl.recoverGoodCount++;
+            if (pData->zcCtrl.recoverGoodCount >= ZC_RECOVER_GOOD_ZC)
+                ZcEnterAcquire(pData);
+            break;
+
+        case ZC_MODE_TRACK:
+            /* Normal running — stay in TRACK */
+            break;
+    }
 }
 
 /**

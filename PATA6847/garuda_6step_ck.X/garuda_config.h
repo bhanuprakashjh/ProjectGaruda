@@ -293,6 +293,11 @@
  * Floor of 1 tick allows full speed; the per-rev check catches false cascades. */
 #define ZC_ABSOLUTE_MIN_INTERVAL  1U
 
+/* ── ZC V2 Mode Thresholds ────────────────────────────────────────── */
+#define ZC_ACQUIRE_GOOD_ZC       20U   /* consecutive good ZCs to exit ACQUIRE → TRACK */
+#define ZC_RECOVER_GOOD_ZC       10U   /* consecutive good ZCs to exit RECOVER → ACQUIRE */
+#define ZC_RECOVER_MAX_ATTEMPTS   5U   /* RECOVER entries before top-level desync fault */
+
 /* ── Adaptive Blanking (derived constants + defaults) ──────────────── */
 /* HR floor: ZC_BLANK_FLOOR_US converted to SCCP4 ticks (640ns each).
  * 1 µs = 25/16 HR ticks (1000ns / 640ns = 1.5625). */
