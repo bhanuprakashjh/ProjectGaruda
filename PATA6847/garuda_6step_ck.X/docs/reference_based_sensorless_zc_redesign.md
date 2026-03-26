@@ -745,3 +745,300 @@ If this redesign is implemented incrementally, the first slice should be:
 
 That provides most of the architectural benefit before introducing the full
 windowed BLHeli-style scan model.
+
+## File-By-File Implementation Checklist
+
+This checklist is the concrete execution plan for the redesign. The order is
+intentional: keep the firmware compiling and bench-testable after each phase.
+
+### `garuda_types.h`
+
+Phase 1:
+
+- add `ZC_MODE_T` with `ZC_ACQUIRE`, `ZC_TRACK`, `ZC_RECOVER`
+- keep the existing `TIMING_STATE_T`, `IC_ZC_STATE_T`, and `ZC_DIAG_T`
+  structures, but extend them rather than replacing them
+- add a true forced-comm counter (`actualForcedCommCount`)
+- add a true timeout counter (`zcTimeoutCount`)
+- add per-polarity diagnostic counters:
+  - accepted rising
+  - accepted falling
+  - timeout rising
+  - timeout falling
+  - reject rising
+  - reject falling
+
+Phase 2:
+
+- add `zcMode` to runtime state
+- add `modeGoodCount` / `modeAnomalyCount` or equivalent mode-transition
+  counters
+
+Phase 3:
+
+- extend `IC_ZC_PHASE_T` from:
+  - `IC_ZC_BLANKING`
+  - `IC_ZC_ARMED`
+  - `IC_ZC_DONE`
+- to:
+  - `IC_ZC_SWITCH_BLANK`
+  - `IC_ZC_SCAN_DELAY`
+  - `IC_ZC_SCANNING`
+  - `IC_ZC_DONE`
+- add explicit scan-window timestamps:
+  - `scanStartHR`
+  - `scanTimeoutHR`
+  - `originalTimeoutHR`
+
+Phase 4:
+
+- add protected estimator state:
+  - `rawIntervalT1`
+  - `rawIntervalHR`
+  - `refIntervalT1`
+  - `refIntervalHR`
+  - `checkpointIntervalT1`
+  - `checkpointIntervalHR`
+
+Phase 5:
+
+- add `demagMetric`
+- add `demagEventCount`
+
+Important:
+
+- keep `stepPeriod`, `stepPeriodHR`, `stepsSinceLastZc`, and
+  `bypassSuppressed` until the new detector is proven
+- do not delete legacy fields until telemetry and scheduling have moved to the
+  new state
+
+### `motor/bemf_zc.h`
+
+Phase 2:
+
+- add a closed-loop entry helper prototype, preferably
+  `BEMF_ZC_OnClosedLoopEntry()`
+- add a reset/recover entry helper prototype if it keeps `garuda_service.c`
+  simpler
+
+Notes:
+
+- if the mode helpers remain `static` in `bemf_zc.c`, this header may only need
+  the single CL-entry API
+- avoid exporting many small helpers; keep the mode machine internal to the ZC
+  module
+
+### `motor/bemf_zc.c`
+
+Phase 1:
+
+- update `BEMF_ZC_Init()` to initialize:
+  - `zcMode`
+  - true forced-comm counters
+  - per-polarity counters
+  - any new raw/reference interval state
+- keep existing blanking and scheduling behavior unchanged in this phase
+
+Phase 2:
+
+- add internal helpers:
+  - `ZcEnterAcquire()`
+  - `ZcEnterTrack()`
+  - `ZcEnterRecover()`
+- wire OL->CL entry into `ZC_ACQUIRE`
+- remove any normal-running dependence on permissive bypass
+- in `BEMF_ZC_FastPoll()`, keep strict polarity whenever `zcMode` is
+  `ZC_TRACK`
+
+Phase 3:
+
+- refactor `BEMF_ZC_OnCommutation()` to compute:
+  - `t_switch_blank_hr`
+  - `t_scan_delay_hr`
+  - `t_scan_timeout_hr`
+  - mode-specific filter level
+- keep the current adaptive blanking logic only as a temporary implementation
+  of `t_scan_delay_hr`
+- change `BEMF_ZC_FastPoll()` to operate on:
+  - switch blank
+  - scan delay
+  - scan window open
+  - scan timeout
+- stop treating "blanking end" as the entire detector model
+
+Phase 4:
+
+- split `RecordZcTiming()` into three concerns:
+  - candidate validation
+  - raw interval capture
+  - protected reference-interval update
+- clamp shrink in `ZC_TRACK` to 25%
+- clamp growth in `ZC_TRACK` to a larger bound
+- allow looser growth only in `ZC_RECOVER`
+- update checkpoints only after a good streak
+- change `BEMF_ZC_ScheduleCommutation()` to schedule from `refInterval*`,
+  not the minimum of recent intervals
+
+Phase 5:
+
+- add demag classification in the scan path
+- if the comparator is unstable or wrong-polarity in the early scan region,
+  increment `demagMetric` instead of trying to reinterpret it as a ZC
+- use demag events to hold the detector in `ZC_ACQUIRE` or force
+  `ZC_RECOVER`
+
+Phase 6:
+
+- rewrite `BEMF_ZC_CheckTimeout()` to:
+  - increment `actualForcedCommCount`
+  - increment `zcTimeoutCount`
+  - transition mode on timeout
+  - apply recover-mode period expansion
+  - escalate to desync only after repeated recovery failure
+
+Keep in mind:
+
+- `BEMF_ZC_Poll()` can stay as the OL-ramp and backup path initially
+- only align `BEMF_ZC_Poll()` with the new mode semantics after the fast path
+  is stable
+
+### `garuda_service.c`
+
+Phase 2:
+
+- replace the direct CL-entry detector setup with one ZC-module entry point
+- on OL->CL transition:
+  - keep the current HR seeding
+  - keep `stepsSinceLastZc = 0`
+  - keep bypass suppression through the first trusted CL ZC
+  - enter `ZC_ACQUIRE`, not `ZC_TRACK`
+
+Phase 3:
+
+- stop manually manipulating detector-recovery details in the service layer
+- let `bemf_zc.c` own:
+  - detector mode transitions
+  - timeout recovery state
+  - trusted-ZC promotion into track mode
+
+Phase 6:
+
+- when top-level desync/restart happens, call back into the ZC module so the
+  detector state resets coherently
+
+Phase 7:
+
+- add the speed governor here, not in the ZC module
+- map input to target eRPM
+- rate-limit duty or apply PI against target eRPM
+- keep this change separate from the detector rewrite
+
+### `garuda_config.h`
+
+Phase 1:
+
+- keep the current 2810 adaptive blanking knobs in place
+- do not delete working knobs before the explicit scan-window model is proven
+
+Phase 2:
+
+- add mode-transition knobs:
+  - `ZC_ACQUIRE_GOOD_ZC`
+  - `ZC_RECOVER_GOOD_ZC`
+  - `ZC_RECOVER_FAIL_LIMIT`
+
+Phase 3:
+
+- add explicit scan-window knobs:
+  - `ZC_SWITCH_BLANK_US`
+  - `ZC_SCAN_DELAY_TRACK_PCT`
+  - `ZC_SCAN_DELAY_ACQUIRE_PCT`
+  - `ZC_SCAN_TIMEOUT_TRACK_MULT`
+  - `ZC_SCAN_TIMEOUT_ACQUIRE_MULT`
+  - `ZC_SCAN_TIMEOUT_RECOVER_MULT`
+
+Phase 4:
+
+- add estimator protection knobs:
+  - `ZC_REF_SHRINK_LIMIT_PCT`
+  - `ZC_REF_GROW_LIMIT_TRACK_PCT`
+  - `ZC_REF_GROW_LIMIT_RECOVER_PCT`
+
+Phase 5:
+
+- add demag knobs:
+  - `ZC_DEMAG_INC`
+  - `ZC_DEMAG_DEC`
+  - `ZC_DEMAG_RECOVER_THRESH`
+
+Phase 7:
+
+- add speed-governor knobs:
+  - `CL_TARGET_ERPM_ENABLE`
+  - `CL_ERPM_ACCEL_LIMIT`
+  - `CL_TP3_DUTY_CAP`
+
+Configuration rule:
+
+- keep profile-specific tuning in config
+- keep detector code free of profile-specific `#if MOTOR_PROFILE` branches
+
+### `gsp/gsp_commands.h`
+
+Phase 1:
+
+- append new fields rather than reordering existing ones
+- keep the old `forcedSteps` field temporarily, but mark it as legacy
+- add:
+  - `zcMode`
+  - `actualForcedCommCount`
+  - `zcTimeoutCount`
+  - `demagMetric`
+  - `refIntervalHR`
+  - `rawIntervalHR`
+
+Phase 2:
+
+- if packet size changes, update the size comment and all consumers together
+- if compatibility is a concern, keep legacy fields until the GUI and scripts
+  are updated
+
+### `gsp/gsp_snapshot.c`
+
+Phase 1:
+
+- populate the new telemetry fields from the new runtime state
+- keep populating legacy `forcedSteps` until all tooling migrates
+- stop using `stepsSinceLastZc` as the only operator-facing forced-comm signal
+
+Phase 3:
+
+- compute `zcLatencyPct` from the original scan window
+- do not derive it from the decremented `forcedCountdown`
+
+### External Telemetry Consumers
+
+If the snapshot layout changes, update all consumers in the same phase:
+
+- GUI decode/types
+- Python capture scripts
+- any CSV tooling or offline analysis scripts
+
+Rules:
+
+- append fields, do not reorder
+- keep legacy names until every consumer is updated
+- bump any expected payload-length checks together
+
+## Recommended Commit Sequence
+
+1. `garuda_types.h` + `gsp/*` telemetry semantics only
+2. `bemf_zc.c` / `bemf_zc.h` mode shell, no timing rewrite yet
+3. `garuda_service.c` CL-entry handoff into `ZC_ACQUIRE`
+4. `bemf_zc.c` remove permissive bypass from `ZC_TRACK`
+5. `bemf_zc.c` protected estimator + scheduler from `refInterval`
+6. `bemf_zc.c` explicit scan-window timing
+7. `bemf_zc.c` demag metric + recover-mode timeout behavior
+8. `garuda_service.c` speed governor
+
+Each commit should bench-test cleanly before the next one.
