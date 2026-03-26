@@ -255,24 +255,23 @@ void BEMF_ZC_OnCommutation(volatile GARUDA_DATA_T *pData)
     HAL_ComTimer_Cancel();
 #endif
 
-    /* Set forced commutation timeout: ZC_TIMEOUT_MULT * stepPeriod.
-     * When stepPeriod is clamped at MIN_CL_STEP_PERIOD (Timer1 quantization
-     * limit), use stepPeriodHR to derive a more accurate timeout.
-     * HR ticks → Timer1 ticks: t1 = hrTicks × 8 / 625 (640ns → 50µs). */
+    /* Set forced commutation timeout: ZC_TIMEOUT_MULT * period.
+     * Phase 4: use refIntervalHR when available for accurate timeout
+     * at high speed where Timer1 quantization (50µs) is too coarse.
+     * At Tp=3 Timer1, HR gives 234 ticks vs Timer1's 3 — 78× better. */
     {
         uint16_t timeoutT1;
 #if FEATURE_IC_ZC
         if (pData->state == ESC_CLOSED_LOOP &&
-            pData->timing.stepPeriodHR > 0 &&
-            pData->timing.hasPrevZcHR)
+            pData->zcCtrl.refIntervalHR > 0)
         {
-            /* Convert HR step period to Timer1 ticks, then apply multiplier.
-             * This gives accurate timeout even when Tp is clamped. */
-            uint32_t spT1 = ((uint32_t)pData->timing.stepPeriodHR *
+            /* Use protected refIntervalHR for timeout.
+             * Convert to Timer1 for the countdown mechanism. */
+            uint32_t refT1 = ((uint32_t)pData->zcCtrl.refIntervalHR *
                              COM_TIMER_T1_DENOM + COM_TIMER_T1_NUMER / 2) /
                             COM_TIMER_T1_NUMER;
-            if (spT1 < 1) spT1 = 1;
-            uint32_t tout = spT1 * ZC_TIMEOUT_MULT;
+            if (refT1 < 1) refT1 = 1;
+            uint32_t tout = refT1 * ZC_TIMEOUT_MULT;
             timeoutT1 = (tout > 65535U) ? 65535U : (uint16_t)tout;
         }
         else
@@ -591,16 +590,11 @@ void BEMF_ZC_ScheduleCommutation(volatile GARUDA_DATA_T *pData)
     if (pData->timing.deadlineActive)
         return;
 
-    uint16_t sp = pData->timing.stepPeriod;
-
-    /* Acceleration tracking: use minimum of IIR and latest 2-step average. */
-    if (pData->timing.zcInterval > 0 && pData->timing.prevZcInterval > 0)
-    {
-        uint16_t avgInterval =
-            (pData->timing.zcInterval + pData->timing.prevZcInterval) / 2;
-        if (avgInterval > 0 && avgInterval < sp)
-            sp = avgInterval;
-    }
+    /* Phase 4: schedule from protected refInterval, not min-of-recent.
+     * The old min(IIR, 2-step-avg) shortcut amplified false short
+     * intervals — one bad ZC immediately tightened the next schedule.
+     * refIntervalHR has independent shrink/growth clamps. */
+    uint16_t sp = pData->timing.stepPeriod;  /* Timer1 fallback */
 
     /* Compute eRPM for timing advance lookup.
      * Prefer HR when available (78x better resolution than Timer1). */
@@ -645,17 +639,12 @@ void BEMF_ZC_ScheduleCommutation(volatile GARUDA_DATA_T *pData)
             pData->timing.stepPeriodHR > 0 &&
             pData->timing.stepPeriod < HR_MAX_STEP_PERIOD)
         {
-            /* True HR path: delay computed directly in SCCP4 ticks. */
-            uint16_t spHR = pData->timing.stepPeriodHR;
-            if (pData->timing.zcIntervalHR > 0 &&
-                pData->timing.prevZcIntervalHR > 0)
-            {
-                uint16_t avgHR =
-                    (pData->timing.zcIntervalHR +
-                     pData->timing.prevZcIntervalHR) / 2;
-                if (avgHR > 0 && avgHR < spHR)
-                    spHR = avgHR;
-            }
+            /* Phase 4: schedule from protected refIntervalHR.
+             * No min-of-recent shortcut — acceleration comes from
+             * speed governor, not from aggressive scheduling. */
+            uint16_t spHR = (pData->zcCtrl.refIntervalHR > 0)
+                          ? pData->zcCtrl.refIntervalHR
+                          : pData->timing.stepPeriodHR;
 
             uint16_t delayHR = (uint16_t)(
                 (uint32_t)spHR * (30 - advDeg) / 60);
@@ -877,6 +866,31 @@ static void RecordZcTiming(volatile GARUDA_DATA_T *pData,
                 if (pData->timing.stepPeriodHR < minPeriodHR)
                     pData->timing.stepPeriodHR = minPeriodHR;
             }
+
+            /* Phase 4: Update protected reference interval.
+             * refIntervalHR is what the scheduler uses. It tracks
+             * stepPeriodHR but with independent shrink/growth clamps.
+             * This prevents one bad interval from tightening the
+             * schedule even if the IIR moves slightly. */
+            {
+                uint16_t ref = pData->zcCtrl.refIntervalHR;
+                uint16_t raw = pData->timing.stepPeriodHR;
+                if (ref == 0) {
+                    ref = raw;  /* first ZC — seed directly */
+                } else {
+                    /* Shrink clamp: max 25% per update */
+                    uint16_t minRef = ref - (ref >> 2);
+                    if (minRef < 10) minRef = 10;
+                    if (raw < minRef) raw = minRef;
+                    /* Growth clamp: max 50% per update */
+                    uint16_t maxRef = ref + (ref >> 1);
+                    if (raw > maxRef) raw = maxRef;
+                    /* IIR */
+                    ref = (uint16_t)(((uint32_t)ref * 3 + raw) >> 2);
+                }
+                pData->zcCtrl.refIntervalHR = ref;
+                pData->zcCtrl.rawIntervalHR = pData->timing.zcIntervalHR;
+            }
         }
         else
         {
@@ -980,7 +994,12 @@ bool BEMF_ZC_FastPoll(volatile GARUDA_DATA_T *pData)
      * 50% is noise, demag, or switching artifacts. */
     {
         uint16_t elapsed = HAL_ComTimer_ReadTimer() - pData->timing.lastZcTickHR;
-        uint16_t halfInterval = pData->timing.stepPeriodHR >> 1;
+        /* Phase 4: use protected refIntervalHR for half-interval rejection.
+         * The raw stepPeriodHR can be corrupted by aggressive IIR;
+         * refIntervalHR has independent shrink/growth clamps. */
+        uint16_t ref = pData->zcCtrl.refIntervalHR;
+        if (ref == 0) ref = pData->timing.stepPeriodHR;  /* fallback */
+        uint16_t halfInterval = ref >> 1;
         if (halfInterval > 0 && (int16_t)(elapsed - halfInterval) < 0)
             return false;  /* Too early — reject (demag/noise) */
     }
