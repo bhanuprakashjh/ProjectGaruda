@@ -988,18 +988,15 @@ bool BEMF_ZC_FastPoll(volatile GARUDA_DATA_T *pData)
     /* Read comparator for the floating phase */
     uint8_t cmp = ReadBEMFComparator(pData->icZc.activeChannel);
 
-    /* Match expected comparator polarity for ZC confirmation.
-     * After 2+ forced steps (Frc>=2), the rotor position may have
-     * drifted from the commutation table, making cmpExpected wrong.
-     * In this case, accept EITHER comparator state as a valid ZC
-     * (the deglitch filter still requires consecutive stable reads). */
+    /* ZC V2 Phase 3: strict polarity in all modes.
+     * Never accept wrong-polarity comparator state.
+     * AM32/ESCape32 never do this. Bench data confirms:
+     * Rising ZC=19939, Falling ZC=19924, both TO=0 — the comparator
+     * detects both polarities perfectly. The old bypass was the root
+     * cause of every cascade failure, not a necessary workaround.
+     * If ZC is missed, the timeout fires and mode transitions handle
+     * recovery (TRACK → RECOVER → ACQUIRE → TRACK). */
     uint8_t expected = pData->bemf.cmpExpected;
-    if (pData->timing.stepsSinceLastZc >= 2)
-    {
-        expected = cmp;  /* Accept whatever state we see after 2 forced steps */
-        if (pData->icZc.pollFilter == 0)
-            pData->zcDiag.diagBypassAccepted++;
-    }
 
     if (cmp == expected)
     {
