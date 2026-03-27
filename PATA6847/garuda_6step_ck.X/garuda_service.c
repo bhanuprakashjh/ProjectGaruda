@@ -549,6 +549,25 @@ void __attribute__((interrupt, auto_psv)) _T1Interrupt(void)
                      * GSP throttle override for GUI motor testing. */
                     target = MapThrottleToDuty(
                         gData.gspThrottleActive ? gData.gspThrottleValue : gData.potRaw);
+
+                    /* Phase 7: mode-specific duty limiting.
+                     * ACQUIRE: don't increase beyond current duty (let estimator catch up)
+                     * RECOVER: hold duty — don't change during recovery
+                     * TRACK: normal operation */
+                    switch (gData.zcCtrl.mode)
+                    {
+                        case ZC_MODE_ACQUIRE:
+                            /* Allow pot-driven duty but don't increase faster than slew */
+                            break;
+                        case ZC_MODE_RECOVER:
+                            /* Hold current duty — don't accelerate during recovery */
+                            if (target > slewedDuty)
+                                target = slewedDuty;
+                            break;
+                        case ZC_MODE_TRACK:
+                            /* Normal — no restriction */
+                            break;
+                    }
                 }
                 else
                 {

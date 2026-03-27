@@ -47,15 +47,15 @@ static void ZcEnterAcquire(volatile GARUDA_DATA_T *pData)
 {
     pData->zcCtrl.mode = ZC_MODE_ACQUIRE;
     pData->zcCtrl.acquireGoodCount = 0;
-    /* Phase 2: no behavior change — same detector, filter, advance, timeout.
-     * Phase 3+ will add mode-specific parameters here. */
+    /* Phase 7: ACQUIRE uses conservative timing.
+     * The refIntervalHR is kept as-is — it was valid when we left
+     * RECOVER, and the motor should be near that speed. */
 }
 
 static void ZcEnterTrack(volatile GARUDA_DATA_T *pData)
 {
     pData->zcCtrl.mode = ZC_MODE_TRACK;
     pData->zcCtrl.recoverAttempts = 0;  /* reset on successful lock */
-    /* Phase 2: no behavior change. Phase 3 removes bypass in TRACK. */
 }
 
 static void ZcEnterRecover(volatile GARUDA_DATA_T *pData)
@@ -64,7 +64,16 @@ static void ZcEnterRecover(volatile GARUDA_DATA_T *pData)
     pData->zcCtrl.recoverGoodCount = 0;
     if (pData->zcCtrl.recoverAttempts < 255u)
         pData->zcCtrl.recoverAttempts++;
-    /* Phase 2: no behavior change. Phase 7 adds duty hold, wider timeout. */
+    /* Phase 7: RECOVER expands refIntervalHR by 12.5% to give more
+     * time for ZC detection. The motor may be decelerating and the
+     * estimator needs room to find the real speed. */
+    {
+        uint16_t ref = pData->zcCtrl.refIntervalHR;
+        uint16_t inc = ref >> 3;  /* +12.5% */
+        if (inc < 1) inc = 1;
+        ref += inc;
+        pData->zcCtrl.refIntervalHR = ref;
+    }
 }
 
 void BEMF_ZC_Init(volatile GARUDA_DATA_T *pData)
@@ -544,20 +553,35 @@ ZC_TIMEOUT_RESULT_T BEMF_ZC_CheckTimeout(volatile GARUDA_DATA_T *pData)
             if (pData->timing.consecutiveMissedSteps >= ZC_MISS_LIMIT)
                 return ZC_TIMEOUT_DESYNC;
 
-            /* ZC V2: mode transition on timeout.
-             * Phase 2: observation only — same behavior, just tracks mode.
-             * Phase 7 will add mode-specific timeout behavior. */
-            if (pData->zcCtrl.mode == ZC_MODE_TRACK)
-                ZcEnterRecover(pData);
-            /* ACQUIRE/RECOVER: reset good-ZC counters on timeout */
-            pData->zcCtrl.acquireGoodCount = 0;
-            pData->zcCtrl.recoverGoodCount = 0;
+            /* ZC V2 Phase 7: mode-specific timeout behavior. */
+            switch (pData->zcCtrl.mode)
+            {
+                case ZC_MODE_TRACK:
+                    /* First timeout in TRACK → enter RECOVER.
+                     * RECOVER expands refIntervalHR to give more detection window. */
+                    ZcEnterRecover(pData);
+                    break;
 
-            /* Decelerate forced commutation when desynced.
-             * Without this, forced steps keep firing at the stale high-speed
-             * stepPeriod while the motor decelerates, producing false ZCs
-             * that prevent recovery. Increase stepPeriod by 12.5% per forced
-             * step so forced comm slows down to match actual motor speed. */
+                case ZC_MODE_ACQUIRE:
+                case ZC_MODE_RECOVER:
+                    /* Already recovering. Expand refIntervalHR further
+                     * to slow down commutation and let motor decelerate
+                     * to a speed where ZC can be detected reliably. */
+                    {
+                        uint16_t ref = pData->zcCtrl.refIntervalHR;
+                        uint16_t inc = ref >> 3;  /* +12.5% per timeout */
+                        if (inc < 1) inc = 1;
+                        ref += inc;
+                        if (ref > 5000) ref = 5000;  /* cap ~3.2ms = ~5k eRPM */
+                        pData->zcCtrl.refIntervalHR = ref;
+                    }
+                    /* Reset good-ZC counters */
+                    pData->zcCtrl.acquireGoodCount = 0;
+                    pData->zcCtrl.recoverGoodCount = 0;
+                    break;
+            }
+
+            /* Also expand Timer1 stepPeriod for backup path consistency */
             if (!pData->timing.zcSynced)
             {
                 uint16_t inc = pData->timing.stepPeriod >> 3;
