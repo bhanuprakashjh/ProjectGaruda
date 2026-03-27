@@ -251,6 +251,14 @@
  * 0 eRPM to MAX_DUTY at DUTY_RAMP_ERPM. Motor can only get more
  * duty as it proves it can commutate at the current speed.
  * Prevents desync from fast throttle increase under load. */
+/* Speed PD controller (AM32-style accumulated override) */
+#define FEATURE_SPEED_PD     1           /* enable for 2810 */
+#define SPEED_PD_KP          5U          /* proportional (÷SPEED_PD_SCALE) */
+#define SPEED_PD_KD         50U          /* derivative (÷SPEED_PD_SCALE) */
+#define SPEED_PD_SCALE   10000UL         /* output divider */
+#define MIN_TARGET_ERPM   3000U          /* pot at zero → idle target */
+#define MAX_TARGET_ERPM  80000U          /* pot at max → prop-safe */
+
 #define DUTY_RAMP_ERPM       60000U      /* full duty available at 60k eRPM.
                                          * With props at 24V, motor reaches
                                          * ~50-65k eRPM at full throttle.
@@ -345,6 +353,15 @@
 /* Speed governance default (per-profile override in motor section) */
 #ifndef DUTY_RAMP_ERPM
 #define DUTY_RAMP_ERPM  100000U  /* default: no effective limit for Hurst/A2212 */
+#endif
+#ifndef FEATURE_SPEED_PD
+#define FEATURE_SPEED_PD     0   /* disabled for Hurst/A2212 by default */
+#endif
+#ifndef MIN_TARGET_ERPM
+#define MIN_TARGET_ERPM   1000U
+#endif
+#ifndef MAX_TARGET_ERPM
+#define MAX_TARGET_ERPM 100000U
 #endif
 
 /* ── Feature Flags ─────────────────────────────────────────────────── */

@@ -472,6 +472,12 @@ void __attribute__((interrupt, auto_psv)) _T1Interrupt(void)
                 gData.zcCtrl.refIntervalHR = gData.timing.stepPeriodHR;
                 /* Capture ramp exit duty for ACQUIRE mode cap */
                 rampExitDuty = gData.duty;
+#if FEATURE_SPEED_PD
+                /* Seed PD override from ramp exit duty */
+                gData.speedPd.override = (int32_t)gData.duty;
+                gData.speedPd.lastError = 0;
+                gData.speedPd.targetErpm = 0;
+#endif
                 gData.timing.bypassSuppressed = true;  /* Suppress bypass
                     * until first confirmed CL ZC. Prevents polarity-
                     * blind acceptance during CL entry when the estimator
@@ -548,42 +554,91 @@ void __attribute__((interrupt, auto_psv)) _T1Interrupt(void)
 
                 if (gData.timing.zcSynced)
                 {
-                    /* Synced: pot-mapped with idle floor.
-                     * GSP throttle override for GUI motor testing. */
+#if FEATURE_SPEED_PD
+                    /* Speed PD controller — AM32-style accumulated override.
+                     * pot → target_eRPM → PD → duty override.
+                     * Runs at 1ms rate (every 20 Timer1 ticks). */
+                    {
+                        static uint16_t pdDiv = 0;
+                        if (++pdDiv >= 20)
+                        {
+                            pdDiv = 0;
+
+                            /* 1. Target eRPM from pot */
+                            uint16_t potVal = gData.gspThrottleActive
+                                ? gData.gspThrottleValue : gData.potRaw;
+                            uint32_t tgtErpm;
+                            if (potVal < POT_DEADZONE)
+                                tgtErpm = MIN_TARGET_ERPM;
+                            else if (potVal > POT_MAX)
+                                tgtErpm = MAX_TARGET_ERPM;
+                            else
+                                tgtErpm = MIN_TARGET_ERPM +
+                                    (uint32_t)(MAX_TARGET_ERPM - MIN_TARGET_ERPM)
+                                    * (potVal - POT_DEADZONE)
+                                    / (POT_MAX - POT_DEADZONE);
+                            gData.speedPd.targetErpm = tgtErpm;
+
+                            /* 2. Measured eRPM from protected estimator */
+                            bool fbValid = (gData.zcCtrl.refIntervalHR > 0 &&
+                                            gData.timing.zcSynced);
+                            uint32_t measErpm = 0;
+                            if (fbValid)
+                                measErpm = 15625000UL / gData.zcCtrl.refIntervalHR;
+
+                            /* 3. PD computation (only with valid feedback) */
+                            if (fbValid)
+                            {
+                                int32_t error = (int32_t)tgtErpm - (int32_t)measErpm;
+                                int32_t dError = error - gData.speedPd.lastError;
+                                gData.speedPd.lastError = error;
+
+                                gData.speedPd.override +=
+                                    (error * (int32_t)SPEED_PD_KP +
+                                     dError * (int32_t)SPEED_PD_KD)
+                                    / (int32_t)SPEED_PD_SCALE;
+
+                                /* Clamp */
+                                if (gData.speedPd.override > (int32_t)MAX_DUTY)
+                                    gData.speedPd.override = (int32_t)MAX_DUTY;
+                                if (gData.speedPd.override < (int32_t)CL_IDLE_DUTY)
+                                    gData.speedPd.override = (int32_t)CL_IDLE_DUTY;
+                            }
+                            /* If feedback invalid: freeze override */
+                        }
+                        target = (uint32_t)gData.speedPd.override;
+                    }
+#else
+                    /* Open-loop: pot → duty */
                     target = MapThrottleToDuty(
                         gData.gspThrottleActive ? gData.gspThrottleValue : gData.potRaw);
+#endif
 
-                    /* Phase 7: mode-specific duty limiting.
-                     * ACQUIRE: don't increase beyond current duty (let estimator catch up)
-                     * RECOVER: hold duty — don't change during recovery
-                     * TRACK: normal operation */
+                    /* Mode-specific duty limiting (applies to both PD and open-loop) */
                     switch (gData.zcCtrl.mode)
                     {
                         case ZC_MODE_ACQUIRE:
-                            /* Cap duty at ramp exit level — don't accelerate
-                             * until ACQUIRE → TRACK confirms estimator locked. */
                             if (target > rampExitDuty)
                                 target = rampExitDuty;
                             break;
                         case ZC_MODE_RECOVER:
-                            /* Hold current duty — don't accelerate during recovery */
                             if (target > slewedDuty)
                                 target = slewedDuty;
                             break;
                         case ZC_MODE_TRACK:
-                            /* Normal — no restriction */
                             break;
                     }
                 }
                 else
                 {
-                    /* NOT synced (per-revolution check or missed steps).
-                     * Cut duty aggressively to reduce current and let motor
-                     * decelerate to a speed where ZC can re-acquire.
-                     * AM32-style: halve duty immediately, don't rely on slew. */
+                    /* NOT synced — cut duty aggressively */
                     target = CL_IDLE_DUTY;
                     if (slewedDuty > CL_IDLE_DUTY * 2)
-                        slewedDuty = slewedDuty / 2;  /* Fast cut, bypass slew */
+                        slewedDuty = slewedDuty / 2;
+#if FEATURE_SPEED_PD
+                    gData.speedPd.override = (int32_t)CL_IDLE_DUTY;
+                    gData.speedPd.lastError = 0;
+#endif
                 }
 
                 /* Phase 9: Speed governance (ESCape32-style duty_ramp).

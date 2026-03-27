@@ -153,6 +153,13 @@ typedef struct {
     uint16_t diagFallingRejects;    /* false ZCs rejected on falling steps */
 } ZC_DIAG_T;
 
+/* ── Speed PD Controller State ──────────────────────────────────────── */
+typedef struct {
+    int32_t  override;      /* accumulated duty override (PWM counts) */
+    int32_t  lastError;     /* previous error for derivative */
+    uint32_t targetErpm;    /* from pot mapping (diagnostic) */
+} SPEED_PD_T;
+
 /* Fault codes */
 typedef enum {
     FAULT_NONE = 0,
@@ -215,6 +222,7 @@ typedef struct {
 #endif
     ZC_DIAG_T      zcDiag;
     ZC_CTRL_T      zcCtrl;
+    SPEED_PD_T     speedPd;
 
 } GARUDA_DATA_T;
 
