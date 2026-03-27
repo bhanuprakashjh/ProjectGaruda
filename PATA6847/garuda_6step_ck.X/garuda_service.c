@@ -66,6 +66,7 @@ static volatile uint8_t uvDebounce = 0;
                               * real ZCs rejected as "too early" → desync. */
 #define DUTY_SLEW_DOWN   5U   /* ~100ms ramp down (was 10 = 50ms) */
 static volatile uint32_t slewedDuty = 0;
+static volatile uint32_t rampExitDuty = 0;  /* duty at OL→CL transition, used as ACQUIRE cap */
 
 /* CL settle: hold ramp duty for N ticks after CL entry before switching
  * to pot control. Lets ZC tracking stabilize after OL→CL handoff. */
@@ -469,6 +470,8 @@ void __attribute__((interrupt, auto_psv)) _T1Interrupt(void)
                 gData.zcCtrl.recoverAttempts = 0;
                 /* Phase 4: seed refIntervalHR from stepPeriodHR */
                 gData.zcCtrl.refIntervalHR = gData.timing.stepPeriodHR;
+                /* Capture ramp exit duty for ACQUIRE mode cap */
+                rampExitDuty = gData.duty;
                 gData.timing.bypassSuppressed = true;  /* Suppress bypass
                     * until first confirmed CL ZC. Prevents polarity-
                     * blind acceptance during CL entry when the estimator
@@ -557,7 +560,10 @@ void __attribute__((interrupt, auto_psv)) _T1Interrupt(void)
                     switch (gData.zcCtrl.mode)
                     {
                         case ZC_MODE_ACQUIRE:
-                            /* Allow pot-driven duty but don't increase faster than slew */
+                            /* Cap duty at ramp exit level — don't accelerate
+                             * until ACQUIRE → TRACK confirms estimator locked. */
+                            if (target > rampExitDuty)
+                                target = rampExitDuty;
                             break;
                         case ZC_MODE_RECOVER:
                             /* Hold current duty — don't accelerate during recovery */

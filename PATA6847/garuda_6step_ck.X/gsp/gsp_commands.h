@@ -87,10 +87,11 @@ typedef struct __attribute__((packed)) {
 #define GSP_FEATURE_GSP         (1UL << 16)  /* GSP protocol active */
 
 /**
- * GSP_CK_SNAPSHOT_T — 48 bytes, CK board telemetry snapshot.
+ * GSP_CK_SNAPSHOT_T — 64 bytes, CK board telemetry snapshot.
  *
- * Different from AK board's 170-byte snapshot (FOC fields).
- * GUI detects CK board via boardId=0x0002 and uses CK decoder.
+ * V1: 48 bytes (core + electrical + speed + ZC diag + system)
+ * V2: 52 bytes (+zcLatencyPct, zcBlankPct, zcBypassCount)
+ * V3: 64 bytes (+zcMode, actualForcedComm, per-polarity counters)
  */
 typedef struct __attribute__((packed)) {
     /* Core state (8B) */
@@ -122,7 +123,8 @@ typedef struct __attribute__((packed)) {
     uint16_t icFalse;           /* Rejected ZCs */
     uint8_t  filterLevel;       /* Current deglitch FL */
     uint8_t  missedSteps;       /* consecutiveMissedSteps */
-    uint8_t  forcedSteps;       /* stepsSinceLastZc */
+    uint8_t  forcedSteps;       /* LEGACY: stepsSinceLastZc (NOT real forced comm count).
+                                 * Use actualForcedComm below for real timeout count. */
     uint8_t  ilimActive;        /* ATA6847 ILIM chopping */
 
     /* System (8B) */

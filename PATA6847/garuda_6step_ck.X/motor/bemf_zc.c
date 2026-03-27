@@ -578,6 +578,9 @@ ZC_TIMEOUT_RESULT_T BEMF_ZC_CheckTimeout(volatile GARUDA_DATA_T *pData)
                     /* Reset good-ZC counters */
                     pData->zcCtrl.acquireGoodCount = 0;
                     pData->zcCtrl.recoverGoodCount = 0;
+                    /* Enforce max recovery attempts */
+                    if (pData->zcCtrl.recoverAttempts >= ZC_RECOVER_MAX_ATTEMPTS)
+                        return ZC_TIMEOUT_DESYNC;
                     break;
             }
 
@@ -621,13 +624,12 @@ void BEMF_ZC_ScheduleCommutation(volatile GARUDA_DATA_T *pData)
     uint16_t sp = pData->timing.stepPeriod;  /* Timer1 fallback */
 
     /* Compute eRPM for timing advance lookup.
-     * Prefer HR when available (78x better resolution than Timer1). */
+     * Use protected refIntervalHR — consistent with scheduling. */
     uint32_t eRPM;
 #if FEATURE_IC_ZC
-    if (pData->timing.stepPeriodHR > 0 && pData->timing.hasPrevZcHR)
+    if (pData->zcCtrl.refIntervalHR > 0)
     {
-        /* eRPM = 15625000 / stepPeriodHR (from 640ns tick base) */
-        eRPM = 15625000UL / pData->timing.stepPeriodHR;
+        eRPM = 15625000UL / pData->zcCtrl.refIntervalHR;
     }
     else
 #endif
