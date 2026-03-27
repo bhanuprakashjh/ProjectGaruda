@@ -258,7 +258,10 @@
  * OV: 28V (margin above fully charged 6S)
  * UV: 10V (bench supply sags under desync current spikes;
  *     production should use 16V for LiPo protection) */
-#define VBUS_OV_THRESHOLD   (33908U)       /* ~28V */
+#define VBUS_OV_THRESHOLD   (38752U)       /* ~32V. Was 28V — regen spikes during
+                                         * fast deceleration reach 28V at 24V supply.
+                                         * 32V gives margin for regen while still
+                                         * protecting against real OV faults. */
 #define VBUS_UV_THRESHOLD   (12110U)       /* ~10V → 1211*10 */
 
 #else
