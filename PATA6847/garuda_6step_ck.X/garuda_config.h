@@ -248,9 +248,12 @@
 #define RAMP_TARGET_ERPM     3000U       /* Lower than A2212 — gentler handoff */
 
 /* ATA6847 Hardware Current Limit */
-#define ILIM_DAC            110U         /* ~22.6A peak. Was 95 (16.6A) — too low
-                                         * for startup inrush. 2810 at 24V draws
-                                         * 15-20A during OL ramp alignment. */
+#define ILIM_DAC            120U         /* ~30.6A peak. With props, commutation
+                                         * transients reach 20-25A at mid speed.
+                                         * 110 (24.7A) chops too aggressively under
+                                         * load, limiting max speed to ~40k eRPM.
+                                         * 120 allows prop operation while still
+                                         * protecting during genuine desync (34A+). */
 
 #define CL_IDLE_DUTY_PERCENT 10U
 

@@ -62,18 +62,13 @@ void HAL_ATA6847_Init(void)
     /* Wake-up control */
     HAL_ATA6847_WriteReg(ATA_WUCR, 0x03);
 
-    /* Current limitation — ENABLED.
-     * Cycle-by-cycle PWM chopping when phase current exceeds ILIM_DAC
-     * threshold. Non-latching (ILIMSDEN=0): auto-resumes when current
-     * drops below threshold.
-     *
-     * Previously disabled because "HW ILIM disrupts BEMF sensing" —
-     * that was with the old polarity bypass. With ZC V2 strict polarity,
-     * ILIM chopping during desync is preferable to 34A sustained draw.
-     *
-     * ILIMCR: ILIMEN=1, ILIMFLT=6 (1750ns filter), ILIMSDEN=0 (no shutdown)
-     * ILIMTH: DAC per profile (2810: 95 = 16.6A trip) */
-    HAL_ATA6847_WriteReg(ATA_ILIMCR, (1 << 7) | (6 << 3) | (0 << 2));
+    /* Current limitation — DISABLED.
+     * Cycle-by-cycle chopping limits prop performance: at 24V with
+     * 8" props, phase current transients during commutation reach
+     * 15-25A even at mid-speed, triggering ILIM and capping eRPM.
+     * VDS short-circuit protection (SCPCR) still active for hardware
+     * safety. Software RECOVER mode handles desync current. */
+    HAL_ATA6847_WriteReg(ATA_ILIMCR, (0 << 7) | (6 << 3) | (0 << 2));
     HAL_ATA6847_WriteReg(ATA_ILIMTH, ILIM_DAC);
 
     /* Short circuit protection */
