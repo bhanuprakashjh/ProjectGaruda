@@ -247,6 +247,15 @@
                                           * instead of Timer1 (33% error at Tp=2). */
 #define RAMP_TARGET_ERPM     3000U       /* Lower than A2212 — gentler handoff */
 
+/* Speed governance: max duty ramps linearly from CL_IDLE_DUTY at
+ * 0 eRPM to MAX_DUTY at DUTY_RAMP_ERPM. Motor can only get more
+ * duty as it proves it can commutate at the current speed.
+ * Prevents desync from fast throttle increase under load. */
+#define DUTY_RAMP_ERPM       60000U      /* full duty available at 60k eRPM.
+                                         * With props at 24V, motor reaches
+                                         * ~50-65k eRPM at full throttle.
+                                         * 60k allows full range with margin. */
+
 /* ATA6847 Hardware Current Limit */
 #define ILIM_DAC            120U         /* ~30.6A peak. With props, commutation
                                          * transients reach 20-25A at mid speed.
@@ -332,6 +341,11 @@
 /* Bypass guard bounds (used when FEATURE_IC_ZC_ADAPTIVE=1) */
 #define ZC_BYPASS_LO_PCT    40U     /* Min % of stepPeriodHR for bypass acceptance */
 #define ZC_BYPASS_HI_PCT   160U     /* Max % of stepPeriodHR for bypass acceptance */
+
+/* Speed governance default (per-profile override in motor section) */
+#ifndef DUTY_RAMP_ERPM
+#define DUTY_RAMP_ERPM  100000U  /* default: no effective limit for Hurst/A2212 */
+#endif
 
 /* ── Feature Flags ─────────────────────────────────────────────────── */
 #ifndef FEATURE_IC_ZC

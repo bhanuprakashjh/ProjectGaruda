@@ -580,6 +580,32 @@ void __attribute__((interrupt, auto_psv)) _T1Interrupt(void)
                         slewedDuty = slewedDuty / 2;  /* Fast cut, bypass slew */
                 }
 
+                /* Phase 9: Speed governance (ESCape32-style duty_ramp).
+                 * Limit max duty based on measured eRPM so the motor can't
+                 * be driven faster than the estimator can track.
+                 * duty_max ramps linearly from CL_IDLE_DUTY at 0 eRPM to
+                 * MAX_DUTY at DUTY_RAMP_ERPM. Above DUTY_RAMP_ERPM: no cap.
+                 *
+                 * This prevents the desync-on-fast-pot failure: the motor
+                 * can only get more duty as it proves it can commutate at
+                 * the current speed. */
+#if FEATURE_IC_ZC
+                {
+                    uint32_t measuredErpm = 0;
+                    if (gData.zcCtrl.refIntervalHR > 0)
+                        measuredErpm = 15625000UL / gData.zcCtrl.refIntervalHR;
+
+                    if (measuredErpm < DUTY_RAMP_ERPM)
+                    {
+                        uint32_t maxDuty = CL_IDLE_DUTY +
+                            (uint32_t)(MAX_DUTY - CL_IDLE_DUTY)
+                            * measuredErpm / DUTY_RAMP_ERPM;
+                        if (target > maxDuty)
+                            target = maxDuty;
+                    }
+                }
+#endif
+
                 /* Asymmetric slew: fast up, slow down */
                 if (target > slewedDuty)
                 {
