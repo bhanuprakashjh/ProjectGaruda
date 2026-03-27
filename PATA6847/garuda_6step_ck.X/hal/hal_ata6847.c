@@ -62,11 +62,18 @@ void HAL_ATA6847_Init(void)
     /* Wake-up control */
     HAL_ATA6847_WriteReg(ATA_WUCR, 0x03);
 
-    /* Current limitation — DISABLED.
-     * HW ILIM gate chopping disrupts BEMF sensing (causes Frc:3).
-     * Use software PD current limit instead (Phase 1 roadmap).
-     * VDS short-circuit protection (SCPCR) remains active. */
-    HAL_ATA6847_WriteReg(ATA_ILIMCR, (0 << 7) | (6 << 3) | (0 << 2));
+    /* Current limitation — ENABLED.
+     * Cycle-by-cycle PWM chopping when phase current exceeds ILIM_DAC
+     * threshold. Non-latching (ILIMSDEN=0): auto-resumes when current
+     * drops below threshold.
+     *
+     * Previously disabled because "HW ILIM disrupts BEMF sensing" —
+     * that was with the old polarity bypass. With ZC V2 strict polarity,
+     * ILIM chopping during desync is preferable to 34A sustained draw.
+     *
+     * ILIMCR: ILIMEN=1, ILIMFLT=6 (1750ns filter), ILIMSDEN=0 (no shutdown)
+     * ILIMTH: DAC per profile (2810: 95 = 16.6A trip) */
+    HAL_ATA6847_WriteReg(ATA_ILIMCR, (1 << 7) | (6 << 3) | (0 << 2));
     HAL_ATA6847_WriteReg(ATA_ILIMTH, ILIM_DAC);
 
     /* Short circuit protection */
@@ -102,8 +109,12 @@ void HAL_ATA6847_Init(void)
     HAL_ATA6847_WriteReg(ATA_GDUCR3, (0x03 << 2));                /* 0x0C */
     HAL_ATA6847_WriteReg(ATA_GDUCR4, (1 << 6) | (1 << 5) | (1 << 4) | 2); /* 0x72 */
 
-    /* Interrupt masks */
-    HAL_ATA6847_WriteReg(ATA_SIECER1, 0xE7);
+    /* Interrupt masks.
+     * SIECER1 bit 5 (ILIMM) = 0: mask ILIM from nIRQ.
+     * ILIM chopping is cycle-by-cycle and non-latching — it should
+     * chop silently, not trigger a fault that kills the motor.
+     * Was 0xE7 (ILIM unmasked), now 0xC7 (ILIM masked). */
+    HAL_ATA6847_WriteReg(ATA_SIECER1, 0xC7);
     HAL_ATA6847_WriteReg(ATA_SIECER2, 0x1F);
 
     /* Device operation mode: Normal + RSTLVL

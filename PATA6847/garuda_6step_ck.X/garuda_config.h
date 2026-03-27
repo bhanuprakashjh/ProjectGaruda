@@ -248,7 +248,9 @@
 #define RAMP_TARGET_ERPM     3000U       /* Lower than A2212 — gentler handoff */
 
 /* ATA6847 Hardware Current Limit */
-#define ILIM_DAC            95U          /* ~16.6A peak — same as A2212 */
+#define ILIM_DAC            110U         /* ~22.6A peak. Was 95 (16.6A) — too low
+                                         * for startup inrush. 2810 at 24V draws
+                                         * 15-20A during OL ramp alignment. */
 
 #define CL_IDLE_DUTY_PERCENT 10U
 
