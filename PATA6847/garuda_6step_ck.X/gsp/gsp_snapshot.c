@@ -97,6 +97,15 @@ void GSP_CaptureSnapshot(GSP_CK_SNAPSHOT_T *dst)
     dst->fallingZcCount  = src->zcDiag.diagFallingZcCount;
     dst->risingTimeouts  = src->zcDiag.diagRisingTimeouts;
     dst->fallingTimeouts = src->zcDiag.diagFallingTimeouts;
+
+    /* Per-step 0..5 counters */
+    {
+        uint8_t i;
+        for (i = 0; i < 6; i++) {
+            dst->stepAccepted[i] = src->zcDiag.stepAccepted[i];
+            dst->stepTimeouts[i] = src->zcDiag.stepTimeouts[i];
+        }
+    }
 }
 
 #endif /* FEATURE_GSP */

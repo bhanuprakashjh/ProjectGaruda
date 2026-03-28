@@ -144,6 +144,10 @@ typedef struct __attribute__((packed)) {
     uint16_t fallingZcCount;    /* falling polarity ZC accepts */
     uint16_t risingTimeouts;    /* rising polarity timeouts */
     uint16_t fallingTimeouts;   /* falling polarity timeouts */
+
+    /* Per-step 0..5 counters (24B) — phase-pair vs polarity-class test */
+    uint16_t stepAccepted[6];   /* ZCs accepted per commutation step */
+    uint16_t stepTimeouts[6];   /* timeouts per commutation step */
 } GSP_CK_SNAPSHOT_T;
 
 /* XC16 doesn't support _Static_assert. Verify size at compile time:

@@ -151,6 +151,9 @@ typedef struct {
     uint16_t diagFallingTimeouts;   /* timeouts on falling ZC steps */
     uint16_t diagRisingRejects;     /* false ZCs rejected on rising steps */
     uint16_t diagFallingRejects;    /* false ZCs rejected on falling steps */
+    /* Per-step 0..5 counters — distinguishes phase-pair vs polarity-class */
+    uint16_t stepAccepted[6];       /* ZCs accepted per commutation step */
+    uint16_t stepTimeouts[6];       /* timeouts per commutation step */
 } ZC_DIAG_T;
 
 /* ── Speed PD Controller State ──────────────────────────────────────── */

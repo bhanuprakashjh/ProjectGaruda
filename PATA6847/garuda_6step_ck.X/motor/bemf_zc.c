@@ -111,6 +111,13 @@ void BEMF_ZC_Init(volatile GARUDA_DATA_T *pData)
     pData->zcDiag.diagFallingTimeouts = 0;
     pData->zcDiag.diagRisingRejects = 0;
     pData->zcDiag.diagFallingRejects = 0;
+    {
+        uint8_t i;
+        for (i = 0; i < 6; i++) {
+            pData->zcDiag.stepAccepted[i] = 0;
+            pData->zcDiag.stepTimeouts[i] = 0;
+        }
+    }
 
     pData->zcCtrl.mode = ZC_MODE_ACQUIRE;
     pData->zcCtrl.acquireGoodCount = 0;
@@ -539,11 +546,13 @@ ZC_TIMEOUT_RESULT_T BEMF_ZC_CheckTimeout(volatile GARUDA_DATA_T *pData)
             pData->zcDiag.zcLatencyPct = 0xFFu;  /* 0xFF = timeout */
             pData->zcDiag.actualForcedComm++;
             pData->zcDiag.zcTimeoutCount++;
-            /* Per-polarity timeout tracking */
+            /* Per-polarity and per-step timeout tracking */
             if (commutationTable[pData->currentStep].zcPolarity > 0)
                 pData->zcDiag.diagRisingTimeouts++;
             else
                 pData->zcDiag.diagFallingTimeouts++;
+            if (pData->currentStep < 6)
+                pData->zcDiag.stepTimeouts[pData->currentStep]++;
             pData->timing.consecutiveMissedSteps++;
             pData->timing.goodZcCount >>= 1;
 
@@ -937,11 +946,13 @@ static void RecordZcTiming(volatile GARUDA_DATA_T *pData,
     pData->timing.goodZcCount++;
     pData->timing.consecutiveMissedSteps = 0;
 
-    /* Per-polarity diagnostic counters */
+    /* Per-polarity and per-step diagnostic counters */
     if (commutationTable[pData->currentStep].zcPolarity > 0)
         pData->zcDiag.diagRisingZcCount++;
     else
         pData->zcDiag.diagFallingZcCount++;
+    if (pData->currentStep < 6)
+        pData->zcDiag.stepAccepted[pData->currentStep]++;
 
     if (pData->timing.goodZcCount >= ZC_SYNC_THRESHOLD)
         pData->timing.zcSynced = true;

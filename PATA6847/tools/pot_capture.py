@@ -129,6 +129,16 @@ def decode_ck_snapshot(data):
         s['fallingZcCount'] = 0
         s['risingTimeouts'] = 0
         s['fallingTimeouts'] = 0
+    # V4 per-step 0..5 counters (88 bytes total)
+    if len(data) >= 88:
+        for i in range(6):
+            s[f'stepAcc{i}'] = struct.unpack_from('<H', data, 64 + i*2)[0]
+        for i in range(6):
+            s[f'stepTO{i}'] = struct.unpack_from('<H', data, 76 + i*2)[0]
+    else:
+        for i in range(6):
+            s[f'stepAcc{i}'] = 0
+            s[f'stepTO{i}'] = 0
     # Derived
     s['iaMa'] = round(s['iaRaw'] * CK_CURRENT_SCALE)
     s['ibMa'] = round(s['ibRaw'] * CK_CURRENT_SCALE)
@@ -260,6 +270,12 @@ def main():
                     'falling_zc_count': snap['fallingZcCount'],
                     'rising_timeouts': snap['risingTimeouts'],
                     'falling_timeouts': snap['fallingTimeouts'],
+                    'step_acc_0': snap['stepAcc0'], 'step_acc_1': snap['stepAcc1'],
+                    'step_acc_2': snap['stepAcc2'], 'step_acc_3': snap['stepAcc3'],
+                    'step_acc_4': snap['stepAcc4'], 'step_acc_5': snap['stepAcc5'],
+                    'step_to_0': snap['stepTO0'], 'step_to_1': snap['stepTO1'],
+                    'step_to_2': snap['stepTO2'], 'step_to_3': snap['stepTO3'],
+                    'step_to_4': snap['stepTO4'], 'step_to_5': snap['stepTO5'],
                 })
 
             time.sleep(0.01)
@@ -281,6 +297,38 @@ def main():
             w.writeheader()
             w.writerows(rows)
         print(f"\n{sample_count} samples saved to {csv_file}")
+
+        # Print per-step breakdown from last sample
+        last = rows[-1]
+        print("\n=== Per-Step ZC Analysis (phase-pair vs polarity-class test) ===")
+        print("Step | Phase | Polarity | PrevState | Accepted | Timeouts")
+        print("-----|-------|----------|-----------|----------|--------")
+        step_info = [
+            (0, 'C', 'Rising',  'B=LOW'),
+            (1, 'A', 'Falling', 'A=PWM'),
+            (2, 'B', 'Rising',  'A=LOW'),
+            (3, 'C', 'Falling', 'B=PWM'),
+            (4, 'A', 'Rising',  'A=LOW'),
+            (5, 'B', 'Falling', 'A=PWM'),
+        ]
+        for i, (step, phase, pol, prev) in enumerate(step_info):
+            acc = int(last.get(f'step_acc_{i}', last.get(f'stepAcc{i}', 0)))
+            to = int(last.get(f'step_to_{i}', last.get(f'stepTO{i}', 0)))
+            print(f"  {step}  |   {phase}   | {pol:<8s} | {prev:<9s} | {acc:>8d} | {to:>7d}")
+        # Summary
+        rising_acc = sum(int(last.get(f'step_acc_{i}', last.get(f'stepAcc{i}', 0))) for i in [0,2,4])
+        falling_acc = sum(int(last.get(f'step_acc_{i}', last.get(f'stepAcc{i}', 0))) for i in [1,3,5])
+        rising_to = sum(int(last.get(f'step_to_{i}', last.get(f'stepTO{i}', 0))) for i in [0,2,4])
+        falling_to = sum(int(last.get(f'step_to_{i}', last.get(f'stepTO{i}', 0))) for i in [1,3,5])
+        print(f"\nRising  (0,2,4 = float-after-LOW): acc={rising_acc} to={rising_to}")
+        print(f"Falling (1,3,5 = float-after-PWM): acc={falling_acc} to={falling_to}")
+        if rising_acc + falling_acc > 0:
+            # Check phase pairs
+            print("\nPhase pairs (0/3=C, 1/4=A, 2/5=B):")
+            for name, a, b in [('C', 0, 3), ('A', 1, 4), ('B', 2, 5)]:
+                pa = int(last.get(f'step_acc_{a}', last.get(f'stepAcc{a}', 0))) + int(last.get(f'step_acc_{b}', last.get(f'stepAcc{b}', 0)))
+                pt = int(last.get(f'step_to_{a}', last.get(f'stepTO{a}', 0))) + int(last.get(f'step_to_{b}', last.get(f'stepTO{b}', 0)))
+                print(f"  Phase {name} (steps {a},{b}): acc={pa} to={pt}")
     else:
         print("\nNo data captured")
 
