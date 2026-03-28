@@ -153,6 +153,14 @@
 #define ZC_BLANK_FLOOR_US   25U         /* Abs minimum blanking (µs). A2212 L/R=462µs */
 #define ZC_BLANK_CAP_PCT    45U         /* Max blanking as % of step period */
 
+/* Speed P controller (no D — derivative amplifies ZC glitches) */
+#define FEATURE_SPEED_PD     1           /* enable for A2212 */
+#define SPEED_PD_KP         10U          /* moderate P — don't overreact to brief ZC miss */
+#define SPEED_PD_KD          0U          /* D disabled: ZC miss causes eRPM spike → duty swing */
+#define SPEED_PD_SCALE   10000UL
+#define MIN_TARGET_ERPM   3000U
+#define MAX_TARGET_ERPM  60000U          /* A2212 at 12V with prop */
+
 /* Timing Advance — compensates commutation delay at high eRPM.
  *
  * Fast poll (100kHz) with SCCP4 HR timestamps (640ns) gives ~10µs
