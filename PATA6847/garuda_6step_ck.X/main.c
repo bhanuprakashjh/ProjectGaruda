@@ -29,6 +29,7 @@
 #if FEATURE_IC_ZC
 #include "hal/hal_ic.h"
 #include "hal/hal_com_timer.h"
+#include "hal/hal_clc.h"
 #endif
 #include "hal/board_service.h"
 #if FEATURE_GSP
@@ -247,6 +248,12 @@ int main(void)
     /* 7. PWM — center-aligned complementary, 20 kHz */
     HAL_PWM_Init();
     HAL_UART_WriteString("PWM.");
+
+#if FEATURE_IC_ZC && FEATURE_CLC_BLANKING
+    /* 7b. CLC D-FF BEMF blanking — must be after PWM init (needs PWMEVTA) */
+    HAL_CLC_Init();
+    HAL_UART_WriteString("CLC.");
+#endif
 
     /* 8. Timer1 — 50 µs tick for state machine */
     HAL_Timer1_Init();

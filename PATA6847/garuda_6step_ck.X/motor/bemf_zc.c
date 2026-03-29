@@ -24,6 +24,9 @@
 #include "../hal/hal_ic.h"
 #include "../hal/hal_com_timer.h"
 #endif
+#if FEATURE_CLC_BLANKING
+#include "../hal/hal_clc.h"
+#endif
 
 /**
  * @brief Read the digital BEMF comparator output for a given phase.
@@ -32,6 +35,11 @@
  */
 static inline uint8_t ReadBEMFComparator(uint8_t phase)
 {
+#if FEATURE_CLC_BLANKING
+    /* CLC D-FF output: sampled at mid-PWM, held between cycles.
+     * Eliminates switching noise aliasing (step-2 vector fix). */
+    return HAL_CLC_ReadOutput(phase);
+#else
     switch (phase)
     {
         case 0: return BEMF_A_GetValue() ? 1 : 0;
@@ -39,6 +47,7 @@ static inline uint8_t ReadBEMFComparator(uint8_t phase)
         case 2: return BEMF_C_GetValue() ? 1 : 0;
         default: return 0;
     }
+#endif
 }
 
 /* ── ZC V2 Mode Helpers (Phase 2) ─────────────────────────────────── */
@@ -384,6 +393,15 @@ void BEMF_ZC_OnCommutation(volatile GARUDA_DATA_T *pData)
         pData->icZc.blankingEndHR = pData->icZc.lastCommHR + blankHR;
         pData->icZc.activeChannel = step->floatingPhase;
         pData->icZc.pollFilter = 0;
+
+#if FEATURE_CLC_BLANKING
+        /* Force CLC D-FF to pre-ZC state. After commutation, the D-FF
+         * may hold a stale value from when the phase was driven.
+         * Force to the state BEFORE the expected ZC transition so
+         * FastPoll sees a clean edge when the real ZC occurs. */
+        HAL_CLC_ForcePreZcState(step->floatingPhase,
+                                step->zcPolarity > 0);
+#endif
         /* Use the larger of IIR stepPeriod and latest ZC interval for FL.
          * During decel, IIR lags — raw interval is more current and ensures
          * FL re-increases promptly instead of staying stuck at the min. */

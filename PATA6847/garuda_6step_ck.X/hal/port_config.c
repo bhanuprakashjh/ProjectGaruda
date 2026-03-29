@@ -73,5 +73,14 @@ void SetupGPIOPorts(void)
     /* SCCP1 is in timer mode (fast poll) — no PPS routing needed.
      * BEMF comparator pins (RC6/RC7/RD10) are read as GPIO directly. */
 
+#if FEATURE_CLC_BLANKING
+    /* CLC D-FF inputs: route BEMF comparator pins to CLC data inputs.
+     * CLC1 uses CLCINA (BEMF_A), CLC2 uses CLCINB (BEMF_B),
+     * CLC3 uses CLCINC (BEMF_C). Clocked from PWM Event A (internal). */
+    RPINR45bits.CLCINAR = 0x0036;   /* RC6 (RP54) → CLCINA (BEMF_A) */
+    RPINR46bits.CLCINBR = 0x0037;   /* RC7 (RP55) → CLCINB (BEMF_B) */
+    RPINR46bits.CLCINCR = 0x004A;   /* RD10 (RP74) → CLCINC (BEMF_C) */
+#endif
+
     __builtin_write_RPCON(0x0800);  /* lock */
 }

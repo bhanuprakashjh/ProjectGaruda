@@ -377,6 +377,12 @@
 #define FEATURE_IC_ZC           1   /* 1 = fast poll timer ZC, 0 = ADC ISR polling only */
 #endif
 
+#ifndef FEATURE_CLC_BLANKING
+#define FEATURE_CLC_BLANKING    1   /* CLC D-FF PWM-synchronous BEMF sampling.
+                                     * Samples comparator at mid-PWM, eliminates
+                                     * switching noise aliasing (step-2 fix). */
+#endif
+
 #ifndef FEATURE_GSP
 #define FEATURE_GSP             1   /* 1 = GSP binary protocol on UART1 (disables debug prints)
                                      * 0 = debug UART text output (default for development)
