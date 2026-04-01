@@ -178,12 +178,21 @@ void GarudaService_StartMotor(void)
 
     HAL_UART_WriteString("SM:clr ");
 
-    /* Clear ATA6847 faults */
+    /* Clear ATA6847 faults — may need multiple attempts after desync.
+     * VDS/SC faults latch until cleared AND the fault condition is gone. */
+    HAL_ATA6847_ClearFaults();
+    { volatile uint32_t d; for (d = 0; d < 50000UL; d++); }  /* ~5ms */
     HAL_ATA6847_ClearFaults();
 
     HAL_UART_WriteString("gdu ");
 
-    /* Power up GDU */
+    /* Power up GDU — retry once if first attempt fails */
+    if (!HAL_ATA6847_EnterGduNormal())
+    {
+        { volatile uint32_t d; for (d = 0; d < 100000UL; d++); }  /* ~10ms */
+        HAL_ATA6847_ClearFaults();
+        { volatile uint32_t d; for (d = 0; d < 50000UL; d++); }
+    }
     if (!HAL_ATA6847_EnterGduNormal())
     {
         HAL_UART_WriteString("FAIL!");
@@ -307,8 +316,26 @@ void GarudaService_MainLoop(void)
     if (deferredRestart)
     {
         deferredRestart = false;
-        if (gData.runCommandActive && gData.state == ESC_IDLE)
+        if (gData.state == ESC_IDLE)
             GarudaService_StartMotor();
+    }
+
+    /* Auto-clear FAULT after 1 second — allows retry without board reset.
+     * If the fault condition persists, it will fault again quickly.
+     * User can stop motor via pot=0 or SW2. */
+    if (gData.state == ESC_FAULT)
+    {
+        static uint32_t faultTick = 0;
+        if (faultTick == 0)
+            faultTick = gData.systemTick;
+        else if (gData.systemTick - faultTick > 1000)
+        {
+            faultTick = 0;
+            gData.state = ESC_IDLE;
+            gData.faultCode = FAULT_NONE;
+            gData.desyncRestartAttempts = 0;
+            LED_FAULT = 0;
+        }
     }
 
     /* Handle deferred fault — do the SPI standby that ISR couldn't */
@@ -631,10 +658,7 @@ void __attribute__((interrupt, auto_psv)) _T1Interrupt(void)
                 }
                 else
                 {
-                    /* NOT synced — reduce duty via normal slew (not halving).
-                     * The old slewedDuty/2 ran at 20kHz and destroyed duty
-                     * in <1ms on any brief sync loss, making recovery
-                     * impossible. Normal slew-down gives time to re-sync. */
+                    /* NOT synced — reduce duty to idle via normal slew. */
                     target = CL_IDLE_DUTY;
 #if FEATURE_SPEED_PD
                     gData.speedPd.override = (int32_t)CL_IDLE_DUTY;
@@ -683,9 +707,6 @@ void __attribute__((interrupt, auto_psv)) _T1Interrupt(void)
                 gData.duty = slewedDuty;
                 HAL_PWM_SetDutyCycle(gData.duty);
             }
-
-            /* Commutation deadline is checked in ADC ISR (20 kHz)
-             * for better timing resolution. See _ADCInterrupt. */
 
             /* Check for ZC timeout */
             ZC_TIMEOUT_RESULT_T tout = BEMF_ZC_CheckTimeout(
@@ -773,11 +794,14 @@ void __attribute__((interrupt, auto_psv)) _T1Interrupt(void)
             }
             else
             {
-                /* Retry: go back to IDLE, main loop will restart */
+                /* Retry: go back to IDLE, auto-restart.
+                 * Always restart after desync recovery — if pot is
+                 * non-zero the user wants the motor running. The old
+                 * runCommandActive check caused hangs when SW1 wasn't
+                 * held during recovery. */
                 HAL_PWM_DisableOutputs();
                 gData.state = ESC_IDLE;
-                if (gData.runCommandActive)
-                    deferredRestart = true;
+                deferredRestart = true;
             }
             break;
 
@@ -998,86 +1022,36 @@ void __attribute__((interrupt, no_auto_psv)) _CCP2Interrupt(void)
     _CCP2IE = 0;
     _CCP2IF = 0;
 
-    /* Only process during closed-loop, when IC was properly armed,
-     * AND at high speed where the comparator is clean enough for
-     * single-edge detection. Below ~30k eRPM, flip rate is 10-40%
-     * and IC accepts noise as ZC. Above ~30k, flip rate drops to
-     * ~5% and IC matches poll path 1:1. */
+    /* Only process during closed-loop AND when IC was properly armed. */
     if (gData.state != ESC_CLOSED_LOOP || !gData.icZc.icArmed)
-        return;
-    if (gData.timing.stepPeriod > 6)  /* Tp>6 = <33k eRPM: poll-only */
         return;
 
     /* If poll path already got this ZC, stop */
     if (gData.bemf.zeroCrossDetected)
         return;
 
-    /* Single-read state check: confirm comparator is in expected
-     * post-ZC state. With single-polarity MOD, the IC only fires
-     * on the correct edge direction, so one state check is enough.
-     * NO re-arm on rejection — poll path handles missed steps. */
-    {
-        uint8_t cmp;
-        switch (gData.icZc.activeChannel)
-        {
-            case 0:  cmp = BEMF_A_GetValue() ? 1 : 0; break;
-            case 1:  cmp = BEMF_B_GetValue() ? 1 : 0; break;
-            case 2:  cmp = BEMF_C_GetValue() ? 1 : 0; break;
-            default: cmp = 0; break;
-        }
-        if (cmp != gData.bemf.cmpExpected)
-        {
-            /* Noise edge — don't re-arm. Poll handles this step. */
-            gData.icZc.diagIcBounce++;
-            return;
-        }
-    }
+    /* HYBRID: IC provides precise timestamp, poll validates.
+     * IC does NOT call RecordZcTiming or ScheduleCommutation.
+     * It only latches the backdated SCCP4 timestamp into
+     * zcCandidateHR/T1. The poll path confirms with its 3-read
+     * deglitch and schedules using the IC's precise timestamp.
+     *
+     * This gives: IC precision (640ns) + poll reliability (3-read). */
 
     /* Backdate IC timestamp to SCCP4 domain. */
     uint16_t icCapture = HAL_ZcIC_ReadCapture();
     uint16_t icNow     = HAL_ZcIC_ReadTimer();
     uint16_t s4Now     = HAL_ComTimer_ReadTimer();
     uint16_t elapsed   = icNow - icCapture;
-    uint16_t zcTickHR  = s4Now - elapsed;
 
-    /* 50% interval rejection. */
-    {
-        uint16_t sinceLastZc = zcTickHR - gData.timing.lastZcTickHR;
-        uint16_t ref = gData.zcCtrl.refIntervalHR;
-        if (ref == 0) ref = gData.timing.stepPeriodHR;
-        uint16_t halfInterval = ref >> 1;
-        if (halfInterval > 0 && (int16_t)(sinceLastZc - halfInterval) < 0)
-        {
-            /* Too early — don't re-arm. Poll handles this step. */
-            gData.icZc.diagIcBounce++;
-            return;
-        }
-    }
-
-    /* Compute Timer1 tick (approximate) */
-    uint16_t zcTickT1 = gData.timer1Tick;
+    gData.icZc.zcCandidateHR = s4Now - elapsed;
     {
         uint16_t elapsedT1 = (uint16_t)((uint32_t)elapsed * COM_TIMER_T1_DENOM
                                          / COM_TIMER_T1_NUMER);
-        zcTickT1 -= elapsedT1;
+        gData.icZc.zcCandidateT1 = gData.timer1Tick - elapsedT1;
     }
-
-    /* Accept ZC — record timing and schedule commutation */
-    gData.icZc.icArmed = false;
-    gData.bemf.zeroCrossDetected = true;
-    RecordZcTiming((volatile GARUDA_DATA_T *)&gData, zcTickT1, zcTickHR);
-
-    if (gData.bemf.zeroCrossDetected)
-    {
-        gData.icZc.diagIcAccepted++;
-        gData.icZc.phase = IC_ZC_DONE;
-        BEMF_ZC_ScheduleCommutation((volatile GARUDA_DATA_T *)&gData);
-    }
-    else
-    {
-        /* RecordZcTiming rejected — poll handles this step */
-        gData.icZc.diagIcBounce++;
-    }
+    gData.icZc.icArmed = false;   /* Signal to poll: IC has captured */
+    gData.icZc.diagIcAccepted++;
 }
 #endif /* FEATURE_IC_ZC_CAPTURE */
 

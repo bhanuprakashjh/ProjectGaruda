@@ -1118,10 +1118,18 @@ bool BEMF_ZC_FastPoll(volatile GARUDA_DATA_T *pData)
     {
         if (pData->icZc.pollFilter == 0)
         {
-            /* First matching read — record candidate ZC timestamp.
-             * Poll path is fallback when IC doesn't fire. */
-            pData->icZc.zcCandidateHR = HAL_ComTimer_ReadTimer();
-            pData->icZc.zcCandidateT1 = pData->timer1Tick;
+#if FEATURE_IC_ZC_CAPTURE
+            /* If IC already captured a precise timestamp for this
+             * step, keep it. Only write poll timestamp as fallback
+             * if IC hasn't fired. IC fires on the actual edge (640ns),
+             * poll sees it 0-5µs later. */
+            if (pData->icZc.icArmed)
+#endif
+            {
+                /* No IC capture — use poll timestamp (5µs precision) */
+                pData->icZc.zcCandidateHR = HAL_ComTimer_ReadTimer();
+                pData->icZc.zcCandidateT1 = pData->timer1Tick;
+            }
         }
         pData->icZc.pollFilter++;
 

@@ -160,7 +160,7 @@
 #define FEATURE_SPEED_PD     0
 
 /* Duty governor: limits max duty based on measured eRPM.
- * Prevents fast-pot desync without PD. Full duty at 60k. */
+ * Prevents fast-pot desync. Full duty at 60k. */
 #define DUTY_RAMP_ERPM       60000U
 
 /* Timing Advance — compensates commutation delay at high eRPM.
@@ -447,8 +447,10 @@
 #endif
 
 /* ── Desync Recovery ───────────────────────────────────────────────── */
-#define DESYNC_RESTART_MAX  3U
-#define RECOVERY_TIME_MS    200U
+#define DESYNC_RESTART_MAX  10U   /* More restart attempts before fault.
+                                    * Counter resets after 2s stable CL. */
+#define RECOVERY_TIME_MS    50U    /* Shortened from 200ms — PWM is OFF during
+                                    * recovery so no current risk. Faster restart. */
 #define RECOVERY_COUNTS     ((uint16_t)((uint32_t)RECOVERY_TIME_MS * TIMER1_FREQ_HZ / 1000))
 
 /* ── ARM ───────────────────────────────────────────────────────────── */
