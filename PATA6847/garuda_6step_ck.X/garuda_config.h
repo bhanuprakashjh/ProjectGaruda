@@ -153,13 +153,13 @@
 #define ZC_BLANK_FLOOR_US   25U         /* Abs minimum blanking (µs). A2212 L/R=462µs */
 #define ZC_BLANK_CAP_PCT    45U         /* Max blanking as % of step period */
 
-/* Speed PD disabled — raw pot→duty for no-load bench testing.
- * Re-enable with prop for speed regulation. */
+/* Speed PD disabled — direct pot→duty gives best performance with
+ * IC capture + AM32 advance. PD interacts badly with IC ZC at high
+ * speed. Re-enable after tuning PD gains for IC-based detection.
+ * TODO: make this a runtime GSP param so it can be toggled from GUI. */
 #define FEATURE_SPEED_PD     0
 
-/* Duty governor: full duty available from 10k eRPM.
- * No-load bench — motor needs ~100% duty to reach 117k eRPM.
- * With prop, raise back to 60-100k for protection. */
+/* Duty governor: full duty available from 10k eRPM. */
 #define DUTY_RAMP_ERPM       10000U
 
 /* Timing Advance — compensates commutation delay at high eRPM.
@@ -199,7 +199,10 @@
  * Bench supply sags significantly under motor load (12V → 9V at full duty).
  * OV: 18V (headroom for regen spikes + 4S compatibility)
  * UV: 6V (only trips on actual supply disconnect, not load sag) */
-#define VBUS_OV_THRESHOLD   (1363U * 16U)  /* ~18V → 21808 in 16-bit */
+#define VBUS_OV_THRESHOLD   (1817U * 16U)  /* ~24V → 29072 in 16-bit.
+                                             * Raised from 18V — regen spikes
+                                             * on fast decel reach 14-16V at 12V
+                                             * supply, 18-20V at 14V supply. */
 #define VBUS_UV_THRESHOLD   (454U * 16U)   /* ~6V  → 7264 in 16-bit */
 
 #elif MOTOR_PROFILE == 2
