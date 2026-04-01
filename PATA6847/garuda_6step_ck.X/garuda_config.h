@@ -153,14 +153,15 @@
 #define ZC_BLANK_FLOOR_US   25U         /* Abs minimum blanking (µs). A2212 L/R=462µs */
 #define ZC_BLANK_CAP_PCT    45U         /* Max blanking as % of step period */
 
-/* Speed PD disabled — direct pot→duty gives best performance with
- * IC capture + AM32 advance. PD interacts badly with IC ZC at high
- * speed. Re-enable after tuning PD gains for IC-based detection.
- * TODO: make this a runtime GSP param so it can be toggled from GUI. */
+/* Speed PD disabled. Fixed-rate (1ms) PD on eRPM causes duty oscillation
+ * at high speed — small eRPM jitter → PD reacts → transient → more jitter.
+ * Needs AM32-style per-ZC interval-based PID to work properly.
+ * Direct pot→duty + duty governor gives 101k eRPM stable. */
 #define FEATURE_SPEED_PD     0
 
-/* Duty governor: full duty available from 10k eRPM. */
-#define DUTY_RAMP_ERPM       10000U
+/* Duty governor: limits max duty based on measured eRPM.
+ * Prevents fast-pot desync without PD. Full duty at 60k. */
+#define DUTY_RAMP_ERPM       60000U
 
 /* Timing Advance — compensates commutation delay at high eRPM.
  *
