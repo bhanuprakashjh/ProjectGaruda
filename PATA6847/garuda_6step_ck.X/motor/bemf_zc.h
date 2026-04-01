@@ -31,13 +31,20 @@ void BEMF_ZC_ScheduleCommutation(volatile GARUDA_DATA_T *pData);
 
 #if FEATURE_IC_ZC
 /**
- * @brief Fast poll ZC detection — called from SCCP1 timer ISR at 100kHz.
+ * @brief Fast poll ZC detection — called from SCCP1 timer ISR at 200kHz.
  * Reads the floating phase comparator and applies adaptive deglitch filter.
  * Uses SCCP4 timestamps for 640ns-resolution blanking.
  * @param pData ESC runtime data
  * @return true when ZC is confirmed (caller should schedule commutation)
  */
 bool BEMF_ZC_FastPoll(volatile GARUDA_DATA_T *pData);
+
+/**
+ * @brief Record ZC timing and update step period estimator.
+ * Non-static: called from both FastPoll and _CCP2Interrupt (IC path).
+ */
+void RecordZcTiming(volatile GARUDA_DATA_T *pData,
+                    uint16_t zcTick, uint16_t hrTick);
 #endif
 
 #endif /* BEMF_ZC_H */

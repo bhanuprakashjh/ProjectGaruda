@@ -139,6 +139,16 @@ def decode_ck_snapshot(data):
         for i in range(6):
             s[f'stepAcc{i}'] = 0
             s[f'stepTO{i}'] = 0
+    # V5 raw comparator edge trace (112 bytes total)
+    if len(data) >= 112:
+        for i in range(6):
+            s[f'stepFlips{i}'] = struct.unpack_from('<H', data, 88 + i*2)[0]
+        for i in range(6):
+            s[f'stepPolls{i}'] = struct.unpack_from('<H', data, 100 + i*2)[0]
+    else:
+        for i in range(6):
+            s[f'stepFlips{i}'] = 0
+            s[f'stepPolls{i}'] = 0
     # Derived
     s['iaMa'] = round(s['iaRaw'] * CK_CURRENT_SCALE)
     s['ibMa'] = round(s['ibRaw'] * CK_CURRENT_SCALE)
@@ -276,6 +286,12 @@ def main():
                     'step_to_0': snap['stepTO0'], 'step_to_1': snap['stepTO1'],
                     'step_to_2': snap['stepTO2'], 'step_to_3': snap['stepTO3'],
                     'step_to_4': snap['stepTO4'], 'step_to_5': snap['stepTO5'],
+                    'flips_0': snap['stepFlips0'], 'flips_1': snap['stepFlips1'],
+                    'flips_2': snap['stepFlips2'], 'flips_3': snap['stepFlips3'],
+                    'flips_4': snap['stepFlips4'], 'flips_5': snap['stepFlips5'],
+                    'polls_0': snap['stepPolls0'], 'polls_1': snap['stepPolls1'],
+                    'polls_2': snap['stepPolls2'], 'polls_3': snap['stepPolls3'],
+                    'polls_4': snap['stepPolls4'], 'polls_5': snap['stepPolls5'],
                 })
 
             time.sleep(0.01)
@@ -329,6 +345,25 @@ def main():
                 pa = int(last.get(f'step_acc_{a}', last.get(f'stepAcc{a}', 0))) + int(last.get(f'step_acc_{b}', last.get(f'stepAcc{b}', 0)))
                 pt = int(last.get(f'step_to_{a}', last.get(f'stepTO{a}', 0))) + int(last.get(f'step_to_{b}', last.get(f'stepTO{b}', 0)))
                 print(f"  Phase {name} (steps {a},{b}): acc={pa} to={pt}")
+
+        # Raw comparator edge trace summary
+        total_flips = sum(int(last.get(f'flips_{i}', 0)) for i in range(6))
+        total_polls = sum(int(last.get(f'polls_{i}', 0)) for i in range(6))
+        if total_polls > 0:
+            print("\n=== Raw Comparator Edge Trace ===")
+            print("Step | Phase | Polarity | Flips | Polls  | Flip Rate")
+            print("-----|-------|----------|-------|--------|----------")
+            for i, (step, phase, pol, prev) in enumerate(step_info):
+                flips = int(last.get(f'flips_{i}', 0))
+                polls = int(last.get(f'polls_{i}', 0))
+                rate = f"{flips*100/polls:.1f}%" if polls > 0 else "N/A"
+                print(f"  {step}  |   {phase}   | {pol:<8s} | {flips:>5d} | {polls:>6d} | {rate:>8s}")
+            rising_flips = sum(int(last.get(f'flips_{i}', 0)) for i in [0,2,4])
+            falling_flips = sum(int(last.get(f'flips_{i}', 0)) for i in [1,3,5])
+            rising_polls = sum(int(last.get(f'polls_{i}', 0)) for i in [0,2,4])
+            falling_polls = sum(int(last.get(f'polls_{i}', 0)) for i in [1,3,5])
+            print(f"\nRising  flips={rising_flips} polls={rising_polls} rate={rising_flips*100/rising_polls:.1f}%" if rising_polls > 0 else "")
+            print(f"Falling flips={falling_flips} polls={falling_polls} rate={falling_flips*100/falling_polls:.1f}%" if falling_polls > 0 else "")
     else:
         print("\nNo data captured")
 

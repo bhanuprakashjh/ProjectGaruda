@@ -105,7 +105,22 @@ void BEMF_ZC_Init(volatile GARUDA_DATA_T *pData)
     pData->icZc.diagLcoutAccepted = 0;
     pData->icZc.diagFalseZc = 0;
     pData->icZc.diagPollCycles = 0;
+    pData->icZc.lastCmpState = 0xFF;
+    {
+        uint8_t i;
+        for (i = 0; i < 6; i++) {
+            pData->icZc.stepFlips[i] = 0;
+            pData->icZc.stepPolls[i] = 0;
+        }
+    }
     HAL_ZcTimer_Stop();
+#if FEATURE_IC_ZC_CAPTURE
+    pData->icZc.icCommStamp = 0;
+    pData->icZc.icArmed = false;
+    pData->icZc.diagIcAccepted = 0;
+    pData->icZc.diagIcBounce = 0;
+    HAL_ZcIC_Disarm();
+#endif
 #endif
 
     pData->zcDiag.zcLatencyPct = 0;
@@ -393,6 +408,19 @@ void BEMF_ZC_OnCommutation(volatile GARUDA_DATA_T *pData)
         pData->icZc.blankingEndHR = pData->icZc.lastCommHR + blankHR;
         pData->icZc.activeChannel = step->floatingPhase;
         pData->icZc.pollFilter = 0;
+        pData->icZc.lastCmpState = 0xFF;  /* force re-read on first poll */
+
+#if FEATURE_IC_ZC_CAPTURE
+        /* Configure SCCP2 IC for this step's floating phase and polarity.
+         * Disarms IC, re-routes PPS, sets edge. Armed later after blanking. */
+        {
+            static const uint16_t rpPins[3] = { BEMF_A_RP, BEMF_B_RP, BEMF_C_RP };
+            HAL_ZcIC_Configure(rpPins[step->floatingPhase],
+                               step->zcPolarity > 0);
+            pData->icZc.icCommStamp = HAL_ZcIC_ReadTimer();
+            pData->icZc.icArmed = false;
+        }
+#endif
 
 #if FEATURE_CLC_BLANKING
         /* Force CLC D-FF to pre-ZC state. After commutation, the D-FF
@@ -665,24 +693,16 @@ void BEMF_ZC_ScheduleCommutation(volatile GARUDA_DATA_T *pData)
         eRPM = ERPM_CONST_SCHED / sp;
     }
 
-    /* Linear timing advance by eRPM */
-    uint16_t advDeg = TIMING_ADVANCE_MIN_DEG;
-    if (eRPM >= MAX_CLOSED_LOOP_ERPM)
-    {
-        advDeg = TIMING_ADVANCE_MAX_DEG;
-    }
-    else if (eRPM > TIMING_ADVANCE_START_ERPM)
-    {
-        uint32_t range = MAX_CLOSED_LOOP_ERPM - TIMING_ADVANCE_START_ERPM;
-        uint32_t pos = eRPM - TIMING_ADVANCE_START_ERPM;
-        advDeg = TIMING_ADVANCE_MIN_DEG +
-            (uint16_t)((uint32_t)(TIMING_ADVANCE_MAX_DEG - TIMING_ADVANCE_MIN_DEG)
-                       * pos / range);
-    }
-
-    /* Delay = sp * (30 - advDeg) / 60 */
-    uint16_t delay = (uint16_t)((uint32_t)sp * (30 - advDeg) / 60);
-    if (delay < 1) delay = 1;
+    /* AM32-style timing advance: fixed fraction of commutation interval.
+     * advance = (interval / 8) * advance_level
+     * waitTime = interval / 2 - advance
+     *
+     * advance_level: 0=0°, 1=7.5°, 2=15°, 3=22.5°
+     * This automatically scales with speed — no eRPM-based ramp needed.
+     * Default level 2 = 15° advance at all speeds. */
+    uint16_t halfPeriod = sp >> 1;
+    uint16_t advance = (sp >> 3) * TIMING_ADVANCE_LEVEL;
+    uint16_t delay = (halfPeriod > advance) ? (halfPeriod - advance) : 1;
 
 #if FEATURE_IC_ZC
     /* Hardware com timer with high-resolution timing. */
@@ -699,9 +719,10 @@ void BEMF_ZC_ScheduleCommutation(volatile GARUDA_DATA_T *pData)
                           ? pData->zcCtrl.refIntervalHR
                           : pData->timing.stepPeriodHR;
 
-            uint16_t delayHR = (uint16_t)(
-                (uint32_t)spHR * (30 - advDeg) / 60);
-            if (delayHR < 32) delayHR = 32;  /* Min ~20µs (fast poll, no CLC latency) */
+            /* AM32-style: half interval minus advance fraction */
+            uint16_t halfHR = spHR >> 1;
+            uint16_t advHR = (spHR >> 3) * TIMING_ADVANCE_LEVEL;
+            uint16_t delayHR = (halfHR > advHR) ? (halfHR - advHR) : 2;
 
             uint16_t targetHR = pData->timing.lastZcTickHR + delayHR;
 
@@ -748,8 +769,8 @@ void BEMF_ZC_ScheduleCommutation(volatile GARUDA_DATA_T *pData)
  * @brief Record ZC timing and update step period IIR.
  * Tracks both Timer1 (50µs) and SCCP4 HR (640ns) timestamps.
  */
-static void RecordZcTiming(volatile GARUDA_DATA_T *pData,
-                           uint16_t zcTick, uint16_t hrTick)
+void RecordZcTiming(volatile GARUDA_DATA_T *pData,
+                    uint16_t zcTick, uint16_t hrTick)
 {
     if (pData->timing.hasPrevZc)
     {
@@ -1000,7 +1021,7 @@ static void RecordZcTiming(volatile GARUDA_DATA_T *pData,
 }
 
 /**
- * @brief Fast poll ZC detection — called from SCCP1 timer ISR at 100kHz.
+ * @brief Fast poll ZC detection — called from SCCP1 timer ISR at 200kHz.
  *
  * State machine:
  *   BLANKING: check SCCP4 timestamp against blankingEndHR → ARMED
@@ -1034,6 +1055,15 @@ bool BEMF_ZC_FastPoll(volatile GARUDA_DATA_T *pData)
 
         pData->icZc.phase = IC_ZC_ARMED;
         pData->icZc.pollFilter = 0;
+#if FEATURE_IC_ZC_CAPTURE
+        /* Arm SCCP2 IC now that blanking has expired.
+         * One-shot: ISR disables itself on first capture. */
+        if (!pData->icZc.icArmed)
+        {
+            HAL_ZcIC_Arm();
+            pData->icZc.icArmed = true;
+        }
+#endif
     }
 
     if (pData->icZc.phase != IC_ZC_ARMED)
@@ -1062,6 +1092,18 @@ bool BEMF_ZC_FastPoll(volatile GARUDA_DATA_T *pData)
     /* Read comparator for the floating phase */
     uint8_t cmp = ReadBEMFComparator(pData->icZc.activeChannel);
 
+    /* Raw comparator edge trace — count transitions per step */
+    {
+        uint8_t step = pData->currentStep;
+        if (step < 6)
+        {
+            pData->icZc.stepPolls[step]++;
+            if (cmp != pData->icZc.lastCmpState && pData->icZc.lastCmpState != 0xFF)
+                pData->icZc.stepFlips[step]++;
+            pData->icZc.lastCmpState = cmp;
+        }
+    }
+
     /* ZC V2 Phase 3: strict polarity in all modes.
      * Never accept wrong-polarity comparator state.
      * AM32/ESCape32 never do this. Bench data confirms:
@@ -1077,9 +1119,7 @@ bool BEMF_ZC_FastPoll(volatile GARUDA_DATA_T *pData)
         if (pData->icZc.pollFilter == 0)
         {
             /* First matching read — record candidate ZC timestamp.
-             * This is the closest approximation of the actual ZC time.
-             * Using this instead of the confirmation time eliminates
-             * the deglitch filter delay from commutation scheduling. */
+             * Poll path is fallback when IC doesn't fire. */
             pData->icZc.zcCandidateHR = HAL_ComTimer_ReadTimer();
             pData->icZc.zcCandidateT1 = pData->timer1Tick;
         }

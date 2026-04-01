@@ -66,7 +66,11 @@ void GSP_CaptureSnapshot(GSP_CK_SNAPSHOT_T *dst)
     /* ZC diagnostics */
 #if FEATURE_IC_ZC
     dst->icAccepted   = src->icZc.diagAccepted;
+#if FEATURE_IC_ZC_CAPTURE
+    dst->icFalse      = src->icZc.diagIcAccepted;  /* TEMP: IC capture count */
+#else
     dst->icFalse      = src->icZc.diagFalseZc;
+#endif
     dst->filterLevel  = src->icZc.filterLevel;
 #endif
     dst->missedSteps  = src->timing.consecutiveMissedSteps;
@@ -106,6 +110,17 @@ void GSP_CaptureSnapshot(GSP_CK_SNAPSHOT_T *dst)
             dst->stepTimeouts[i] = src->zcDiag.stepTimeouts[i];
         }
     }
+
+    /* Raw comparator edge trace */
+#if FEATURE_IC_ZC
+    {
+        uint8_t i;
+        for (i = 0; i < 6; i++) {
+            dst->stepFlips[i] = src->icZc.stepFlips[i];
+            dst->stepPolls[i] = src->icZc.stepPolls[i];
+        }
+    }
+#endif
 }
 
 #endif /* FEATURE_GSP */

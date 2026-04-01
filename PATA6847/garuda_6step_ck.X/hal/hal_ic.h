@@ -43,5 +43,63 @@ void HAL_ZcTimer_Start(void);
  */
 void HAL_ZcTimer_Stop(void);
 
+/* ── SCCP2 Input Capture for hardware-precise ZC timestamps ────────── */
+#if FEATURE_IC_ZC_CAPTURE
+
+/* BEMF comparator RP pin numbers for PPS routing to SCCP2 IC input.
+ * RC6 = RP54 (0x36), RC7 = RP55 (0x37), RD10 = RP74 (0x4A). */
+#define BEMF_A_RP   0x0036U
+#define BEMF_B_RP   0x0037U
+#define BEMF_C_RP   0x004AU
+
+/**
+ * @brief Initialize SCCP2 as Input Capture for ZC edge detection.
+ * Timer runs at same prescaler as SCCP4 (Fp/64 = 640ns/tick).
+ * Interrupt disabled until armed after blanking.
+ */
+void HAL_ZcIC_Init(void);
+
+/**
+ * @brief Route a BEMF comparator pin to SCCP2 IC input and set edge.
+ * Call at each commutation to select the floating phase.
+ * @param rpPin RP pin number (BEMF_A_RP, BEMF_B_RP, or BEMF_C_RP)
+ * @param risingEdge true=capture rising edge, false=capture falling
+ */
+void HAL_ZcIC_Configure(uint16_t rpPin, bool risingEdge);
+
+/**
+ * @brief Arm SCCP2 IC for one-shot capture.
+ * Call after blanking expires. Clears any stale flag and enables interrupt.
+ */
+void HAL_ZcIC_Arm(void);
+
+/**
+ * @brief Disarm SCCP2 IC (disable interrupt).
+ * Called in IC ISR (one-shot) or at commutation/stop.
+ */
+static inline void HAL_ZcIC_Disarm(void)
+{
+    _CCP2IE = 0;
+    _CCP2IF = 0;
+}
+
+/**
+ * @brief Read the captured SCCP2 timer value (latched at edge).
+ */
+static inline uint16_t HAL_ZcIC_ReadCapture(void)
+{
+    return CCP2BUFL;
+}
+
+/**
+ * @brief Read the current SCCP2 timer value (for backdate calculation).
+ */
+static inline uint16_t HAL_ZcIC_ReadTimer(void)
+{
+    return CCP2TMRL;
+}
+
+#endif /* FEATURE_IC_ZC_CAPTURE */
+
 #endif /* FEATURE_IC_ZC */
 #endif /* HAL_IC_H */

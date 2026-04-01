@@ -14,7 +14,7 @@
 
 /* ── Motor Profile Selection ──────────────────────────────────────── */
 #ifndef MOTOR_PROFILE
-#define MOTOR_PROFILE   2   /* 0=Hurst, 1=A2212, 2=2810 */
+#define MOTOR_PROFILE   1   /* 0=Hurst, 1=A2212, 2=2810 */
 #endif
 
 /* ── Clock ─────────────────────────────────────────────────────────── */
@@ -153,13 +153,14 @@
 #define ZC_BLANK_FLOOR_US   25U         /* Abs minimum blanking (µs). A2212 L/R=462µs */
 #define ZC_BLANK_CAP_PCT    45U         /* Max blanking as % of step period */
 
-/* Speed P controller (no D — derivative amplifies ZC glitches) */
-#define FEATURE_SPEED_PD     1           /* enable for A2212 */
-#define SPEED_PD_KP         10U          /* moderate P — don't overreact to brief ZC miss */
-#define SPEED_PD_KD          0U          /* D disabled: ZC miss causes eRPM spike → duty swing */
-#define SPEED_PD_SCALE   10000UL
-#define MIN_TARGET_ERPM   3000U
-#define MAX_TARGET_ERPM  60000U          /* A2212 at 12V with prop */
+/* Speed PD disabled — raw pot→duty for no-load bench testing.
+ * Re-enable with prop for speed regulation. */
+#define FEATURE_SPEED_PD     0
+
+/* Duty governor: full duty available from 10k eRPM.
+ * No-load bench — motor needs ~100% duty to reach 117k eRPM.
+ * With prop, raise back to 60-100k for protection. */
+#define DUTY_RAMP_ERPM       10000U
 
 /* Timing Advance — compensates commutation delay at high eRPM.
  *
@@ -171,9 +172,11 @@
  *   delay = 300 × 14/60 = 70µs — comfortable
  * At Tp:5 (40k+ eRPM), advance = 20° (max):
  *   delay = 250 × 10/60 = 42µs — tight but HR-scheduled */
-#define TIMING_ADVANCE_MIN_DEG      0U   /* Degrees advance at low speed */
-#define TIMING_ADVANCE_MAX_DEG      20U  /* Degrees advance at max speed */
-#define TIMING_ADVANCE_START_ERPM   5000U /* eRPM where advance begins */
+/* AM32-style timing advance: fixed fraction of commutation interval.
+ * advance = (interval / 8) * level → 7.5° per level.
+ * Level 0=0°, 1=7.5°, 2=15° (AM32 default), 3=22.5°.
+ * Scales automatically with speed — no eRPM ramp needed. */
+#define TIMING_ADVANCE_LEVEL    2U   /* 15° advance (AM32 default) */
 
 /* Closed-Loop advance curve endpoint.
  * Advance ramps from 0° to 20° linearly over 5k-40k eRPM range.
@@ -378,9 +381,17 @@
 #endif
 
 #ifndef FEATURE_CLC_BLANKING
-#define FEATURE_CLC_BLANKING    1   /* CLC D-FF PWM-synchronous BEMF sampling.
-                                     * Samples comparator at mid-PWM, eliminates
-                                     * switching noise aliasing (step-2 fix). */
+#define FEATURE_CLC_BLANKING    0   /* CLC experiment: reduced step-2 aliasing but
+                                     * degraded overall detection at 20kHz PWM.
+                                     * Needs 40kHz+ PWM or new detector architecture.
+                                     * Disabled — raw GPIO poller is better at 20kHz. */
+#endif
+
+#ifndef FEATURE_IC_ZC_CAPTURE
+#define FEATURE_IC_ZC_CAPTURE   1   /* SCCP2 IC for hardware-precise ZC timestamps.
+                                     * ATA6847 comparator is inverted — rising ZC
+                                     * produces falling edge, falling ZC produces
+                                     * rising edge. MOD polarity accounts for this. */
 #endif
 
 #ifndef FEATURE_GSP
@@ -409,6 +420,7 @@
                                               * False ZC rate managed by per-rev desync check. */
 #define ZC_POLL_PERIOD          (FCY / ZC_POLL_FREQ_HZ)  /* 1000 ticks at 100MHz Fp */
 #define ZC_POLL_ISR_PRIORITY    5           /* Above Timer1(4), below ComTimer(6) */
+#define ZC_IC_ISR_PRIORITY      5           /* SCCP2 IC capture: same as poll */
 
 /* Adaptive deglitch filter: consecutive matching reads to confirm ZC.
  * Fewer reads at high speed (tight timing margins), more at low speed

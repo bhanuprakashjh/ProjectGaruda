@@ -111,6 +111,17 @@ typedef struct {
     uint16_t diagLcoutAccepted; /* ZCs accepted via ADC ISR backup */
     uint16_t diagFalseZc;       /* Rejected by RecordZcTiming */
     uint16_t diagPollCycles;    /* Total poll ISR invocations */
+    /* Raw comparator edge trace */
+    uint8_t  lastCmpState;      /* previous raw comparator read (0 or 1) */
+    uint16_t stepFlips[6];      /* comparator transitions per step (glitch count) */
+    uint16_t stepPolls[6];      /* total polls per step (for rate calculation) */
+#if FEATURE_IC_ZC_CAPTURE
+    /* SCCP2 IC capture state */
+    uint16_t icCommStamp;       /* SCCP2 timer at last commutation (IC domain) */
+    bool     icArmed;           /* true when IC is armed for capture */
+    uint16_t diagIcAccepted;    /* ZCs accepted via IC capture */
+    uint16_t diagIcBounce;      /* IC fires rejected (bounce after blanking) */
+#endif
 } IC_ZC_STATE_T;
 #endif
 

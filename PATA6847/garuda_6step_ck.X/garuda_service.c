@@ -631,10 +631,11 @@ void __attribute__((interrupt, auto_psv)) _T1Interrupt(void)
                 }
                 else
                 {
-                    /* NOT synced — cut duty aggressively */
+                    /* NOT synced — reduce duty via normal slew (not halving).
+                     * The old slewedDuty/2 ran at 20kHz and destroyed duty
+                     * in <1ms on any brief sync loss, making recovery
+                     * impossible. Normal slew-down gives time to re-sync. */
                     target = CL_IDLE_DUTY;
-                    if (slewedDuty > CL_IDLE_DUTY * 2)
-                        slewedDuty = slewedDuty / 2;
 #if FEATURE_SPEED_PD
                     gData.speedPd.override = (int32_t)CL_IDLE_DUTY;
                     gData.speedPd.lastError = 0;
@@ -979,5 +980,105 @@ void __attribute__((interrupt, no_auto_psv)) _CCP4Interrupt(void)
 
     _CCP4IF = 0;
 }
+
+#if FEATURE_IC_ZC_CAPTURE
+/**
+ * @brief SCCP2 Input Capture ISR — pure IC-driven ZC detection.
+ *
+ * Replaces the poll path for ZC detection. On the first comparator edge
+ * after blanking, validates the interval, records timing, and schedules
+ * commutation directly. No deglitch filter — single edge = ZC.
+ *
+ * The poll path (FastPoll) still runs but serves only as a fallback
+ * if the IC misses an edge (e.g. no transition occurs).
+ */
+void __attribute__((interrupt, no_auto_psv)) _CCP2Interrupt(void)
+{
+    /* One-shot: disarm immediately to prevent bounce re-triggers */
+    _CCP2IE = 0;
+    _CCP2IF = 0;
+
+    /* Only process during closed-loop, when IC was properly armed,
+     * AND at high speed where the comparator is clean enough for
+     * single-edge detection. Below ~30k eRPM, flip rate is 10-40%
+     * and IC accepts noise as ZC. Above ~30k, flip rate drops to
+     * ~5% and IC matches poll path 1:1. */
+    if (gData.state != ESC_CLOSED_LOOP || !gData.icZc.icArmed)
+        return;
+    if (gData.timing.stepPeriod > 6)  /* Tp>6 = <33k eRPM: poll-only */
+        return;
+
+    /* If poll path already got this ZC, stop */
+    if (gData.bemf.zeroCrossDetected)
+        return;
+
+    /* Single-read state check: confirm comparator is in expected
+     * post-ZC state. With single-polarity MOD, the IC only fires
+     * on the correct edge direction, so one state check is enough.
+     * NO re-arm on rejection — poll path handles missed steps. */
+    {
+        uint8_t cmp;
+        switch (gData.icZc.activeChannel)
+        {
+            case 0:  cmp = BEMF_A_GetValue() ? 1 : 0; break;
+            case 1:  cmp = BEMF_B_GetValue() ? 1 : 0; break;
+            case 2:  cmp = BEMF_C_GetValue() ? 1 : 0; break;
+            default: cmp = 0; break;
+        }
+        if (cmp != gData.bemf.cmpExpected)
+        {
+            /* Noise edge — don't re-arm. Poll handles this step. */
+            gData.icZc.diagIcBounce++;
+            return;
+        }
+    }
+
+    /* Backdate IC timestamp to SCCP4 domain. */
+    uint16_t icCapture = HAL_ZcIC_ReadCapture();
+    uint16_t icNow     = HAL_ZcIC_ReadTimer();
+    uint16_t s4Now     = HAL_ComTimer_ReadTimer();
+    uint16_t elapsed   = icNow - icCapture;
+    uint16_t zcTickHR  = s4Now - elapsed;
+
+    /* 50% interval rejection. */
+    {
+        uint16_t sinceLastZc = zcTickHR - gData.timing.lastZcTickHR;
+        uint16_t ref = gData.zcCtrl.refIntervalHR;
+        if (ref == 0) ref = gData.timing.stepPeriodHR;
+        uint16_t halfInterval = ref >> 1;
+        if (halfInterval > 0 && (int16_t)(sinceLastZc - halfInterval) < 0)
+        {
+            /* Too early — don't re-arm. Poll handles this step. */
+            gData.icZc.diagIcBounce++;
+            return;
+        }
+    }
+
+    /* Compute Timer1 tick (approximate) */
+    uint16_t zcTickT1 = gData.timer1Tick;
+    {
+        uint16_t elapsedT1 = (uint16_t)((uint32_t)elapsed * COM_TIMER_T1_DENOM
+                                         / COM_TIMER_T1_NUMER);
+        zcTickT1 -= elapsedT1;
+    }
+
+    /* Accept ZC — record timing and schedule commutation */
+    gData.icZc.icArmed = false;
+    gData.bemf.zeroCrossDetected = true;
+    RecordZcTiming((volatile GARUDA_DATA_T *)&gData, zcTickT1, zcTickHR);
+
+    if (gData.bemf.zeroCrossDetected)
+    {
+        gData.icZc.diagIcAccepted++;
+        gData.icZc.phase = IC_ZC_DONE;
+        BEMF_ZC_ScheduleCommutation((volatile GARUDA_DATA_T *)&gData);
+    }
+    else
+    {
+        /* RecordZcTiming rejected — poll handles this step */
+        gData.icZc.diagIcBounce++;
+    }
+}
+#endif /* FEATURE_IC_ZC_CAPTURE */
 
 #endif /* FEATURE_IC_ZC */

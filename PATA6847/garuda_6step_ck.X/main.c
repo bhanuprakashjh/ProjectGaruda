@@ -266,6 +266,12 @@ int main(void)
     /* 8c. SCCP4 commutation timer (hardware-timed commutation) */
     HAL_ComTimer_Init();
     HAL_UART_WriteString("CT.");
+
+#if FEATURE_IC_ZC_CAPTURE
+    /* 8d. SCCP2 input capture for hardware-precise ZC timestamps */
+    HAL_ZcIC_Init();
+    HAL_UART_WriteString("IC.");
+#endif
 #endif
 
     /* 9. Board service + ESC service */

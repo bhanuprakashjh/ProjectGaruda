@@ -148,6 +148,9 @@ typedef struct __attribute__((packed)) {
     /* Per-step 0..5 counters (24B) — phase-pair vs polarity-class test */
     uint16_t stepAccepted[6];   /* ZCs accepted per commutation step */
     uint16_t stepTimeouts[6];   /* timeouts per commutation step */
+    /* Raw comparator edge trace (24B) */
+    uint16_t stepFlips[6];      /* comparator transitions per step (glitch count) */
+    uint16_t stepPolls[6];      /* total polls per step */
 } GSP_CK_SNAPSHOT_T;
 
 /* XC16 doesn't support _Static_assert. Verify size at compile time:
