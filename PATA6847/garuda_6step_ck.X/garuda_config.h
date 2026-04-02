@@ -14,7 +14,7 @@
 
 /* ── Motor Profile Selection ──────────────────────────────────────── */
 #ifndef MOTOR_PROFILE
-#define MOTOR_PROFILE   1   /* 0=Hurst, 1=A2212, 2=2810 */
+#define MOTOR_PROFILE   2   /* 0=Hurst, 1=A2212, 2=2810 */
 #endif
 
 /* ── Clock ─────────────────────────────────────────────────────────── */
@@ -85,12 +85,7 @@
 #define ZC_BLANK_FLOOR_US   25U         /* Absolute minimum blanking (µs) */
 #define ZC_BLANK_CAP_PCT    45U         /* Max blanking as % of step period */
 
-/* Timing Advance — Hurst has high inductance (471µH), moderate advance needed.
- * At max speed (Tp:11), total delay from real ZC = 3 + sp*(30-adv)/60.
- * With 8° max: 3 + 11*22/60 = 7 ticks. HalfStep = 5.5. OK margin. */
-#define TIMING_ADVANCE_MIN_DEG      0U   /* Degrees advance at low speed */
-#define TIMING_ADVANCE_MAX_DEG      8U   /* Degrees advance at max speed */
-#define TIMING_ADVANCE_START_ERPM   6000U /* eRPM where advance begins (~1200 mech RPM) */
+/* Timing advance: uses shared TIMING_ADVANCE_LEVEL default (15°) */
 
 /* Closed-Loop */
 #define MAX_CLOSED_LOOP_ERPM 15000U      /* ~3000 mech RPM */
@@ -153,36 +148,8 @@
 #define ZC_BLANK_FLOOR_US   25U         /* Abs minimum blanking (µs). A2212 L/R=462µs */
 #define ZC_BLANK_CAP_PCT    45U         /* Max blanking as % of step period */
 
-/* Speed PD disabled. Fixed-rate (1ms) PD on eRPM causes duty oscillation
- * at high speed — small eRPM jitter → PD reacts → transient → more jitter.
- * Needs AM32-style per-ZC interval-based PID to work properly.
- * Direct pot→duty + duty governor gives 101k eRPM stable. */
-#define FEATURE_SPEED_PD     0
-
-/* Duty governor: limits max duty based on measured eRPM.
- * Prevents fast-pot desync. Full duty at 60k. */
-#define DUTY_RAMP_ERPM       60000U
-
-/* Timing Advance — compensates commutation delay at high eRPM.
- *
- * Fast poll (100kHz) with SCCP4 HR timestamps (640ns) gives ~10µs
- * worst-case ZC timing error. Advance must ensure comm delay >
- * deglitch latency (30µs at min filter=3) so HR scheduling works.
- *
- * At Tp:6 (33k eRPM), advance = 20*(33-5)/(40-5) = 16°:
- *   delay = 300 × 14/60 = 70µs — comfortable
- * At Tp:5 (40k+ eRPM), advance = 20° (max):
- *   delay = 250 × 10/60 = 42µs — tight but HR-scheduled */
-/* AM32-style timing advance: fixed fraction of commutation interval.
- * advance = (interval / 8) * level → 7.5° per level.
- * Level 0=0°, 1=7.5°, 2=15° (AM32 default), 3=22.5°.
- * Scales automatically with speed — no eRPM ramp needed. */
-#define TIMING_ADVANCE_LEVEL    2U   /* 15° advance (AM32 default) */
-
-/* Closed-Loop advance curve endpoint.
- * Advance ramps from 0° to 20° linearly over 5k-40k eRPM range.
- * Beyond 40k eRPM, advance stays at 20° (max). */
-#define MAX_CLOSED_LOOP_ERPM 100000U     /* Advance curve endpoint — A2212 reaches 100k+ eRPM */
+/* Closed-Loop */
+#define MAX_CLOSED_LOOP_ERPM 100000U
 #define MIN_CL_STEP_PERIOD   2U          /* Tp floor — was 5, clamped entire pot range.
                                           * Tp:2 = 100k eRPM. Below Tp:2, Timer1 quantization
                                           * is too coarse; HR timing handles sub-tick precision. */
@@ -244,14 +211,7 @@
 #define ZC_BLANK_CAP_PCT    45U         /* Max blanking as % of step period */
 #define FEATURE_IC_ZC_ADAPTIVE 1        /* Enable adaptive blanking for 2810 */
 
-/* Timing Advance — 2810 has low Ls (25µH), BEMF rises fast.
- * Start advance earlier (3000 eRPM vs 5000) and ramp to 25° (vs 20°).
- * Low-Ls motors benefit from more advance at high speed because the
- * commutation delay (deglitch + scheduling) is a larger fraction of
- * the electrical period. */
-#define TIMING_ADVANCE_MIN_DEG      2U    /* Small base advance even at low speed */
-#define TIMING_ADVANCE_MAX_DEG      25U   /* More advance for low-Ls motor */
-#define TIMING_ADVANCE_START_ERPM   3000U /* Start earlier — BEMF usable sooner */
+/* Timing advance: uses shared TIMING_ADVANCE_LEVEL default (15°) */
 
 /* Closed-Loop
  * At 25.2V (6S full): 1350 × 25.2 = 34020 RPM = 238k eRPM theoretical.
@@ -266,13 +226,7 @@
  * 0 eRPM to MAX_DUTY at DUTY_RAMP_ERPM. Motor can only get more
  * duty as it proves it can commutate at the current speed.
  * Prevents desync from fast throttle increase under load. */
-/* Speed PD controller (AM32-style accumulated override) */
-#define FEATURE_SPEED_PD     1           /* enable for 2810 */
-#define SPEED_PD_KP          5U          /* proportional (÷SPEED_PD_SCALE) */
-#define SPEED_PD_KD         50U          /* derivative (÷SPEED_PD_SCALE) */
-#define SPEED_PD_SCALE   10000UL         /* output divider */
-#define MIN_TARGET_ERPM   3000U          /* pot at zero → idle target */
-#define MAX_TARGET_ERPM  80000U          /* pot at max → prop-safe */
+/* Speed PD: uses shared default (disabled) */
 
 #define DUTY_RAMP_ERPM       60000U      /* full duty available at 60k eRPM.
                                          * With props at 24V, motor reaches
@@ -293,10 +247,10 @@
  * OV: 28V (margin above fully charged 6S)
  * UV: 10V (bench supply sags under desync current spikes;
  *     production should use 16V for LiPo protection) */
-#define VBUS_OV_THRESHOLD   (38752U)       /* ~32V. Was 28V — regen spikes during
-                                         * fast deceleration reach 28V at 24V supply.
-                                         * 32V gives margin for regen while still
-                                         * protecting against real OV faults. */
+#define VBUS_OV_THRESHOLD   (48440U)       /* ~40V. Regen spikes at 24V supply
+                                         * reach 32V+ during fast decel or rough
+                                         * commutation. 40V gives headroom.
+                                         * Board FETs rated 100V — 40V is safe. */
 #define VBUS_UV_THRESHOLD   (12110U)       /* ~10V → 1211*10 */
 
 #else
@@ -365,12 +319,27 @@
 #define ZC_BYPASS_LO_PCT    40U     /* Min % of stepPeriodHR for bypass acceptance */
 #define ZC_BYPASS_HI_PCT   160U     /* Max % of stepPeriodHR for bypass acceptance */
 
-/* Speed governance default (per-profile override in motor section) */
-#ifndef DUTY_RAMP_ERPM
-#define DUTY_RAMP_ERPM  100000U  /* default: no effective limit for Hurst/A2212 */
+/* ── Universal defaults (apply to ALL motors) ─────────────────────── */
+
+/* AM32-style timing advance: fixed fraction of commutation interval.
+ * advance = (interval/8) * level → 7.5° per level.
+ * Level 2 = 15° works for all motors tested (Hurst, A2212, 2810).
+ * Per-profile override possible but not needed. */
+#ifndef TIMING_ADVANCE_LEVEL
+#define TIMING_ADVANCE_LEVEL  2U
 #endif
+
+/* Speed PD disabled globally — direct pot→duty + duty governor.
+ * Current eRPM-based 1ms PD causes duty oscillation at high speed.
+ * Needs AM32-style per-ZC interval-based PID before re-enabling. */
 #ifndef FEATURE_SPEED_PD
-#define FEATURE_SPEED_PD     0   /* disabled for Hurst/A2212 by default */
+#define FEATURE_SPEED_PD     0
+#endif
+
+/* Duty governor: limits max duty based on measured eRPM.
+ * Prevents fast-pot desync. Full duty at threshold. */
+#ifndef DUTY_RAMP_ERPM
+#define DUTY_RAMP_ERPM  60000U
 #endif
 #ifndef MIN_TARGET_ERPM
 #define MIN_TARGET_ERPM   1000U
@@ -392,10 +361,7 @@
 #endif
 
 #ifndef FEATURE_IC_ZC_CAPTURE
-#define FEATURE_IC_ZC_CAPTURE   1   /* SCCP2 IC for hardware-precise ZC timestamps.
-                                     * ATA6847 comparator is inverted — rising ZC
-                                     * produces falling edge, falling ZC produces
-                                     * rising edge. MOD polarity accounts for this. */
+#define FEATURE_IC_ZC_CAPTURE   1   /* Hybrid IC+poll: IC timestamp, poll validates */
 #endif
 
 #ifndef FEATURE_GSP
@@ -417,7 +383,13 @@
  * At 100 kHz, worst-case idle CPU = 2%. ZC detection + scheduling
  * adds ~1-2 µs once per step (negligible). */
 #if FEATURE_IC_ZC
-#define ZC_POLL_FREQ_HZ         200000U     /* 200 kHz polling rate.
+#define ZC_POLL_FREQ_HZ         210526U     /* ~210.5 kHz — NOT an integer multiple of
+                                              * 20kHz PWM. 200kHz/20kHz = exactly 10 polls
+                                              * per PWM cycle → polls always hit the same
+                                              * positions → aliasing at 60k/80k eRPM.
+                                              * 210.5kHz/20kHz = 10.526 → polls drift
+                                              * across PWM cycle, smearing switching noise.
+                                              * Period = 475 ticks (vs 500 at 200kHz).
                                               * 100kHz desync'd 2810 at 36k eRPM (Tp=5).
                                               * 200kHz doubles polls per step — FL=3 at Tp=5
                                               * gets 50 polls (10 blanked) vs 25 at 100kHz.

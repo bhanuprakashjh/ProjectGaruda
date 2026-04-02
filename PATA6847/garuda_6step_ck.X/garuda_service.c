@@ -320,22 +320,15 @@ void GarudaService_MainLoop(void)
             GarudaService_StartMotor();
     }
 
-    /* Auto-clear FAULT after 1 second — allows retry without board reset.
-     * If the fault condition persists, it will fault again quickly.
-     * User can stop motor via pot=0 or SW2. */
-    if (gData.state == ESC_FAULT)
+    /* FAULT state: clear fault on SW1 press (same as normal start).
+     * Don't auto-restart — ATA6847 faults need the motor to stop
+     * completely before GDU can re-enter Normal mode. */
+    if (gData.state == ESC_FAULT && BTN1_GetValue() == 0)
     {
-        static uint32_t faultTick = 0;
-        if (faultTick == 0)
-            faultTick = gData.systemTick;
-        else if (gData.systemTick - faultTick > 1000)
-        {
-            faultTick = 0;
-            gData.state = ESC_IDLE;
-            gData.faultCode = FAULT_NONE;
-            gData.desyncRestartAttempts = 0;
-            LED_FAULT = 0;
-        }
+        gData.state = ESC_IDLE;
+        gData.faultCode = FAULT_NONE;
+        gData.desyncRestartAttempts = 0;
+        LED_FAULT = 0;
     }
 
     /* Handle deferred fault — do the SPI standby that ISR couldn't */
@@ -1031,20 +1024,37 @@ void __attribute__((interrupt, no_auto_psv)) _CCP2Interrupt(void)
         return;
 
     /* HYBRID: IC provides precise timestamp, poll validates.
-     * IC does NOT call RecordZcTiming or ScheduleCommutation.
-     * It only latches the backdated SCCP4 timestamp into
-     * zcCandidateHR/T1. The poll path confirms with its 3-read
-     * deglitch and schedules using the IC's precise timestamp.
-     *
-     * This gives: IC precision (640ns) + poll reliability (3-read). */
+     * IC latches timestamp ONLY if the edge passes 50% interval check.
+     * This prevents noise edges (before 50%) from providing a wrong
+     * early timestamp that the poll later confirms and schedules from. */
 
     /* Backdate IC timestamp to SCCP4 domain. */
     uint16_t icCapture = HAL_ZcIC_ReadCapture();
     uint16_t icNow     = HAL_ZcIC_ReadTimer();
     uint16_t s4Now     = HAL_ComTimer_ReadTimer();
     uint16_t elapsed   = icNow - icCapture;
+    uint16_t zcTickHR  = s4Now - elapsed;
 
-    gData.icZc.zcCandidateHR = s4Now - elapsed;
+    /* 50% interval rejection — same as poll path Layer 2.
+     * Reject noise edges that arrive before 50% of expected interval.
+     * Without this, IC latches an early timestamp that the poll later
+     * confirms (comparator stayed in expected state), causing early
+     * commutation → rough operation → current spikes → OV fault. */
+    {
+        uint16_t sinceLastZc = zcTickHR - gData.timing.lastZcTickHR;
+        uint16_t ref = gData.zcCtrl.refIntervalHR;
+        if (ref == 0) ref = gData.timing.stepPeriodHR;
+        uint16_t halfInterval = ref >> 1;
+        if (halfInterval > 0 && (int16_t)(sinceLastZc - halfInterval) < 0)
+        {
+            /* Too early — noise edge. Don't latch timestamp.
+             * Poll will use its own timestamp when it confirms. */
+            gData.icZc.diagIcBounce++;
+            return;
+        }
+    }
+
+    gData.icZc.zcCandidateHR = zcTickHR;
     {
         uint16_t elapsedT1 = (uint16_t)((uint32_t)elapsed * COM_TIMER_T1_DENOM
                                          / COM_TIMER_T1_NUMER);

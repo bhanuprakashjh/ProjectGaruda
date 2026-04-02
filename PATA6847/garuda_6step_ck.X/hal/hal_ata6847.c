@@ -72,12 +72,11 @@ void HAL_ATA6847_Init(void)
     HAL_ATA6847_WriteReg(ATA_ILIMTH, ILIM_DAC);
 
     /* Short circuit protection */
-    HAL_ATA6847_WriteReg(ATA_SCPCR, (1 << 7) | (5 << 3) | 5);
-    /* SCTHSEL=5 (1500mV). VDS spikes scale with Vbus — at 24V the
-     * switching transients exceed 1000mV even at moderate current.
-     * Confirmed: 500mV trips at 10A, 1000mV trips at ~26A spike.
-     * 1500mV gives headroom for 24V operation.
-     * Still protects against real shorts (VDS > 1.5V = dead short). */
+    HAL_ATA6847_WriteReg(ATA_SCPCR, (1 << 7) | (7 << 3) | 7);
+    /* SCTHSEL=7 (2000mV). VDS spikes scale with Vbus — at 24V the
+     * switching transients exceed 1500mV at moderate current, tripping
+     * SCTHSEL=5. 2000mV gives headroom for 24V operation.
+     * SCTHLSEL=7 for low-side too. Still protects real shorts. */
 
     /* Current sense: disabled, gain=16, offset=VRef/2 */
     HAL_ATA6847_WriteReg(ATA_CSCR, (0x00 << 5) | (0x03 << 2) | 0x01);
@@ -94,7 +93,10 @@ void HAL_ATA6847_Init(void)
      * the software deglitch filter. HW blanking suppresses the comparator
      * output itself, which software blanking cannot do.
      * HSOFF=1, LSOFF=1: HS/LS off in standby. TSWTO=0b00: 250ns adaptive. */
-    HAL_ATA6847_WriteReg(ATA_GDUCR2, (1 << 7) | (1 << 6) | 8);   /* 0xC8: EGBLT=8 (2µs) */
+    HAL_ATA6847_WriteReg(ATA_GDUCR2, (1 << 7) | (1 << 6) | 12);  /* 0xCC: EGBLT=12 (3µs).
+                                                                     * At 24V, switching transients
+                                                                     * exceed 2µs on rising steps.
+                                                                     * 3µs covers the ringing. */
     /* GDUCR3: Slew rate + adaptive dead-time.
      * HSSRC=0b11 (12.5%), LSSRC=0b00 (full speed), no adaptive dead time.
      * Asymmetric by design — slow HS reduces ringing. Tested alternatives:
