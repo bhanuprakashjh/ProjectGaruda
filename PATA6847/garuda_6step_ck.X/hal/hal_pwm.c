@@ -38,8 +38,18 @@ static inline void ApplyPhaseState(volatile uint16_t *ioconl,
     switch (state)
     {
         case PHASE_PWM_ACTIVE:
-            /* Release overrides — complementary PWM drives both H and L */
-            val &= ~(0x3000u);  /* Clear OVRENH (bit13) and OVRENL (bit12) */
+#if PWM_DRIVE_UNIPOLAR
+            /* H-PWM / L-OFF (unipolar). 34x fewer ZC timeouts vs
+             * complementary — half the switching edges = clean comparator.
+             * No braking during OFF → needs lower MAX_DUTY (~25%). */
+            val &= ~0x2000u;            /* Clear OVRENH — PWM drives H */
+            val |= 0x1000u;             /* Set OVRENL — override L */
+            val &= ~0x0400u;            /* OVRDAT_L = 0 — L forced OFF */
+#else
+            /* Complementary: H and L alternate with dead time.
+             * Active braking during OFF → needs higher MAX_DUTY (~100%). */
+            val &= ~(0x3000u);          /* Clear OVRENH and OVRENL */
+#endif
             break;
         case PHASE_LOW:
             /* Override: H=OFF, L=ON.

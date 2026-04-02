@@ -23,11 +23,33 @@
 #define FOSC_PWM_MHZ        400U         /* PWM timing base (CK: 2x Fosc) */
 
 /* ── PWM ───────────────────────────────────────────────────────────── */
-#define PWMFREQUENCY_HZ     20000U       /* 20 kHz switching */
+#define PWMFREQUENCY_HZ     24000U       /* 24 kHz (AM32 default). Inaudible.
+                                          * 15kHz gave 19x fewer ZC timeouts
+                                          * but was audible. 24kHz should give
+                                          * cleaner ZC than 20kHz while staying
+                                          * above hearing. Aliasing at 72k eRPM
+                                          * (was 60k at 20kHz). */
 #define LOOPTIME_MICROSEC   (uint16_t)(1000000UL / PWMFREQUENCY_HZ)  /* 50 us */
 #define LOOPTIME_TCY        (uint16_t)((uint32_t)LOOPTIME_MICROSEC * FOSC_PWM_MHZ / 2 - 1)
-#define MAX_DUTY            (LOOPTIME_TCY - 200U)  /* Min off-time margin */
-#define MIN_DUTY            200U
+/* PWM drive mode: complementary vs unipolar.
+ * 0 = Complementary (H+L alternate): active braking, more switching noise
+ * 1 = Unipolar (H-PWM, L-OFF): no braking, half switching noise.
+ *     34x fewer ZC timeouts, 99.96% success rate.
+ *     Needs lower MAX_DUTY (25%) since no braking. */
+#ifndef PWM_DRIVE_UNIPOLAR
+#define PWM_DRIVE_UNIPOLAR  1
+#endif
+
+#if PWM_DRIVE_UNIPOLAR
+#define MAX_DUTY            (LOOPTIME_TCY / 4)     /* 25% for unipolar (no braking) */
+#else
+#define MAX_DUTY            (LOOPTIME_TCY - 200U)  /* ~100% for complementary */
+#endif
+#if PWM_DRIVE_UNIPOLAR
+#define MIN_DUTY            50U          /* Unipolar: low idle needs low min */
+#else
+#define MIN_DUTY            200U         /* Complementary: normal min */
+#endif
 /* Dead time: ATA6847 handles 700ns CCPT internally, so dsPIC dead time
  * is minimal. Reference firmware uses 0x14 = 20 counts = 50ns. */
 #define DEADTIME_TCY        0x14U
@@ -90,7 +112,7 @@
 /* Closed-Loop */
 #define MAX_CLOSED_LOOP_ERPM 15000U      /* ~3000 mech RPM */
 #define RAMP_TARGET_ERPM     3000U       /* OL→CL handoff speed */
-#define CL_IDLE_DUTY_PERCENT 8U          /* Minimum duty in CL (idle floor) */
+/* CL_IDLE_DUTY_PERCENT: shared default below */
 
 /* ATA6847 Hardware Current Limit — cycle-by-cycle chopping.
  * DAC formula: VILIM_TH = 3.3V × DAC / 128
@@ -160,7 +182,7 @@
  * PRODUCTION: raise to DAC=95 (16.6A) for flight. */
 #define ILIM_DAC            85U     /* TEST: calibrating actual trip point */
 
-#define CL_IDLE_DUTY_PERCENT 10U         /* Higher idle for prop drag (10% of 12V) */
+/* CL_IDLE_DUTY_PERCENT: shared default below */
 
 /* Vbus Fault Thresholds (12V / 3S LiPo system)
  * EV43F54A Vbus divider: ~1211 raw/V (from 24V→29072 calibration).
@@ -241,7 +263,7 @@
                                          * 120 allows prop operation while still
                                          * protecting during genuine desync (34A+). */
 
-#define CL_IDLE_DUTY_PERCENT 10U
+/* CL_IDLE_DUTY_PERCENT: shared default below */
 
 /* Vbus Fault Thresholds
  * OV: 28V (margin above fully charged 6S)
@@ -262,6 +284,13 @@
  * ================================================================ */
 
 #define ALIGN_TIME_COUNTS   ((uint16_t)((uint32_t)ALIGN_TIME_MS * TIMER1_FREQ_HZ / 1000))
+#ifndef CL_IDLE_DUTY_PERCENT
+#if PWM_DRIVE_UNIPOLAR
+#define CL_IDLE_DUTY_PERCENT 2U    /* Unipolar: no braking, 2% overcomes friction */
+#else
+#define CL_IDLE_DUTY_PERCENT 10U   /* Complementary: braking needs higher idle */
+#endif
+#endif
 #define CL_IDLE_DUTY         (((uint32_t)CL_IDLE_DUTY_PERCENT * LOOPTIME_TCY) / 100)
 
 /* ── BEMF ZC Detection (shared) ───────────────────────────────────── */
