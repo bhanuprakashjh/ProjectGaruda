@@ -93,9 +93,9 @@ void HAL_ATA6847_Init(void)
      * the software deglitch filter. HW blanking suppresses the comparator
      * output itself, which software blanking cannot do.
      * HSOFF=1, LSOFF=1: HS/LS off in standby. TSWTO=0b00: 250ns adaptive. */
-    HAL_ATA6847_WriteReg(ATA_GDUCR2, (1 << 7) | (1 << 6) | 12);  /* 0xCC: EGBLT=12 (3µs).
-                                                                     * At 24V, switching transients
-                                                                     * exceed 2µs on rising steps.
+    HAL_ATA6847_WriteReg(ATA_GDUCR2, (1 << 7) | (1 << 6) | 15);  /* 0xCF: EGBLT=15 (3.75µs MAX).
+                                                                     * Helps at 18V. At 24V the Vbus
+                                                                     * swings dominate, not EGBLT.
                                                                      * 3µs covers the ringing. */
     /* GDUCR3: Slew rate + adaptive dead-time.
      * HSSRC=0b11 (12.5%), LSSRC=0b00 (full speed), no adaptive dead time.
