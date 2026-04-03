@@ -14,7 +14,7 @@
 
 /* ── Motor Profile Selection ──────────────────────────────────────── */
 #ifndef MOTOR_PROFILE
-#define MOTOR_PROFILE   2   /* 0=Hurst, 1=A2212, 2=2810 */
+#define MOTOR_PROFILE   1   /* 0=Hurst, 1=A2212, 2=2810 */
 #endif
 
 /* ── Clock ─────────────────────────────────────────────────────────── */
@@ -41,12 +41,16 @@
 #endif
 
 #if PWM_DRIVE_UNIPOLAR
-#define MAX_DUTY            (LOOPTIME_TCY / 4)     /* 25% for unipolar (no braking) */
+#define MAX_DUTY            (LOOPTIME_TCY - 200U)  /* Full range. Previous 97% duty test
+                                                    * had zero ZC timeouts at 100k eRPM.
+                                                    * Governor (DUTY_RAMP_ERPM) limits
+                                                    * acceleration. No-load self-limits
+                                                    * via back-EMF. Prop needs full range. */
 #else
 #define MAX_DUTY            (LOOPTIME_TCY - 200U)  /* ~100% for complementary */
 #endif
 #if PWM_DRIVE_UNIPOLAR
-#define MIN_DUTY            50U          /* Unipolar: low idle needs low min */
+#define MIN_DUTY            30U          /* Unipolar: minimum for 1% idle */
 #else
 #define MIN_DUTY            200U         /* Complementary: normal min */
 #endif
@@ -286,7 +290,8 @@
 #define ALIGN_TIME_COUNTS   ((uint16_t)((uint32_t)ALIGN_TIME_MS * TIMER1_FREQ_HZ / 1000))
 #ifndef CL_IDLE_DUTY_PERCENT
 #if PWM_DRIVE_UNIPOLAR
-#define CL_IDLE_DUTY_PERCENT 2U    /* Unipolar: no braking, 2% overcomes friction */
+#define CL_IDLE_DUTY_PERCENT 6U    /* Unipolar: 3% had constant ZC timeouts
+                                    * at idle. 6% sustains prop + clean ZC. */
 #else
 #define CL_IDLE_DUTY_PERCENT 10U   /* Complementary: braking needs higher idle */
 #endif
@@ -368,7 +373,13 @@
 /* Duty governor: limits max duty based on measured eRPM.
  * Prevents fast-pot desync. Full duty at threshold. */
 #ifndef DUTY_RAMP_ERPM
-#define DUTY_RAMP_ERPM  60000U
+#if PWM_DRIVE_UNIPOLAR
+#define DUTY_RAMP_ERPM  60000U  /* Unipolar: full duty at 60k. Governor prevents
+                                 * fast-pot desync. With 50% MAX_DUTY, governor
+                                 * effectively allows 50% at 60k eRPM. */
+#else
+#define DUTY_RAMP_ERPM  60000U  /* Complementary: braking assists at low speed */
+#endif
 #endif
 #ifndef MIN_TARGET_ERPM
 #define MIN_TARGET_ERPM   1000U
