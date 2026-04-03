@@ -37,7 +37,10 @@
  *     34x fewer ZC timeouts, 99.96% success rate.
  *     Needs lower MAX_DUTY (25%) since no braking. */
 #ifndef PWM_DRIVE_UNIPOLAR
-#define PWM_DRIVE_UNIPOLAR  1
+#define PWM_DRIVE_UNIPOLAR  0   /* Complementary + CLC AND filter.
+                                 * CLC gates BEMF with PWM-ON window →
+                                 * switching noise hardware-blocked.
+                                 * Proper braking + clean ZC. */
 #endif
 
 #if PWM_DRIVE_UNIPOLAR
@@ -394,7 +397,7 @@
 #endif
 
 #ifndef FEATURE_CLC_BLANKING
-#define FEATURE_CLC_BLANKING    0   /* CLC experiment: reduced step-2 aliasing but
+#define FEATURE_CLC_BLANKING    1   /* CLC AND filter: BEMF gated by PWM-ON */   /* CLC experiment: reduced step-2 aliasing but
                                      * degraded overall detection at 20kHz PWM.
                                      * Needs 40kHz+ PWM or new detector architecture.
                                      * Disabled — raw GPIO poller is better at 20kHz. */

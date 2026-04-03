@@ -423,10 +423,16 @@ void BEMF_ZC_OnCommutation(volatile GARUDA_DATA_T *pData)
 #endif
 
 #if FEATURE_CLC_BLANKING
-        /* Force CLC D-FF to pre-ZC state. After commutation, the D-FF
-         * may hold a stale value from when the phase was driven.
-         * Force to the state BEFORE the expected ZC transition so
-         * FastPoll sees a clean edge when the real ZC occurs. */
+        /* Configure CLC AND filter for this step.
+         * Routes floating phase BEMF and active PWM H to CLC1. */
+        {
+            /* Find which phase is PWM-active */
+            uint8_t pwmPhase = 0;
+            if (step->phaseA == PHASE_PWM_ACTIVE) pwmPhase = 0;
+            else if (step->phaseB == PHASE_PWM_ACTIVE) pwmPhase = 1;
+            else pwmPhase = 2;
+            HAL_CLC_ConfigureStep(step->floatingPhase, pwmPhase);
+        }
         HAL_CLC_ForcePreZcState(step->floatingPhase,
                                 step->zcPolarity > 0);
 #endif
@@ -1133,7 +1139,13 @@ bool BEMF_ZC_FastPoll(volatile GARUDA_DATA_T *pData)
         }
         pData->icZc.pollFilter++;
 
+#if FEATURE_CLC_BLANKING
+        /* CLC D-FF output is clean (PWM-sync sampled, held stable).
+         * 1 read is enough — no deglitch needed on clean signal. */
+        if (pData->icZc.pollFilter >= 1)
+#else
         if (pData->icZc.pollFilter >= pData->icZc.filterLevel)
+#endif
         {
             /* ZC confirmed! */
             pData->bemf.zeroCrossDetected = true;

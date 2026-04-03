@@ -1060,8 +1060,16 @@ void __attribute__((interrupt, no_auto_psv)) _CCP2Interrupt(void)
                                          / COM_TIMER_T1_NUMER);
         gData.icZc.zcCandidateT1 = gData.timer1Tick - elapsedT1;
     }
-    gData.icZc.icArmed = false;   /* Signal to poll: IC has captured */
+    gData.icZc.icArmed = false;
     gData.icZc.diagIcAccepted++;
+
+    /* IC only stores the precise timestamp. Does NOT call
+     * RecordZcTiming or ScheduleCommutation — that corrupts the
+     * estimator if this edge is noise.
+     *
+     * The poll path reads CLC D-FF output (clean, PWM-sync sampled).
+     * When CLC confirms expected state, poll calls RecordZcTiming
+     * using the IC's stored timestamp → precise + validated. */
 }
 #endif /* FEATURE_IC_ZC_CAPTURE */
 
