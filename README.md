@@ -1,5 +1,31 @@
 # Project Garuda
 
+**Open-source drone ESC firmware for Microchip dsPIC — two hardware platforms**
+
+## Boards
+
+| Board | MCU | Gate Driver | Mode | Status |
+|-------|-----|-------------|------|--------|
+| **[CK Board (EV43F54A)](PATA6847/)** | dsPIC33CK64MP205 | ATA6847 | 6-step sensorless | **Active** — 100% ZC with prop, 102k eRPM |
+| **[AK Board (MCLV-48V-300W)](dspic33AKESC/)** | dsPIC33AK128MC106 | Discrete FETs | FOC sensorless | Stable — SMO observer CL |
+
+**GUI**: [Live WebSerial Configurator](https://bhanuprakashjh.github.io/ProjectGaruda/) — auto-detects CK vs AK board
+
+---
+
+## CK Board (ATA6847) — Latest
+
+See [`PATA6847/README.md`](PATA6847/README.md) for full details. Key highlights:
+- CLC D-FF + SCCP2 IC capture hybrid ZC detection
+- 100% ZC success with propeller on A2212 (12V) and 2810 (18V)
+- AM32-style 15° fixed timing advance
+- 24kHz PWM, complementary + unipolar modes
+- Team testing guide: [`PATA6847/TESTING_GUIDE.md`](PATA6847/TESTING_GUIDE.md)
+
+---
+
+## AK Board (dsPIC33AK) — Below
+
 **Open-source drone ESC firmware for the Microchip dsPIC33AK128MC106**
 
 6-step trapezoidal BLDC motor control with sensorless ADC-based BEMF zero-crossing detection and sinusoidal V/f startup — built from scratch for high-performance multirotor applications.
