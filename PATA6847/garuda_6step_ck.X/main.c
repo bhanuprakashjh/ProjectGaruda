@@ -31,6 +31,9 @@
 #include "hal/hal_com_timer.h"
 #include "hal/hal_clc.h"
 #endif
+#if FEATURE_PTG_ZC
+#include "hal/hal_ptg.h"
+#endif
 #include "hal/board_service.h"
 #if FEATURE_GSP
 #include "gsp/gsp.h"
@@ -272,6 +275,12 @@ int main(void)
     HAL_ZcIC_Init();
     HAL_UART_WriteString("IC.");
 #endif
+#endif
+
+#if FEATURE_PTG_ZC
+    /* 8e. PTG edge-relative BEMF sampling */
+    HAL_PTG_Init();
+    HAL_UART_WriteString("PTG.");
 #endif
 
     /* 9. Board service + ESC service */

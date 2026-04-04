@@ -34,6 +34,9 @@
 #include "hal/hal_ic.h"
 #include "hal/hal_com_timer.h"
 #endif
+#if FEATURE_PTG_ZC
+#include "hal/hal_ptg.h"
+#endif
 
 /* Global ESC runtime data */
 volatile GARUDA_DATA_T gData;
@@ -113,6 +116,9 @@ static void EnterFaultISR(FAULT_CODE_T code)
     HAL_ZcTimer_Stop();
     HAL_ComTimer_Cancel();
 #endif
+#if FEATURE_PTG_ZC
+    HAL_PTG_Stop();
+#endif
     deferredFault = code;  /* main loop will do SPI standby */
     LED_FAULT = 1;
     LED_RUN = 0;
@@ -135,6 +141,9 @@ static void EnterRecovery(void)
 #if FEATURE_IC_ZC
     HAL_ZcTimer_Stop();
     HAL_ComTimer_Cancel();
+#endif
+#if FEATURE_PTG_ZC
+    HAL_PTG_Stop();
 #endif
     gData.state = ESC_RECOVERY;
     gData.recoveryCounter = RECOVERY_COUNTS;
@@ -266,6 +275,9 @@ void GarudaService_StopMotor(void)
 #if FEATURE_IC_ZC
     HAL_ZcTimer_Stop();
     HAL_ComTimer_Cancel();
+#endif
+#if FEATURE_PTG_ZC
+    HAL_PTG_Stop();
 #endif
     /* Don't stop Timer1 — systemTick must keep running for UART debug */
     /* Don't disable ADC — pot/Vbus polling needs it during IDLE */
@@ -423,6 +435,9 @@ void __attribute__((interrupt, auto_psv)) _T1Interrupt(void)
                 HAL_ZcTimer_Stop();
                 HAL_ComTimer_Cancel();
 #endif
+#if FEATURE_PTG_ZC
+                HAL_PTG_Stop();
+#endif
                 gData.state = ESC_FAULT;
                 gData.faultCode = FAULT_ATA6847;
                 gData.ataFaultPending = true;  /* Main loop decodes via SPI */
@@ -536,6 +551,9 @@ void __attribute__((interrupt, auto_psv)) _T1Interrupt(void)
                 BEMF_ZC_OnCommutation((volatile GARUDA_DATA_T *)&gData);
                 /* Start SCCP1 fast poll timer */
                 HAL_ZcTimer_Start();
+#endif
+#if FEATURE_PTG_ZC
+                HAL_PTG_Start();
 #endif
             }
             else if (rampDone && !gData.timing.zcSynced)
@@ -760,8 +778,14 @@ void __attribute__((interrupt, auto_psv)) _T1Interrupt(void)
 
             if (tout == ZC_TIMEOUT_FORCE_STEP)
             {
-                /* Force a commutation step.
-                 * Gate out higher-priority ISRs (SCCP1/SCCP4) during the
+                /* Force a commutation step at current duty.
+                 * Duty cut was tested but causes ATA6847 VDS fault from regen
+                 * voltage spike (motor acts as generator when duty drops).
+                 * The remaining timeouts are mostly PWM-step aliasing artifacts
+                 * (integer ratio at specific eRPM) — single forced steps at
+                 * full duty are harmless and the motor recovers immediately. */
+
+                /* Gate out higher-priority ISRs (SCCP1/SCCP4) during the
                  * transition to prevent race conditions where they see
                  * partially-updated state (old cmpExpected + new step). */
 #if FEATURE_IC_ZC

@@ -1095,7 +1095,7 @@ bool BEMF_ZC_FastPoll(volatile GARUDA_DATA_T *pData)
             return false;  /* Too early — reject (demag/noise) */
     }
 
-    /* Read comparator for the floating phase */
+    /* Read comparator for the floating phase. */
     uint8_t cmp = ReadBEMFComparator(pData->icZc.activeChannel);
 
     /* Raw comparator edge trace — count transitions per step */
@@ -1125,14 +1125,25 @@ bool BEMF_ZC_FastPoll(volatile GARUDA_DATA_T *pData)
         if (pData->icZc.pollFilter == 0)
         {
 #if FEATURE_IC_ZC_CAPTURE
-            /* If IC already captured a precise timestamp for this
-             * step, keep it. Only write poll timestamp as fallback
-             * if IC hasn't fired. IC fires on the actual edge (640ns),
-             * poll sees it 0-5µs later. */
-            if (pData->icZc.icArmed)
+            /* At high speed: validate IC timestamp freshness.
+             * IC may catch a bounce; if stale, use poll time.
+             * At low speed: trust IC as-is (proven working). */
+            if (!pData->icZc.icArmed &&
+                pData->timing.stepPeriodHR < 300u)
+            {
+                uint16_t now = HAL_ComTimer_ReadTimer();
+                uint16_t icAge = now - pData->icZc.zcCandidateHR;
+                uint16_t maxAge = (uint16_t)((uint32_t)LOOPTIME_MICROSEC
+                                             * 25u / 16u);  /* 1 PWM cycle */
+                if (icAge > maxAge)
+                {
+                    pData->icZc.zcCandidateHR = now;
+                    pData->icZc.zcCandidateT1 = pData->timer1Tick;
+                }
+            }
+            else if (pData->icZc.icArmed)
 #endif
             {
-                /* No IC capture — use poll timestamp (5µs precision) */
                 pData->icZc.zcCandidateHR = HAL_ComTimer_ReadTimer();
                 pData->icZc.zcCandidateT1 = pData->timer1Tick;
             }
@@ -1140,16 +1151,20 @@ bool BEMF_ZC_FastPoll(volatile GARUDA_DATA_T *pData)
         pData->icZc.pollFilter++;
 
 #if FEATURE_CLC_BLANKING
-        /* CLC D-FF output is clean. In TRACK mode: 1 read enough.
-         * In ACQUIRE: use full deglitch (CL entry has stale CLC
-         * state from ForcePreZcState → false accepts without filter). */
+        /* CLC D-FF can hold stale state from blanking period at HIGH speed.
+         * At high speed (StpHR < 300 ≈ 52k eRPM): use FL=2 in TRACK to
+         * reject stale D-FF. At low speed: FL=1 (BEMF is weak, comparator
+         * bounces at ZC, second read might catch bounce → timeout).
+         * In ACQUIRE: use full deglitch as before. */
         if (pData->icZc.pollFilter >=
-            (pData->zcCtrl.mode == ZC_MODE_TRACK ? 1 : pData->icZc.filterLevel))
+            (pData->zcCtrl.mode == ZC_MODE_TRACK
+             ? (pData->timing.stepPeriodHR < 300u ? 2u : 1u)
+             : pData->icZc.filterLevel))
 #else
         if (pData->icZc.pollFilter >= pData->icZc.filterLevel)
 #endif
         {
-            /* ZC confirmed! */
+            /* ZC confirmed! IC timestamp already validated at first match. */
             pData->bemf.zeroCrossDetected = true;
             RecordZcTiming(pData, pData->icZc.zcCandidateT1,
                            pData->icZc.zcCandidateHR);

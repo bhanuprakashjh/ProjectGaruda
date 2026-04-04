@@ -21,39 +21,65 @@
 
 void HAL_CLC_Init(void)
 {
-    /* CLC1: BEMF_A — D from CLCINA (DS1), CLK from PWM Event A (DS4) */
+    /* CLC1: BEMF_A — D from CLCINA (DS1)
+     * PTG mode: no clock (PTG ISR updates via R/S at edge-relative timing)
+     * Normal mode: CLK from PWM Event A (DS4, fires at PG1TRIGA=0) */
     CLC1CONL = 0;
     CLC1CONH = 0x0000;
     CLC1SEL  = (0b000u << 12)          /* DS4 = PWM Event A */
              | (0b000u << 8)
              | (0b000u << 4)
              | (0b000u);              /* DS1 = CLCINA (BEMF_A) */
-    CLC1GLSL = (1u << 7)              /* G1D4T: Gate1 CLK = DS4 (PWM Event A) */
-             | (1u << 9);             /* G2D1T: Gate2 D = DS1 (CLCINA = BEMF_A) */
+#if FEATURE_PTG_ZC
+    /* PTG controls CLC timing via R/S. Disable PWMEVTA clock so they
+     * don't fight — PWMEVTA (counter-relative) and PTG (edge-relative)
+     * would race, causing CLC to toggle → flip storm → false ZCs. */
+    CLC1GLSL = (1u << 9);             /* G2D1T only: D = BEMF_A. No clock. */
+#else
+    CLC1GLSL = (1u << 7)              /* G1D4N: Gate1 CLK = !DS4 (!PWM Event A) */
+             | (1u << 9);             /* G2D1N: Gate2 D = !DS1 (!CLCINA = !BEMF_A) */
+#endif
     CLC1GLSH = 0x0000;
-    CLC1CONL = (1u << 15) | (0b100u); /* LCEN=1, MODE=D-FF */
+    CLC1CONL = (1u << 15) | (0b100u); /* LCEN=1, MODE=D-FF (edge-triggered).
+                                       * Was MODE=100 (D-FF, edge-triggered):
+                                       * sampled once per PWM cycle (24kHz) → only
+                                       * 1.3 updates in detection window at 85k+ eRPM
+                                       * → speed bottleneck causing timeouts.
+                                       * MODE=111 (D-Latch): transparent when CLK=1,
+                                       * tracks comparator in real-time. Poll reads
+                                       * at 210.5kHz → no bottleneck at any speed.
+                                       * Noise handled by blanking + 50% rejection
+                                       * + deglitch filter. */
 
-    /* CLC2: BEMF_B — D from CLCINB (DS2), CLK from PWM Event A (DS4) */
+    /* CLC2: BEMF_B — D from CLCINB (DS2) */
     CLC2CONL = 0;
     CLC2CONH = 0x0000;
     CLC2SEL  = (0b000u << 12)
              | (0b000u << 8)
              | (0b000u << 4)
              | (0b000u);
-    CLC2GLSL = (1u << 7)              /* G1D4T: CLK = DS4 */
-             | (1u << 11);            /* G2D2T: D = DS2 (CLCINB = BEMF_B) */
+#if FEATURE_PTG_ZC
+    CLC2GLSL = (1u << 11);
+#else
+    CLC2GLSL = (1u << 7)
+             | (1u << 11);
+#endif
     CLC2GLSH = 0x0000;
     CLC2CONL = (1u << 15) | (0b100u);
 
-    /* CLC3: BEMF_C — D from CLCINC (DS3), CLK from PWM Event A (DS4) */
+    /* CLC3: BEMF_C — D from CLCINC (DS3) */
     CLC3CONL = 0;
     CLC3CONH = 0x0000;
     CLC3SEL  = (0b000u << 12)
              | (0b000u << 8)
              | (0b000u << 4)
              | (0b000u);
-    CLC3GLSL = (1u << 7)              /* G1D4T: CLK = DS4 */
-             | (1u << 13);            /* G2D3T: D = DS3 (CLCINC = BEMF_C) */
+#if FEATURE_PTG_ZC
+    CLC3GLSL = (1u << 13);
+#else
+    CLC3GLSL = (1u << 7)
+             | (1u << 13);
+#endif
     CLC3GLSH = 0x0000;
     CLC3CONL = (1u << 15) | (0b100u);
 }

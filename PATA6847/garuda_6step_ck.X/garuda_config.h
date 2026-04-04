@@ -23,7 +23,7 @@
 #define FOSC_PWM_MHZ        400U         /* PWM timing base (CK: 2x Fosc) */
 
 /* ── PWM ───────────────────────────────────────────────────────────── */
-#define PWMFREQUENCY_HZ     24000U       /* 24 kHz (AM32 default). Inaudible.
+#define PWMFREQUENCY_HZ     40000U       /* 40 kHz — zero timeouts at 100k with fixes.
                                           * 15kHz gave 19x fewer ZC timeouts
                                           * but was audible. 24kHz should give
                                           * cleaner ZC than 20kHz while staying
@@ -220,11 +220,11 @@
  * Low Rs (50mΩ) means high current at moderate duty.
  * At 13V, 5% duty → I = 0.05 × 13 / 0.050 = 13A peak (brief ramp). */
 #define ALIGN_TIME_MS       200U
-#define ALIGN_DUTY          (LOOPTIME_TCY / 40)    /* ~2.5% duty */
+#define ALIGN_DUTY          (LOOPTIME_TCY / 20)    /* ~5% for 40kHz (CCPT overhead) */
 #define INITIAL_STEP_PERIOD 1000U        /* Timer1 ticks (50ms = ~200 eRPM) */
 #define MIN_STEP_PERIOD     50U          /* Timer1 ticks (2.5ms = ~4000 eRPM) */
 #define RAMP_ACCEL_ERPM_S   500U         /* eRPM/s — moderate, proven on this motor */
-#define RAMP_DUTY_CAP       (LOOPTIME_TCY / 15)    /* Max ~7% duty during OL ramp */
+#define RAMP_DUTY_CAP       (LOOPTIME_TCY / 8)     /* ~12.5% for 40kHz */
 
 /* ZC Detection */
 #define ZC_BLANKING_PERCENT 20U          /* For OL_RAMP ADC backup poll only.
@@ -352,6 +352,17 @@
 #define FEATURE_IC_ZC_ADAPTIVE  0
 #endif
 
+/* Speed-adaptive detector front end threshold.
+ * Below this StpHR: switch from CLC D-FF to raw GPIO (inverted) for
+ * BEMF reads. CLC updates once per PWM (42µs at 24kHz) — at high speed,
+ * the CLC may show stale pre-ZC state if its update falls in blanking.
+ * Raw GPIO updates every poll (4.75µs at 210.5kHz), 9x faster.
+ * BEMF is strong at high speed → raw GPIO noise is manageable.
+ * 250 HR = 160µs = ~62k eRPM. Below 62k: CLC. Above 62k: raw GPIO. */
+#ifndef ZC_IC_DIRECT_THRESHOLD_HR
+#define ZC_IC_DIRECT_THRESHOLD_HR  250U
+#endif
+
 /* Bypass guard bounds (used when FEATURE_IC_ZC_ADAPTIVE=1) */
 #define ZC_BYPASS_LO_PCT    40U     /* Min % of stepPeriodHR for bypass acceptance */
 #define ZC_BYPASS_HI_PCT   160U     /* Max % of stepPeriodHR for bypass acceptance */
@@ -405,6 +416,26 @@
 
 #ifndef FEATURE_IC_ZC_CAPTURE
 #define FEATURE_IC_ZC_CAPTURE   1   /* Hybrid IC+poll: IC timestamp, poll validates */
+#endif
+
+#ifndef FEATURE_PTG_ZC
+#define FEATURE_PTG_ZC          0   /* PTG edge-relative BEMF sampling.
+                                     * 0 = disabled (CLC D-FF only — proven working)
+                                     * 1 = PTG supplements CLC: reads raw GPIO at
+                                     *     fixed delay after switching edge.
+                                     *     Fixes duty-dependent CLC clock position
+                                     *     issue at 50%/80% duty. */
+#endif
+#if FEATURE_PTG_ZC
+#define PTG_DELAY_US            7U  /* Delay after switching edge (µs).
+                                     * Must be > ATA6847 comparator settling (~3µs)
+                                     * and > edge blanking (EGBLT=3.75µs at max).
+                                     * 7µs gives margin. Increase to 10µs at 24V
+                                     * if ringing is still visible. */
+#define PTG_BTE_BIT             9U  /* PTGBTE bit for PG1 ADC Trigger 2 (TRIGB).
+                                     * Device-specific — verify against DS70005178
+                                     * Table 2 for dsPIC33CK64MP205.
+                                     * If PTG doesn't trigger: try 1, 2, or 8. */
 #endif
 
 #ifndef FEATURE_GSP

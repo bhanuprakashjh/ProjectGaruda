@@ -31,6 +31,35 @@ static inline uint8_t HAL_CLC_ReadOutput(uint8_t channel)
     }
 }
 
+/**
+ * @brief Force CLC D-FF Q output to match a given BEMF state.
+ * Uses async R/S to set Q=state. Called from PTG ISR to update
+ * CLC at an edge-relative moment (duty-independent clean read).
+ */
+static inline void HAL_CLC_ForceState(uint8_t channel, uint8_t state)
+{
+    volatile uint16_t *conh;
+    switch (channel)
+    {
+        case 0: conh = (volatile uint16_t *)&CLC1CONH; break;
+        case 1: conh = (volatile uint16_t *)&CLC2CONH; break;
+        case 2: conh = (volatile uint16_t *)&CLC3CONH; break;
+        default: return;
+    }
+    if (state)
+    {
+        *conh |= (1u << 3);   /* G4POL=1 → S asserted → Q=1 */
+        __asm__ volatile ("nop");
+        *conh &= ~(1u << 3);
+    }
+    else
+    {
+        *conh |= (1u << 2);   /* G3POL=1 → R asserted → Q=0 */
+        __asm__ volatile ("nop");
+        *conh &= ~(1u << 2);
+    }
+}
+
 static inline void HAL_CLC_ForcePreZcState(uint8_t channel, bool risingZc)
 {
     volatile uint16_t *conh;

@@ -185,6 +185,13 @@ void HAL_PWM_SetDutyCycle(uint32_t duty)
     PG3DC = (uint16_t)duty;
     PG1DC = (uint16_t)duty;
 
+#if FEATURE_PTG_ZC
+    /* Track switching edge for PTG edge-relative sampling.
+     * PG1TRIGB fires ADC Trigger 2 at counter=duty (ON→OFF edge).
+     * PTG waits for this trigger, delays, then samples BEMF. */
+    PG1TRIGB = (uint16_t)duty;
+#endif
+
     /* Request buffer-to-active transfer at next SOC */
     PG1STATbits.UPDREQ = 1;
     PG2STATbits.UPDREQ = 1;

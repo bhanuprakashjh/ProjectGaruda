@@ -20,6 +20,7 @@
       <itemPath>hal/hal_ic.h</itemPath>
       <itemPath>hal/hal_com_timer.h</itemPath>
       <itemPath>hal/hal_clc.h</itemPath>
+      <itemPath>hal/hal_ptg.h</itemPath>
       <itemPath>hal/board_service.h</itemPath>
       <itemPath>motor/commutation.h</itemPath>
       <itemPath>motor/startup.h</itemPath>
@@ -56,6 +57,7 @@
       <itemPath>hal/hal_ic.c</itemPath>
       <itemPath>hal/hal_com_timer.c</itemPath>
       <itemPath>hal/hal_clc.c</itemPath>
+      <itemPath>hal/hal_ptg.c</itemPath>
       <itemPath>hal/hal_trap.c</itemPath>
       <itemPath>hal/board_service.c</itemPath>
       <itemPath>motor/commutation.c</itemPath>

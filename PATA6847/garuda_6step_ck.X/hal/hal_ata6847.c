@@ -72,7 +72,12 @@ void HAL_ATA6847_Init(void)
     HAL_ATA6847_WriteReg(ATA_ILIMTH, ILIM_DAC);
 
     /* Short circuit protection */
-    HAL_ATA6847_WriteReg(ATA_SCPCR, (1 << 7) | (7 << 3) | 7);
+    HAL_ATA6847_WriteReg(ATA_SCPCR, (1 << 7) | (15 << 3) | 7);
+    /* SCSDEN=1 (shutdown enabled), SCFLT=15 (7.5µs max filter),
+     * SCTHSEL=7 (2000mV max threshold).
+     * Was SCFLT=7 (3.5µs). Regen VDS spikes from wrong commutation
+     * at 24V are brief (~2-4µs). 7.5µs filter rejects them while
+     * still catching real shorts (which persist longer). */
     /* SCTHSEL=7 (2000mV). VDS spikes scale with Vbus — at 24V the
      * switching transients exceed 1500mV at moderate current, tripping
      * SCTHSEL=5. 2000mV gives headroom for 24V operation.
@@ -98,12 +103,31 @@ void HAL_ATA6847_Init(void)
                                                                      * swings dominate, not EGBLT.
                                                                      * 3µs covers the ringing. */
     /* GDUCR3: Slew rate + adaptive dead-time.
-     * HSSRC=0b11 (12.5%), LSSRC=0b00 (full speed), no adaptive dead time.
-     * Asymmetric by design — slow HS reduces ringing. Tested alternatives:
-     *   Both 50%: desync at 28k eRPM (slower LS = more noise)
-     *   Both full: desync at 45k eRPM (fast HS ringing)
-     *   Adaptive dead time: unreliable CL entry (3 attempts needed) */
-    HAL_ATA6847_WriteReg(ATA_GDUCR3, (0x03 << 2));                /* 0x0C */
+     * HSSRC=0b11 (12.5%), LSSRC=0b11 (12.5%), no adaptive dead time.
+     *
+     * Previously LSSRC was 0b00 (full speed). But per-step timeout data
+     * shows steps after a PWM-active phase (1,3,5) have 3-50× more
+     * timeouts than steps after a LOW-held phase (2,4). The fast LS
+     * turn-on creates dV/dt that couples into the floating phase through
+     * mutual inductance, corrupting the BEMF comparator.
+     * Slowing LS to 12.5% reduces this coupling.
+     *
+     * Previous test notes (at 20kHz PWM, before CLC/IC):
+     *   Both 50%: desync at 28k eRPM
+     *   Both full: desync at 45k eRPM
+     * Those results were WITHOUT CLC D-FF filtering and IC capture.
+     * With current CLC+IC+210.5kHz poll architecture, slow LS should
+     * work because the detection is much more robust now. */
+    /* ADDTHS=0b01 (50-160ns), ADDTLS=0b01 (50-160ns): adaptive dead time.
+     * ATA6847 monitors VDS to detect when MOSFET has actually turned off,
+     * then shortens dead time to minimum. Reduces body diode conduction
+     * → less noise on floating phase during dead time intervals.
+     * Combined with slow slew rate, this gives clean transitions. */
+    HAL_ATA6847_WriteReg(ATA_GDUCR3, (0x01 << 6) | (0x01 << 4) | (0x03 << 2) | 0x03);
+    /* 0x5F: ADDTHS=50-160ns, ADDTLS=50-160ns, HSSRC=12.5%, LSSRC=12.5%.
+     * Best high-speed performance: 2.2 TO/snap at 85-95k, 4.3 at 95k+.
+     * ADT 150-210ns had cleaner comparator (4% flip rate) but worse at 95k+
+     * because wider dead time eats into the tight step period. */
     HAL_ATA6847_WriteReg(ATA_GDUCR4, (1 << 6) | (1 << 5) | (1 << 4) | 2); /* 0x72 */
 
     /* Interrupt masks.

@@ -122,6 +122,11 @@ typedef struct {
     uint16_t diagIcAccepted;    /* ZCs accepted via IC capture */
     uint16_t diagIcBounce;      /* IC fires rejected (bounce after blanking) */
 #endif
+#if FEATURE_PTG_ZC
+    /* PTG edge-relative sampling (supplements CLC D-FF) */
+    uint8_t  ptgSample;        /* Raw BEMF from PTG ISR (0 or 1) */
+    uint8_t  ptgSampleValid;   /* 1 when fresh PTG sample available */
+#endif
 } IC_ZC_STATE_T;
 #endif
 
