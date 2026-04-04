@@ -1140,9 +1140,11 @@ bool BEMF_ZC_FastPoll(volatile GARUDA_DATA_T *pData)
         pData->icZc.pollFilter++;
 
 #if FEATURE_CLC_BLANKING
-        /* CLC D-FF output is clean (PWM-sync sampled, held stable).
-         * 1 read is enough — no deglitch needed on clean signal. */
-        if (pData->icZc.pollFilter >= 1)
+        /* CLC D-FF output is clean. In TRACK mode: 1 read enough.
+         * In ACQUIRE: use full deglitch (CL entry has stale CLC
+         * state from ForcePreZcState → false accepts without filter). */
+        if (pData->icZc.pollFilter >=
+            (pData->zcCtrl.mode == ZC_MODE_TRACK ? 1 : pData->icZc.filterLevel))
 #else
         if (pData->icZc.pollFilter >= pData->icZc.filterLevel)
 #endif
