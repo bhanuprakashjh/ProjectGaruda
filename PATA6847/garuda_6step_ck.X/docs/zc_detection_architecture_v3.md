@@ -8,6 +8,276 @@
 
 ---
 
+## 0. Visual Guide — How It Works
+
+### 0.1 The Problem: PWM Switching Noise on BEMF Comparator
+
+The ATA6847 has internal BEMF comparators with digital outputs. Every time a PWM FET switches, the comparator output rings for 2-6µs (depending on voltage):
+
+```
+                    PWM H-FET gate signal
+                    ┌──────────┐          ┌──────────┐
+           OFF      │    ON    │   OFF    │    ON    │   OFF
+         ──────────┘          └──────────┘          └──────────
+
+                    Real BEMF comparator output (what ATA6847 gives us)
+                    ↓ ringing  ↓ clean   ↓ ringing  ↓ clean
+         ──╥╨╥╨╥───┤──────────├─╥╨╥╨╥───┤──────────├─╥╨╥╨╥──
+           noise   │  VALID   │  noise  │  VALID   │  noise
+           2-6µs   │  BEMF    │  2-6µs  │  BEMF    │  2-6µs
+                    │  signal  │         │  signal  │
+```
+
+At 12V: ringing lasts ~2-3µs (manageable)
+At 24V: ringing lasts ~5-6µs (overlaps with detection window)
+
+The 200kHz poll reads the comparator every 5µs — some reads hit noise, some hit clean signal. The deglitch filter (3 consecutive matching reads = 15µs) helps but can't fully solve it at high speed where the step period is only 100-170µs.
+
+### 0.2 The Solution: CLC D-Flip-Flop (Stroboscopic Sampling)
+
+Instead of reading the noisy signal continuously, sample it ONCE per PWM cycle at the cleanest moment (mid-ON-time):
+
+```
+   PWM switching edges
+   ↓                    ↓                    ↓
+   ┌────────────────────┐                    ┌────────────
+   │       ON time      │     OFF time       │
+   └────────────────────┘                    └────────────
+   ↑noise    ↑ CLEAN    ↑noise
+
+   CLC D-FF clock (PWM Event A)
+                ↑ (fires HERE at mid-ON)
+
+   Raw BEMF:  ╥╨╥╨──1111111111──╥╨╥╨──0000000──╥╨╥╨──
+              noise   clean      noise  clean    noise
+
+   D-FF captures "1" at mid-ON
+              ↓
+   CLC output: ────────1111111111111111111111111111──────
+                        ↑ captured     ↑ held until
+                        clean "1"       next clock edge
+
+   Next PWM cycle: D-FF captures "0" (ZC happened!)
+              ↓
+   CLC output: ────────────────0000000000000000000──────
+                               ↑ transition = ZC detected!
+```
+
+The D-FF acts like a camera flash — it "photographs" the comparator at one clean moment, then holds that picture until the next flash. All noise between flashes is invisible.
+
+### 0.3 SCCP2 IC Capture: Precise Timestamp
+
+The CLC tells us IF a ZC happened. The IC tells us WHEN:
+
+```
+   Real ZC occurs at t=0 (comparator edge)
+   ↓
+   ├──── IC captures edge ──→ timestamp = t=0 (640ns precision)
+   │
+   ├──── CLC D-FF hasn't clocked yet (waits for next PWM Event A)
+   │
+   │     20µs later: CLC clocks ──→ output transitions
+   │                                    ↓
+   │     21µs later: Poll reads CLC ──→ "yes, expected state!" ──→ CONFIRMED
+   │
+   └──── RecordZcTiming uses IC timestamp (t=0), NOT poll time (t=21µs)
+         ScheduleCommutation targets t=0 + advance_delay
+         Commutation fires at precise time despite CLC delay
+```
+
+### 0.4 Why IC Alone Doesn't Work
+
+The IC captures EVERY comparator edge — real ZC AND noise:
+
+```
+   Noise edge at t=5µs (during ringing)
+   ↓
+   IC captures ──→ timestamp = t=5µs
+   IC stores zcCandidateHR = t=5µs
+
+   If IC calls RecordZcTiming directly:
+     → Estimator updated with WRONG interval
+     → Commutation scheduled at WRONG time
+     → Phantom commutation cascade!
+
+   With CLC validation:
+     → CLC hasn't transitioned (noise = temporary, comparator bounced back)
+     → Poll reads CLC ──→ still shows pre-ZC state ──→ NOT confirmed
+     → IC timestamp ignored, no damage to estimator
+```
+
+### 0.5 Complete Detection Flow Chart
+
+```
+              ┌─────────────────────┐
+              │   COMMUTATION FIRES │
+              │   (SCCP4 OC ISR)    │
+              └──────────┬──────────┘
+                         ↓
+              ┌──────────────────────┐
+              │  OnCommutation:      │
+              │  • Route PPS to      │
+              │    floating phase    │
+              │  • Force CLC D-FF    │
+              │    to pre-ZC state   │
+              │  • Set blanking time │
+              │  • Arm IC after      │
+              │    blanking          │
+              └──────────┬───────────┘
+                         ↓
+              ╔══════════════════════╗
+              ║   BLANKING PERIOD    ║
+              ║   (12% of step,     ║
+              ║    min 25µs)         ║
+              ║   Poll: skip reads   ║
+              ║   IC: not armed yet  ║
+              ╚══════════╤═══════════╝
+                         ↓
+          ┌──────────────┴──────────────┐
+          ↓                             ↓
+   ┌──────────────┐            ┌───────────────┐
+   │  IC ARMED    │            │  POLL ARMED   │
+   │  (SCCP2 IE)  │            │  (210.5kHz)   │
+   └──────┬───────┘            └───────┬───────┘
+          ↓                            ↓
+   ┌──────────────┐            ┌───────────────┐
+   │ IC captures  │            │ Poll reads    │
+   │ raw edge     │            │ CLC D-FF      │
+   │              │            │ output (clean)│
+   │ 50% interval │            │               │
+   │ check:       │            │ Matches       │
+   │ too early? ──┼─YES→ skip  │ expected? ────┼─NO→ reset filter
+   │   ↓ NO       │            │   ↓ YES       │
+   │ Store        │            │ pollFilter++  │
+   │ zcCandidateHR│            │               │
+   │ (640ns       │            │ ACQUIRE: ≥3?  │
+   │  precision)  │            │ TRACK:   ≥1?  │
+   │              │            │   ↓ YES       │
+   │ icArmed=false│            │               │
+   └──────────────┘            │ ┌─────────────┤
+                               │ │ IC captured? │
+                               │ │ (icArmed=    │
+                               │ │  false?)     │
+                               │ ├─YES: use IC  │
+                               │ │  timestamp   │
+                               │ ├─NO: use poll │
+                               │ │  timestamp   │
+                               │ └──────┬───────┘
+                               │        ↓
+                               │ RecordZcTiming()
+                               │ • Update IIR
+                               │ • Update refInterval
+                               │ • Mode transitions
+                               │        ↓
+                               │ ScheduleCommutation()
+                               │ • Compute advance
+                               │ • Set SCCP4 OC target
+                               │ • Enable CCP4IE
+                               └───────┬───────┘
+                                       ↓
+                               ┌───────────────┐
+                               │ SCCP4 OC fires│
+                               │ at target time│
+                               │       ↓       │
+                               │ COMMUTATION!  │
+                               └───────────────┘
+```
+
+### 0.6 Mode State Machine
+
+```
+                    Motor Start (CL entry)
+                           ↓
+                  ┌─────────────────┐
+                  │    ACQUIRE      │
+                  │ • Full deglitch │
+                  │ • Duty capped   │
+                  │ • Building      │
+                  │   estimator     │
+                  └────────┬────────┘
+                           │ 20 good ZCs
+                           ↓
+                  ┌─────────────────┐
+           ┌──→   │     TRACK       │
+           │      │ • 1-read CLC    │
+           │      │ • IC timestamps │
+           │      │ • Full duty     │
+           │      │ • Normal        │
+           │      │   operation     │
+           │      └────────┬────────┘
+           │               │ timeout/desync
+           │               ↓
+           │      ┌─────────────────┐
+           │      │    RECOVER      │
+           │      │ • Expand        │
+           │      │   refInterval   │
+           │      │ • Duty held     │
+           │      │ • Max 5         │
+           │      │   attempts      │
+           │      └────────┬────────┘
+           │               │ 10 good ZCs
+           └───────────────┘
+```
+
+### 0.7 Noise Comparison: Complementary vs Unipolar PWM
+
+```
+   COMPLEMENTARY (2 switching edges per cycle):
+
+   H-FET: ────┐████████████┌────┐████████████┌────
+              ↓            ↑   ↓            ↑
+   L-FET: ████┘            └████┘            └████
+              ↑ edge 1     ↑ edge 2
+
+   Comparator: ╥╨╥──────────╥╨╥──╥╨╥──────────╥╨╥──
+               noise1      noise2 noise1      noise2
+
+   Result: 2 noise spikes per PWM cycle
+
+
+   UNIPOLAR H-PWM/L-OFF (1 switching edge per cycle):
+
+   H-FET: ────┐████████████┌──────────────────────
+              ↓            ↑
+   L-FET: ────────────────────────────────────────  (always OFF)
+              ↑ edge 1     (no edge 2!)
+
+   Comparator: ╥╨╥──────────────────────────────────
+               noise1 only
+
+   Result: 1 noise spike per PWM cycle → 34x fewer ZC timeouts!
+           But: no braking → motor free-wheels → needs speed PID
+```
+
+### 0.8 The CLC Clock Position Problem (Known Issue)
+
+```
+   Center-aligned PWM at different duty ratios:
+
+   30% duty:
+   Counter: ──/\──/\──/\──
+                ↑ peak
+   ON:      ___╱██╲___╱██╲___
+   CLC CLK:    ↑ (far from edges = CLEAN sample)
+
+   50% duty:
+   Counter: ──/\──/\──/\──
+   ON:      _╱████╲_╱████╲_
+   CLC CLK:   ↑ (ON/OFF edge RIGHT HERE = NOISY sample!)
+
+   80% duty:
+   Counter: ──/\──/\──/\──
+   ON:      ╱██████╲╱██████╲
+   CLC CLK:  ↑ (near edge again = NOISY)
+
+   The CLC clock fires at a FIXED counter position (PG1TRIGA=0).
+   At some duty ratios, this position coincides with a switching edge.
+
+   FIX: PTG edge-relative sampling (always N µs after edge, duty-independent)
+```
+
+---
+
 ## 1. System Overview
 
 ### Hardware
