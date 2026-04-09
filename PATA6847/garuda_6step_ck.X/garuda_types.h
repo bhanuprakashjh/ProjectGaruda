@@ -221,14 +221,21 @@ typedef struct {
     /* Step 3: Predictor-driven commutation scheduling */
     bool     predictiveMode;       /* true when predictor owns commutation scheduling */
     bool     handoffPending;       /* true: let current reactive comm fire, then own next */
+    uint16_t handoffTargetHR;      /* Pre-computed first predictor target (set in RecordZcTiming) */
     uint16_t lastPredCommHR;       /* Exact HR time of last predictor-owned commutation */
     uint16_t pendingPredCommHR;    /* Next scheduled predictor commutation target */
     bool     pendingPredValid;     /* true when pendingPredCommHR is programmed */
     /* Shadow delta: predictor vs reactive target comparison */
     int16_t  predVsReactiveDelta;  /* predNextComm - reactiveTarget (HR ticks) */
     uint8_t  deltaOkCount;         /* Consecutive steps with |delta| < threshold */
+    /* Entry score: evaluated after RecordZcTiming with current ZC's data.
+     * Decoupled from gateActive (which is for supervision only).
+     * GREEN + small phaseErr: +4, YELLOW + moderate: -1, RED/timeout: clear. */
+    uint8_t  entryScore;           /* 0-255, saturating. Entry at >= 24 (~1 rev) */
     /* Step 3 telemetry */
     uint16_t diagPredCommOwned;    /* Commutations scheduled by predictor */
+    uint16_t diagPredEnter;        /* Successful predictive mode entries */
+    uint16_t diagPredEntryLate;    /* Handoff aborted: first target already past */
     uint16_t diagPredExitRed;      /* Predictor exits due to RED zone */
     uint16_t diagPredExitMiss;     /* Predictor exits due to missCount */
     uint16_t diagPredExitYellow;   /* Predictor exits due to repeated YELLOW */

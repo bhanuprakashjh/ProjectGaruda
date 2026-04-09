@@ -199,7 +199,7 @@ typedef struct __attribute__((packed)) {
     uint16_t predExitTimeout;   /* Exits: timeout */
     int16_t  predVsReactiveDelta; /* Shadow: pred target - reactive target */
     uint8_t  deltaOkCount;      /* Consecutive small-delta steps */
-    uint8_t  _pad2;
+    uint8_t  entryScore;        /* Predictive entry readiness (0-255) */
 } GSP_CK_SNAPSHOT_T;
 
 /* XC16 doesn't support _Static_assert. Verify size at compile time:

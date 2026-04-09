@@ -164,7 +164,7 @@ void GSP_CaptureSnapshot(GSP_CK_SNAPSHOT_T *dst)
     dst->predExitTimeout   = src->zcPred.diagPredExitTimeout;
     dst->predVsReactiveDelta = src->zcPred.predVsReactiveDelta;
     dst->deltaOkCount      = src->zcPred.deltaOkCount;
-    dst->_pad2             = 0;
+    dst->entryScore        = src->zcPred.entryScore;
 #endif
 }
 

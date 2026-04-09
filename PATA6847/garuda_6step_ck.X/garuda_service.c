@@ -1018,6 +1018,14 @@ void __attribute__((interrupt, no_auto_psv)) _CCP4Interrupt(void)
         uint16_t thisCommHR = CCP4RA;
         gData.zcPred.lastCommHR = thisCommHR;
 
+        /* Step 3: Check handoff BEFORE OnCommutation runs,
+         * because OnCommutation increments missCount which can
+         * clear handoffPending via the >4 hard exit path. */
+        bool doHandoff = gData.zcPred.handoffPending &&
+            gData.zcPred.predStepHR > 0 &&
+            gData.zcPred.predZcOffsetHR > 0 &&
+            gData.zcPred.predStepHR > gData.zcPred.predZcOffsetHR;
+
         /* Gate out SCCP1 fast poll during transition */
         gData.icZc.phase = IC_ZC_DONE;
         gData.timing.deadlineActive = false;
@@ -1040,27 +1048,32 @@ void __attribute__((interrupt, no_auto_psv)) _CCP4Interrupt(void)
          * In steady-state predictive mode, use:
          *   nextComm = lastPredComm + predStepHR
          * which is comm-to-comm with correct period. */
-        if (gData.zcPred.handoffPending &&
-            gData.zcPred.predStepHR > 0 &&
-            gData.zcPred.predZcOffsetHR > 0 &&
-            gData.zcPred.predStepHR > gData.zcPred.predZcOffsetHR)
+        if (doHandoff)
         {
-            /* Handoff: first predictor-owned step.
-             * Anchor to last accepted ZC, not to this commutation. */
+            /* Handoff: use pre-computed target from RecordZcTiming.
+             * Computed at ZC acceptance time with fresh timestamps,
+             * avoiding the ISR latency problem. */
             gData.zcPred.handoffPending = false;
-            gData.zcPred.predictiveMode = true;
-            gData.zcPred.lastPredCommHR = thisCommHR;
+            uint16_t nextTargetHR = gData.zcPred.handoffTargetHR;
 
-            uint16_t zcToComm = gData.zcPred.predStepHR
-                                - gData.zcPred.predZcOffsetHR;
-            uint16_t nextTargetHR = gData.timing.lastZcTickHR + zcToComm;
+            /* Safety check */
+            int16_t margin = (int16_t)(nextTargetHR - HAL_ComTimer_ReadTimer());
+            if (margin <= 0)
+            {
+                gData.zcPred.diagPredEntryLate++;
+            }
+            else
+            {
+                gData.zcPred.predictiveMode = true;
+                gData.zcPred.lastPredCommHR = thisCommHR;
+                gData.zcPred.pendingPredCommHR = nextTargetHR;
+                gData.zcPred.pendingPredValid = true;
+                gData.zcPred.diagPredCommOwned++;
+                gData.zcPred.diagPredEnter++;
 
-            gData.zcPred.pendingPredCommHR = nextTargetHR;
-            gData.zcPred.pendingPredValid = true;
-            gData.zcPred.diagPredCommOwned++;
-
-            HAL_ComTimer_ScheduleAbsolute(nextTargetHR);
-            gData.timing.deadlineActive = true;
+                HAL_ComTimer_ScheduleAbsolute(nextTargetHR);
+                gData.timing.deadlineActive = true;
+            }
         }
         else if (gData.zcPred.predictiveMode &&
                  gData.zcPred.predStepHR > 0)

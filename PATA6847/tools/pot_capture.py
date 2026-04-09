@@ -230,6 +230,7 @@ def decode_ck_snapshot(data):
         s['predExitTimeout'] = struct.unpack_from('<H', data, 172)[0]
         s['predVsReactiveDelta'] = struct.unpack_from('<h', data, 174)[0]
         s['deltaOkCount'] = data[176]
+        s['entryScore'] = data[177]
     else:
         s['predCommOwned'] = 0
         s['predictiveMode'] = 0
@@ -238,6 +239,7 @@ def decode_ck_snapshot(data):
         s['predExitTimeout'] = 0
         s['predVsReactiveDelta'] = 0
         s['deltaOkCount'] = 0
+        s['entryScore'] = 0
     # Derived
     s['iaMa'] = round(s['iaRaw'] * CK_CURRENT_SCALE)
     s['ibMa'] = round(s['ibRaw'] * CK_CURRENT_SCALE)
@@ -285,7 +287,7 @@ def main():
     print(f"  Press Ctrl+C to stop")
     print()
     ZC_MODES = ['ACQ', 'TRK', 'RCV']
-    print(f"{'Time':>7s} {'State':>8s} {'ZcM':>3s} {'eRPM':>7s} {'Duty':>4s} {'Vbus':>6s} {'PhA':>5s} {'ZcOf':>5s} {'Dlta':>5s} {'DOk':>3s} {'POwn':>6s} {'Lck':>3s} {'Gat':>3s} {'Prd':>3s} {'TO':>4s} {'ExMs':>5s}")
+    print(f"{'Time':>7s} {'State':>8s} {'ZcM':>3s} {'eRPM':>7s} {'Duty':>4s} {'Vbus':>6s} {'PhA':>5s} {'ZcOf':>5s} {'ESc':>3s} {'POwn':>6s} {'Lck':>3s} {'Gat':>3s} {'Prd':>3s} {'TO':>4s} {'Mrgn':>5s}")
     print("-" * 115)
 
     rows = []
@@ -339,7 +341,7 @@ def main():
                 lck = 'Y' if snap.get('predLocked', 0) else 'N'
                 gat = 'Y' if snap.get('gateActive', 0) else 'N'
                 prd = 'Y' if snap.get('predictiveMode', 0) else 'N'
-                print(f"{t:7.1f} {state_str:>8s} {zc_mode_str:>3s} {snap['eRpm']:7d} {snap['dutyPct']:3d}% {snap['vbusV']:5.1f}V {snap.get('predPhaseErrHR',0):5d} {snap.get('predZcOffsetHR',0):5d} {snap.get('predVsReactiveDelta',0):5d} {snap.get('deltaOkCount',0):3d} {snap.get('predCommOwned',0):6d} {lck:>3s} {gat:>3s} {prd:>3s} {snap.get('zc_timeout_count', snap.get('zcTimeoutCount',0)):4d} {snap.get('predExitMiss',0):5d}{fault_str}")
+                print(f"{t:7.1f} {state_str:>8s} {zc_mode_str:>3s} {snap['eRpm']:7d} {snap['dutyPct']:3d}% {snap['vbusV']:5.1f}V {snap.get('predPhaseErrHR',0):5d} {snap.get('predZcOffsetHR',0):5d} {snap.get('entryScore',0):3d} {snap.get('predCommOwned',0):6d} {lck:>3s} {gat:>3s} {prd:>3s} {snap.get('zc_timeout_count', snap.get('zcTimeoutCount',0)):4d} {snap.get('sched_margin_hr', snap.get('schedMarginHR',0)):5d}{fault_str}")
 
                 rows.append({
                     'time': round(t, 3),
@@ -419,6 +421,7 @@ def main():
                     'pred_vs_reactive_delta': snap.get('predVsReactiveDelta', 0),
                     'delta_ok_count': snap.get('deltaOkCount', 0),
                     'handoff_pending': snap.get('handoffPending', 0),
+                    'entry_score': snap.get('entryScore', 0),
                 })
 
             time.sleep(0.01)

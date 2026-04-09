@@ -248,7 +248,10 @@ void BEMF_ZC_Init(volatile GARUDA_DATA_T *pData)
     pData->zcPred.pendingPredValid = false;
     pData->zcPred.predVsReactiveDelta = 0;
     pData->zcPred.deltaOkCount = 0;
+    pData->zcPred.entryScore = 0;
     pData->zcPred.diagPredCommOwned = 0;
+    pData->zcPred.diagPredEnter = 0;
+    pData->zcPred.diagPredEntryLate = 0;
     pData->zcPred.diagPredExitRed = 0;
     pData->zcPred.diagPredExitMiss = 0;
     pData->zcPred.diagPredExitYellow = 0;
@@ -595,6 +598,7 @@ void BEMF_ZC_OnCommutation(volatile GARUDA_DATA_T *pData)
             {
                 pData->zcPred.locked = false;
                 pData->zcPred.deltaOkCount = 0;
+                pData->zcPred.entryScore = 0;
                 pData->zcPred.handoffPending = false;
                 if (pData->zcPred.predictiveMode)
                 {
@@ -608,22 +612,9 @@ void BEMF_ZC_OnCommutation(volatile GARUDA_DATA_T *pData)
                 pData->zcPred.locked = false;
             }
 
-            /* Enter predictive mode — safe handoff.
-             * Requires gateActive (12 consecutive locked+GREEN) +
-             * high speed where reactive scheduling hits the latency wall.
-             * Don't require locked here — at high speed with target-past,
-             * missCount frequently hits 2-3 which clears locked briefly.
-             * gateActive is the stronger stability indicator. */
-            if (!pData->zcPred.predictiveMode &&
-                !pData->zcPred.handoffPending &&
-                pData->zcPred.gateActive &&
-                pData->zcPred.predStepHR > 0 &&
-                pData->zcPred.predZcOffsetHR > 0 &&
-                pData->timing.stepPeriodHR > 0 &&
-                pData->timing.stepPeriodHR < 250)
-            {
-                pData->zcPred.handoffPending = true;
-            }
+            /* Predictive mode entry is now in RecordZcTiming, evaluated
+             * after the current ZC's phaseErr/offset/locked are refreshed.
+             * This avoids using stale state from the previous step. */
         }
     }
 #endif
@@ -781,6 +772,7 @@ ZC_TIMEOUT_RESULT_T BEMF_ZC_CheckTimeout(volatile GARUDA_DATA_T *pData)
             pData->zcPred.gateActive = false;
             pData->zcPred.gateArmCount = 0;
             pData->zcPred.deltaOkCount = 0;
+            pData->zcPred.entryScore = 0;
             pData->zcPred.handoffPending = false;
             if (pData->zcPred.predictiveMode)
             {
@@ -1318,6 +1310,95 @@ void RecordZcTiming(volatile GARUDA_DATA_T *pData,
         {
             pData->zcPred.locked = true;
             pData->zcPred.missCount = 0;
+        }
+
+        /* Compute zone classification for entryScore.
+         * Uses the scan window set in OnCommutation. */
+        bool inGreen = false;
+        bool inRed = false;
+        {
+            int16_t sinceOpen = (int16_t)(hrTick - pData->zcPred.scanOpenHR);
+            int16_t sinceClose = (int16_t)(hrTick - pData->zcPred.scanCloseHR);
+            inGreen = (sinceOpen >= 0 && sinceClose <= 0);
+            if (!inGreen)
+            {
+                uint16_t outerHR = pData->zcPred.predStepHR >> 1;
+                uint16_t outerOpen = pData->zcPred.predZcHR - outerHR;
+                uint16_t outerClose = pData->zcPred.predZcHR + outerHR;
+                int16_t sinceOO = (int16_t)(hrTick - outerOpen);
+                int16_t sinceOC = (int16_t)(hrTick - outerClose);
+                inRed = !(sinceOO >= 0 && sinceOC <= 0);
+            }
+        }
+
+        /* ── entryScore: predictive scheduling readiness ──────────
+         * Evaluated HERE with the CURRENT ZC's refreshed data
+         * (phaseErr, locked, offset, stepHR all just updated).
+         *
+         * Scoring:
+         *   GREEN + small |phaseErr| (< stepHR/6): +4
+         *   GREEN + moderate |phaseErr|:           +1
+         *   YELLOW:                                -1
+         *   RED / large |phaseErr| (> stepHR/4):   clear to 0
+         *
+         * Entry threshold: >= 24 (~1 revolution of good ZCs).
+         * Decay-based: occasional YELLOW doesn't kill progress. */
+        {
+            uint16_t smallErr = pData->zcPred.predStepHR / 6;
+            uint16_t largeErr = pData->zcPred.predStepHR >> 2;
+
+            if (inGreen && absErr < smallErr)
+            {
+                if (pData->zcPred.entryScore <= 251)
+                    pData->zcPred.entryScore += 4;
+                else
+                    pData->zcPred.entryScore = 255;
+            }
+            else if (inGreen)
+            {
+                if (pData->zcPred.entryScore < 255)
+                    pData->zcPred.entryScore++;
+            }
+            else if (inRed || absErr > largeErr)
+            {
+                pData->zcPred.entryScore = 0;
+            }
+            else /* YELLOW */
+            {
+                if (pData->zcPred.entryScore > 0)
+                    pData->zcPred.entryScore--;
+            }
+        }
+
+        /* ── Predictive mode entry (post-ZC, current state) ──────
+         * Arm handoff when:
+         * - entryScore high enough (predictor quality proven)
+         * - predictor has valid state
+         * - reactive path is under pressure (recent low margin
+         *   or recent targetPast — not just high speed)
+         * - not already in predictive mode or pending handoff
+         *
+         * The actual scheduling takeover happens in _CCP4Interrupt
+         * on the NEXT commutation after handoffPending is set. */
+        if (!pData->zcPred.predictiveMode &&
+            !pData->zcPred.handoffPending &&
+            pData->zcPred.entryScore >= 24 &&
+            pData->zcPred.predStepHR > 0 &&
+            pData->zcPred.predZcOffsetHR > 0 &&
+            pData->zcPred.predStepHR > pData->zcPred.predZcOffsetHR &&
+            pData->zcDiag.lastScheduleMarginHR < 10)
+        {
+            /* Pre-compute the first predictor target NOW while we
+             * have the freshest ZC timestamp. The ISR will just
+             * program this value without recomputing.
+             * Target: 2 steps from this ZC (current step is being
+             * handled by reactive, next step also reactive, predictor
+             * takes over the step after that). */
+            uint16_t zcToComm = pData->zcPred.predStepHR
+                                - pData->zcPred.predZcOffsetHR;
+            pData->zcPred.handoffTargetHR = hrTick + zcToComm
+                                            + pData->zcPred.predStepHR;
+            pData->zcPred.handoffPending = true;
         }
     }
 
