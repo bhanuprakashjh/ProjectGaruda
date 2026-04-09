@@ -129,6 +129,10 @@ void GSP_CaptureSnapshot(GSP_CK_SNAPSHOT_T *dst)
     dst->tsFromClc         = src->icZc.diagTsFromClc;
     dst->tsFromPoll        = src->icZc.diagTsFromPoll;
     dst->icLeadReject      = src->icZc.diagIcLeadReject;
+
+    /* Scheduler margin */
+    dst->targetPastCount   = src->zcDiag.diagTargetPast;
+    dst->schedMarginHR     = src->zcDiag.lastScheduleMarginHR;
 #endif
 }
 

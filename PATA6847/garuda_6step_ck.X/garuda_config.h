@@ -14,7 +14,7 @@
 
 /* ── Motor Profile Selection ──────────────────────────────────────── */
 #ifndef MOTOR_PROFILE
-#define MOTOR_PROFILE   1   /* 0=Hurst, 1=A2212, 2=2810 */
+#define MOTOR_PROFILE   2   /* 0=Hurst, 1=A2212, 2=2810 */
 #endif
 
 /* ── Clock ─────────────────────────────────────────────────────────── */
@@ -240,7 +240,13 @@
 #define ZC_BLANK_CAP_PCT    45U         /* Max blanking as % of step period */
 #define FEATURE_IC_ZC_ADAPTIVE 1        /* Enable adaptive blanking for 2810 */
 
-/* Timing advance: uses shared TIMING_ADVANCE_LEVEL default (15°) */
+/* Timing advance: level 3 (22.5°) for 2810 at 24V.
+ * Level 3 vs 2 bench test: speed wall at ~100k is detector-latency-
+ * limited (target-past >75% above 90k), not advance-limited.
+ * Level 3 kept for now — does not hurt sub-90k operation and
+ * provides slightly more margin in the 60-90k band.
+ * Next step: scan-window state machine for earlier accepted timestamps. */
+#define TIMING_ADVANCE_LEVEL 3U
 
 /* Closed-Loop
  * At 25.2V (6S full): 1350 × 25.2 = 34020 RPM = 238k eRPM theoretical.

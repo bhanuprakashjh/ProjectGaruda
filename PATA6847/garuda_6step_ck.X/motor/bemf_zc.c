@@ -166,6 +166,8 @@ void BEMF_ZC_Init(volatile GARUDA_DATA_T *pData)
     pData->zcDiag.diagFallingTimeouts = 0;
     pData->zcDiag.diagRisingRejects = 0;
     pData->zcDiag.diagFallingRejects = 0;
+    pData->zcDiag.diagTargetPast = 0;
+    pData->zcDiag.lastScheduleMarginHR = 0;
     {
         uint8_t i;
         for (i = 0; i < 6; i++) {
@@ -773,8 +775,12 @@ void BEMF_ZC_ScheduleCommutation(volatile GARUDA_DATA_T *pData)
              * commutate ASAP via hardware timer rather than falling through
              * to the imprecise Timer1 path (50µs jitter at Tp:2). */
             int16_t margin = (int16_t)(targetHR - HAL_ComTimer_ReadTimer());
+            pData->zcDiag.lastScheduleMarginHR = margin;
             if (margin <= 0)
+            {
                 targetHR = HAL_ComTimer_ReadTimer() + 2;  /* Fire ASAP */
+                pData->zcDiag.diagTargetPast++;
+            }
             HAL_ComTimer_ScheduleAbsolute(targetHR);
             pData->timing.commDeadline = pData->timing.lastZcTick + delay;
             pData->timing.deadlineActive = true;

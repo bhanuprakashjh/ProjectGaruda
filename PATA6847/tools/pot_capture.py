@@ -173,6 +173,13 @@ def decode_ck_snapshot(data):
         s['tsFromClc'] = 0
         s['tsFromPoll'] = 0
         s['icLeadReject'] = 0
+    # V8 Scheduler margin diagnostics (134 bytes total)
+    if len(data) >= 134:
+        s['targetPastCount'] = struct.unpack_from('<H', data, 130)[0]
+        s['schedMarginHR'] = struct.unpack_from('<h', data, 132)[0]  # signed
+    else:
+        s['targetPastCount'] = 0
+        s['schedMarginHR'] = 0
     # Derived
     s['iaMa'] = round(s['iaRaw'] * CK_CURRENT_SCALE)
     s['ibMa'] = round(s['ibRaw'] * CK_CURRENT_SCALE)
@@ -220,8 +227,8 @@ def main():
     print(f"  Press Ctrl+C to stop")
     print()
     ZC_MODES = ['ACQ', 'TRK', 'RCV']
-    print(f"{'Time':>7s} {'State':>8s} {'ZcM':>3s} {'eRPM':>7s} {'Duty':>4s} {'Pot':>5s} {'Ibus':>7s} {'Vbus':>6s} {'FrcTO':>5s} {'R/F ZC':>10s} {'R/F TO':>10s} {'ZcLat':>6s} {'RawV':>5s} {'RSBk':>5s} {'TFbk':>5s} {'TsIC':>5s} {'TsRw':>5s} {'IcLd':>5s}")
-    print("-" * 155)
+    print(f"{'Time':>7s} {'State':>8s} {'ZcM':>3s} {'eRPM':>7s} {'Duty':>4s} {'Pot':>5s} {'Ibus':>7s} {'Vbus':>6s} {'FrcTO':>5s} {'R/F ZC':>10s} {'R/F TO':>10s} {'ZcLat':>6s} {'RawV':>5s} {'RSBk':>5s} {'TFbk':>5s} {'TsIC':>5s} {'TsRw':>5s} {'IcLd':>5s} {'TPst':>5s} {'Mrgn':>5s}")
+    print("-" * 170)
 
     rows = []
     buf = b''
@@ -271,7 +278,7 @@ def main():
 
                 rfc = f"{snap['risingZcCount']:5d}/{snap['fallingZcCount']:<5d}"
                 rft = f"{snap['risingTimeouts']:5d}/{snap['fallingTimeouts']:<5d}"
-                print(f"{t:7.1f} {state_str:>8s} {zc_mode_str:>3s} {snap['eRpm']:7d} {snap['dutyPct']:3d}% {snap['potRaw']:5d} {snap['ibusMa']:6d}mA {snap['vbusV']:5.1f}V {snap['actualForcedComm']:5d} {rfc:>10s} {rft:>10s} {lat_str:>6s} {snap['rawVetoCount']:5d} {snap['rawStableBlock']:5d} {snap['trackFallbackCount']:5d} {snap['tsFromIc']:5d} {snap['tsFromRaw']:5d} {snap['icLeadReject']:5d}{fault_str}")
+                print(f"{t:7.1f} {state_str:>8s} {zc_mode_str:>3s} {snap['eRpm']:7d} {snap['dutyPct']:3d}% {snap['potRaw']:5d} {snap['ibusMa']:6d}mA {snap['vbusV']:5.1f}V {snap['actualForcedComm']:5d} {rfc:>10s} {rft:>10s} {lat_str:>6s} {snap['rawVetoCount']:5d} {snap['rawStableBlock']:5d} {snap['trackFallbackCount']:5d} {snap['tsFromIc']:5d} {snap['tsFromRaw']:5d} {snap['icLeadReject']:5d} {snap['targetPastCount']:5d} {snap['schedMarginHR']:5d}{fault_str}")
 
                 rows.append({
                     'time': round(t, 3),
@@ -325,6 +332,8 @@ def main():
                     'ts_from_clc': snap['tsFromClc'],
                     'ts_from_poll': snap['tsFromPoll'],
                     'ic_lead_reject': snap['icLeadReject'],
+                    'target_past': snap['targetPastCount'],
+                    'sched_margin_hr': snap['schedMarginHR'],
                 })
 
             time.sleep(0.01)

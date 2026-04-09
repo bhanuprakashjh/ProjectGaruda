@@ -164,6 +164,10 @@ typedef struct __attribute__((packed)) {
     uint16_t tsFromClc;         /* ZCs using CLC first-match timestamp */
     uint16_t tsFromPoll;        /* ZCs using poll timestamp */
     uint16_t icLeadReject;      /* IC timestamp downgraded (IC led raw too much) */
+
+    /* Scheduler margin diagnostics (4B) */
+    uint16_t targetPastCount;   /* Commutation target already in past */
+    int16_t  schedMarginHR;     /* Last scheduler margin (HR ticks, neg=late) */
 } GSP_CK_SNAPSHOT_T;
 
 /* XC16 doesn't support _Static_assert. Verify size at compile time:

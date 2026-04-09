@@ -190,6 +190,9 @@ typedef struct {
     /* Per-step 0..5 counters — distinguishes phase-pair vs polarity-class */
     uint16_t stepAccepted[6];       /* ZCs accepted per commutation step */
     uint16_t stepTimeouts[6];       /* timeouts per commutation step */
+    /* Scheduler margin diagnostics */
+    uint16_t diagTargetPast;        /* Commutation target already in past (fire ASAP) */
+    int16_t  lastScheduleMarginHR;  /* Last margin: positive=on-time, negative=late */
 } ZC_DIAG_T;
 
 /* ── Speed PD Controller State ──────────────────────────────────────── */
