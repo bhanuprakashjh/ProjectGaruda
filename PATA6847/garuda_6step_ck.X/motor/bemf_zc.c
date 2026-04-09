@@ -50,6 +50,21 @@ static inline uint8_t ReadBEMFComparator(uint8_t phase)
 #endif
 }
 
+/**
+ * @brief Read the RAW BEMF comparator GPIO (bypasses CLC D-FF).
+ * Used for raw corroboration: sanity-check that CLC D-FF isn't stale.
+ */
+static inline uint8_t ReadRawBEMFComparator(uint8_t phase)
+{
+    switch (phase)
+    {
+        case 0: return BEMF_A_GetValue() ? 1 : 0;
+        case 1: return BEMF_B_GetValue() ? 1 : 0;
+        case 2: return BEMF_C_GetValue() ? 1 : 0;
+        default: return 0;
+    }
+}
+
 /* ── ZC V2 Mode Helpers (Phase 2) ─────────────────────────────────── */
 
 static void ZcEnterAcquire(volatile GARUDA_DATA_T *pData)
@@ -105,6 +120,21 @@ void BEMF_ZC_Init(volatile GARUDA_DATA_T *pData)
     pData->icZc.diagLcoutAccepted = 0;
     pData->icZc.diagFalseZc = 0;
     pData->icZc.diagPollCycles = 0;
+    pData->icZc.rawCoro = 0;
+    pData->icZc.hasFirstClcMatch = false;
+    pData->icZc.firstClcMatchHR = 0;
+    pData->icZc.hasRawFirstMatch = false;
+    pData->icZc.rawFirstMatchHR = 0;
+    pData->icZc.rawFirstMatchT1 = 0;
+    pData->icZc.diagRawVeto = 0;
+    pData->icZc.diagIcAgeReject = 0;
+    pData->icZc.diagTrackFallback = 0;
+    pData->icZc.diagRawStableBlock = 0;
+    pData->icZc.diagTsFromIc = 0;
+    pData->icZc.diagTsFromRaw = 0;
+    pData->icZc.diagTsFromClc = 0;
+    pData->icZc.diagTsFromPoll = 0;
+    pData->icZc.diagIcLeadReject = 0;
     pData->icZc.lastCmpState = 0xFF;
     {
         uint8_t i;
@@ -117,6 +147,7 @@ void BEMF_ZC_Init(volatile GARUDA_DATA_T *pData)
 #if FEATURE_IC_ZC_CAPTURE
     pData->icZc.icCommStamp = 0;
     pData->icZc.icArmed = false;
+    pData->icZc.icCandidateValid = false;
     pData->icZc.diagIcAccepted = 0;
     pData->icZc.diagIcBounce = 0;
     HAL_ZcIC_Disarm();
@@ -408,6 +439,9 @@ void BEMF_ZC_OnCommutation(volatile GARUDA_DATA_T *pData)
         pData->icZc.blankingEndHR = pData->icZc.lastCommHR + blankHR;
         pData->icZc.activeChannel = step->floatingPhase;
         pData->icZc.pollFilter = 0;
+        pData->icZc.rawCoro = 0;
+        pData->icZc.hasFirstClcMatch = false;
+        pData->icZc.hasRawFirstMatch = false;
         pData->icZc.lastCmpState = 0xFF;  /* force re-read on first poll */
 
 #if FEATURE_IC_ZC_CAPTURE
@@ -419,6 +453,7 @@ void BEMF_ZC_OnCommutation(volatile GARUDA_DATA_T *pData)
                                step->zcPolarity > 0);
             pData->icZc.icCommStamp = HAL_ZcIC_ReadTimer();
             pData->icZc.icArmed = false;
+            pData->icZc.icCandidateValid = false;
         }
 #endif
 
@@ -1111,37 +1146,69 @@ bool BEMF_ZC_FastPoll(volatile GARUDA_DATA_T *pData)
     }
 
     /* ZC V2 Phase 3: strict polarity in all modes.
-     * Never accept wrong-polarity comparator state.
-     * AM32/ESCape32 never do this. Bench data confirms:
-     * Rising ZC=19939, Falling ZC=19924, both TO=0 — the comparator
-     * detects both polarities perfectly. The old bypass was the root
-     * cause of every cascade failure, not a necessary workaround.
-     * If ZC is missed, the timeout fires and mode transitions handle
-     * recovery (TRACK → RECOVER → ACQUIRE → TRACK). */
+     * Never accept wrong-polarity comparator state. */
     uint8_t expected = pData->bemf.cmpExpected;
+
+    /* Read raw GPIO in parallel with CLC for corroboration (TRACK only).
+     * Raw is NOT the primary detector — it's a sanity check to catch
+     * stale CLC D-FF holds and noise-coincidence fast accepts. */
+    uint8_t rawCmp = ReadRawBEMFComparator(pData->icZc.activeChannel);
 
     if (cmp == expected)
     {
+        /* Record first CLC match timestamp for candidateAge fallback */
+        if (!pData->icZc.hasFirstClcMatch)
+        {
+            pData->icZc.firstClcMatchHR = HAL_ComTimer_ReadTimer();
+            pData->icZc.hasFirstClcMatch = true;
+        }
+
+        /* Raw corroboration & stability (candidate-local, TRACK only).
+         * rawCoro: saturating 0..2 counter of consecutive raw matches.
+         * rawFirstMatchHR: scoped to CLC candidate — only starts when
+         * CLC==expected AND raw==expected. Resets on ANY raw mismatch
+         * (not just CLC mismatch) to prevent spanning chatter. */
+        if (pData->zcCtrl.mode == ZC_MODE_TRACK)
+        {
+            if (rawCmp == expected)
+            {
+                if (pData->icZc.rawCoro < 2u)
+                    pData->icZc.rawCoro++;
+                if (!pData->icZc.hasRawFirstMatch)
+                {
+                    pData->icZc.rawFirstMatchHR = HAL_ComTimer_ReadTimer();
+                    pData->icZc.rawFirstMatchT1 = pData->timer1Tick;
+                    pData->icZc.hasRawFirstMatch = true;
+                }
+            }
+            else
+            {
+                /* Raw mismatch — reset raw stability entirely */
+                pData->icZc.rawCoro = 0;
+                pData->icZc.hasRawFirstMatch = false;
+            }
+        }
+
         if (pData->icZc.pollFilter == 0)
         {
 #if FEATURE_IC_ZC_CAPTURE
-            /* At high speed: validate IC timestamp freshness.
-             * IC may catch a bounce; if stale, use poll time.
-             * At low speed: trust IC as-is (proven working). */
-            if (!pData->icZc.icArmed &&
-                pData->timing.stepPeriodHR < 300u)
+            /* PWM-aware IC timestamp age validation (no speed gate).
+             * IC may catch a bounce; if stale, use poll time. */
+            if (pData->icZc.icCandidateValid)
             {
                 uint16_t now = HAL_ComTimer_ReadTimer();
                 uint16_t icAge = now - pData->icZc.zcCandidateHR;
-                uint16_t maxAge = (uint16_t)((uint32_t)LOOPTIME_MICROSEC
-                                             * 25u / 16u);  /* 1 PWM cycle */
-                if (icAge > maxAge)
+                if (icAge > IC_AGE_MAX_HR)
                 {
                     pData->icZc.zcCandidateHR = now;
                     pData->icZc.zcCandidateT1 = pData->timer1Tick;
+                    pData->icZc.icCandidateValid = false;
+                    pData->icZc.diagIcAgeReject++;
                 }
             }
             else if (pData->icZc.icArmed)
+#else
+            if (true)
 #endif
             {
                 pData->icZc.zcCandidateHR = HAL_ComTimer_ReadTimer();
@@ -1150,24 +1217,129 @@ bool BEMF_ZC_FastPoll(volatile GARUDA_DATA_T *pData)
         }
         pData->icZc.pollFilter++;
 
-#if FEATURE_CLC_BLANKING
-        /* CLC D-FF can hold stale state from blanking period at HIGH speed.
-         * At high speed (StpHR < 300 ≈ 52k eRPM): use FL=2 in TRACK to
-         * reject stale D-FF. At low speed: FL=1 (BEMF is weak, comparator
-         * bounces at ZC, second read might catch bounce → timeout).
-         * In ACQUIRE: use full deglitch as before. */
-        if (pData->icZc.pollFilter >=
-            (pData->zcCtrl.mode == ZC_MODE_TRACK
-             ? (pData->timing.stepPeriodHR < 300u ? 2u : 1u)
-             : pData->icZc.filterLevel))
-#else
-        if (pData->icZc.pollFilter >= pData->icZc.filterLevel)
-#endif
+        /* ── TRACK acceptance: detector agreement, no speed gate ──────
+         *
+         * Fast accept: pollFilter >= 1 && rawStable
+         *   rawStable = rawCoro >= 2 (primary: two consecutive raw matches)
+         *            OR (hasRawFirstMatch && rawAge >= RAW_STABLE_AGE_HR)
+         *               (jitter insurance: raw stable for >= 1 poll period,
+         *                covers case where rawCoro is exactly 1 but raw
+         *                has been consistent long enough)
+         *
+         * Safe fallback: pollFilter >= 2 && candidateAge >= 1 PWM cycle
+         *   CLC persisted through a fresh D-FF update (not stale).
+         *
+         * ACQUIRE/RECOVER: full adaptive FL (3-8). */
+        bool accept = false;
+        if (pData->zcCtrl.mode == ZC_MODE_TRACK)
         {
-            /* ZC confirmed! IC timestamp already validated at first match. */
+            bool rawStable = false;
+            if (pData->icZc.rawCoro >= 2u)
+            {
+                rawStable = true;  /* primary: two consecutive raw matches */
+            }
+            else if (pData->icZc.hasRawFirstMatch && pData->icZc.rawCoro >= 1u)
+            {
+                uint16_t rawAge = HAL_ComTimer_ReadTimer()
+                                  - pData->icZc.rawFirstMatchHR;
+                if (rawAge >= RAW_STABLE_AGE_HR)
+                    rawStable = true;  /* jitter insurance: stable for 1 poll */
+            }
+
+            if (pData->icZc.pollFilter >= 1u && rawStable)
+            {
+                accept = true;  /* fast path: CLC + raw stably agree */
+            }
+            else if (pData->icZc.pollFilter >= 2u)
+            {
+                uint16_t candidateAge = HAL_ComTimer_ReadTimer()
+                                        - pData->icZc.firstClcMatchHR;
+                if (candidateAge >= PWM_PERIOD_HR)
+                {
+                    accept = true;  /* fallback: CLC survived a D-FF refresh */
+                    pData->icZc.diagTrackFallback++;
+                }
+                else if (pData->icZc.rawCoro >= 1u)
+                {
+                    /* Raw was present but not stable enough for fast path */
+                    pData->icZc.diagRawStableBlock++;
+                }
+                else
+                {
+                    pData->icZc.diagRawVeto++;
+                }
+            }
+        }
+        else
+        {
+            /* ACQUIRE/RECOVER: use full adaptive filter */
+            if (pData->icZc.pollFilter >= pData->icZc.filterLevel)
+                accept = true;
+        }
+
+        if (accept)
+        {
+            /* ── Timestamp selection by confidence ────────────────────
+             * Select best ZC timestamp AFTER acceptance is decided.
+             * IC lead check is a timestamp downgrade only — never
+             * affects whether the ZC is accepted.
+             *
+             * Preferred: IC (if valid and doesn't lead raw too much)
+             * Fallback 1: rawFirstMatchHR (first stable raw observation)
+             * Fallback 2: firstClcMatchHR (first CLC match)
+             * Fallback 3: current poll time */
+            uint16_t tsHR = pData->icZc.zcCandidateHR;
+            uint16_t tsT1 = pData->icZc.zcCandidateT1;
+
+#if FEATURE_IC_ZC_CAPTURE
+            if (pData->icZc.icCandidateValid && pData->icZc.hasRawFirstMatch)
+            {
+                /* Check IC lead vs raw stability */
+                int16_t icLead = (int16_t)(pData->icZc.rawFirstMatchHR
+                                           - pData->icZc.zcCandidateHR);
+                if (icLead > (int16_t)IC_LEAD_MAX_HR)
+                {
+                    /* IC fired too far ahead of raw — bounce, downgrade */
+                    tsHR = pData->icZc.rawFirstMatchHR;
+                    tsT1 = pData->icZc.rawFirstMatchT1;
+                    pData->icZc.diagIcLeadReject++;
+                    pData->icZc.diagTsFromRaw++;
+                }
+                else
+                {
+                    /* IC is fresh and consistent with raw — best source */
+                    pData->icZc.diagTsFromIc++;
+                }
+            }
+            else if (pData->icZc.icCandidateValid)
+            {
+                /* IC valid but no raw reference — trust IC */
+                pData->icZc.diagTsFromIc++;
+            }
+            else
+#endif
+            if (pData->icZc.hasRawFirstMatch)
+            {
+                /* No valid IC — use raw first match */
+                tsHR = pData->icZc.rawFirstMatchHR;
+                tsT1 = pData->icZc.rawFirstMatchT1;
+                pData->icZc.diagTsFromRaw++;
+            }
+            else if (pData->icZc.hasFirstClcMatch)
+            {
+                /* No raw either — use CLC first match */
+                tsHR = pData->icZc.firstClcMatchHR;
+                tsT1 = pData->icZc.zcCandidateT1;  /* best T1 available */
+                pData->icZc.diagTsFromClc++;
+            }
+            else
+            {
+                /* Nothing — use current poll time (already in tsHR/tsT1) */
+                pData->icZc.diagTsFromPoll++;
+            }
+
             pData->bemf.zeroCrossDetected = true;
-            RecordZcTiming(pData, pData->icZc.zcCandidateT1,
-                           pData->icZc.zcCandidateHR);
+            RecordZcTiming(pData, tsT1, tsHR);
 
             if (pData->bemf.zeroCrossDetected)
             {
@@ -1177,16 +1349,21 @@ bool BEMF_ZC_FastPoll(volatile GARUDA_DATA_T *pData)
             }
             /* RecordZcTiming rejected (too-short interval) — reset */
             pData->icZc.pollFilter = 0;
+            pData->icZc.rawCoro = 0;
+            pData->icZc.hasFirstClcMatch = false;
+            pData->icZc.hasRawFirstMatch = false;
         }
     }
     else
     {
-        /* Mismatch — bounce-tolerant decrement instead of hard reset.
-         * A single noise spike costs 2 polls (one lost + one to recover)
-         * instead of throwing away the entire filter. Critical at Tp:5
-         * where only ~20 polls are available after blanking. */
+        /* CLC mismatch — reset entire candidate state.
+         * Bounce-tolerant decrement for pollFilter, but raw corroboration,
+         * raw stability, and first-match are candidate-local so they reset. */
         if (pData->icZc.pollFilter > 0)
             pData->icZc.pollFilter--;
+        pData->icZc.rawCoro = 0;
+        pData->icZc.hasFirstClcMatch = false;
+        pData->icZc.hasRawFirstMatch = false;
     }
 
     return false;

@@ -2,8 +2,8 @@
 ## dsPIC33CK64MP205 + ATA6847 — Garuda 6-Step BLDC ESC
 
 ### Document Version
-- Date: 2026-04-04
-- Commit: 5286b2e
+- Date: 2026-04-09
+- Commit: (Phase 2 — detector-agreement acceptance)
 - Authors: Bhanu Prakash, Claude Opus 4.6
 
 ---
@@ -146,23 +146,24 @@ The IC captures EVERY comparator edge — real ZC AND noise:
    │              │            │ output (clean)│
    │ 50% interval │            │               │
    │ check:       │            │ Matches       │
-   │ too early? ──┼─YES→ skip  │ expected? ────┼─NO→ reset filter
-   │   ↓ NO       │            │   ↓ YES       │
-   │ Store        │            │ pollFilter++  │
-   │ zcCandidateHR│            │               │
-   │ (640ns       │            │ ACQUIRE: ≥3?  │
-   │  precision)  │            │ TRACK:   ≥1?  │
-   │              │            │   ↓ YES       │
-   │ icArmed=false│            │               │
-   └──────────────┘            │ ┌─────────────┤
-                               │ │ IC captured? │
-                               │ │ (icArmed=    │
-                               │ │  false?)     │
-                               │ ├─YES: use IC  │
-                               │ │  timestamp   │
-                               │ ├─NO: use poll │
-                               │ │  timestamp   │
-                               │ └──────┬───────┘
+   │ too early? ──┼─YES→ skip  │ expected? ────┼─NO→ reset filter,
+   │   ↓ NO       │            │              │     rawCoro,
+   │ Store        │            │              │     rawFirstMatch
+   │ zcCandidateHR│            │   ↓ YES      │
+   │ (640ns       │            │ pollFilter++ │
+   │  precision)  │            │ + raw corro- │
+   │              │            │   boration   │
+   │ icArmed=false│            │              │
+   │ icCandidate  │            │ ACQUIRE: ≥FL │
+   │  Valid=true  │            │ TRACK: fast  │
+   └──────────────┘            │  or fallback │
+                               │   ↓ YES      │
+                               │ ┌─────────────┤
+                               │ │ Timestamp   │
+                               │ │ selection:  │
+                               │ │ IC→raw→CLC  │
+                               │ │  →poll      │
+                               │ └──────┬──────┘
                                │        ↓
                                │ RecordZcTiming()
                                │ • Update IIR
@@ -199,11 +200,12 @@ The IC captures EVERY comparator edge — real ZC AND noise:
                            ↓
                   ┌─────────────────┐
            ┌──→   │     TRACK       │
-           │      │ • 1-read CLC    │
-           │      │ • IC timestamps │
+           │      │ • Detector-     │
+           │      │   agreement    │
+           │      │   acceptance   │
+           │      │ • Raw corrobo- │
+           │      │   ration gate  │
            │      │ • Full duty     │
-           │      │ • Normal        │
-           │      │   operation     │
            │      └────────┬────────┘
            │               │ timeout/desync
            │               ↓
@@ -347,20 +349,39 @@ Timer1: 20 kHz system tick (duty control, timeout, state machine)
 **50% interval rejection**: IC ISR rejects edges arriving before 50% of refIntervalHR from last ZC. Prevents noise edges from providing wrong timestamps.
 
 ### 2.3 Poll Path (Detection + Validation)
-- **Frequency**: 210.5 kHz (SCCP1 timer, non-integer ratio with 24kHz PWM)
+- **Frequency**: 210.5 kHz (SCCP1 timer, non-integer ratio with PWM)
 - **Signal source**: CLC D-FF output (clean) when FEATURE_CLC_BLANKING=1
-- **Deglitch**: Mode-dependent:
-  - ACQUIRE (CL entry): full filterLevel (3-4 consecutive reads)
-  - TRACK (stable): 1 read (CLC signal is stable, no deglitch needed)
+- **Raw corroboration**: Raw GPIO read in parallel (sanity check, not co-equal detector)
+- **Acceptance**: Mode-dependent:
+  - ACQUIRE/RECOVER: full adaptive filterLevel (3-8 consecutive reads)
+  - TRACK: detector-agreement acceptance (see below)
+
+**TRACK Acceptance (Phase 2 — no speed gates)**:
+
+Two paths, no `stepPeriodHR` thresholds:
+- **Fast accept**: `pollFilter >= 1` AND raw stable (`rawCoro >= 2`, or `rawCoro >= 1` with `rawAge >= pollPeriodHR`)
+  - Primary gate: two consecutive raw matches confirm CLC is not stale
+  - Jitter insurance: single raw match that persisted for one poll period
+- **Safe fallback**: `pollFilter >= 2` AND `candidateAge >= pwmPeriodHR`
+  - CLC persisted through a fresh D-FF update cycle (guarantees D-FF re-sampled)
+
+All candidate state (`rawCoro`, `rawFirstMatchHR`, `firstClcMatchHR`) is candidate-local — resets on any CLC mismatch. `rawFirstMatchHR` also resets on any raw mismatch to prevent spanning chatter.
+
+**Timestamp selection** (after acceptance, never affects whether ZC is accepted):
+1. IC timestamp — if `icCandidateValid` and IC doesn't lead raw by more than `IC_LEAD_MAX_HR`
+2. `rawFirstMatchHR` — first stable raw observation within the CLC candidate
+3. `firstClcMatchHR` — first CLC match (fallback)
+4. Current poll time (last resort)
 
 **Operation**:
 1. Blanking check (12% of step period from commutation, floor 25µs)
 2. 50% interval rejection (elapsed since last ZC > half of refIntervalHR)
-3. Read CLC output for floating phase
-4. If matches expected state: increment pollFilter
-5. If pollFilter >= required level: ZC confirmed
-6. Call RecordZcTiming with IC's precise timestamp (if IC captured) or poll timestamp
-7. Call ScheduleCommutation
+3. Read CLC output for floating phase + raw GPIO in parallel
+4. If CLC matches expected: record firstClcMatchHR, update rawCoro/rawFirstMatchHR
+5. If raw mismatches: reset rawCoro and rawFirstMatchHR
+6. IC age validation (PWM-aware budget: `pwmPeriodHR + pollPeriodHR + margin`)
+7. Check acceptance criteria (fast or fallback path)
+8. Select best timestamp, call RecordZcTiming + ScheduleCommutation
 
 ### 2.4 Combined Flow
 ```
@@ -369,22 +390,28 @@ Commutation fires (SCCP4 OC ISR)
 BEMF_ZC_OnCommutation:
     → Configure SCCP2 IC (PPS route, edge polarity)
     → ForcePreZcState (CLC D-FF reset to pre-ZC state)
+    → Clear rawCoro, rawFirstMatch, firstClcMatch
     → Set blanking end time
     → phase = IC_ZC_BLANKING
     ↓
 FastPoll (210.5 kHz):
     → Check blanking: if expired → phase = IC_ZC_ARMED, arm IC
     → 50% interval rejection
-    → Read CLC output (clean)
-    → Deglitch filter (ACQUIRE: 3-4 reads, TRACK: 1 read)
-    → If confirmed: RecordZcTiming + ScheduleCommutation
+    → Read CLC output (clean) + raw GPIO (corroboration)
+    → If CLC matches: track rawCoro, rawFirstMatchHR, firstClcMatchHR
+    → If raw mismatches: reset rawCoro + rawFirstMatchHR
+    → IC age validation (PWM-aware budget)
+    → TRACK: fast accept (CLC+raw stable) or fallback (FL=2+pwmAge)
+    → ACQUIRE: full adaptive FL (3-8)
+    → Timestamp selection: IC → raw → CLC → poll
+    → If accepted: RecordZcTiming + ScheduleCommutation
     ↓
 IC Capture (_CCP2Interrupt):
     → Fires on raw comparator edge (before CLC updates)
     → 50% interval check on backdated timestamp
-    → Stores precise zcCandidateHR (640ns)
+    → Stores precise zcCandidateHR (640ns), sets icCandidateValid
     → Does NOT call RecordZcTiming
-    → Poll path uses IC timestamp when it confirms
+    → Poll path validates IC freshness and lead-vs-raw before using
     ↓
 SCCP4 OC fires at computed target → Commutation
 ```
@@ -474,10 +501,12 @@ waitTime = interval / 2 - advance
 - Transitions to TRACK after 20 consecutive good ZCs
 
 ### ZC_MODE_TRACK
-- Normal operation
-- 1-read CLC confirm (clean signal, fast validation)
-- IC timestamp used for precise scheduling
-- Full duty range available
+- Normal operation, full duty range available
+- **Detector-agreement acceptance** (no speed gates):
+  - Fast path: CLC + raw GPIO both match expected (rawCoro >= 2 or rawAge >= pollPeriodHR)
+  - Fallback: pollFilter >= 2 AND CLC candidate persisted >= 1 PWM cycle
+- **Timestamp hierarchy**: IC (if valid, not leading raw) → raw → CLC → poll
+- **IC age validation**: PWM-aware budget (pwmPeriod + pollPeriod + margin)
 - Transitions to RECOVER on timeout
 
 ### ZC_MODE_RECOVER
@@ -514,12 +543,30 @@ waitTime = interval / 2 - advance
 | No-load | CLC+IC hybrid | 99.4% | 103k | 34A | 1224 |
 | Prop | CLC+IC hybrid | 99.84% | 62k | 25A | 178 |
 
+### A2212 1400KV at 12V, 40kHz PWM (Phase 2 — detector-agreement)
+
+| Test | Acceptance | ZC Success | Max eRPM | Timeouts | icFalse |
+|------|-----------|-----------|----------|----------|---------|
+| No-load, Phase 1 (rawCoro>=1) | CLC+raw(1) | 100% | 132k (inflated) | 24 | 92 |
+| **No-load, Phase 2 (rawStable)** | **CLC+raw(stable)** | **100%** | **112k** | **0** | **15** |
+
+Phase 2 diagnostic counters (60,202 ZC accepts):
+- rawVeto: 42,863 (stale D-FF blocked)
+- rawStableBlock: 63,235 (noise coincidence blocked — primary Phase 2 fix)
+- trackFallback: 1,144 (PWM-aged safe path)
+- icLeadReject: 44,297 (IC bounce timestamps downgraded)
+- tsFromIc: 8,314 (13.8%), tsFromRaw: 51,877 (86.1%)
+
 ### Key Findings
 1. **With prop: 100% ZC** on both motors (12V and 18V)
-2. **No-load noise at 50%/80% duty**: CLC clock position issue (counter-relative, not edge-relative)
-3. **24V Vbus swings**: bench supply sags 20-28V under 25A → comparator threshold shift
-4. **Unipolar gives 34x fewer timeouts** but needs speed PID for proper control
-5. **CLC+IC hybrid** combines complementary braking with clean ZC detection
+2. **Phase 2 eliminates all timeouts and forced commutations** at 40kHz
+3. **50-54k eRPM false IC spike eliminated** (Phase 1 removed speed gate, Phase 2 tightened acceptance)
+4. **Raw timestamp is dominant source** (86%) — IC is opportunistic precision, not primary
+5. **eRPM readings converge** at high duty (100.8k at 95% duty, consistent across runs)
+6. **No-load noise at 50%/80% duty**: CLC clock position issue (counter-relative, not edge-relative)
+7. **24V Vbus swings**: bench supply sags 20-28V under 25A → comparator threshold shift
+8. **Unipolar gives 34x fewer timeouts** but needs speed PID for proper control
+9. **CLC+IC hybrid** combines complementary braking with clean ZC detection
 
 ---
 
@@ -539,9 +586,17 @@ waitTime = interval / 2 - advance
 
 ### 9.3 Fast Pot Transients
 - Rapid pot changes can outrun the estimator
-- 1-read CLC confirm accepts stale state during transients
+- Phase 2 raw stability gate significantly reduces false accepts during transients
 - ACQUIRE mode full deglitch prevents this at CL entry
 - **Fix**: Duty slew rate limiting (DUTY_SLEW_UP=3 already active)
+
+### 9.5 IC Timestamp Utilization at High Speed
+- At high speed with moderate duty (70-90%), IC timestamp is mostly rejected:
+  - icAgeReject: IC fires during blanking/noise, timestamp too old by poll time
+  - icLeadReject: IC catches bounce edge, timestamp leads raw stability by too much
+- Result: tsFromRaw dominates (86%), IC provides timing in only 14% of ZC accepts
+- IC still valuable for 50% interval rejection in ISR (prevents early noise edges)
+- **Potential fix**: Scan-window state machine (explicit ZC search model, not level-agreement)
 
 ### 9.4 No Speed PID
 - Direct pot→duty mapping (no closed-loop speed control)
@@ -623,7 +678,7 @@ FEATURE_CLC_BLANKING    1    // CLC D-FF noise filter
 PWM_DRIVE_UNIPOLAR      0    // 0=complementary (default), 1=unipolar
 
 // PWM
-PWMFREQUENCY_HZ         24000   // 24 kHz (AM32 default)
+PWMFREQUENCY_HZ         40000   // 40 kHz (zero timeouts at 100k eRPM)
 ZC_POLL_FREQ_HZ         210526  // Non-integer ratio with PWM
 
 // Timing advance
@@ -636,5 +691,12 @@ SCTHSEL                 7       // 2000mV VDS threshold (for 24V)
 // Deglitch
 ZC_DEGLITCH_MIN         3       // Min consecutive reads (high speed)
 ZC_DEGLITCH_MAX         8       // Max consecutive reads (low speed)
-// CLC mode: ACQUIRE=filterLevel, TRACK=1 read
+// ACQUIRE: full adaptive filterLevel (3-8)
+// TRACK: detector-agreement (raw stable + CLC, or FL=2 + PWM age)
+
+// Phase 2: PWM-aware timing budgets (derived, not magic numbers)
+IC_AGE_MAX_HR           // pwmPeriodHR + pollPeriodHR + margin (~56 HR @ 40kHz)
+IC_LEAD_MAX_HR          // pollPeriodHR + margin (~17 HR @ 210kHz)
+RAW_STABLE_AGE_HR       // pollPeriodHR (~7 HR @ 210kHz)
+PWM_PERIOD_HR           // pwmPeriodHR (~39 HR @ 40kHz)
 ```

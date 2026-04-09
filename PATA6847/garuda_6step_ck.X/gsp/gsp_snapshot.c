@@ -116,6 +116,19 @@ void GSP_CaptureSnapshot(GSP_CK_SNAPSHOT_T *dst)
             dst->stepPolls[i] = src->icZc.stepPolls[i];
         }
     }
+
+    /* Raw corroboration & IC age diagnostics */
+    dst->rawVetoCount      = src->icZc.diagRawVeto;
+    dst->icAgeRejectCount  = src->icZc.diagIcAgeReject;
+    dst->trackFallbackCount = src->icZc.diagTrackFallback;
+
+    /* Phase 2: raw stability & timestamp source */
+    dst->rawStableBlock    = src->icZc.diagRawStableBlock;
+    dst->tsFromIc          = src->icZc.diagTsFromIc;
+    dst->tsFromRaw         = src->icZc.diagTsFromRaw;
+    dst->tsFromClc         = src->icZc.diagTsFromClc;
+    dst->tsFromPoll        = src->icZc.diagTsFromPoll;
+    dst->icLeadReject      = src->icZc.diagIcLeadReject;
 #endif
 }
 

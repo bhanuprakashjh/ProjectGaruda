@@ -111,14 +111,34 @@ typedef struct {
     uint16_t diagLcoutAccepted; /* ZCs accepted via ADC ISR backup */
     uint16_t diagFalseZc;       /* Rejected by RecordZcTiming */
     uint16_t diagPollCycles;    /* Total poll ISR invocations */
+    /* Raw corroboration (candidate-local, TRACK mode) */
+    uint8_t  rawCoro;           /* Saturating 0..2: raw GPIO agrees with CLC during candidate */
+    bool     hasFirstClcMatch;  /* true after CLC first matches expected this candidate */
+    uint16_t firstClcMatchHR;   /* HR timestamp of first CLC==expected this candidate */
+    /* Phase 2: raw stability tracking (candidate-local) */
+    bool     hasRawFirstMatch;  /* true after raw first matches expected within current CLC candidate */
+    uint16_t rawFirstMatchHR;   /* HR timestamp of first raw==expected within CLC candidate */
+    uint16_t rawFirstMatchT1;   /* Timer1 tick at first raw==expected (for timestamp selection) */
     /* Raw comparator edge trace */
     uint8_t  lastCmpState;      /* previous raw comparator read (0 or 1) */
     uint16_t stepFlips[6];      /* comparator transitions per step (glitch count) */
     uint16_t stepPolls[6];      /* total polls per step (for rate calculation) */
+    /* Diagnostics — raw corroboration & IC age */
+    uint16_t diagRawVeto;       /* CLC matched but raw didn't corroborate (stale D-FF) */
+    uint16_t diagIcAgeReject;   /* IC timestamp discarded as stale */
+    uint16_t diagTrackFallback; /* ZCs accepted via PWM-aged FL=2 fallback */
+    uint16_t diagRawStableBlock; /* Fast accept blocked: CLC candidate but raw not stable */
+    /* Phase 2: timestamp source counters */
+    uint16_t diagTsFromIc;      /* ZC accepted using IC timestamp */
+    uint16_t diagTsFromRaw;     /* ZC accepted using rawFirstMatchHR */
+    uint16_t diagTsFromClc;     /* ZC accepted using firstClcMatchHR */
+    uint16_t diagTsFromPoll;    /* ZC accepted using current poll time */
+    uint16_t diagIcLeadReject;  /* IC timestamp downgraded: IC led raw by too much */
 #if FEATURE_IC_ZC_CAPTURE
     /* SCCP2 IC capture state */
     uint16_t icCommStamp;       /* SCCP2 timer at last commutation (IC domain) */
     bool     icArmed;           /* true when IC is armed for capture */
+    bool     icCandidateValid;  /* true when IC has captured and timestamp is usable */
     uint16_t diagIcAccepted;    /* ZCs accepted via IC capture */
     uint16_t diagIcBounce;      /* IC fires rejected (bounce after blanking) */
 #endif

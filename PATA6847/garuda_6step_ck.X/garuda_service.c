@@ -1085,6 +1085,7 @@ void __attribute__((interrupt, no_auto_psv)) _CCP2Interrupt(void)
         gData.icZc.zcCandidateT1 = gData.timer1Tick - elapsedT1;
     }
     gData.icZc.icArmed = false;
+    gData.icZc.icCandidateValid = true;
     gData.icZc.diagIcAccepted++;
 
     /* IC only stores the precise timestamp. Does NOT call

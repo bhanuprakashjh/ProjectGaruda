@@ -151,6 +151,19 @@ typedef struct __attribute__((packed)) {
     /* Raw comparator edge trace (24B) */
     uint16_t stepFlips[6];      /* comparator transitions per step (glitch count) */
     uint16_t stepPolls[6];      /* total polls per step */
+
+    /* Raw corroboration & IC age diagnostics (6B) */
+    uint16_t rawVetoCount;      /* CLC matched but raw didn't corroborate */
+    uint16_t icAgeRejectCount;  /* IC timestamp discarded as stale */
+    uint16_t trackFallbackCount; /* ZCs accepted via PWM-aged FL=2 fallback */
+
+    /* Phase 2: raw stability & timestamp source diagnostics (14B) */
+    uint16_t rawStableBlock;    /* Fast accept blocked: raw not stable enough */
+    uint16_t tsFromIc;          /* ZCs using IC timestamp */
+    uint16_t tsFromRaw;         /* ZCs using raw first-match timestamp */
+    uint16_t tsFromClc;         /* ZCs using CLC first-match timestamp */
+    uint16_t tsFromPoll;        /* ZCs using poll timestamp */
+    uint16_t icLeadReject;      /* IC timestamp downgraded (IC led raw too much) */
 } GSP_CK_SNAPSHOT_T;
 
 /* XC16 doesn't support _Static_assert. Verify size at compile time:

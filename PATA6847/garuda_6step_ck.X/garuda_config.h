@@ -14,7 +14,7 @@
 
 /* ── Motor Profile Selection ──────────────────────────────────────── */
 #ifndef MOTOR_PROFILE
-#define MOTOR_PROFILE   2   /* 0=Hurst, 1=A2212, 2=2810 */
+#define MOTOR_PROFILE   1   /* 0=Hurst, 1=A2212, 2=2810 */
 #endif
 
 /* ── Clock ─────────────────────────────────────────────────────────── */
@@ -490,6 +490,32 @@
 #define ZC_DEGLITCH_MAX         8U          /* At Tp >= ZC_DEGLITCH_SLOW_TP */
 #define ZC_DEGLITCH_FAST_TP     5U          /* Tp threshold for min filter (was 10) */
 #define ZC_DEGLITCH_SLOW_TP     50U         /* Tp threshold for max filter */
+
+/* PWM-aware IC age budget (replaces hard StpHR < 300 gate).
+ * Maximum acceptable IC-to-poll delay: IC fires on comparator edge,
+ * CLC D-FF updates on next PWM valley, poll reads CLC on next poll.
+ * Budget = pwmPeriod + pollPeriod + margin.
+ * In HR ticks (640ns): LOOPTIME_MICROSEC * 25/16 + pollPeriod_us * 25/16 + margin.
+ * At 40kHz: 39 + 7 + 10 = 56 HR ticks (~36µs)
+ * At 24kHz: 65 + 7 + 10 = 82 HR ticks (~53µs) */
+#define IC_AGE_PWM_HR       ((uint16_t)((uint32_t)LOOPTIME_MICROSEC * 25u / 16u))
+#define IC_AGE_POLL_HR      ((uint16_t)((1000000UL / ZC_POLL_FREQ_HZ) * 25u / 16u))
+#define IC_AGE_MARGIN_HR    10u   /* ~6.4µs margin for ISR jitter */
+#define IC_AGE_MAX_HR       (IC_AGE_PWM_HR + IC_AGE_POLL_HR + IC_AGE_MARGIN_HR)
+/* PWM period in HR ticks — used for candidateAge fallback check */
+#define PWM_PERIOD_HR       IC_AGE_PWM_HR
+/* Phase 2: IC lead budget — max acceptable IC-ahead-of-raw gap.
+ * If IC fires this far before raw stabilises, the IC caught a bounce.
+ * Derived from poll period + margin, not a magic number.
+ * At 210kHz: pollPeriodHR ≈ 7, margin 10 → 17 HR ticks (~11µs) */
+#define IC_LEAD_MAX_HR      (IC_AGE_POLL_HR + IC_AGE_MARGIN_HR)
+/* Phase 2: raw stability threshold for fast accept.
+ * Main rule: rawCoro >= 2 (two consecutive raw matches).
+ * Jitter insurance: raw has been stable for >= 1 poll period.
+ * rawCoro >= 2 is the primary gate; age check is backup for cases
+ * where rawCoro is exactly 1 but raw has been stable long enough
+ * that the single-sample concern doesn't apply. */
+#define RAW_STABLE_AGE_HR   IC_AGE_POLL_HR
 #endif
 
 /* ── Desync Recovery ───────────────────────────────────────────────── */

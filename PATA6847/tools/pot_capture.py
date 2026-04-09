@@ -149,6 +149,30 @@ def decode_ck_snapshot(data):
         for i in range(6):
             s[f'stepFlips{i}'] = 0
             s[f'stepPolls{i}'] = 0
+    # V6 raw corroboration & IC age diagnostics (118 bytes total)
+    if len(data) >= 118:
+        s['rawVetoCount'] = struct.unpack_from('<H', data, 112)[0]
+        s['icAgeRejectCount'] = struct.unpack_from('<H', data, 114)[0]
+        s['trackFallbackCount'] = struct.unpack_from('<H', data, 116)[0]
+    else:
+        s['rawVetoCount'] = 0
+        s['icAgeRejectCount'] = 0
+        s['trackFallbackCount'] = 0
+    # V7 Phase 2: raw stability & timestamp source diagnostics (130 bytes)
+    if len(data) >= 130:
+        s['rawStableBlock'] = struct.unpack_from('<H', data, 118)[0]
+        s['tsFromIc'] = struct.unpack_from('<H', data, 120)[0]
+        s['tsFromRaw'] = struct.unpack_from('<H', data, 122)[0]
+        s['tsFromClc'] = struct.unpack_from('<H', data, 124)[0]
+        s['tsFromPoll'] = struct.unpack_from('<H', data, 126)[0]
+        s['icLeadReject'] = struct.unpack_from('<H', data, 128)[0]
+    else:
+        s['rawStableBlock'] = 0
+        s['tsFromIc'] = 0
+        s['tsFromRaw'] = 0
+        s['tsFromClc'] = 0
+        s['tsFromPoll'] = 0
+        s['icLeadReject'] = 0
     # Derived
     s['iaMa'] = round(s['iaRaw'] * CK_CURRENT_SCALE)
     s['ibMa'] = round(s['ibRaw'] * CK_CURRENT_SCALE)
@@ -196,8 +220,8 @@ def main():
     print(f"  Press Ctrl+C to stop")
     print()
     ZC_MODES = ['ACQ', 'TRK', 'RCV']
-    print(f"{'Time':>7s} {'State':>8s} {'ZcM':>3s} {'eRPM':>7s} {'Duty':>4s} {'Pot':>5s} {'Ibus':>7s} {'Vbus':>6s} {'FrcTO':>5s} {'R/F ZC':>10s} {'R/F TO':>10s} {'ZcLat':>6s}")
-    print("-" * 105)
+    print(f"{'Time':>7s} {'State':>8s} {'ZcM':>3s} {'eRPM':>7s} {'Duty':>4s} {'Pot':>5s} {'Ibus':>7s} {'Vbus':>6s} {'FrcTO':>5s} {'R/F ZC':>10s} {'R/F TO':>10s} {'ZcLat':>6s} {'RawV':>5s} {'RSBk':>5s} {'TFbk':>5s} {'TsIC':>5s} {'TsRw':>5s} {'IcLd':>5s}")
+    print("-" * 155)
 
     rows = []
     buf = b''
@@ -247,7 +271,7 @@ def main():
 
                 rfc = f"{snap['risingZcCount']:5d}/{snap['fallingZcCount']:<5d}"
                 rft = f"{snap['risingTimeouts']:5d}/{snap['fallingTimeouts']:<5d}"
-                print(f"{t:7.1f} {state_str:>8s} {zc_mode_str:>3s} {snap['eRpm']:7d} {snap['dutyPct']:3d}% {snap['potRaw']:5d} {snap['ibusMa']:6d}mA {snap['vbusV']:5.1f}V {snap['actualForcedComm']:5d} {rfc:>10s} {rft:>10s} {lat_str:>6s}{fault_str}")
+                print(f"{t:7.1f} {state_str:>8s} {zc_mode_str:>3s} {snap['eRpm']:7d} {snap['dutyPct']:3d}% {snap['potRaw']:5d} {snap['ibusMa']:6d}mA {snap['vbusV']:5.1f}V {snap['actualForcedComm']:5d} {rfc:>10s} {rft:>10s} {lat_str:>6s} {snap['rawVetoCount']:5d} {snap['rawStableBlock']:5d} {snap['trackFallbackCount']:5d} {snap['tsFromIc']:5d} {snap['tsFromRaw']:5d} {snap['icLeadReject']:5d}{fault_str}")
 
                 rows.append({
                     'time': round(t, 3),
@@ -292,6 +316,15 @@ def main():
                     'polls_0': snap['stepPolls0'], 'polls_1': snap['stepPolls1'],
                     'polls_2': snap['stepPolls2'], 'polls_3': snap['stepPolls3'],
                     'polls_4': snap['stepPolls4'], 'polls_5': snap['stepPolls5'],
+                    'raw_veto': snap['rawVetoCount'],
+                    'ic_age_reject': snap['icAgeRejectCount'],
+                    'track_fallback': snap['trackFallbackCount'],
+                    'raw_stable_block': snap['rawStableBlock'],
+                    'ts_from_ic': snap['tsFromIc'],
+                    'ts_from_raw': snap['tsFromRaw'],
+                    'ts_from_clc': snap['tsFromClc'],
+                    'ts_from_poll': snap['tsFromPoll'],
+                    'ic_lead_reject': snap['icLeadReject'],
                 })
 
             time.sleep(0.01)
