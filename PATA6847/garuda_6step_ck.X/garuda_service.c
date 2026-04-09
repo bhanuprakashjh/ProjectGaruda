@@ -1014,17 +1014,38 @@ void __attribute__((interrupt, no_auto_psv)) _CCP4Interrupt(void)
      * this step (deadlineActive is the one-shot gate). */
     if (gData.timing.deadlineActive)
     {
-        /* Capture exact commutation time for predictor.
-         * CCP4RA is the OC target — the precise scheduled time.
-         * Using this instead of ReadTimer() eliminates ISR latency
-         * from the predictor's phase reference. */
-        gData.zcPred.lastCommHR = CCP4RA;
+        /* Capture exact commutation time for predictor. */
+        uint16_t thisCommHR = CCP4RA;
+        gData.zcPred.lastCommHR = thisCommHR;
 
         /* Gate out SCCP1 fast poll during transition */
         gData.icZc.phase = IC_ZC_DONE;
         gData.timing.deadlineActive = false;
         COMMUTATION_AdvanceStep((volatile GARUDA_DATA_T *)&gData);
         BEMF_ZC_OnCommutation((volatile GARUDA_DATA_T *)&gData);
+
+        /* Step 3: In predictive mode, schedule next commutation
+         * immediately from the predictor. No retime in v1 — ZC
+         * corrections apply to the step AFTER the pending one.
+         *
+         * nextComm = thisComm + predStepHR
+         * predStepHR is the comm-to-comm interval. Do NOT subtract
+         * advance here — the phase relationship is carried by
+         * predZcOffsetHR, not by shortening the step period. */
+        if (gData.zcPred.predictiveMode &&
+            gData.zcPred.predStepHR > 0)
+        {
+            uint16_t nextTargetHR = thisCommHR + gData.zcPred.predStepHR;
+
+            gData.zcPred.lastPredCommHR = thisCommHR;
+            gData.zcPred.pendingPredCommHR = nextTargetHR;
+            gData.zcPred.pendingPredValid = true;
+            gData.zcPred.diagPredCommOwned++;
+
+            /* Program SCCP4 for the next commutation */
+            HAL_ComTimer_ScheduleAbsolute(nextTargetHR);
+            gData.timing.deadlineActive = true;
+        }
     }
 
     _CCP4IF = 0;

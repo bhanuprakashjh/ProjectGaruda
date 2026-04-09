@@ -217,6 +217,19 @@ typedef struct {
     /* Live gate counters (FEATURE_PRED_WINDOW_GATE) */
     uint16_t diagWindowReject;     /* ZC vetoed by window gate */
     uint16_t diagWindowRecovered;  /* Vetoed step got a later valid ZC */
+
+    /* Step 3: Predictor-driven commutation scheduling */
+    bool     predictiveMode;       /* true when predictor owns commutation scheduling */
+    uint16_t lastPredCommHR;       /* Exact HR time of last predictor-owned commutation */
+    uint16_t pendingPredCommHR;    /* Next scheduled predictor commutation target */
+    bool     pendingPredValid;     /* true when pendingPredCommHR is programmed */
+    /* Step 3 telemetry */
+    uint16_t diagPredCommOwned;    /* Commutations scheduled by predictor */
+    uint16_t diagPredExitRed;      /* Predictor exits due to RED zone */
+    uint16_t diagPredExitMiss;     /* Predictor exits due to missCount */
+    uint16_t diagPredExitYellow;   /* Predictor exits due to repeated YELLOW */
+    uint16_t diagPredExitPhaseErr; /* Predictor exits due to large phaseErr */
+    uint16_t diagPredExitTimeout;  /* Predictor exits due to timeout */
 } ZC_PRED_T;
 #endif
 

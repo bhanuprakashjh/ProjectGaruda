@@ -241,6 +241,16 @@ void BEMF_ZC_Init(volatile GARUDA_DATA_T *pData)
     pData->zcPred.diagWinOutLate = 0;
     pData->zcPred.diagWindowReject = 0;
     pData->zcPred.diagWindowRecovered = 0;
+    pData->zcPred.predictiveMode = false;
+    pData->zcPred.lastPredCommHR = 0;
+    pData->zcPred.pendingPredCommHR = 0;
+    pData->zcPred.pendingPredValid = false;
+    pData->zcPred.diagPredCommOwned = 0;
+    pData->zcPred.diagPredExitRed = 0;
+    pData->zcPred.diagPredExitMiss = 0;
+    pData->zcPred.diagPredExitYellow = 0;
+    pData->zcPred.diagPredExitPhaseErr = 0;
+    pData->zcPred.diagPredExitTimeout = 0;
 #endif
 }
 
@@ -573,7 +583,54 @@ void BEMF_ZC_OnCommutation(volatile GARUDA_DATA_T *pData)
              * correction arrives in RecordZcTiming. */
             pData->zcPred.missCount++;
             if (pData->zcPred.missCount > 2)
+            {
                 pData->zcPred.locked = false;
+                /* Bounded free-run: exit predictive mode if no ZC
+                 * correction for 2+ steps. */
+                if (pData->zcPred.predictiveMode)
+                {
+                    pData->zcPred.predictiveMode = false;
+                    pData->zcPred.pendingPredValid = false;
+                    pData->zcPred.diagPredExitMiss++;
+                }
+            }
+
+            /* Enter predictive mode when predictor has been stable
+             * AND reactive scheduling is running out of margin.
+             *
+             * DISABLED: Live predictor scheduling causes mis-commutation
+             * at entry → current spike → UV fault. The predStepHR
+             * (comm-to-comm interval in reactive mode) does not match
+             * the actual 60° electrical period because reactive mode
+             * fires late (target-past). Using it as the predictor step
+             * period produces wrong timing. Needs investigation.
+             *
+             * TODO: predStepHR must be calibrated to the true electrical
+             * period, not the reactive comm-to-comm interval. */
+            if (0 /* DISABLED */ &&
+                !pData->zcPred.predictiveMode &&
+                pData->zcPred.gateActive &&
+                pData->zcPred.gateArmCount >= 24 &&
+                pData->zcPred.locked &&
+                pData->timing.stepPeriodHR > 0 &&
+                pData->timing.stepPeriodHR < 250)
+            {
+                pData->zcPred.predictiveMode = true;
+                pData->zcPred.lastPredCommHR = commHR;
+
+                /* Schedule the first predictor-owned commutation NOW.
+                 * Without this, ScheduleCommutation is a no-op (predictive
+                 * mode) and _CCP4Interrupt never fires → deadlock.
+                 * Use full predStepHR — no advance subtraction. */
+                {
+                    uint16_t nextTargetHR = commHR + pData->zcPred.predStepHR;
+                    pData->zcPred.pendingPredCommHR = nextTargetHR;
+                    pData->zcPred.pendingPredValid = true;
+                    HAL_ComTimer_ScheduleAbsolute(nextTargetHR);
+                    pData->timing.deadlineActive = true;
+                    pData->zcPred.diagPredCommOwned++;
+                }
+            }
         }
     }
 #endif
@@ -727,9 +784,15 @@ ZC_TIMEOUT_RESULT_T BEMF_ZC_CheckTimeout(volatile GARUDA_DATA_T *pData)
             pData->zcDiag.zcLatencyPct = 0xFFu;  /* 0xFF = timeout */
             pData->zcDiag.actualForcedComm++;
             pData->zcDiag.zcTimeoutCount++;
-            /* Disarm gate on timeout — immediate */
+            /* Disarm gate and exit predictive mode on timeout */
             pData->zcPred.gateActive = false;
             pData->zcPred.gateArmCount = 0;
+            if (pData->zcPred.predictiveMode)
+            {
+                pData->zcPred.predictiveMode = false;
+                pData->zcPred.pendingPredValid = false;
+                pData->zcPred.diagPredExitTimeout++;
+            }
             /* Per-polarity and per-step timeout tracking */
             if (commutationTable[pData->currentStep].zcPolarity > 0)
                 pData->zcDiag.diagRisingTimeouts++;
@@ -809,6 +872,13 @@ void BEMF_ZC_ScheduleCommutation(volatile GARUDA_DATA_T *pData)
     /* Guard: don't re-schedule if a commutation is already pending. */
     if (pData->timing.deadlineActive)
         return;
+
+    /* Step 3: In predictive mode, commutation is already scheduled
+     * by _CCP4Interrupt. ZC detection only updates the predictor. */
+#if FEATURE_IC_ZC
+    if (pData->zcPred.predictiveMode)
+        return;
+#endif
 
     /* Phase 4: schedule from protected refInterval, not min-of-recent.
      * The old min(IIR, 2-step-avg) shortcut amplified false short
@@ -1582,9 +1652,12 @@ bool BEMF_ZC_FastPoll(volatile GARUDA_DATA_T *pData)
                     pData->zcPred.gateActive = false;
                     pData->zcPred.gateArmCount = 0;
                     pData->zcPred.diagWindowReject++;
-                    /* Skip predictor offset update for this ZC by
-                     * temporarily zeroing predZcOffsetHR — RecordZcTiming
-                     * will re-seed it from next measured delay. */
+                    if (pData->zcPred.predictiveMode)
+                    {
+                        pData->zcPred.predictiveMode = false;
+                        pData->zcPred.pendingPredValid = false;
+                        pData->zcPred.diagPredExitRed++;
+                    }
                 }
                 else if (inYellow)
                 {

@@ -190,6 +190,13 @@ typedef struct __attribute__((packed)) {
     uint8_t  _pad1;             /* alignment */
     uint16_t windowReject;      /* ZCs vetoed by live gate */
     uint16_t windowRecovered;   /* Vetoed steps that got later valid ZC */
+
+    /* Step 3: predictive scheduling (8B) */
+    uint16_t predCommOwned;     /* Commutations scheduled by predictor */
+    uint8_t  predictiveMode;    /* Predictor owns scheduling */
+    uint8_t  _pad2;
+    uint16_t predExitMiss;      /* Exits: missCount */
+    uint16_t predExitTimeout;   /* Exits: timeout */
 } GSP_CK_SNAPSHOT_T;
 
 /* XC16 doesn't support _Static_assert. Verify size at compile time:

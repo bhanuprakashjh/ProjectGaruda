@@ -221,6 +221,18 @@ def decode_ck_snapshot(data):
         s['gateActive'] = 0
         s['windowReject'] = 0
         s['windowRecovered'] = 0
+    # V11 Step 3: predictive scheduling (174 bytes total)
+    if len(data) >= 174:
+        s['predCommOwned'] = struct.unpack_from('<H', data, 166)[0]
+        s['predictiveMode'] = data[168]
+        # pad at 169
+        s['predExitMiss'] = struct.unpack_from('<H', data, 170)[0]
+        s['predExitTimeout'] = struct.unpack_from('<H', data, 172)[0]
+    else:
+        s['predCommOwned'] = 0
+        s['predictiveMode'] = 0
+        s['predExitMiss'] = 0
+        s['predExitTimeout'] = 0
     # Derived
     s['iaMa'] = round(s['iaRaw'] * CK_CURRENT_SCALE)
     s['ibMa'] = round(s['ibRaw'] * CK_CURRENT_SCALE)
@@ -268,8 +280,8 @@ def main():
     print(f"  Press Ctrl+C to stop")
     print()
     ZC_MODES = ['ACQ', 'TRK', 'RCV']
-    print(f"{'Time':>7s} {'State':>8s} {'ZcM':>3s} {'eRPM':>7s} {'Duty':>4s} {'Vbus':>6s} {'PhA':>5s} {'ZcOf':>5s} {'GIn':>5s} {'GOt':>5s} {'WRej':>5s} {'Erly':>5s} {'Late':>5s} {'Lck':>3s} {'Gat':>3s} {'TO':>4s}")
-    print("-" * 120)
+    print(f"{'Time':>7s} {'State':>8s} {'ZcM':>3s} {'eRPM':>7s} {'Duty':>4s} {'Vbus':>6s} {'PhA':>5s} {'ZcOf':>5s} {'POwn':>6s} {'Lck':>3s} {'Gat':>3s} {'Prd':>3s} {'TO':>4s} {'ExMs':>5s} {'ExTO':>5s}")
+    print("-" * 115)
 
     rows = []
     buf = b''
@@ -321,7 +333,8 @@ def main():
                 rft = f"{snap['risingTimeouts']:5d}/{snap['fallingTimeouts']:<5d}"
                 lck = 'Y' if snap.get('predLocked', 0) else 'N'
                 gat = 'Y' if snap.get('gateActive', 0) else 'N'
-                print(f"{t:7.1f} {state_str:>8s} {zc_mode_str:>3s} {snap['eRpm']:7d} {snap['dutyPct']:3d}% {snap['vbusV']:5.1f}V {snap.get('predPhaseErrHR',0):5d} {snap.get('predZcOffsetHR',0):5d} {snap.get('winCandInGated',0):5d} {snap.get('winCandOutGated',0):5d} {snap.get('windowReject',0):5d} {snap.get('winOutEarly',0):5d} {snap.get('winOutLate',0):5d} {lck:>3s} {gat:>3s} {snap.get('zc_timeout_count', snap.get('zcTimeoutCount',0)):4d}{fault_str}")
+                prd = 'Y' if snap.get('predictiveMode', 0) else 'N'
+                print(f"{t:7.1f} {state_str:>8s} {zc_mode_str:>3s} {snap['eRpm']:7d} {snap['dutyPct']:3d}% {snap['vbusV']:5.1f}V {snap.get('predPhaseErrHR',0):5d} {snap.get('predZcOffsetHR',0):5d} {snap.get('predCommOwned',0):6d} {lck:>3s} {gat:>3s} {prd:>3s} {snap.get('zc_timeout_count', snap.get('zcTimeoutCount',0)):4d} {snap.get('predExitMiss',0):5d} {snap.get('predExitTimeout',0):5d}{fault_str}")
 
                 rows.append({
                     'time': round(t, 3),
@@ -394,6 +407,10 @@ def main():
                     'gate_active': snap.get('gateActive', 0),
                     'window_reject': snap.get('windowReject', 0),
                     'window_recovered': snap.get('windowRecovered', 0),
+                    'pred_comm_owned': snap.get('predCommOwned', 0),
+                    'predictive_mode': snap.get('predictiveMode', 0),
+                    'pred_exit_miss': snap.get('predExitMiss', 0),
+                    'pred_exit_timeout': snap.get('predExitTimeout', 0),
                 })
 
             time.sleep(0.01)
