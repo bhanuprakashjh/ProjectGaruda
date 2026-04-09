@@ -424,6 +424,14 @@
 #define FEATURE_IC_ZC_CAPTURE   1   /* Hybrid IC+poll: IC timestamp, poll validates */
 #endif
 
+#ifndef FEATURE_PRED_WINDOW_GATE
+#define FEATURE_PRED_WINDOW_GATE 0  /* PLL predictor scan window gate.
+                                     * When gateActive (12 consecutive locked+in-window),
+                                     * veto ZC candidates outside the predicted scan window.
+                                     * On veto: clear candidate, continue scanning same step.
+                                     * Self-disarms on timeout or 2+ rejects/revolution. */
+#endif
+
 #ifndef FEATURE_PTG_ZC
 #define FEATURE_PTG_ZC          0   /* PTG edge-relative BEMF sampling.
                                      * 0 = disabled (CLC D-FF only — proven working)

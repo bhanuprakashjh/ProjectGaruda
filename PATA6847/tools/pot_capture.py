@@ -180,7 +180,7 @@ def decode_ck_snapshot(data):
     else:
         s['targetPastCount'] = 0
         s['schedMarginHR'] = 0
-    # V9 PLL predictor telemetry (152 bytes total)
+    # V9 PLL predictor telemetry (152 bytes)
     if len(data) >= 152:
         s['predPhaseErrHR'] = struct.unpack_from('<h', data, 134)[0]
         s['predPhaseErrRxHR'] = struct.unpack_from('<h', data, 136)[0]
@@ -203,6 +203,24 @@ def decode_ck_snapshot(data):
         s['predMinMarginHR'] = 0
         s['predRealZcDelayHR'] = 0
         s['predZcOffsetHR'] = 0
+    # V10 Step 2: gate readiness + live veto (166 bytes total)
+    if len(data) >= 166:
+        s['winCandInGated'] = struct.unpack_from('<H', data, 152)[0]
+        s['winCandOutGated'] = struct.unpack_from('<H', data, 154)[0]
+        s['winOutEarly'] = struct.unpack_from('<H', data, 156)[0]
+        s['winOutLate'] = struct.unpack_from('<H', data, 158)[0]
+        s['gateActive'] = data[160]
+        # pad at 161
+        s['windowReject'] = struct.unpack_from('<H', data, 162)[0]
+        s['windowRecovered'] = struct.unpack_from('<H', data, 164)[0]
+    else:
+        s['winCandInGated'] = 0
+        s['winCandOutGated'] = 0
+        s['winOutEarly'] = 0
+        s['winOutLate'] = 0
+        s['gateActive'] = 0
+        s['windowReject'] = 0
+        s['windowRecovered'] = 0
     # Derived
     s['iaMa'] = round(s['iaRaw'] * CK_CURRENT_SCALE)
     s['ibMa'] = round(s['ibRaw'] * CK_CURRENT_SCALE)
@@ -250,8 +268,8 @@ def main():
     print(f"  Press Ctrl+C to stop")
     print()
     ZC_MODES = ['ACQ', 'TRK', 'RCV']
-    print(f"{'Time':>7s} {'State':>8s} {'ZcM':>3s} {'eRPM':>7s} {'Duty':>4s} {'Vbus':>6s} {'FrcTO':>5s} {'TPst':>5s} {'Mrgn':>5s} {'PhA':>5s} {'PhB':>5s} {'PdSp':>5s} {'ZcOf':>5s} {'ZcDl':>5s} {'ZcIn':>5s} {'ZcOt':>5s} {'Lck':>3s}")
-    print("-" * 130)
+    print(f"{'Time':>7s} {'State':>8s} {'ZcM':>3s} {'eRPM':>7s} {'Duty':>4s} {'Vbus':>6s} {'PhA':>5s} {'ZcOf':>5s} {'GIn':>5s} {'GOt':>5s} {'WRej':>5s} {'Erly':>5s} {'Late':>5s} {'Lck':>3s} {'Gat':>3s} {'TO':>4s}")
+    print("-" * 120)
 
     rows = []
     buf = b''
@@ -302,7 +320,8 @@ def main():
                 rfc = f"{snap['risingZcCount']:5d}/{snap['fallingZcCount']:<5d}"
                 rft = f"{snap['risingTimeouts']:5d}/{snap['fallingTimeouts']:<5d}"
                 lck = 'Y' if snap.get('predLocked', 0) else 'N'
-                print(f"{t:7.1f} {state_str:>8s} {zc_mode_str:>3s} {snap['eRpm']:7d} {snap['dutyPct']:3d}% {snap['vbusV']:5.1f}V {snap['actualForcedComm']:5d} {snap['targetPastCount']:5d} {snap['schedMarginHR']:5d} {snap.get('predPhaseErrHR',0):5d} {snap.get('predPhaseErrRxHR',0):5d} {snap.get('predStepHR',0):5d} {snap.get('predZcOffsetHR',0):5d} {snap.get('predRealZcDelayHR',0):5d} {snap.get('predZcInWindow',0):5d} {snap.get('predZcOutWindow',0):5d} {lck:>3s}{fault_str}")
+                gat = 'Y' if snap.get('gateActive', 0) else 'N'
+                print(f"{t:7.1f} {state_str:>8s} {zc_mode_str:>3s} {snap['eRpm']:7d} {snap['dutyPct']:3d}% {snap['vbusV']:5.1f}V {snap.get('predPhaseErrHR',0):5d} {snap.get('predZcOffsetHR',0):5d} {snap.get('winCandInGated',0):5d} {snap.get('winCandOutGated',0):5d} {snap.get('windowReject',0):5d} {snap.get('winOutEarly',0):5d} {snap.get('winOutLate',0):5d} {lck:>3s} {gat:>3s} {snap.get('zc_timeout_count', snap.get('zcTimeoutCount',0)):4d}{fault_str}")
 
                 rows.append({
                     'time': round(t, 3),
@@ -368,6 +387,13 @@ def main():
                     'pred_miss_count': snap.get('predMissCount', 0),
                     'pred_min_margin_hr': snap.get('predMinMarginHR', 0),
                     'pred_zc_offset_hr': snap.get('predZcOffsetHR', 0),
+                    'win_cand_in_gated': snap.get('winCandInGated', 0),
+                    'win_cand_out_gated': snap.get('winCandOutGated', 0),
+                    'win_out_early': snap.get('winOutEarly', 0),
+                    'win_out_late': snap.get('winOutLate', 0),
+                    'gate_active': snap.get('gateActive', 0),
+                    'window_reject': snap.get('windowReject', 0),
+                    'window_recovered': snap.get('windowRecovered', 0),
                 })
 
             time.sleep(0.01)

@@ -197,12 +197,26 @@ typedef struct {
     uint16_t diagZcOutWindow;   /* ZC fell outside predicted scan window */
     int16_t  diagMinMarginHR;   /* Minimum predNextComm margin observed */
 
-    /* Dual phase-error diagnostic (Codex suggestion):
-     * Compare actual ZC against two models to isolate error source.
-     * Model A (nominal): comm + half + advance (predictor formula)
-     * Model B (reactive): comm + lastRealZcDelay (empirical) */
+    /* Dual phase-error diagnostic */
     uint16_t lastRealZcDelayHR; /* Delay from last comm to last real ZC (measured) */
     int16_t  phaseErrReactiveHR;/* Phase error vs reactive model B */
+
+    /* Step 2: gate readiness instrumentation.
+     * Counters at the exact future veto point (after timestamp selection,
+     * before estimator update). gateActive has hysteresis separate from
+     * locked: enable after N consecutive locked+in-window, disable on
+     * timeout or M out-of-window in one revolution. */
+    bool     gateActive;           /* true when gate would be armed */
+    uint8_t  gateArmCount;         /* Consecutive locked+in-window ZCs toward arming */
+    uint8_t  gateRevRejects;       /* Out-of-window rejects in current revolution */
+    /* Shadow counters at the veto site */
+    uint16_t diagWinCandInGated;   /* In-window while gateActive */
+    uint16_t diagWinCandOutGated;  /* Out-of-window while gateActive */
+    uint16_t diagWinOutEarly;      /* ZC before scanOpen (all states) */
+    uint16_t diagWinOutLate;       /* ZC after scanClose (all states) */
+    /* Live gate counters (FEATURE_PRED_WINDOW_GATE) */
+    uint16_t diagWindowReject;     /* ZC vetoed by window gate */
+    uint16_t diagWindowRecovered;  /* Vetoed step got a later valid ZC */
 } ZC_PRED_T;
 #endif
 

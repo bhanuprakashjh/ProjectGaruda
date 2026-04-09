@@ -180,6 +180,16 @@ typedef struct __attribute__((packed)) {
     int16_t  predMinMarginHR;   /* Min predictor margin observed */
     uint16_t predRealZcDelayHR; /* Last measured comm-to-ZC delay */
     uint16_t predZcOffsetHR;    /* Adaptive phase offset (IIR-tracked) */
+
+    /* Step 2: gate readiness (8B) */
+    uint16_t winCandInGated;    /* In-window while gateActive */
+    uint16_t winCandOutGated;   /* Out-of-window while gateActive */
+    uint16_t winOutEarly;       /* ZC before scanOpen */
+    uint16_t winOutLate;        /* ZC after scanClose */
+    uint8_t  gateActive;        /* Gate armed */
+    uint8_t  _pad1;             /* alignment */
+    uint16_t windowReject;      /* ZCs vetoed by live gate */
+    uint16_t windowRecovered;   /* Vetoed steps that got later valid ZC */
 } GSP_CK_SNAPSHOT_T;
 
 /* XC16 doesn't support _Static_assert. Verify size at compile time:

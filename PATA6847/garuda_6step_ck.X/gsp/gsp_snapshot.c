@@ -145,6 +145,16 @@ void GSP_CaptureSnapshot(GSP_CK_SNAPSHOT_T *dst)
     dst->predMinMarginHR   = src->zcPred.diagMinMarginHR;
     dst->predRealZcDelayHR = src->zcPred.lastRealZcDelayHR;
     dst->predZcOffsetHR    = src->zcPred.predZcOffsetHR;
+
+    /* Step 2: gate readiness */
+    dst->winCandInGated    = src->zcPred.diagWinCandInGated;
+    dst->winCandOutGated   = src->zcPred.diagWinCandOutGated;
+    dst->winOutEarly       = src->zcPred.diagWinOutEarly;
+    dst->winOutLate        = src->zcPred.diagWinOutLate;
+    dst->gateActive        = src->zcPred.gateActive ? 1 : 0;
+    dst->_pad1             = 0;
+    dst->windowReject      = src->zcPred.diagWindowReject;
+    dst->windowRecovered   = src->zcPred.diagWindowRecovered;
 #endif
 }
 

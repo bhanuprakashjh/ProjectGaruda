@@ -232,6 +232,15 @@ void BEMF_ZC_Init(volatile GARUDA_DATA_T *pData)
     pData->zcPred.diagZcInWindow = 0;
     pData->zcPred.diagZcOutWindow = 0;
     pData->zcPred.diagMinMarginHR = 32767;
+    pData->zcPred.gateActive = false;
+    pData->zcPred.gateArmCount = 0;
+    pData->zcPred.gateRevRejects = 0;
+    pData->zcPred.diagWinCandInGated = 0;
+    pData->zcPred.diagWinCandOutGated = 0;
+    pData->zcPred.diagWinOutEarly = 0;
+    pData->zcPred.diagWinOutLate = 0;
+    pData->zcPred.diagWindowReject = 0;
+    pData->zcPred.diagWindowRecovered = 0;
 #endif
 }
 
@@ -273,6 +282,11 @@ void BEMF_ZC_OnCommutation(volatile GARUDA_DATA_T *pData)
     if (pData->timing.revStepCount >= 6)
     {
         pData->timing.revStepCount = 0;
+        /* Reset per-revolution gate reject counter.
+         * If 2+ rejects in one revolution, disable gate. */
+        if (pData->zcPred.gateRevRejects >= 2)
+            pData->zcPred.gateActive = false;
+        pData->zcPred.gateRevRejects = 0;
         bool desyncDetected = false;
 
 #if FEATURE_IC_ZC
@@ -713,6 +727,9 @@ ZC_TIMEOUT_RESULT_T BEMF_ZC_CheckTimeout(volatile GARUDA_DATA_T *pData)
             pData->zcDiag.zcLatencyPct = 0xFFu;  /* 0xFF = timeout */
             pData->zcDiag.actualForcedComm++;
             pData->zcDiag.zcTimeoutCount++;
+            /* Disarm gate on timeout — immediate */
+            pData->zcPred.gateActive = false;
+            pData->zcPred.gateArmCount = 0;
             /* Per-polarity and per-step timeout tracking */
             if (commutationTable[pData->currentStep].zcPolarity > 0)
                 pData->zcDiag.diagRisingTimeouts++;
@@ -1152,9 +1169,12 @@ void RecordZcTiming(volatile GARUDA_DATA_T *pData,
         pData->zcPred.lastRealZcDelayHR = actualDelayHR;
 
         /* Update adaptive phase offset via IIR: 7/8 old + 1/8 measured.
-         * Clamp to reasonable range (25% - 75% of step period) to
-         * prevent one bad ZC from corrupting the offset. */
-        if (pData->zcPred.predZcOffsetHR > 0)
+         * Only update when predictor is trusted (gateActive or locked).
+         * RED zone ZCs disarm gateActive before reaching here, so they
+         * are excluded automatically. YELLOW zone ZCs still update
+         * (gateActive may still be true) but the clamp limits damage. */
+        if (pData->zcPred.predZcOffsetHR > 0 &&
+            (pData->zcPred.gateActive || pData->zcPred.locked))
         {
             uint16_t minOff = pData->zcPred.predStepHR >> 2;  /* 25% */
             uint16_t maxOff = pData->zcPred.predStepHR -
@@ -1165,6 +1185,12 @@ void RecordZcTiming(volatile GARUDA_DATA_T *pData,
             pData->zcPred.predZcOffsetHR = (uint16_t)(
                 ((uint32_t)pData->zcPred.predZcOffsetHR * 7
                  + clampedDelay) >> 3);
+        }
+        else if (pData->zcPred.predZcOffsetHR == 0 &&
+                 actualDelayHR > 0)
+        {
+            /* Re-seed after RED zone disarm */
+            pData->zcPred.predZcOffsetHR = actualDelayHR;
         }
 
         /* Accumulate |phaseErr| for telemetry averaging */
@@ -1503,20 +1529,106 @@ bool BEMF_ZC_FastPoll(volatile GARUDA_DATA_T *pData)
                 pData->icZc.diagTsFromPoll++;
             }
 
-            pData->bemf.zeroCrossDetected = true;
-            RecordZcTiming(pData, tsT1, tsHR);
-
-            if (pData->bemf.zeroCrossDetected)
+            /* ── Step 2: 3-zone confidence model ─────────────────────
+             * Window supervises the predictor, does NOT gate acceptance.
+             * ZC is always accepted if Phase 2 says valid.
+             *
+             * GREEN: inside ±25% → normal predictor update, trust high
+             * YELLOW: outside ±25% but inside ±50% → accept ZC, skip
+             *         predictor correction, count warning
+             * RED: outside ±50% → accept ZC, disarm predictor trust,
+             *      do not use for predictor update */
+            if (pData->zcCtrl.mode == ZC_MODE_TRACK &&
+                pData->zcPred.predZcOffsetHR > 0)
             {
-                pData->icZc.diagAccepted++;
-                pData->icZc.phase = IC_ZC_DONE;
-                return true;
+                int16_t sinceOpen = (int16_t)(tsHR - pData->zcPred.scanOpenHR);
+                int16_t sinceClose = (int16_t)(tsHR - pData->zcPred.scanCloseHR);
+                bool inGreen = (sinceOpen >= 0 && sinceClose <= 0);
+
+                /* Outer guard band: ±50% of step period */
+                uint16_t outerHR = pData->zcPred.predStepHR >> 1;
+                uint16_t outerOpen = pData->zcPred.predZcHR - outerHR;
+                uint16_t outerClose = pData->zcPred.predZcHR + outerHR;
+                int16_t sinceOuterOpen = (int16_t)(tsHR - outerOpen);
+                int16_t sinceOuterClose = (int16_t)(tsHR - outerClose);
+                bool inYellow = !inGreen &&
+                    (sinceOuterOpen >= 0 && sinceOuterClose <= 0);
+                bool inRed = !inGreen && !inYellow;
+
+                /* Telemetry */
+                if (pData->zcPred.gateActive)
+                {
+                    if (inGreen)
+                        pData->zcPred.diagWinCandInGated++;
+                    else
+                        pData->zcPred.diagWinCandOutGated++;
+                }
+
+                if (!inGreen)
+                {
+                    if (sinceOpen < 0)
+                        pData->zcPred.diagWinOutEarly++;
+                    else
+                        pData->zcPred.diagWinOutLate++;
+                }
+
+                /* Predictor update weighting based on zone.
+                 * Set a flag that RecordZcTiming checks before
+                 * updating predZcOffsetHR. */
+                if (inRed)
+                {
+                    /* RED: disarm predictor trust immediately.
+                     * ZC is too far from expected — don't corrupt offset. */
+                    pData->zcPred.gateActive = false;
+                    pData->zcPred.gateArmCount = 0;
+                    pData->zcPred.diagWindowReject++;
+                    /* Skip predictor offset update for this ZC by
+                     * temporarily zeroing predZcOffsetHR — RecordZcTiming
+                     * will re-seed it from next measured delay. */
+                }
+                else if (inYellow)
+                {
+                    /* YELLOW: accept, count warning, reduce confidence */
+                    pData->zcPred.gateRevRejects++;
+                    pData->zcPred.diagWinCandOutGated++;
+                }
+                /* GREEN: normal — predictor update proceeds in RecordZcTiming */
+
+                /* gateActive hysteresis (Option C: stability-based):
+                 * Arm after 12 consecutive locked+GREEN ZCs.
+                 * Disarm on RED or timeout (timeout handled elsewhere).
+                 * Disarm on 2+ YELLOW in one revolution. */
+                if (pData->zcPred.locked && inGreen)
+                {
+                    if (pData->zcPred.gateArmCount < 255)
+                        pData->zcPred.gateArmCount++;
+                    if (pData->zcPred.gateArmCount >= 12 &&
+                        !pData->zcPred.gateActive)
+                        pData->zcPred.gateActive = true;
+                }
+                else if (!inGreen)
+                {
+                    pData->zcPred.gateArmCount = 0;
+                }
             }
-            /* RecordZcTiming rejected (too-short interval) — reset */
-            pData->icZc.pollFilter = 0;
-            pData->icZc.rawCoro = 0;
-            pData->icZc.hasFirstClcMatch = false;
-            pData->icZc.hasRawFirstMatch = false;
+
+            if (accept)
+            {
+                pData->bemf.zeroCrossDetected = true;
+                RecordZcTiming(pData, tsT1, tsHR);
+
+                if (pData->bemf.zeroCrossDetected)
+                {
+                    pData->icZc.diagAccepted++;
+                    pData->icZc.phase = IC_ZC_DONE;
+                    return true;
+                }
+                /* RecordZcTiming rejected (too-short interval) — reset */
+                pData->icZc.pollFilter = 0;
+                pData->icZc.rawCoro = 0;
+                pData->icZc.hasFirstClcMatch = false;
+                pData->icZc.hasRawFirstMatch = false;
+            }
         }
     }
     else
