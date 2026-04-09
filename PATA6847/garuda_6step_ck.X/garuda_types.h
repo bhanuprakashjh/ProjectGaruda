@@ -220,9 +220,13 @@ typedef struct {
 
     /* Step 3: Predictor-driven commutation scheduling */
     bool     predictiveMode;       /* true when predictor owns commutation scheduling */
+    bool     handoffPending;       /* true: let current reactive comm fire, then own next */
     uint16_t lastPredCommHR;       /* Exact HR time of last predictor-owned commutation */
     uint16_t pendingPredCommHR;    /* Next scheduled predictor commutation target */
     bool     pendingPredValid;     /* true when pendingPredCommHR is programmed */
+    /* Shadow delta: predictor vs reactive target comparison */
+    int16_t  predVsReactiveDelta;  /* predNextComm - reactiveTarget (HR ticks) */
+    uint8_t  deltaOkCount;         /* Consecutive steps with |delta| < threshold */
     /* Step 3 telemetry */
     uint16_t diagPredCommOwned;    /* Commutations scheduled by predictor */
     uint16_t diagPredExitRed;      /* Predictor exits due to RED zone */

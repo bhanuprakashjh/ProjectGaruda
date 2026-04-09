@@ -1024,17 +1024,48 @@ void __attribute__((interrupt, no_auto_psv)) _CCP4Interrupt(void)
         COMMUTATION_AdvanceStep((volatile GARUDA_DATA_T *)&gData);
         BEMF_ZC_OnCommutation((volatile GARUDA_DATA_T *)&gData);
 
-        /* Step 3: In predictive mode, schedule next commutation
-         * immediately from the predictor. No retime in v1 — ZC
-         * corrections apply to the step AFTER the pending one.
+        /* Step 3: Predictive commutation scheduling.
          *
-         * nextComm = thisComm + predStepHR
-         * predStepHR is the comm-to-comm interval. Do NOT subtract
-         * advance here — the phase relationship is carried by
-         * predZcOffsetHR, not by shortening the step period. */
-        if (gData.zcPred.predictiveMode &&
-            gData.zcPred.predStepHR > 0)
+         * Safe handoff: handoffPending means "this was the last reactive
+         * comm — take ownership of the next step." We transition to
+         * predictiveMode HERE, then schedule the next step.
+         *
+         * ZC-anchored formula:
+         *   nextComm = lastZcHR + (predStepHR - predZcOffsetHR)
+         * where:
+         *   predStepHR = learned 60° period
+         *   predZcOffsetHR = learned comm-to-ZC delay
+         *   predStepHR - predZcOffsetHR = learned ZC-to-next-comm delay
+         *
+         * In steady-state predictive mode, use:
+         *   nextComm = lastPredComm + predStepHR
+         * which is comm-to-comm with correct period. */
+        if (gData.zcPred.handoffPending &&
+            gData.zcPred.predStepHR > 0 &&
+            gData.zcPred.predZcOffsetHR > 0 &&
+            gData.zcPred.predStepHR > gData.zcPred.predZcOffsetHR)
         {
+            /* Handoff: first predictor-owned step.
+             * Anchor to last accepted ZC, not to this commutation. */
+            gData.zcPred.handoffPending = false;
+            gData.zcPred.predictiveMode = true;
+            gData.zcPred.lastPredCommHR = thisCommHR;
+
+            uint16_t zcToComm = gData.zcPred.predStepHR
+                                - gData.zcPred.predZcOffsetHR;
+            uint16_t nextTargetHR = gData.timing.lastZcTickHR + zcToComm;
+
+            gData.zcPred.pendingPredCommHR = nextTargetHR;
+            gData.zcPred.pendingPredValid = true;
+            gData.zcPred.diagPredCommOwned++;
+
+            HAL_ComTimer_ScheduleAbsolute(nextTargetHR);
+            gData.timing.deadlineActive = true;
+        }
+        else if (gData.zcPred.predictiveMode &&
+                 gData.zcPred.predStepHR > 0)
+        {
+            /* Steady-state predictor: comm-to-comm with learned period */
             uint16_t nextTargetHR = thisCommHR + gData.zcPred.predStepHR;
 
             gData.zcPred.lastPredCommHR = thisCommHR;
@@ -1042,7 +1073,6 @@ void __attribute__((interrupt, no_auto_psv)) _CCP4Interrupt(void)
             gData.zcPred.pendingPredValid = true;
             gData.zcPred.diagPredCommOwned++;
 
-            /* Program SCCP4 for the next commutation */
             HAL_ComTimer_ScheduleAbsolute(nextTargetHR);
             gData.timing.deadlineActive = true;
         }

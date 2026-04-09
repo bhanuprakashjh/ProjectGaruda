@@ -159,9 +159,12 @@ void GSP_CaptureSnapshot(GSP_CK_SNAPSHOT_T *dst)
     /* Step 3: predictive scheduling */
     dst->predCommOwned     = src->zcPred.diagPredCommOwned;
     dst->predictiveMode    = src->zcPred.predictiveMode ? 1 : 0;
-    dst->_pad2             = 0;
+    dst->handoffPending    = src->zcPred.handoffPending ? 1 : 0;
     dst->predExitMiss      = src->zcPred.diagPredExitMiss;
     dst->predExitTimeout   = src->zcPred.diagPredExitTimeout;
+    dst->predVsReactiveDelta = src->zcPred.predVsReactiveDelta;
+    dst->deltaOkCount      = src->zcPred.deltaOkCount;
+    dst->_pad2             = 0;
 #endif
 }
 

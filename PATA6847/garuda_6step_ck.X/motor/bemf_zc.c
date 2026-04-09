@@ -242,9 +242,12 @@ void BEMF_ZC_Init(volatile GARUDA_DATA_T *pData)
     pData->zcPred.diagWindowReject = 0;
     pData->zcPred.diagWindowRecovered = 0;
     pData->zcPred.predictiveMode = false;
+    pData->zcPred.handoffPending = false;
     pData->zcPred.lastPredCommHR = 0;
     pData->zcPred.pendingPredCommHR = 0;
     pData->zcPred.pendingPredValid = false;
+    pData->zcPred.predVsReactiveDelta = 0;
+    pData->zcPred.deltaOkCount = 0;
     pData->zcPred.diagPredCommOwned = 0;
     pData->zcPred.diagPredExitRed = 0;
     pData->zcPred.diagPredExitMiss = 0;
@@ -580,13 +583,19 @@ void BEMF_ZC_OnCommutation(volatile GARUDA_DATA_T *pData)
             pData->zcPred.diagPredCommCount++;
 
             /* Track miss count — incremented here, cleared when ZC
-             * correction arrives in RecordZcTiming. */
+             * correction arrives in RecordZcTiming.
+             *
+             * At high speed with reactive scheduling, ZC detection is
+             * inherently late (target-past), so missCount reaches 2-3
+             * normally between telemetry samples. Use tiered thresholds:
+             * >2: soft unlock (stop trusting phase for lock decisions)
+             * >4: hard exit (stop predictive scheduling + cancel handoff) */
             pData->zcPred.missCount++;
-            if (pData->zcPred.missCount > 2)
+            if (pData->zcPred.missCount > 4)
             {
                 pData->zcPred.locked = false;
-                /* Bounded free-run: exit predictive mode if no ZC
-                 * correction for 2+ steps. */
+                pData->zcPred.deltaOkCount = 0;
+                pData->zcPred.handoffPending = false;
                 if (pData->zcPred.predictiveMode)
                 {
                     pData->zcPred.predictiveMode = false;
@@ -594,42 +603,26 @@ void BEMF_ZC_OnCommutation(volatile GARUDA_DATA_T *pData)
                     pData->zcPred.diagPredExitMiss++;
                 }
             }
+            else if (pData->zcPred.missCount > 2)
+            {
+                pData->zcPred.locked = false;
+            }
 
-            /* Enter predictive mode when predictor has been stable
-             * AND reactive scheduling is running out of margin.
-             *
-             * DISABLED: Live predictor scheduling causes mis-commutation
-             * at entry → current spike → UV fault. The predStepHR
-             * (comm-to-comm interval in reactive mode) does not match
-             * the actual 60° electrical period because reactive mode
-             * fires late (target-past). Using it as the predictor step
-             * period produces wrong timing. Needs investigation.
-             *
-             * TODO: predStepHR must be calibrated to the true electrical
-             * period, not the reactive comm-to-comm interval. */
-            if (0 /* DISABLED */ &&
-                !pData->zcPred.predictiveMode &&
+            /* Enter predictive mode — safe handoff.
+             * Requires gateActive (12 consecutive locked+GREEN) +
+             * high speed where reactive scheduling hits the latency wall.
+             * Don't require locked here — at high speed with target-past,
+             * missCount frequently hits 2-3 which clears locked briefly.
+             * gateActive is the stronger stability indicator. */
+            if (!pData->zcPred.predictiveMode &&
+                !pData->zcPred.handoffPending &&
                 pData->zcPred.gateActive &&
-                pData->zcPred.gateArmCount >= 24 &&
-                pData->zcPred.locked &&
+                pData->zcPred.predStepHR > 0 &&
+                pData->zcPred.predZcOffsetHR > 0 &&
                 pData->timing.stepPeriodHR > 0 &&
                 pData->timing.stepPeriodHR < 250)
             {
-                pData->zcPred.predictiveMode = true;
-                pData->zcPred.lastPredCommHR = commHR;
-
-                /* Schedule the first predictor-owned commutation NOW.
-                 * Without this, ScheduleCommutation is a no-op (predictive
-                 * mode) and _CCP4Interrupt never fires → deadlock.
-                 * Use full predStepHR — no advance subtraction. */
-                {
-                    uint16_t nextTargetHR = commHR + pData->zcPred.predStepHR;
-                    pData->zcPred.pendingPredCommHR = nextTargetHR;
-                    pData->zcPred.pendingPredValid = true;
-                    HAL_ComTimer_ScheduleAbsolute(nextTargetHR);
-                    pData->timing.deadlineActive = true;
-                    pData->zcPred.diagPredCommOwned++;
-                }
+                pData->zcPred.handoffPending = true;
             }
         }
     }
@@ -787,6 +780,8 @@ ZC_TIMEOUT_RESULT_T BEMF_ZC_CheckTimeout(volatile GARUDA_DATA_T *pData)
             /* Disarm gate and exit predictive mode on timeout */
             pData->zcPred.gateActive = false;
             pData->zcPred.gateArmCount = 0;
+            pData->zcPred.deltaOkCount = 0;
+            pData->zcPred.handoffPending = false;
             if (pData->zcPred.predictiveMode)
             {
                 pData->zcPred.predictiveMode = false;
@@ -933,6 +928,31 @@ void BEMF_ZC_ScheduleCommutation(volatile GARUDA_DATA_T *pData)
             uint16_t delayHR = (halfHR > advHR) ? (halfHR - advHR) : 2;
 
             uint16_t targetHR = pData->timing.lastZcTickHR + delayHR;
+
+            /* Shadow delta: what would the predictor schedule vs reactive?
+             * Predictor formula: lastZcHR + (predStepHR - predZcOffsetHR)
+             * This is the ZC-anchored next-comm from learned states. */
+            if (pData->zcPred.predStepHR > 0 &&
+                pData->zcPred.predZcOffsetHR > 0 &&
+                pData->zcPred.predStepHR > pData->zcPred.predZcOffsetHR)
+            {
+                uint16_t predTargetHR = pData->timing.lastZcTickHR +
+                    (pData->zcPred.predStepHR - pData->zcPred.predZcOffsetHR);
+                int16_t delta = (int16_t)(predTargetHR - targetHR);
+                pData->zcPred.predVsReactiveDelta = delta;
+
+                /* Track consecutive small deltas for entry validation */
+                int16_t absDelta = (delta >= 0) ? delta : -delta;
+                if (absDelta <= 10)  /* ~6.4µs */
+                {
+                    if (pData->zcPred.deltaOkCount < 255)
+                        pData->zcPred.deltaOkCount++;
+                }
+                else
+                {
+                    pData->zcPred.deltaOkCount = 0;
+                }
+            }
 
             /* Check if target is in the past.
              * At high speed (TpHR < 200), filter + compute latency can
@@ -1239,12 +1259,12 @@ void RecordZcTiming(volatile GARUDA_DATA_T *pData,
         pData->zcPred.lastRealZcDelayHR = actualDelayHR;
 
         /* Update adaptive phase offset via IIR: 7/8 old + 1/8 measured.
-         * Only update when predictor is trusted (gateActive or locked).
-         * RED zone ZCs disarm gateActive before reaching here, so they
-         * are excluded automatically. YELLOW zone ZCs still update
-         * (gateActive may still be true) but the clamp limits damage. */
-        if (pData->zcPred.predZcOffsetHR > 0 &&
-            (pData->zcPred.gateActive || pData->zcPred.locked))
+         * Always update when predictor has valid state — the predictor
+         * must keep tracking to converge, even when not locked/gated.
+         * The 25%-75% clamp protects against outlier corruption.
+         * RED zone ZCs still update (they're accepted, just not trusted
+         * for predictive scheduling). */
+        if (pData->zcPred.predZcOffsetHR > 0)
         {
             uint16_t minOff = pData->zcPred.predStepHR >> 2;  /* 25% */
             uint16_t maxOff = pData->zcPred.predStepHR -
@@ -1652,6 +1672,8 @@ bool BEMF_ZC_FastPoll(volatile GARUDA_DATA_T *pData)
                     pData->zcPred.gateActive = false;
                     pData->zcPred.gateArmCount = 0;
                     pData->zcPred.diagWindowReject++;
+                    pData->zcPred.deltaOkCount = 0;
+                    pData->zcPred.handoffPending = false;
                     if (pData->zcPred.predictiveMode)
                     {
                         pData->zcPred.predictiveMode = false;

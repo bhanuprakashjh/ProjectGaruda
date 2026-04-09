@@ -191,12 +191,15 @@ typedef struct __attribute__((packed)) {
     uint16_t windowReject;      /* ZCs vetoed by live gate */
     uint16_t windowRecovered;   /* Vetoed steps that got later valid ZC */
 
-    /* Step 3: predictive scheduling (8B) */
+    /* Step 3: predictive scheduling (12B) */
     uint16_t predCommOwned;     /* Commutations scheduled by predictor */
     uint8_t  predictiveMode;    /* Predictor owns scheduling */
-    uint8_t  _pad2;
+    uint8_t  handoffPending;    /* Handoff in progress */
     uint16_t predExitMiss;      /* Exits: missCount */
     uint16_t predExitTimeout;   /* Exits: timeout */
+    int16_t  predVsReactiveDelta; /* Shadow: pred target - reactive target */
+    uint8_t  deltaOkCount;      /* Consecutive small-delta steps */
+    uint8_t  _pad2;
 } GSP_CK_SNAPSHOT_T;
 
 /* XC16 doesn't support _Static_assert. Verify size at compile time:
