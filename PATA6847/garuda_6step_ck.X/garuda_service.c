@@ -1018,77 +1018,77 @@ void __attribute__((interrupt, no_auto_psv)) _CCP4Interrupt(void)
         uint16_t thisCommHR = CCP4RA;
         gData.zcPred.lastCommHR = thisCommHR;
 
-        /* Step 3: Check handoff BEFORE OnCommutation runs,
-         * because OnCommutation increments missCount which can
-         * clear handoffPending via the >4 hard exit path. */
+        /* Step 3: Latch handoff decision and PROGRAM SCCP4 IMMEDIATELY,
+         * before the expensive AdvanceStep/OnCommutation work.
+         * OnCommutation calls HAL_ComTimer_Cancel() which would
+         * destroy the freshly programmed target — so we set
+         * deadlineActive=true and predictiveMode=true FIRST to
+         * guard against that. */
         bool doHandoff = gData.zcPred.handoffPending &&
             gData.zcPred.predStepHR > 0 &&
             gData.zcPred.predZcOffsetHR > 0 &&
             gData.zcPred.predStepHR > gData.zcPred.predZcOffsetHR;
 
-        /* Gate out SCCP1 fast poll during transition */
-        gData.icZc.phase = IC_ZC_DONE;
-        gData.timing.deadlineActive = false;
-        COMMUTATION_AdvanceStep((volatile GARUDA_DATA_T *)&gData);
-        BEMF_ZC_OnCommutation((volatile GARUDA_DATA_T *)&gData);
-
-        /* Step 3: Predictive commutation scheduling.
-         *
-         * Safe handoff: handoffPending means "this was the last reactive
-         * comm — take ownership of the next step." We transition to
-         * predictiveMode HERE, then schedule the next step.
-         *
-         * ZC-anchored formula:
-         *   nextComm = lastZcHR + (predStepHR - predZcOffsetHR)
-         * where:
-         *   predStepHR = learned 60° period
-         *   predZcOffsetHR = learned comm-to-ZC delay
-         *   predStepHR - predZcOffsetHR = learned ZC-to-next-comm delay
-         *
-         * In steady-state predictive mode, use:
-         *   nextComm = lastPredComm + predStepHR
-         * which is comm-to-comm with correct period. */
         if (doHandoff)
         {
-            /* Handoff: use pre-computed target from RecordZcTiming.
-             * Computed at ZC acceptance time with fresh timestamps,
-             * avoiding the ISR latency problem. */
-            gData.zcPred.handoffPending = false;
-            uint16_t nextTargetHR = gData.zcPred.handoffTargetHR;
-
-            /* Safety check */
-            int16_t margin = (int16_t)(nextTargetHR - HAL_ComTimer_ReadTimer());
-            if (margin <= 0)
+            /* First predictor target: prefer exact comm-to-comm timing,
+             * fall back to "future from now" if nominal is already past.
+             * This preserves phase accuracy when CCP4RA is valid but
+             * handles the target-past reactive case safely. */
+            uint16_t nowHR = HAL_ComTimer_ReadTimer();
+            uint16_t nominalTargetHR = thisCommHR + gData.zcPred.predStepHR;
+            uint16_t minTargetHR = nowHR + 8;  /* handoff guard */
+            uint16_t nextTargetHR =
+                ((int16_t)(nominalTargetHR - minTargetHR) > 0)
+                ? nominalTargetHR : minTargetHR;
+            int16_t margin = (int16_t)(nextTargetHR - nowHR);
+            if (margin > 2)
             {
-                gData.zcPred.diagPredEntryLate++;
-            }
-            else
-            {
+                /* Program SCCP4 NOW — before OnCommutation can cancel it */
+                HAL_ComTimer_ScheduleAbsolute(nextTargetHR);
                 gData.zcPred.predictiveMode = true;
+                gData.zcPred.handoffPending = false;
                 gData.zcPred.lastPredCommHR = thisCommHR;
                 gData.zcPred.pendingPredCommHR = nextTargetHR;
                 gData.zcPred.pendingPredValid = true;
                 gData.zcPred.diagPredCommOwned++;
                 gData.zcPred.diagPredEnter++;
-
-                HAL_ComTimer_ScheduleAbsolute(nextTargetHR);
+                /* deadlineActive stays true — guards OnCommutation's Cancel */
                 gData.timing.deadlineActive = true;
             }
+            else
+            {
+                gData.zcPred.handoffPending = false;
+                gData.zcPred.diagPredEntryLate++;
+            }
         }
-        else if (gData.zcPred.predictiveMode &&
-                 gData.zcPred.predStepHR > 0)
-        {
-            /* Steady-state predictor: comm-to-comm with learned period */
-            uint16_t nextTargetHR = thisCommHR + gData.zcPred.predStepHR;
 
+        /* Steady-state predictive: schedule next comm BEFORE OnCommutation */
+        if (!doHandoff && gData.zcPred.predictiveMode &&
+            gData.zcPred.predStepHR > 0)
+        {
+            uint16_t nextTargetHR = thisCommHR + gData.zcPred.predStepHR;
+            HAL_ComTimer_ScheduleAbsolute(nextTargetHR);
             gData.zcPred.lastPredCommHR = thisCommHR;
             gData.zcPred.pendingPredCommHR = nextTargetHR;
             gData.zcPred.pendingPredValid = true;
             gData.zcPred.diagPredCommOwned++;
-
-            HAL_ComTimer_ScheduleAbsolute(nextTargetHR);
             gData.timing.deadlineActive = true;
         }
+
+        /* Gate out SCCP1 fast poll during transition.
+         * Only clear deadlineActive if predictor hasn't scheduled
+         * the next compare already. */
+        gData.icZc.phase = IC_ZC_DONE;
+        if (!gData.zcPred.predictiveMode)
+            gData.timing.deadlineActive = false;
+        COMMUTATION_AdvanceStep((volatile GARUDA_DATA_T *)&gData);
+        BEMF_ZC_OnCommutation((volatile GARUDA_DATA_T *)&gData);
+
+        /* Re-assert deadlineActive after OnCommutation (which clears
+         * it unconditionally at bemf_zc.c:371). */
+        if (gData.zcPred.predictiveMode && gData.zcPred.pendingPredValid)
+            gData.timing.deadlineActive = true;
     }
 
     _CCP4IF = 0;

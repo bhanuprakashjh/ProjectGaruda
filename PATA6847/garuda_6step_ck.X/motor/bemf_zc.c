@@ -371,8 +371,11 @@ void BEMF_ZC_OnCommutation(volatile GARUDA_DATA_T *pData)
     pData->timing.deadlineActive = false;
 
 #if FEATURE_IC_ZC
-    /* Cancel any pending hardware commutation timer (forced step preempts) */
-    HAL_ComTimer_Cancel();
+    /* Cancel any pending hardware commutation timer (forced step preempts).
+     * Skip when predictiveMode — the predictor already programmed the
+     * next compare target before OnCommutation was called. */
+    if (!pData->zcPred.predictiveMode)
+        HAL_ComTimer_Cancel();
 #endif
 
     /* Set forced commutation timeout: ZC_TIMEOUT_MULT * period.
@@ -1755,12 +1758,13 @@ bool BEMF_ZC_FastPoll(volatile GARUDA_DATA_T *pData)
                     pData->zcPred.diagWindowReject++;
                     pData->zcPred.deltaOkCount = 0;
                     pData->zcPred.handoffPending = false;
+                    /* RED zone disarms gate but does NOT exit predictive
+                     * mode. Predictive exits are only via missCount > 4
+                     * (no ZC corrections) or timeout (genuine desync).
+                     * RED during predictive is expected at handoff when
+                     * phase shifts — the predictor needs time to adapt. */
                     if (pData->zcPred.predictiveMode)
-                    {
-                        pData->zcPred.predictiveMode = false;
-                        pData->zcPred.pendingPredValid = false;
-                        pData->zcPred.diagPredExitRed++;
-                    }
+                        pData->zcPred.diagPredExitRed++;  /* count but don't exit */
                 }
                 else if (inYellow)
                 {

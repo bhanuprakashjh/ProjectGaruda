@@ -221,8 +221,8 @@ def decode_ck_snapshot(data):
         s['gateActive'] = 0
         s['windowReject'] = 0
         s['windowRecovered'] = 0
-    # V11 Step 3: predictive scheduling (178 bytes total)
-    if len(data) >= 178:
+    # V11 Step 3: predictive scheduling (182 bytes total)
+    if len(data) >= 182:
         s['predCommOwned'] = struct.unpack_from('<H', data, 166)[0]
         s['predictiveMode'] = data[168]
         s['handoffPending'] = data[169]
@@ -231,6 +231,8 @@ def decode_ck_snapshot(data):
         s['predVsReactiveDelta'] = struct.unpack_from('<h', data, 174)[0]
         s['deltaOkCount'] = data[176]
         s['entryScore'] = data[177]
+        s['predEnter'] = struct.unpack_from('<H', data, 178)[0]
+        s['predEntryLate'] = struct.unpack_from('<H', data, 180)[0]
     else:
         s['predCommOwned'] = 0
         s['predictiveMode'] = 0
@@ -240,6 +242,8 @@ def decode_ck_snapshot(data):
         s['predVsReactiveDelta'] = 0
         s['deltaOkCount'] = 0
         s['entryScore'] = 0
+        s['predEnter'] = 0
+        s['predEntryLate'] = 0
     # Derived
     s['iaMa'] = round(s['iaRaw'] * CK_CURRENT_SCALE)
     s['ibMa'] = round(s['ibRaw'] * CK_CURRENT_SCALE)
@@ -287,8 +291,8 @@ def main():
     print(f"  Press Ctrl+C to stop")
     print()
     ZC_MODES = ['ACQ', 'TRK', 'RCV']
-    print(f"{'Time':>7s} {'State':>8s} {'ZcM':>3s} {'eRPM':>7s} {'Duty':>4s} {'Vbus':>6s} {'PhA':>5s} {'ZcOf':>5s} {'ESc':>3s} {'POwn':>6s} {'Lck':>3s} {'Gat':>3s} {'Prd':>3s} {'TO':>4s} {'Mrgn':>5s}")
-    print("-" * 115)
+    print(f"{'Time':>7s} {'State':>8s} {'ZcM':>3s} {'eRPM':>7s} {'Duty':>4s} {'Vbus':>6s} {'PhA':>5s} {'ZcOf':>5s} {'ESc':>3s} {'POwn':>6s} {'Lck':>3s} {'Gat':>3s} {'Prd':>3s} {'TO':>4s} {'Mrgn':>5s} {'Entr':>5s} {'Late':>5s}")
+    print("-" * 125)
 
     rows = []
     buf = b''
@@ -341,7 +345,7 @@ def main():
                 lck = 'Y' if snap.get('predLocked', 0) else 'N'
                 gat = 'Y' if snap.get('gateActive', 0) else 'N'
                 prd = 'Y' if snap.get('predictiveMode', 0) else 'N'
-                print(f"{t:7.1f} {state_str:>8s} {zc_mode_str:>3s} {snap['eRpm']:7d} {snap['dutyPct']:3d}% {snap['vbusV']:5.1f}V {snap.get('predPhaseErrHR',0):5d} {snap.get('predZcOffsetHR',0):5d} {snap.get('entryScore',0):3d} {snap.get('predCommOwned',0):6d} {lck:>3s} {gat:>3s} {prd:>3s} {snap.get('zc_timeout_count', snap.get('zcTimeoutCount',0)):4d} {snap.get('sched_margin_hr', snap.get('schedMarginHR',0)):5d}{fault_str}")
+                print(f"{t:7.1f} {state_str:>8s} {zc_mode_str:>3s} {snap['eRpm']:7d} {snap['dutyPct']:3d}% {snap['vbusV']:5.1f}V {snap.get('predPhaseErrHR',0):5d} {snap.get('predZcOffsetHR',0):5d} {snap.get('entryScore',0):3d} {snap.get('predCommOwned',0):6d} {lck:>3s} {gat:>3s} {prd:>3s} {snap.get('zc_timeout_count', snap.get('zcTimeoutCount',0)):4d} {snap.get('sched_margin_hr', snap.get('schedMarginHR',0)):5d} {snap.get('predEnter',0):5d} {snap.get('predEntryLate',0):5d}{fault_str}")
 
                 rows.append({
                     'time': round(t, 3),
@@ -422,6 +426,8 @@ def main():
                     'delta_ok_count': snap.get('deltaOkCount', 0),
                     'handoff_pending': snap.get('handoffPending', 0),
                     'entry_score': snap.get('entryScore', 0),
+                    'pred_enter': snap.get('predEnter', 0),
+                    'pred_entry_late': snap.get('predEntryLate', 0),
                 })
 
             time.sleep(0.01)

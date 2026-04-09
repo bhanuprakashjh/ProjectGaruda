@@ -197,6 +197,8 @@ typedef struct __attribute__((packed)) {
     uint8_t  handoffPending;    /* Handoff in progress */
     uint16_t predExitMiss;      /* Exits: missCount */
     uint16_t predExitTimeout;   /* Exits: timeout */
+    uint16_t predEnter;         /* Successful predictive entries */
+    uint16_t predEntryLate;     /* Handoff aborted: target past */
     int16_t  predVsReactiveDelta; /* Shadow: pred target - reactive target */
     uint8_t  deltaOkCount;      /* Consecutive small-delta steps */
     uint8_t  entryScore;        /* Predictive entry readiness (0-255) */

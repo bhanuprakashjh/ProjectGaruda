@@ -162,6 +162,8 @@ void GSP_CaptureSnapshot(GSP_CK_SNAPSHOT_T *dst)
     dst->handoffPending    = src->zcPred.handoffPending ? 1 : 0;
     dst->predExitMiss      = src->zcPred.diagPredExitMiss;
     dst->predExitTimeout   = src->zcPred.diagPredExitTimeout;
+    dst->predEnter         = src->zcPred.diagPredEnter;
+    dst->predEntryLate     = src->zcPred.diagPredEntryLate;
     dst->predVsReactiveDelta = src->zcPred.predVsReactiveDelta;
     dst->deltaOkCount      = src->zcPred.deltaOkCount;
     dst->entryScore        = src->zcPred.entryScore;
