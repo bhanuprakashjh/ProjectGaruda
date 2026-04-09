@@ -793,6 +793,7 @@ void __attribute__((interrupt, auto_psv)) _T1Interrupt(void)
                 gData.icZc.phase = IC_ZC_DONE;        /* Block FastPoll */
                 HAL_ComTimer_Cancel();                 /* Cancel pending SCCP4 */
                 gData.timing.deadlineActive = false;
+                gData.zcPred.lastCommHR = HAL_ComTimer_ReadTimer();
 #endif
                 COMMUTATION_AdvanceStep((volatile GARUDA_DATA_T *)&gData);
                 BEMF_ZC_OnCommutation((volatile GARUDA_DATA_T *)&gData);
@@ -932,6 +933,7 @@ void __attribute__((interrupt, auto_psv)) _ADCInterrupt(void)
                 HAL_ComTimer_Cancel();
 #endif
                 gData.timing.deadlineActive = false;
+                gData.zcPred.lastCommHR = HAL_ComTimer_ReadTimer();
                 COMMUTATION_AdvanceStep((volatile GARUDA_DATA_T *)&gData);
                 BEMF_ZC_OnCommutation((volatile GARUDA_DATA_T *)&gData);
             }
@@ -1012,6 +1014,12 @@ void __attribute__((interrupt, no_auto_psv)) _CCP4Interrupt(void)
      * this step (deadlineActive is the one-shot gate). */
     if (gData.timing.deadlineActive)
     {
+        /* Capture exact commutation time for predictor.
+         * CCP4RA is the OC target — the precise scheduled time.
+         * Using this instead of ReadTimer() eliminates ISR latency
+         * from the predictor's phase reference. */
+        gData.zcPred.lastCommHR = CCP4RA;
+
         /* Gate out SCCP1 fast poll during transition */
         gData.icZc.phase = IC_ZC_DONE;
         gData.timing.deadlineActive = false;

@@ -168,6 +168,18 @@ typedef struct __attribute__((packed)) {
     /* Scheduler margin diagnostics (4B) */
     uint16_t targetPastCount;   /* Commutation target already in past */
     int16_t  schedMarginHR;     /* Last scheduler margin (HR ticks, neg=late) */
+
+    /* PLL predictor telemetry (18B) */
+    int16_t  predPhaseErrHR;    /* Phase error model A: nominal (comm+half+adv) */
+    int16_t  predPhaseErrRxHR;  /* Phase error model B: reactive (comm+lastDelay) */
+    uint16_t predStepHR;        /* Predicted step period */
+    uint16_t predZcInWindow;    /* ZC fell within scan window */
+    uint16_t predZcOutWindow;   /* ZC fell outside scan window */
+    uint8_t  predLocked;        /* Predictor locked (tracking) */
+    uint8_t  predMissCount;     /* Steps without ZC correction */
+    int16_t  predMinMarginHR;   /* Min predictor margin observed */
+    uint16_t predRealZcDelayHR; /* Last measured comm-to-ZC delay */
+    uint16_t predZcOffsetHR;    /* Adaptive phase offset (IIR-tracked) */
 } GSP_CK_SNAPSHOT_T;
 
 /* XC16 doesn't support _Static_assert. Verify size at compile time:

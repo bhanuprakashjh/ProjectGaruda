@@ -180,6 +180,29 @@ def decode_ck_snapshot(data):
     else:
         s['targetPastCount'] = 0
         s['schedMarginHR'] = 0
+    # V9 PLL predictor telemetry (152 bytes total)
+    if len(data) >= 152:
+        s['predPhaseErrHR'] = struct.unpack_from('<h', data, 134)[0]
+        s['predPhaseErrRxHR'] = struct.unpack_from('<h', data, 136)[0]
+        s['predStepHR'] = struct.unpack_from('<H', data, 138)[0]
+        s['predZcInWindow'] = struct.unpack_from('<H', data, 140)[0]
+        s['predZcOutWindow'] = struct.unpack_from('<H', data, 142)[0]
+        s['predLocked'] = data[144]
+        s['predMissCount'] = data[145]
+        s['predMinMarginHR'] = struct.unpack_from('<h', data, 146)[0]
+        s['predRealZcDelayHR'] = struct.unpack_from('<H', data, 148)[0]
+        s['predZcOffsetHR'] = struct.unpack_from('<H', data, 150)[0]
+    else:
+        s['predPhaseErrHR'] = 0
+        s['predPhaseErrRxHR'] = 0
+        s['predStepHR'] = 0
+        s['predZcInWindow'] = 0
+        s['predZcOutWindow'] = 0
+        s['predLocked'] = 0
+        s['predMissCount'] = 0
+        s['predMinMarginHR'] = 0
+        s['predRealZcDelayHR'] = 0
+        s['predZcOffsetHR'] = 0
     # Derived
     s['iaMa'] = round(s['iaRaw'] * CK_CURRENT_SCALE)
     s['ibMa'] = round(s['ibRaw'] * CK_CURRENT_SCALE)
@@ -227,8 +250,8 @@ def main():
     print(f"  Press Ctrl+C to stop")
     print()
     ZC_MODES = ['ACQ', 'TRK', 'RCV']
-    print(f"{'Time':>7s} {'State':>8s} {'ZcM':>3s} {'eRPM':>7s} {'Duty':>4s} {'Pot':>5s} {'Ibus':>7s} {'Vbus':>6s} {'FrcTO':>5s} {'R/F ZC':>10s} {'R/F TO':>10s} {'ZcLat':>6s} {'RawV':>5s} {'RSBk':>5s} {'TFbk':>5s} {'TsIC':>5s} {'TsRw':>5s} {'IcLd':>5s} {'TPst':>5s} {'Mrgn':>5s}")
-    print("-" * 170)
+    print(f"{'Time':>7s} {'State':>8s} {'ZcM':>3s} {'eRPM':>7s} {'Duty':>4s} {'Vbus':>6s} {'FrcTO':>5s} {'TPst':>5s} {'Mrgn':>5s} {'PhA':>5s} {'PhB':>5s} {'PdSp':>5s} {'ZcOf':>5s} {'ZcDl':>5s} {'ZcIn':>5s} {'ZcOt':>5s} {'Lck':>3s}")
+    print("-" * 130)
 
     rows = []
     buf = b''
@@ -278,7 +301,8 @@ def main():
 
                 rfc = f"{snap['risingZcCount']:5d}/{snap['fallingZcCount']:<5d}"
                 rft = f"{snap['risingTimeouts']:5d}/{snap['fallingTimeouts']:<5d}"
-                print(f"{t:7.1f} {state_str:>8s} {zc_mode_str:>3s} {snap['eRpm']:7d} {snap['dutyPct']:3d}% {snap['potRaw']:5d} {snap['ibusMa']:6d}mA {snap['vbusV']:5.1f}V {snap['actualForcedComm']:5d} {rfc:>10s} {rft:>10s} {lat_str:>6s} {snap['rawVetoCount']:5d} {snap['rawStableBlock']:5d} {snap['trackFallbackCount']:5d} {snap['tsFromIc']:5d} {snap['tsFromRaw']:5d} {snap['icLeadReject']:5d} {snap['targetPastCount']:5d} {snap['schedMarginHR']:5d}{fault_str}")
+                lck = 'Y' if snap.get('predLocked', 0) else 'N'
+                print(f"{t:7.1f} {state_str:>8s} {zc_mode_str:>3s} {snap['eRpm']:7d} {snap['dutyPct']:3d}% {snap['vbusV']:5.1f}V {snap['actualForcedComm']:5d} {snap['targetPastCount']:5d} {snap['schedMarginHR']:5d} {snap.get('predPhaseErrHR',0):5d} {snap.get('predPhaseErrRxHR',0):5d} {snap.get('predStepHR',0):5d} {snap.get('predZcOffsetHR',0):5d} {snap.get('predRealZcDelayHR',0):5d} {snap.get('predZcInWindow',0):5d} {snap.get('predZcOutWindow',0):5d} {lck:>3s}{fault_str}")
 
                 rows.append({
                     'time': round(t, 3),
@@ -334,6 +358,16 @@ def main():
                     'ic_lead_reject': snap['icLeadReject'],
                     'target_past': snap['targetPastCount'],
                     'sched_margin_hr': snap['schedMarginHR'],
+                    'pred_phase_err_hr': snap.get('predPhaseErrHR', 0),
+                    'pred_phase_err_rx_hr': snap.get('predPhaseErrRxHR', 0),
+                    'pred_step_hr': snap.get('predStepHR', 0),
+                    'pred_real_zc_delay_hr': snap.get('predRealZcDelayHR', 0),
+                    'pred_zc_in_window': snap.get('predZcInWindow', 0),
+                    'pred_zc_out_window': snap.get('predZcOutWindow', 0),
+                    'pred_locked': snap.get('predLocked', 0),
+                    'pred_miss_count': snap.get('predMissCount', 0),
+                    'pred_min_margin_hr': snap.get('predMinMarginHR', 0),
+                    'pred_zc_offset_hr': snap.get('predZcOffsetHR', 0),
                 })
 
             time.sleep(0.01)

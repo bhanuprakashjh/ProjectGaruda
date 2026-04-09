@@ -133,6 +133,18 @@ void GSP_CaptureSnapshot(GSP_CK_SNAPSHOT_T *dst)
     /* Scheduler margin */
     dst->targetPastCount   = src->zcDiag.diagTargetPast;
     dst->schedMarginHR     = src->zcDiag.lastScheduleMarginHR;
+
+    /* PLL predictor telemetry */
+    dst->predPhaseErrHR    = src->zcPred.phaseErrHR;
+    dst->predPhaseErrRxHR  = src->zcPred.phaseErrReactiveHR;
+    dst->predStepHR        = src->zcPred.predStepHR;
+    dst->predZcInWindow    = src->zcPred.diagZcInWindow;
+    dst->predZcOutWindow   = src->zcPred.diagZcOutWindow;
+    dst->predLocked        = src->zcPred.locked ? 1 : 0;
+    dst->predMissCount     = src->zcPred.missCount;
+    dst->predMinMarginHR   = src->zcPred.diagMinMarginHR;
+    dst->predRealZcDelayHR = src->zcPred.lastRealZcDelayHR;
+    dst->predZcOffsetHR    = src->zcPred.predZcOffsetHR;
 #endif
 }
 

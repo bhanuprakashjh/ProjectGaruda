@@ -171,6 +171,41 @@ typedef struct {
     uint16_t  demagMetric;        /* demag classification metric (Phase 6+) */
 } ZC_CTRL_T;
 
+/* ── PLL Step Predictor State ──────────────────────────────────────── */
+#if FEATURE_IC_ZC
+typedef struct {
+    /* Predictor core */
+    uint16_t predStepHR;        /* Predicted 60° step period (HR ticks) */
+    uint16_t predNextCommHR;    /* Predicted next commutation time (HR) */
+    uint16_t predZcHR;          /* Predicted ZC time for current sector (HR) */
+    uint16_t predZcOffsetHR;    /* Adaptive comm-to-ZC phase offset (HR ticks).
+                                 * Seeded from lastRealZcDelayHR, then IIR-updated
+                                 * from accepted ZCs. Replaces fixed half+advance. */
+    int16_t  phaseErrHR;        /* Last phase error: actual - predicted ZC (HR) */
+    bool     locked;            /* true when predictor is tracking reliably */
+    uint8_t  missCount;         /* Consecutive steps without valid ZC correction */
+    uint16_t lastCommHR;        /* HR timestamp of last commutation (predictor domain) */
+
+    /* Scan window (derived from predZcHR) */
+    uint16_t scanOpenHR;        /* Earliest acceptable ZC candidate */
+    uint16_t scanCloseHR;       /* Latest acceptable ZC candidate */
+
+    /* Telemetry (Step 1: shadow mode — compute but don't schedule) */
+    uint16_t diagPredCommCount; /* Commutations where predictor was computed */
+    uint16_t diagPhaseErrAccum; /* Sum of |phaseErrHR| for averaging (wrapping) */
+    uint16_t diagZcInWindow;    /* ZC fell within predicted scan window */
+    uint16_t diagZcOutWindow;   /* ZC fell outside predicted scan window */
+    int16_t  diagMinMarginHR;   /* Minimum predNextComm margin observed */
+
+    /* Dual phase-error diagnostic (Codex suggestion):
+     * Compare actual ZC against two models to isolate error source.
+     * Model A (nominal): comm + half + advance (predictor formula)
+     * Model B (reactive): comm + lastRealZcDelay (empirical) */
+    uint16_t lastRealZcDelayHR; /* Delay from last comm to last real ZC (measured) */
+    int16_t  phaseErrReactiveHR;/* Phase error vs reactive model B */
+} ZC_PRED_T;
+#endif
+
 /* ── ZC Diagnostics ─────────────────────────────────────────────────── */
 typedef struct {
     /* Existing (keep for backward compat) */
@@ -264,6 +299,9 @@ typedef struct {
 #endif
     ZC_DIAG_T      zcDiag;
     ZC_CTRL_T      zcCtrl;
+#if FEATURE_IC_ZC
+    ZC_PRED_T      zcPred;
+#endif
     SPEED_PD_T     speedPd;
 
 } GARUDA_DATA_T;

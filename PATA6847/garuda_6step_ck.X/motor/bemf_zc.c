@@ -215,6 +215,23 @@ void BEMF_ZC_Init(volatile GARUDA_DATA_T *pData)
     pData->timing.prevZcIntervalHR = 0;
     pData->timing.stepPeriodHR = 0;
     pData->timing.hasPrevZcHR = false;
+
+    /* PLL predictor init (Step 1: shadow/telemetry mode) */
+    pData->zcPred.predStepHR = 0;
+    pData->zcPred.predNextCommHR = 0;
+    pData->zcPred.predZcHR = 0;
+    pData->zcPred.predZcOffsetHR = 0;
+    pData->zcPred.phaseErrHR = 0;
+    pData->zcPred.locked = false;
+    pData->zcPred.missCount = 0;
+    pData->zcPred.lastCommHR = 0;
+    pData->zcPred.scanOpenHR = 0;
+    pData->zcPred.scanCloseHR = 0;
+    pData->zcPred.diagPredCommCount = 0;
+    pData->zcPred.diagPhaseErrAccum = 0;
+    pData->zcPred.diagZcInWindow = 0;
+    pData->zcPred.diagZcOutWindow = 0;
+    pData->zcPred.diagMinMarginHR = 32767;
 #endif
 }
 
@@ -483,6 +500,67 @@ void BEMF_ZC_OnCommutation(volatile GARUDA_DATA_T *pData)
             pData->icZc.filterLevel = ComputeFilterLevel(flTp);
         }
         pData->icZc.phase = IC_ZC_BLANKING;
+
+        /* ── PLL Predictor: shadow computation (Step 1) ──────────────
+         * Compute predicted next commutation and ZC times without
+         * changing actual scheduling. Runs in parallel with reactive
+         * path to verify tracking quality before enabling. */
+        if (pData->state == ESC_CLOSED_LOOP &&
+            pData->zcCtrl.refIntervalHR > 0 &&
+            pData->timing.hasPrevZcHR)
+        {
+            /* Use exact OC fire time captured in _CCP4Interrupt,
+             * not HAL_ComTimer_ReadTimer() which includes ISR latency.
+             * lastCommHR is set to CCP4RA in the commutation ISR. */
+            uint16_t commHR = pData->zcPred.lastCommHR;
+            uint16_t spHR = pData->zcCtrl.refIntervalHR;
+
+            /* Seed predictor from refInterval on first valid step */
+            if (pData->zcPred.predStepHR == 0)
+                pData->zcPred.predStepHR = spHR;
+
+            /* Seed phase offset from measured delay on first valid step.
+             * After seeding, predZcOffsetHR is IIR-updated from accepted
+             * ZCs in RecordZcTiming. This replaces the fixed half+advance
+             * formula which doesn't match the actual reactive phase. */
+            if (pData->zcPred.predZcOffsetHR == 0 &&
+                pData->zcPred.lastRealZcDelayHR > 0)
+            {
+                pData->zcPred.predZcOffsetHR =
+                    pData->zcPred.lastRealZcDelayHR;
+            }
+
+            /* Predict next commutation: this comm + one step period */
+            pData->zcPred.predNextCommHR = commHR + pData->zcPred.predStepHR;
+
+            /* Predict where ZC should land in this sector.
+             * Uses adaptive phase offset instead of fixed half+advance.
+             * The offset converges to the actual comm-to-ZC relationship
+             * and will adapt as predictor scheduling changes the phase. */
+            pData->zcPred.predZcHR = commHR + pData->zcPred.predZcOffsetHR;
+
+            /* Scan window: +/- 25% of step period around predicted ZC. */
+            uint16_t windowHR = pData->zcPred.predStepHR >> 2;
+            pData->zcPred.scanOpenHR = pData->zcPred.predZcHR - windowHR;
+            pData->zcPred.scanCloseHR = pData->zcPred.predZcHR + windowHR;
+
+            /* Predictor scheduling margin: how far ahead is predNextComm
+             * from now? This is a real measurement, not a nominal calc. */
+            {
+                int16_t predMargin = (int16_t)(pData->zcPred.predNextCommHR
+                                               - HAL_ComTimer_ReadTimer());
+                if (predMargin < pData->zcPred.diagMinMarginHR)
+                    pData->zcPred.diagMinMarginHR = predMargin;
+            }
+
+            pData->zcPred.diagPredCommCount++;
+
+            /* Track miss count — incremented here, cleared when ZC
+             * correction arrives in RecordZcTiming. */
+            pData->zcPred.missCount++;
+            if (pData->zcPred.missCount > 2)
+                pData->zcPred.locked = false;
+        }
     }
 #endif
 }
@@ -1045,6 +1123,87 @@ void RecordZcTiming(volatile GARUDA_DATA_T *pData,
 
     /* First confirmed CL ZC clears bypass suppression */
     pData->timing.bypassSuppressed = false;
+
+    /* ── PLL Predictor: phase error computation (Step 1 shadow) ──────
+     * Compare actual ZC against TWO models to isolate error source:
+     * Model A (nominal): predZcHR = comm + half + advance
+     * Model B (reactive): comm + lastRealZcDelay (empirical)
+     *
+     * Positive phaseErr = ZC arrived later than predicted.
+     * Negative phaseErr = ZC arrived earlier than predicted. */
+    if (pData->zcPred.predZcHR != 0 && pData->zcPred.predStepHR > 0)
+    {
+        /* Model A: nominal predictor */
+        int16_t phaseErr = (int16_t)(hrTick - pData->zcPred.predZcHR);
+        pData->zcPred.phaseErrHR = phaseErr;
+
+        /* Model B: reactive (comm + last observed ZC delay) */
+        if (pData->zcPred.lastRealZcDelayHR > 0)
+        {
+            uint16_t reactiveZcHR = pData->zcPred.lastCommHR
+                                    + pData->zcPred.lastRealZcDelayHR;
+            pData->zcPred.phaseErrReactiveHR =
+                (int16_t)(hrTick - reactiveZcHR);
+        }
+
+        /* Record actual comm-to-ZC delay */
+        uint16_t actualDelayHR =
+            (uint16_t)(hrTick - pData->zcPred.lastCommHR);
+        pData->zcPred.lastRealZcDelayHR = actualDelayHR;
+
+        /* Update adaptive phase offset via IIR: 7/8 old + 1/8 measured.
+         * Clamp to reasonable range (25% - 75% of step period) to
+         * prevent one bad ZC from corrupting the offset. */
+        if (pData->zcPred.predZcOffsetHR > 0)
+        {
+            uint16_t minOff = pData->zcPred.predStepHR >> 2;  /* 25% */
+            uint16_t maxOff = pData->zcPred.predStepHR -
+                              (pData->zcPred.predStepHR >> 2);  /* 75% */
+            uint16_t clampedDelay = actualDelayHR;
+            if (clampedDelay < minOff) clampedDelay = minOff;
+            if (clampedDelay > maxOff) clampedDelay = maxOff;
+            pData->zcPred.predZcOffsetHR = (uint16_t)(
+                ((uint32_t)pData->zcPred.predZcOffsetHR * 7
+                 + clampedDelay) >> 3);
+        }
+
+        /* Accumulate |phaseErr| for telemetry averaging */
+        uint16_t absErr = (phaseErr >= 0) ? (uint16_t)phaseErr
+                                          : (uint16_t)(-phaseErr);
+        pData->zcPred.diagPhaseErrAccum += absErr;
+
+        /* Check if ZC fell within scan window */
+        int16_t sinceOpen = (int16_t)(hrTick - pData->zcPred.scanOpenHR);
+        int16_t sinceClose = (int16_t)(hrTick - pData->zcPred.scanCloseHR);
+        if (sinceOpen >= 0 && sinceClose <= 0)
+            pData->zcPred.diagZcInWindow++;
+        else
+            pData->zcPred.diagZcOutWindow++;
+
+        /* Frequency correction: adjust predStepHR toward actual interval.
+         * Small IIR: 7/8 old + 1/8 correction. */
+        if (pData->timing.hasPrevZcHR && pData->timing.zcIntervalHR > 0)
+        {
+            uint16_t actualStepHR = pData->timing.zcIntervalHR;
+            uint16_t minStep = pData->zcPred.predStepHR >> 1;
+            uint16_t maxStep = pData->zcPred.predStepHR +
+                               (pData->zcPred.predStepHR >> 1);
+            if (actualStepHR >= minStep && actualStepHR <= maxStep)
+            {
+                pData->zcPred.predStepHR = (uint16_t)(
+                    ((uint32_t)pData->zcPred.predStepHR * 7 + actualStepHR)
+                    >> 3);
+            }
+        }
+
+        /* Mark predictor as locked if phase error is small enough
+         * (within 12.5% of step period) */
+        if (absErr < (pData->zcPred.predStepHR >> 3))
+        {
+            pData->zcPred.locked = true;
+            pData->zcPred.missCount = 0;
+        }
+    }
 
     /* ZC V2 mode transitions on good ZC */
     switch (pData->zcCtrl.mode)
