@@ -236,12 +236,44 @@ typedef struct {
     uint16_t diagPredCommOwned;    /* Commutations scheduled by predictor */
     uint16_t diagPredEnter;        /* Successful predictive mode entries */
     uint16_t diagPredEntryLate;    /* Handoff aborted: first target already past */
+    uint16_t diagPredIsrFired;     /* _CCP4Interrupt entered while predictiveMode already true */
+    uint16_t diagPredIsrEntries;   /* Total _CCP4Interrupt entries with deadlineActive */
     uint16_t diagPredExitRed;      /* Predictor exits due to RED zone */
     uint16_t diagPredExitMiss;     /* Predictor exits due to missCount */
     uint16_t diagPredExitYellow;   /* Predictor exits due to repeated YELLOW */
     uint16_t diagPredExitPhaseErr; /* Predictor exits due to large phaseErr */
     uint16_t diagPredExitTimeout;  /* Predictor exits due to timeout */
 } ZC_PRED_T;
+#endif
+
+/* ── DMA shadow capture state ───────────────────────────────────────── */
+#if FEATURE_IC_DMA_SHADOW
+typedef struct {
+    /* Per-step probe results, overwritten each commit in RecordZcTiming.
+     * uint32 so the counters don't wrap at ~13s at 60k eRPM. */
+    uint32_t  stepCount;            /* total probe invocations */
+    uint32_t  matchCount;           /* steps where a capture was found in window */
+    uint32_t  edgesInWindowSum;     /* running sum for average edges/step */
+    uint32_t  ringOverflowCount;    /* ring near-full events (>3/4 consumed) */
+
+    /* Most recent signed deltas (HR ticks) */
+    int16_t   lastEarliestVsPoll;      /* DMA earliest − poll timestamp */
+    int16_t   lastEarliestVsExpected;  /* DMA earliest − predicted ZC */
+    int16_t   lastClosestVsExpected;   /* DMA closest − predicted ZC */
+    int16_t   lastPollVsExpected;      /* poll timestamp − predicted ZC (baseline) */
+
+    uint8_t   lastEdgeCount;        /* captures found in most recent step */
+    bool      lastFound;            /* true if most recent probe matched */
+
+    /* DMA-direct substitution counters (only meaningful when
+     * FEATURE_DMA_ZC_DIRECT=1). Incremented in RecordZcTiming. */
+    uint32_t  substituteCount;      /* times hrTick was replaced by DMA edge */
+    uint32_t  substituteSkipGated;  /* below speed threshold, left alone */
+    uint32_t  substituteSkipRange;  /* DMA edge outside sanity window */
+    int16_t   lastCorrectionHR;     /* most recent (refined - poll) HR delta */
+    int16_t   minCorrectionHR;      /* most negative correction seen so far */
+    int16_t   maxCorrectionHR;      /* most positive correction seen so far */
+} DMA_SHADOW_T;
 #endif
 
 /* ── ZC Diagnostics ─────────────────────────────────────────────────── */
@@ -339,6 +371,9 @@ typedef struct {
     ZC_CTRL_T      zcCtrl;
 #if FEATURE_IC_ZC
     ZC_PRED_T      zcPred;
+#endif
+#if FEATURE_IC_DMA_SHADOW
+    DMA_SHADOW_T   dmaShadow;
 #endif
     SPEED_PD_T     speedPd;
 

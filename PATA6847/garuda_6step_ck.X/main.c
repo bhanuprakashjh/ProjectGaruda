@@ -29,6 +29,9 @@
 #if FEATURE_IC_ZC
 #include "hal/hal_ic.h"
 #include "hal/hal_com_timer.h"
+#if FEATURE_IC_DMA_SHADOW
+#include "hal/hal_ic_dma.h"
+#endif
 #include "hal/hal_clc.h"
 #endif
 #if FEATURE_PTG_ZC
@@ -274,6 +277,14 @@ int main(void)
     /* 8d. SCCP2 input capture for hardware-precise ZC timestamps */
     HAL_ZcIC_Init();
     HAL_UART_WriteString("IC.");
+#endif
+
+#if FEATURE_IC_DMA_SHADOW
+    /* 8d-alt. Dual-CCP + DMA shadow ring (experiment).
+     * Owns CCP2 and CCP5 exclusively. Must run AFTER HAL_ComTimer_Init()
+     * so the CCP2/CCP5 → CCP4 HR domain offset can be measured. */
+    HAL_ZcDma_Init();
+    HAL_UART_WriteString("DMA.");
 #endif
 #endif
 

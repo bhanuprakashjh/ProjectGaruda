@@ -43,14 +43,16 @@ void HAL_ZcTimer_Start(void);
  */
 void HAL_ZcTimer_Stop(void);
 
-/* ── SCCP2 Input Capture for hardware-precise ZC timestamps ────────── */
-#if FEATURE_IC_ZC_CAPTURE
-
-/* BEMF comparator RP pin numbers for PPS routing to SCCP2 IC input.
- * RC6 = RP54 (0x36), RC7 = RP55 (0x37), RD10 = RP74 (0x4A). */
+/* BEMF comparator RP pin numbers for PPS routing.
+ * RC6 = RP54 (0x36), RC7 = RP55 (0x37), RD10 = RP74 (0x4A).
+ * Board hardware constants — used by multiple PPS consumers
+ * (IC capture, DMA shadow), so declared at FEATURE_IC_ZC scope. */
 #define BEMF_A_RP   0x0036U
 #define BEMF_B_RP   0x0037U
 #define BEMF_C_RP   0x004AU
+
+/* ── SCCP2 Input Capture for hardware-precise ZC timestamps ────────── */
+#if FEATURE_IC_ZC_CAPTURE
 
 /**
  * @brief Initialize SCCP2 as Input Capture for ZC edge detection.

@@ -373,6 +373,41 @@ static void HandleLoadProfile(const uint8_t *payload, uint8_t payloadLen)
     GSP_SendResponse(GSP_CMD_LOAD_PROFILE, &profileId, 1);
 }
 
+#if FEATURE_DMA_BURST_CAPTURE
+#include "../hal/hal_dma_burst.h"
+
+static void HandleBurstArm(const uint8_t *payload, uint8_t payloadLen)
+{
+    (void)payload; (void)payloadLen;
+    HAL_DmaBurst_Arm();
+    uint8_t ack = 1;
+    GSP_SendResponse(GSP_CMD_BURST_ARM, &ack, 1);
+}
+
+static void HandleBurstStatus(const uint8_t *payload, uint8_t payloadLen)
+{
+    (void)payload; (void)payloadLen;
+    uint8_t resp[2];
+    resp[0] = HAL_DmaBurst_GetState();
+    resp[1] = HAL_DmaBurst_GetStepCount();
+    GSP_SendResponse(GSP_CMD_BURST_STATUS, resp, 2);
+}
+
+static void HandleBurstGetStep(const uint8_t *payload, uint8_t payloadLen)
+{
+    (void)payloadLen;
+    uint8_t idx = payload[0];
+    const DMA_BURST_STEP_T *step = HAL_DmaBurst_GetStep(idx);
+    if (step == 0) {
+        SendError(GSP_ERR_OUT_OF_RANGE);
+        return;
+    }
+    GSP_SendResponse(GSP_CMD_BURST_GET_STEP,
+                     (const uint8_t *)step,
+                     (uint8_t)sizeof(DMA_BURST_STEP_T));
+}
+#endif /* FEATURE_DMA_BURST_CAPTURE */
+
 /* ── Dispatch table ──────────────────────────────────────────────── */
 
 typedef struct {
@@ -402,6 +437,11 @@ static const CMD_ENTRY_T cmdTable[] = {
     { GSP_CMD_LOAD_DEFAULTS,   0, HandleLoadDefaults   },
     { GSP_CMD_GET_PARAM_LIST,  0xFF, HandleGetParamList },
     { GSP_CMD_LOAD_PROFILE,    1, HandleLoadProfile    },
+#if FEATURE_DMA_BURST_CAPTURE
+    { GSP_CMD_BURST_ARM,       0, HandleBurstArm       },
+    { GSP_CMD_BURST_STATUS,    0, HandleBurstStatus    },
+    { GSP_CMD_BURST_GET_STEP,  1, HandleBurstGetStep   },
+#endif
 };
 
 #define CMD_TABLE_SIZE (sizeof(cmdTable) / sizeof(cmdTable[0]))

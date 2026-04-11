@@ -46,6 +46,10 @@ typedef enum {
     GSP_CMD_TELEM_STOP      = 0x15,
     GSP_CMD_GET_PARAM_LIST  = 0x16,
     GSP_CMD_LOAD_PROFILE    = 0x17,
+    /* DMA burst capture research tool */
+    GSP_CMD_BURST_ARM       = 0x20,   /* arm the burst; no payload */
+    GSP_CMD_BURST_STATUS    = 0x21,   /* response: {state, count} 2 bytes */
+    GSP_CMD_BURST_GET_STEP  = 0x22,   /* payload: {stepIdx}; response: DMA_BURST_STEP_T */
     GSP_CMD_TELEM_FRAME     = 0x80,
     GSP_CMD_ERROR           = 0xFF
 } GSP_CMD_ID_T;
@@ -202,6 +206,49 @@ typedef struct __attribute__((packed)) {
     int16_t  predVsReactiveDelta; /* Shadow: pred target - reactive target */
     uint8_t  deltaOkCount;      /* Consecutive small-delta steps */
     uint8_t  entryScore;        /* Predictive entry readiness (0-255) */
+    uint16_t predIsrFired;      /* ISR entries while predictiveMode active */
+    uint16_t predIsrEntries;    /* Total ISR entries with deadlineActive */
+
+    /* IC capture diagnostics (2B) — added to debug high-speed wall.
+     * icBounce climbs when the SCCP2 IC capture is rejected by the
+     * 50% interval gate in _CCP2Interrupt — i.e. the IC fired before
+     * (estimated step / 2) elapsed since the last ZC. During
+     * acceleration the IIR-averaged refIntervalHR lags reality, so
+     * the actual ZC arrives at the *real* 50% mark which is BEFORE
+     * the gate's threshold, and the IC capture is silently dropped. */
+    uint16_t icBounce;
+
+    /* DMA shadow telemetry (26B) — dual-CCP + DMA ring experiment.
+     * Only populated when FEATURE_IC_DMA_SHADOW=1 at compile time,
+     * otherwise all zero. Fields describe how well a shadow-only
+     * hardware-precise capture ring (CCP2+DMA0 for rising ZCs,
+     * CCP5+DMA1 for falling) tracks the live poll-accepted ZC.
+     *
+     * 32-bit counters grouped at the front — at 60k eRPM the original
+     * uint16 step/match counters wrapped in ~13 seconds and caused
+     * display garbage in the telemetry. The per-step average
+     * (dmaEdgesAvgX16) stays 16-bit — it never accumulates. */
+    uint32_t dmaStepCount;            /* probe invocations (total steps observed) */
+    uint32_t dmaMatchCount;           /* steps where DMA found capture in window */
+    uint32_t dmaRingOverflow;         /* ring near-full events */
+    uint16_t dmaEdgesAvgX16;          /* avg captures/step × 16 (fixed-point) */
+    int16_t  dmaLastEarliestVsPoll;   /* DMA earliest vs poll-accepted (HR ticks) */
+    int16_t  dmaLastEarliestVsExp;    /* DMA earliest vs predicted ZC */
+    int16_t  dmaLastClosestVsExp;     /* DMA best-fit vs predicted ZC */
+    int16_t  dmaLastPollVsExp;        /* baseline: poll-accepted vs predicted ZC */
+    uint8_t  dmaLastEdgeCount;        /* captures found in most recent step */
+    uint8_t  dmaLastFound;            /* 1 = most recent probe matched */
+
+    /* Hybrid DMA-direct ZC substitution telemetry. Populated when
+     * FEATURE_DMA_ZC_DIRECT=1. Shows how often the poll timestamp was
+     * replaced with a hardware-precise DMA edge, plus the observed
+     * correction range (how much earlier the real edge was vs poll). */
+    uint32_t dmaSubCount;             /* total DMA→direct substitutions */
+    uint32_t dmaSubSkipGated;         /* below speed threshold, skipped */
+    uint32_t dmaSubSkipRange;         /* DMA edge out of sanity window */
+    int16_t  dmaLastCorrectionHR;     /* most recent (refined - poll) HR delta */
+    int16_t  dmaMinCorrectionHR;      /* min (most negative) correction seen */
+    int16_t  dmaMaxCorrectionHR;      /* max (most positive) correction seen */
 } GSP_CK_SNAPSHOT_T;
 
 /* XC16 doesn't support _Static_assert. Verify size at compile time:

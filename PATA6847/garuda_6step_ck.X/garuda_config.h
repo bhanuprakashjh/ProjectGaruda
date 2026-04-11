@@ -424,6 +424,78 @@
 #define FEATURE_IC_ZC_CAPTURE   1   /* Hybrid IC+poll: IC timestamp, poll validates */
 #endif
 
+#ifndef FEATURE_IC_DMA_SHADOW
+#define FEATURE_IC_DMA_SHADOW   1   /* Dual-CCP + DMA shadow ring experiment.
+                                     * When 1: CCP2 (rising ZCs) and CCP5 (falling ZCs)
+                                     *  run as free-running input captures with DMA0/DMA1
+                                     *  writing hardware-precise timestamps to circular
+                                     *  RAM rings. A per-step probe compares DMA captures
+                                     *  against the poll-accepted ZC and logs telemetry.
+                                     *  Shadow-only: does NOT affect live scheduling.
+                                     * When 0: no DMA, no CCP5, production path unchanged.
+                                     * MUTUALLY EXCLUSIVE with FEATURE_IC_ZC_CAPTURE — under
+                                     * the shadow flag the live CCP2 path is stubbed so
+                                     * DMA owns CCP2BUFL drains exclusively. */
+#endif
+
+#if FEATURE_IC_DMA_SHADOW && FEATURE_IC_ZC_CAPTURE
+#undef  FEATURE_IC_ZC_CAPTURE
+#define FEATURE_IC_ZC_CAPTURE   0   /* Shadow takes exclusive ownership of CCP2 */
+#endif
+
+#ifndef FEATURE_DMA_ZC_DIRECT
+#define FEATURE_DMA_ZC_DIRECT   0   /* DISABLED — naive substitution causes
+                                     * over-advance. See memory/ck_dma_direct_attempt.md.
+                                     *
+                                     * The theory that poll-is-late-so-replace-with-
+                                     * DMA broke on first trial: the scheduler's
+                                     * advance compensation (TIMING_ADVANCE_LEVEL)
+                                     * was implicitly calibrated against the poll
+                                     * latency. Moving lastZcTickHR ~20 HR ticks
+                                     * earlier via DMA refinement is functionally
+                                     * equivalent to adding ~12° of advance at
+                                     * 50k eRPM — past peak torque, motor stalls
+                                     * around 52-55k. Observed margin dropped from
+                                     * -3 → -31 the moment substitution activated.
+                                     *
+                                     * Keep all the hooks in place — we may revisit
+                                     * with a smarter strategy (use DMA for interval
+                                     * jitter reduction only, or speed-adaptive
+                                     * advance recalibration). Turn ON only after
+                                     * pairing with advance compensation. */
+#endif
+
+#if FEATURE_DMA_ZC_DIRECT && !FEATURE_IC_DMA_SHADOW
+#error "FEATURE_DMA_ZC_DIRECT requires FEATURE_IC_DMA_SHADOW"
+#endif
+
+#ifndef FEATURE_DMA_BURST_CAPTURE
+#define FEATURE_DMA_BURST_CAPTURE  1   /* Research tool: one-shot capture of
+                                        * DMA raw edge sequences for 12
+                                        * consecutive commutation steps.
+                                        * Armed via GSP command; motor runs
+                                        * unaffected. Cost: ~600 bytes .bss */
+#endif
+
+#if FEATURE_DMA_BURST_CAPTURE && !FEATURE_IC_DMA_SHADOW
+#error "FEATURE_DMA_BURST_CAPTURE requires FEATURE_IC_DMA_SHADOW"
+#endif
+
+/* Speed threshold above which DMA-direct substitution is enabled.
+ * Expressed as stepPeriodHR (HR ticks per commutation step).
+ * 15,625,000 HR ticks/sec ÷ 312 ≈ 50,080 eRPM.
+ * Lower (smaller) stepPeriodHR means FASTER motor → gate opens. */
+#ifndef DMA_ZC_DIRECT_THRESHOLD_HR
+#define DMA_ZC_DIRECT_THRESHOLD_HR    312u   /* enable above ~50k eRPM */
+#endif
+
+/* Max absolute |refinedHR - pollHR| allowed. Outside this, the DMA
+ * edge is considered unrelated and poll is used unchanged. 300 HR
+ * ticks = ~192 μs — covers the worst observed poll latency. */
+#ifndef DMA_ZC_DIRECT_MAX_CORRECTION_HR
+#define DMA_ZC_DIRECT_MAX_CORRECTION_HR  300u
+#endif
+
 #ifndef FEATURE_PRED_WINDOW_GATE
 #define FEATURE_PRED_WINDOW_GATE 0  /* PLL predictor scan window gate.
                                      * When gateActive (12 consecutive locked+in-window),

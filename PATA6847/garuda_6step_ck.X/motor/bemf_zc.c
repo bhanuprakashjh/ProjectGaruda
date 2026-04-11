@@ -24,6 +24,10 @@
 #include "../hal/hal_ic.h"
 #include "../hal/hal_com_timer.h"
 #endif
+#if FEATURE_IC_DMA_SHADOW
+#include "../hal/hal_ic_dma.h"
+#include "../hal/hal_dma_burst.h"
+#endif
 #if FEATURE_CLC_BLANKING
 #include "../hal/hal_clc.h"
 #endif
@@ -252,6 +256,8 @@ void BEMF_ZC_Init(volatile GARUDA_DATA_T *pData)
     pData->zcPred.diagPredCommOwned = 0;
     pData->zcPred.diagPredEnter = 0;
     pData->zcPred.diagPredEntryLate = 0;
+    pData->zcPred.diagPredIsrFired = 0;
+    pData->zcPred.diagPredIsrEntries = 0;
     pData->zcPred.diagPredExitRed = 0;
     pData->zcPred.diagPredExitMiss = 0;
     pData->zcPred.diagPredExitYellow = 0;
@@ -275,6 +281,49 @@ static inline uint8_t ComputeFilterLevel(uint16_t stepPeriod)
         (uint8_t)((uint16_t)(stepPeriod - ZC_DEGLITCH_FAST_TP) *
                   (ZC_DEGLITCH_MAX - ZC_DEGLITCH_MIN) /
                   (ZC_DEGLITCH_SLOW_TP - ZC_DEGLITCH_FAST_TP));
+}
+
+/**
+ * @brief Speed-adaptive timing advance level.
+ *
+ * The static TIMING_ADVANCE_LEVEL works fine at low/mid speed but at
+ * high eRPM the delayHR budget = (spHR/2 - spHR*TAL/8) shrinks below
+ * the detection-pipeline latency (~16 µs FastPoll + rawStable + accept
+ * overhead), so the schedule margin goes negative and the wall hits.
+ *
+ * Measured at 100k eRPM with TAL=3:  delayHR = 13 µs, latency ≈ 16 µs,
+ *                                    margin ≈ −3 µs (matches CSV).
+ * With TAL=2 at the same speed:      delayHR = 25 µs, margin ≈ +9 µs.
+ *
+ * Curve (with hysteresis to avoid thrashing at the boundary):
+ *   eRPM <  65k → TAL = compile-time default (typically 3)
+ *   eRPM >  75k → TAL = max(default-1, 1)
+ *   eRPM > 115k → TAL = max(default-2, 1)   (only if default >= 3)
+ *
+ * AM32 / BLHeli / ESCape32 all back off advance at high speed for
+ * the same reason.
+ */
+static inline uint8_t AdaptiveTimingAdvance(uint32_t eRPM)
+{
+    static uint8_t level = TIMING_ADVANCE_LEVEL;
+
+    /* High band: drop to TAL-2 above 115k, recover below 105k */
+    if (TIMING_ADVANCE_LEVEL >= 3)
+    {
+        if (level >= (TIMING_ADVANCE_LEVEL - 1) && eRPM > 115000U)
+            level = (TIMING_ADVANCE_LEVEL > 2U) ? (TIMING_ADVANCE_LEVEL - 2U) : 1U;
+        else if (level <  (TIMING_ADVANCE_LEVEL - 1) && eRPM < 105000U)
+            level = TIMING_ADVANCE_LEVEL - 1U;
+    }
+
+    /* Mid band: drop to TAL-1 above 75k, recover below 65k */
+    if (level >= TIMING_ADVANCE_LEVEL && eRPM > 75000U)
+        level = (TIMING_ADVANCE_LEVEL > 1U) ? (TIMING_ADVANCE_LEVEL - 1U) : 1U;
+    else if (level <  TIMING_ADVANCE_LEVEL && level >= (TIMING_ADVANCE_LEVEL - 1)
+             && eRPM < 65000U)
+        level = TIMING_ADVANCE_LEVEL;
+
+    return level;
 }
 #endif
 
@@ -509,6 +558,28 @@ void BEMF_ZC_OnCommutation(volatile GARUDA_DATA_T *pData)
             pData->icZc.icCommStamp = HAL_ZcIC_ReadTimer();
             pData->icZc.icArmed = false;
             pData->icZc.icCandidateValid = false;
+        }
+#endif
+
+#if FEATURE_DMA_BURST_CAPTURE
+        /* Research capture: MUST run BEFORE HAL_ZcDma_OnCommutation
+         * below so that the prior step's edges can still be dumped
+         * using the old commHead marker. Closes the previously-open
+         * slot (spanning the full step including post-poll tail) and
+         * opens a new slot for this step. */
+        HAL_DmaBurst_OnCommutation(pData->icZc.lastCommHR,
+                                   pData->currentStep,
+                                   step->zcPolarity > 0);
+#endif
+
+#if FEATURE_IC_DMA_SHADOW
+        /* DMA shadow: route floating-phase RP to both CCP2 and CCP5,
+         * update commHead markers for bounded scan at probe time.
+         * This does NOT affect live detection. */
+        {
+            static const uint16_t rpPins[3] = { BEMF_A_RP, BEMF_B_RP, BEMF_C_RP };
+            HAL_ZcDma_OnCommutation(rpPins[step->floatingPhase],
+                                    step->zcPolarity > 0);
         }
 #endif
 
@@ -901,10 +972,18 @@ void BEMF_ZC_ScheduleCommutation(volatile GARUDA_DATA_T *pData)
      * waitTime = interval / 2 - advance
      *
      * advance_level: 0=0°, 1=7.5°, 2=15°, 3=22.5°
-     * This automatically scales with speed — no eRPM-based ramp needed.
-     * Default level 2 = 15° advance at all speeds. */
+     *
+     * Speed-adaptive: AdaptiveTimingAdvance() backs off TAL at high
+     * eRPM so the delayHR budget stays larger than the detection
+     * pipeline latency. See AdaptiveTimingAdvance() comment for the
+     * curve and the measurement that motivated it. */
+#if FEATURE_IC_ZC
+    uint8_t tal = AdaptiveTimingAdvance(eRPM);
+#else
+    uint8_t tal = TIMING_ADVANCE_LEVEL;
+#endif
     uint16_t halfPeriod = sp >> 1;
-    uint16_t advance = (sp >> 3) * TIMING_ADVANCE_LEVEL;
+    uint16_t advance = (sp >> 3) * tal;
     uint16_t delay = (halfPeriod > advance) ? (halfPeriod - advance) : 1;
 
 #if FEATURE_IC_ZC
@@ -922,9 +1001,11 @@ void BEMF_ZC_ScheduleCommutation(volatile GARUDA_DATA_T *pData)
                           ? pData->zcCtrl.refIntervalHR
                           : pData->timing.stepPeriodHR;
 
-            /* AM32-style: half interval minus advance fraction */
+            /* AM32-style: half interval minus advance fraction.
+             * Uses the same speed-adaptive `tal` computed above so
+             * the HR scheduling path tracks the Timer1 path. */
             uint16_t halfHR = spHR >> 1;
-            uint16_t advHR = (spHR >> 3) * TIMING_ADVANCE_LEVEL;
+            uint16_t advHR = (spHR >> 3) * tal;
             uint16_t delayHR = (halfHR > advHR) ? (halfHR - advHR) : 2;
 
             uint16_t targetHR = pData->timing.lastZcTickHR + delayHR;
@@ -1004,6 +1085,49 @@ void BEMF_ZC_ScheduleCommutation(volatile GARUDA_DATA_T *pData)
 void RecordZcTiming(volatile GARUDA_DATA_T *pData,
                     uint16_t zcTick, uint16_t hrTick)
 {
+#if FEATURE_DMA_ZC_DIRECT
+    /* ── Hybrid DMA-direct ZC timestamp substitution ───────────────────
+     * Above a speed threshold the poll path's latency eats a significant
+     * fraction of the step period. Replace hrTick with the hardware
+     * DMA-captured edge closest to it (within a sanity window).
+     * Below the threshold, or if DMA has no matching capture, use poll
+     * unchanged — worst case equals today's behavior. */
+    if (pData->timing.hasPrevZcHR &&
+        pData->timing.stepPeriodHR > 0 &&
+        pData->timing.stepPeriodHR < DMA_ZC_DIRECT_THRESHOLD_HR)
+    {
+        bool risingZc = (commutationTable[pData->currentStep].zcPolarity > 0);
+        int16_t correction = 0;
+        uint16_t refined = HAL_ZcDma_RefineTimestamp(
+            hrTick,
+            DMA_ZC_DIRECT_MAX_CORRECTION_HR,
+            risingZc,
+            &correction);
+
+        if (refined != hrTick)
+        {
+            /* Successfully substituted — hrTick is now the hardware edge */
+            hrTick = refined;
+            pData->dmaShadow.substituteCount++;
+            pData->dmaShadow.lastCorrectionHR = correction;
+            if (correction < pData->dmaShadow.minCorrectionHR)
+                pData->dmaShadow.minCorrectionHR = correction;
+            if (correction > pData->dmaShadow.maxCorrectionHR)
+                pData->dmaShadow.maxCorrectionHR = correction;
+        }
+        else
+        {
+            /* DMA had no match in range — use poll */
+            pData->dmaShadow.substituteSkipRange++;
+        }
+    }
+    else if (pData->timing.hasPrevZcHR)
+    {
+        /* Below speed threshold — poll path is better at low speed */
+        pData->dmaShadow.substituteSkipGated++;
+    }
+#endif /* FEATURE_DMA_ZC_DIRECT */
+
     if (pData->timing.hasPrevZc)
     {
         uint16_t interval = zcTick - pData->timing.lastZcTick;
@@ -1217,6 +1341,47 @@ void RecordZcTiming(volatile GARUDA_DATA_T *pData,
     pData->timing.goodZcCount++;
     pData->timing.consecutiveMissedSteps = 0;
 
+#if FEATURE_IC_DMA_SHADOW
+    /* DMA shadow probe — compare the hardware-precise DMA ring against
+     * the poll-accepted timestamp and the predictor's expected ZC.
+     * Results are logged into dmaShadow for telemetry. Shadow-only:
+     * no effect on live scheduling. */
+    if (pData->timing.hasPrevZcHR)
+    {
+        uint16_t prevHR       = pData->timing.prevZcTickHR;
+        uint16_t prevInterval = pData->timing.prevZcIntervalHR;
+        if (prevInterval == 0) prevInterval = pData->timing.zcIntervalHR;
+        uint16_t halfInterval = prevInterval >> 1;
+        uint16_t windowOpenHR = prevHR + halfInterval;
+        uint16_t expectedHR   = prevHR + prevInterval;
+        bool risingZc = (commutationTable[pData->currentStep].zcPolarity > 0);
+
+        HAL_ZcDma_Result probe;
+        HAL_ZcDma_Probe(windowOpenHR, expectedHR, hrTick, risingZc, &probe);
+
+        pData->dmaShadow.stepCount++;
+        pData->dmaShadow.edgesInWindowSum += probe.edgeCount;
+        pData->dmaShadow.lastEdgeCount = probe.edgeCount;
+        pData->dmaShadow.lastFound = probe.found;
+        if (probe.ringWrappedSinceMark)
+            pData->dmaShadow.ringOverflowCount++;
+        if (probe.found)
+        {
+            pData->dmaShadow.matchCount++;
+            pData->dmaShadow.lastEarliestVsPoll     = probe.earliestVsPoll;
+            pData->dmaShadow.lastEarliestVsExpected = probe.earliestVsExpected;
+            pData->dmaShadow.lastClosestVsExpected  = probe.closestVsExpected;
+        }
+        pData->dmaShadow.lastPollVsExpected =
+            (int16_t)(hrTick - expectedHR);
+
+#if FEATURE_DMA_BURST_CAPTURE
+        /* Snapshot this step for the burst capture (research tool). */
+        HAL_DmaBurst_OnZc(hrTick, expectedHR, false);
+#endif
+    }
+#endif
+
     /* Per-polarity and per-step diagnostic counters */
     if (commutationTable[pData->currentStep].zcPolarity > 0)
         pData->zcDiag.diagRisingZcCount++;
@@ -1396,9 +1561,13 @@ void RecordZcTiming(volatile GARUDA_DATA_T *pData,
          *
          * The actual scheduling takeover happens in _CCP4Interrupt
          * on the NEXT commutation after handoffPending is set. */
-        /* Predictive entry: only requires period estimate + readiness.
-         * predZcOffsetHR is supervision-only, not part of scheduling.
-         * The ISR computes the target from CCP4RA + predStepHR. */
+        /* Predictive entry DISABLED — validating baseline reactive
+         * SCCP3 scheduler first. Once IsrE climbs cleanly across the
+         * entire speed range with no plateaus or stalls, this can be
+         * re-enabled (but the ISR's `thisCommHR = CCP4RA` was wrong
+         * for SCCP3 anyway and now reads CCP4TMRL — predictor handoff
+         * math will need to be revisited before re-enabling). */
+#if 0
         if (!pData->zcPred.predictiveMode &&
             !pData->zcPred.handoffPending &&
             pData->zcPred.entryScore >= 24 &&
@@ -1406,8 +1575,8 @@ void RecordZcTiming(volatile GARUDA_DATA_T *pData,
             pData->zcDiag.lastScheduleMarginHR < 10)
         {
             pData->zcPred.handoffPending = true;
-            /* handoffTargetHR not used — ISR computes from CCP4RA */
         }
+#endif
     }
 
     /* ZC V2 mode transitions on good ZC */
@@ -1563,7 +1732,16 @@ bool BEMF_ZC_FastPoll(volatile GARUDA_DATA_T *pData)
         {
 #if FEATURE_IC_ZC_CAPTURE
             /* PWM-aware IC timestamp age validation (no speed gate).
-             * IC may catch a bounce; if stale, use poll time. */
+             * IC may catch a bounce; if stale, use poll time.
+             *
+             * NOTE: previous attempts to make this adaptive
+             * (proportional to step period) and to re-arm on
+             * age-reject both caused regressions in the 60–70 k
+             * eRPM band (Mrgn went negative). Reverted to the
+             * known-working fixed threshold. The IC contribution
+             * is low (~1–3% of timestamps) but the system runs
+             * cleanly on raw poll and the schedule margin stays
+             * positive across the working speed range. */
             if (pData->icZc.icCandidateValid)
             {
                 uint16_t now = HAL_ComTimer_ReadTimer();

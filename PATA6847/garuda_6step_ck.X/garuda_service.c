@@ -686,7 +686,12 @@ void __attribute__((interrupt, auto_psv)) _T1Interrupt(void)
                  * This prevents the desync-on-fast-pot failure: the motor
                  * can only get more duty as it proves it can commutate at
                  * the current speed. */
-#if FEATURE_IC_ZC
+/* Phase 9 duty governance DISABLED for SCCP3 bench validation.
+ * Re-enable for prop testing where it prevents desync-on-fast-pot.
+ * On bench without load the linear ramp releases at exactly 60k eRPM
+ * (DUTY_RAMP_ERPM) and the duty step from cap to 100% causes a
+ * violent jerk → desync. Prop load smooths this naturally. */
+#if 0 && FEATURE_IC_ZC
                 {
                     uint32_t measuredErpm = 0;
                     if (gData.zcCtrl.refIntervalHR > 0)
@@ -917,18 +922,21 @@ void __attribute__((interrupt, auto_psv)) _ADCInterrupt(void)
         }
 #endif
 
-        /* Commutation deadline check at 20 kHz (50 us resolution).
-         * With FEATURE_IC_ZC: com timer (640 ns) fires first in CL, but
-         * this serves as a safety fallback if com timer hasn't fired yet
-         * (e.g., delay already elapsed when scheduled). Uses absolute
-         * deadline timestamp so it correctly handles elapsed time. */
-        if (gData.timing.deadlineActive)
+        /* Timer1 commutation backup — defers to SCCP3 one-shot scheduler.
+         * If `_CCT3IE` is set, SCCP3 is armed and will fire its own
+         * (higher-priority IPL=6) ISR on the precise HR target. The
+         * Timer1 deadline lives in 50µs ticks while SCCP3 fires inside
+         * that tick at 640ns precision, so an unconditional dt>=0
+         * check would beat SCCP3 to the cancel by up to 50µs and starve
+         * the period-match ISR. */
+        if (!gData.zcPred.predictiveMode &&
+            gData.timing.deadlineActive &&
+            !_CCT3IE)
         {
             int16_t dt = (int16_t)(gData.timer1Tick - gData.timing.commDeadline);
             if (dt >= 0)
             {
 #if FEATURE_IC_ZC
-                /* Gate out SCCP1/SCCP4 during transition */
                 gData.icZc.phase = IC_ZC_DONE;
                 HAL_ComTimer_Cancel();
 #endif
@@ -995,27 +1003,46 @@ void __attribute__((interrupt, no_auto_psv)) _CCT1Interrupt(void)
 }
 
 /**
- * @brief SCCP4 output compare ISR — fires at exact ZC+delay moment.
+ * @brief SCCP3 one-shot timer period ISR — commutation deadline fire.
  *
- * SCCP4 runs as free-running timer (640 ns/tick). When ZC is detected,
- * ScheduleCommutation sets CCP4RA to the target tick. When CCP4TMRL
- * matches CCP4RA, this ISR fires at the precise commutation point.
+ * SCCP3 runs in Time Base mode as a one-shot scheduler. After ZC,
+ * HAL_ComTimer_ScheduleAbsolute() sets CCP3PRL = (target − now) and
+ * starts SCCP3 from zero — when CCP3TMRL reaches PRL, this ISR fires
+ * the commutation. CCT3IE is cleared in the ISR to make it one-shot.
  *
- * One-shot: disable CCP4IE to prevent re-fire on next period wrap.
+ * Resolution: 640 ns/tick (same prescaler as SCCP4 HR timer), so
+ * scheduling accuracy is 78× better than the Timer1 backup path.
  *
- * Resolution: 640 ns vs 50 us = 78x improvement.
+ * NOTE: previously this lived on _CCP4Interrupt with SCCP4 in OC mode,
+ * but the dsPIC33CK SCCP OC compare match never raised CCP4IF on this
+ * device (verified empirically with OCAEN=0 and OCAEN=1). The Time
+ * Base CCTxIF path is the proven working pattern (SCCP1 fast poll
+ * uses it at 100kHz reliably).
  */
-void __attribute__((interrupt, no_auto_psv)) _CCP4Interrupt(void)
+void __attribute__((interrupt, no_auto_psv)) _CCT3Interrupt(void)
 {
-    /* One-shot: disable compare interrupt (timer keeps running) */
-    _CCP4IE = 0;
+    /* One-shot: disable interrupt + push PRL back to 0xFFFF so the
+     * always-on free-running timer can't generate a stray match
+     * before the next ScheduleAbsolute updates PRL. */
+    _CCT3IE = 0;
+    _CCT3IF = 0;
+    CCP3PRL = 0xFFFF;
+
+    /* DIAGNOSTIC: count EVERY ISR entry, before any gating. */
+    gData.zcPred.diagPredIsrEntries++;
 
     /* Fire commutation — but only if no other ISR has already handled
      * this step (deadlineActive is the one-shot gate). */
     if (gData.timing.deadlineActive)
     {
-        /* Capture exact commutation time for predictor. */
-        uint16_t thisCommHR = CCP4RA;
+        if (gData.zcPred.predictiveMode)
+            gData.zcPred.diagPredIsrFired++;
+
+        /* Capture actual commutation moment from the free-running
+         * SCCP4 HR timer (replaces the old `CCP4RA` read which was
+         * the *scheduled* target — actual fire time is `now` plus
+         * a small ISR latency, which is what the predictor needs). */
+        uint16_t thisCommHR = HAL_ComTimer_ReadTimer();
         gData.zcPred.lastCommHR = thisCommHR;
 
         /* Step 3: Latch handoff decision and PROGRAM SCCP4 IMMEDIATELY,
@@ -1039,7 +1066,11 @@ void __attribute__((interrupt, no_auto_psv)) _CCP4Interrupt(void)
              * handles the target-past reactive case safely. */
             uint16_t nowHR = HAL_ComTimer_ReadTimer();
             uint16_t nominalTargetHR = thisCommHR + gData.zcPred.predStepHR;
-            uint16_t minTargetHR = nowHR + 8;  /* handoff guard */
+            /* Handoff guard: target must be >= now + 24 ticks (~15µs).
+             * Codex: 8 ticks was too close — hardware can miss the
+             * compare match if the timer ticks past before the
+             * register updates, causing a 42ms wrap wait. */
+            uint16_t minTargetHR = nowHR + 24;
             uint16_t nextTargetHR =
                 ((int16_t)(nominalTargetHR - minTargetHR) > 0)
                 ? nominalTargetHR : minTargetHR;
@@ -1096,8 +1127,6 @@ void __attribute__((interrupt, no_auto_psv)) _CCP4Interrupt(void)
         if (gData.zcPred.predictiveMode && gData.zcPred.pendingPredValid)
             gData.timing.deadlineActive = true;
     }
-
-    _CCP4IF = 0;
 }
 
 #if FEATURE_IC_ZC_CAPTURE
@@ -1144,7 +1173,16 @@ void __attribute__((interrupt, no_auto_psv)) _CCP2Interrupt(void)
      * commutation → rough operation → current spikes → OV fault. */
     {
         uint16_t sinceLastZc = zcTickHR - gData.timing.lastZcTickHR;
-        uint16_t ref = gData.zcCtrl.refIntervalHR;
+        /* Fix B: prefer the *most recent* measured ZC interval over the
+         * IIR-averaged refIntervalHR. The IIR has a 25% shrink clamp
+         * (bemf_zc.c:1190) plus a 3:1 IIR (~6% effective shrink/ZC),
+         * so during acceleration it lags reality by many ZCs. The 50%
+         * gate built from a stale (too large) ref then rejects the
+         * actual ZC capture as if it were a bounce. zcIntervalHR is
+         * the raw last-step measurement — current to within one ZC.
+         * Falls back to refIntervalHR, then stepPeriodHR. */
+        uint16_t ref = gData.timing.zcIntervalHR;
+        if (ref == 0) ref = gData.zcCtrl.refIntervalHR;
         if (ref == 0) ref = gData.timing.stepPeriodHR;
         uint16_t halfInterval = ref >> 1;
         if (halfInterval > 0 && (int16_t)(sinceLastZc - halfInterval) < 0)

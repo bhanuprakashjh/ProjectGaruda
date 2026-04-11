@@ -167,6 +167,67 @@ void GSP_CaptureSnapshot(GSP_CK_SNAPSHOT_T *dst)
     dst->predVsReactiveDelta = src->zcPred.predVsReactiveDelta;
     dst->deltaOkCount      = src->zcPred.deltaOkCount;
     dst->entryScore        = src->zcPred.entryScore;
+    dst->predIsrFired      = src->zcPred.diagPredIsrFired;
+    dst->predIsrEntries    = src->zcPred.diagPredIsrEntries;
+
+    /* IC bounce: SCCP2 captures rejected by the 50% interval gate.
+     * Gated on FEATURE_IC_ZC_CAPTURE because the field only exists
+     * in that configuration. When FEATURE_IC_DMA_SHADOW takes over
+     * CCP2 exclusively, diagIcBounce is replaced by DMA shadow
+     * telemetry. */
+#if FEATURE_IC_ZC_CAPTURE
+    dst->icBounce          = src->icZc.diagIcBounce;
+#else
+    dst->icBounce          = 0;
+#endif
+
+    /* DMA shadow telemetry */
+#if FEATURE_IC_DMA_SHADOW
+    dst->dmaStepCount          = src->dmaShadow.stepCount;
+    dst->dmaMatchCount         = src->dmaShadow.matchCount;
+    dst->dmaRingOverflow       = src->dmaShadow.ringOverflowCount;
+    /* edges × 16 / stepCount, saturated at uint16 max */
+    if (src->dmaShadow.stepCount > 0) {
+        uint32_t avgX16 =
+            (src->dmaShadow.edgesInWindowSum * 16UL)
+            / src->dmaShadow.stepCount;
+        dst->dmaEdgesAvgX16 =
+            (avgX16 > 0xFFFFUL) ? 0xFFFFU : (uint16_t)avgX16;
+    } else {
+        dst->dmaEdgesAvgX16 = 0;
+    }
+    dst->dmaLastEarliestVsPoll = src->dmaShadow.lastEarliestVsPoll;
+    dst->dmaLastEarliestVsExp  = src->dmaShadow.lastEarliestVsExpected;
+    dst->dmaLastClosestVsExp   = src->dmaShadow.lastClosestVsExpected;
+    dst->dmaLastPollVsExp      = src->dmaShadow.lastPollVsExpected;
+    dst->dmaLastEdgeCount      = src->dmaShadow.lastEdgeCount;
+    dst->dmaLastFound          = src->dmaShadow.lastFound ? 1u : 0u;
+
+    /* DMA-direct substitution telemetry */
+    dst->dmaSubCount          = src->dmaShadow.substituteCount;
+    dst->dmaSubSkipGated      = src->dmaShadow.substituteSkipGated;
+    dst->dmaSubSkipRange      = src->dmaShadow.substituteSkipRange;
+    dst->dmaLastCorrectionHR  = src->dmaShadow.lastCorrectionHR;
+    dst->dmaMinCorrectionHR   = src->dmaShadow.minCorrectionHR;
+    dst->dmaMaxCorrectionHR   = src->dmaShadow.maxCorrectionHR;
+#else
+    dst->dmaStepCount          = 0;
+    dst->dmaMatchCount         = 0;
+    dst->dmaRingOverflow       = 0;
+    dst->dmaEdgesAvgX16        = 0;
+    dst->dmaLastEarliestVsPoll = 0;
+    dst->dmaLastEarliestVsExp  = 0;
+    dst->dmaLastClosestVsExp   = 0;
+    dst->dmaLastPollVsExp      = 0;
+    dst->dmaLastEdgeCount      = 0;
+    dst->dmaLastFound          = 0;
+    dst->dmaSubCount           = 0;
+    dst->dmaSubSkipGated       = 0;
+    dst->dmaSubSkipRange       = 0;
+    dst->dmaLastCorrectionHR   = 0;
+    dst->dmaMinCorrectionHR    = 0;
+    dst->dmaMaxCorrectionHR    = 0;
+#endif
 #endif
 }
 

@@ -39,6 +39,8 @@ SRCS = main.c \
        hal/hal_pwm.c \
        hal/hal_timer1.c \
        hal/hal_ic.c \
+       hal/hal_ic_dma.c \
+       hal/hal_dma_burst.c \
        hal/hal_com_timer.c \
        hal/hal_clc.c \
        hal/hal_ptg.c \

@@ -221,11 +221,11 @@ def decode_ck_snapshot(data):
         s['gateActive'] = 0
         s['windowReject'] = 0
         s['windowRecovered'] = 0
-    # V11 Step 3: predictive scheduling (182 bytes total)
+    # V11 Step 3: predictive scheduling (186 bytes total)
     # struct order: predCommOwned, predictiveMode, handoffPending, predExitMiss,
     #               predExitTimeout, predEnter, predEntryLate, predVsReactiveDelta,
-    #               deltaOkCount, entryScore
-    if len(data) >= 182:
+    #               deltaOkCount, entryScore, predIsrFired, predIsrEntries
+    if len(data) >= 186:
         s['predCommOwned'] = struct.unpack_from('<H', data, 166)[0]
         s['predictiveMode'] = data[168]
         s['handoffPending'] = data[169]
@@ -236,6 +236,8 @@ def decode_ck_snapshot(data):
         s['predVsReactiveDelta'] = struct.unpack_from('<h', data, 178)[0]
         s['deltaOkCount'] = data[180]
         s['entryScore'] = data[181]
+        s['predIsrFired'] = struct.unpack_from('<H', data, 182)[0]
+        s['predIsrEntries'] = struct.unpack_from('<H', data, 184)[0]
     else:
         s['predCommOwned'] = 0
         s['predictiveMode'] = 0
@@ -247,6 +249,60 @@ def decode_ck_snapshot(data):
         s['entryScore'] = 0
         s['predEnter'] = 0
         s['predEntryLate'] = 0
+        s['predIsrFired'] = 0
+        s['predIsrEntries'] = 0
+    # V12: icBounce — IC capture rejected by the in-ISR 50% gate
+    if len(data) >= 188:
+        s['icBounce'] = struct.unpack_from('<H', data, 186)[0]
+    else:
+        s['icBounce'] = 0
+    # V13: DMA shadow telemetry (24 bytes starting at offset 188)
+    # Fields: stepCount (u32), matchCount (u32), ringOverflow (u32),
+    #         edgesAvgX16 (u16), earliestVsPoll (i16), earliestVsExp (i16),
+    #         closestVsExp (i16), pollVsExp (i16),
+    #         lastEdgeCount (u8), lastFound (u8)
+    # 32-bit counters avoid the uint16 wrap that caused DmaM% display
+    # glitches at 60k+ eRPM.
+    if len(data) >= 212:
+        s['dmaStepCount']       = struct.unpack_from('<I', data, 188)[0]
+        s['dmaMatchCount']      = struct.unpack_from('<I', data, 192)[0]
+        s['dmaRingOverflow']    = struct.unpack_from('<I', data, 196)[0]
+        s['dmaEdgesAvgX16']     = struct.unpack_from('<H', data, 200)[0]
+        s['dmaEarlyVsPoll']     = struct.unpack_from('<h', data, 202)[0]
+        s['dmaEarlyVsExp']      = struct.unpack_from('<h', data, 204)[0]
+        s['dmaClosestVsExp']    = struct.unpack_from('<h', data, 206)[0]
+        s['dmaPollVsExp']       = struct.unpack_from('<h', data, 208)[0]
+        s['dmaLastEdgeCount']   = data[210]
+        s['dmaLastFound']       = data[211]
+    else:
+        s['dmaStepCount'] = 0
+        s['dmaMatchCount'] = 0
+        s['dmaEdgesAvgX16'] = 0
+        s['dmaRingOverflow'] = 0
+        s['dmaEarlyVsPoll'] = 0
+        s['dmaEarlyVsExp'] = 0
+        s['dmaClosestVsExp'] = 0
+        s['dmaPollVsExp'] = 0
+        s['dmaLastEdgeCount'] = 0
+        s['dmaLastFound'] = 0
+    # V14: DMA-direct substitution counters (18 bytes starting at offset 212)
+    # Fields: subCount (u32), subSkipGated (u32), subSkipRange (u32),
+    #         lastCorrectionHR (i16), minCorrectionHR (i16),
+    #         maxCorrectionHR (i16)
+    if len(data) >= 230:
+        s['dmaSubCount']        = struct.unpack_from('<I', data, 212)[0]
+        s['dmaSubSkipGated']    = struct.unpack_from('<I', data, 216)[0]
+        s['dmaSubSkipRange']    = struct.unpack_from('<I', data, 220)[0]
+        s['dmaLastCorrectionHR'] = struct.unpack_from('<h', data, 224)[0]
+        s['dmaMinCorrectionHR']  = struct.unpack_from('<h', data, 226)[0]
+        s['dmaMaxCorrectionHR']  = struct.unpack_from('<h', data, 228)[0]
+    else:
+        s['dmaSubCount'] = 0
+        s['dmaSubSkipGated'] = 0
+        s['dmaSubSkipRange'] = 0
+        s['dmaLastCorrectionHR'] = 0
+        s['dmaMinCorrectionHR'] = 0
+        s['dmaMaxCorrectionHR'] = 0
     # Derived
     s['iaMa'] = round(s['iaRaw'] * CK_CURRENT_SCALE)
     s['ibMa'] = round(s['ibRaw'] * CK_CURRENT_SCALE)
@@ -294,8 +350,8 @@ def main():
     print(f"  Press Ctrl+C to stop")
     print()
     ZC_MODES = ['ACQ', 'TRK', 'RCV']
-    print(f"{'Time':>7s} {'State':>8s} {'ZcM':>3s} {'eRPM':>7s} {'Duty':>4s} {'Vbus':>6s} {'PhA':>5s} {'ZcOf':>5s} {'ESc':>3s} {'POwn':>6s} {'Lck':>3s} {'Gat':>3s} {'Prd':>3s} {'TO':>4s} {'Mrgn':>5s} {'Entr':>5s} {'Late':>5s}")
-    print("-" * 125)
+    print(f"{'Time':>7s} {'State':>8s} {'ZcM':>3s} {'eRPM':>7s} {'Duty':>4s} {'Vbus':>6s} {'Mrgn':>5s} {'DmaM%':>5s} {'DmEdg':>5s} {'DmE-P':>6s} {'DmC-X':>6s} {'DmP-X':>6s} {'SubN':>6s} {'Corr':>5s} {'Range':>11s}")
+    print("-" * 120)
 
     rows = []
     buf = b''
@@ -348,7 +404,16 @@ def main():
                 lck = 'Y' if snap.get('predLocked', 0) else 'N'
                 gat = 'Y' if snap.get('gateActive', 0) else 'N'
                 prd = 'Y' if snap.get('predictiveMode', 0) else 'N'
-                print(f"{t:7.1f} {state_str:>8s} {zc_mode_str:>3s} {snap['eRpm']:7d} {snap['dutyPct']:3d}% {snap['vbusV']:5.1f}V {snap.get('predPhaseErrHR',0):5d} {snap.get('predZcOffsetHR',0):5d} {snap.get('entryScore',0):3d} {snap.get('predCommOwned',0):6d} {lck:>3s} {gat:>3s} {prd:>3s} {snap.get('zc_timeout_count', snap.get('zcTimeoutCount',0)):4d} {snap.get('sched_margin_hr', snap.get('schedMarginHR',0)):5d} {snap.get('predEnter',0):5d} {snap.get('predEntryLate',0):5d}{fault_str}")
+                dma_step = snap.get('dmaStepCount', 0)
+                dma_match = snap.get('dmaMatchCount', 0)
+                dma_pct = (100 * dma_match // dma_step) if dma_step else 0
+                dma_edg = snap.get('dmaEdgesAvgX16', 0) / 16.0
+                sub_n = snap.get('dmaSubCount', 0)
+                corr = snap.get('dmaLastCorrectionHR', 0)
+                cmin = snap.get('dmaMinCorrectionHR', 0)
+                cmax = snap.get('dmaMaxCorrectionHR', 0)
+                range_str = f"{cmin:+4d}/{cmax:+4d}"
+                print(f"{t:7.1f} {state_str:>8s} {zc_mode_str:>3s} {snap['eRpm']:7d} {snap['dutyPct']:3d}% {snap['vbusV']:5.1f}V {snap.get('sched_margin_hr', snap.get('schedMarginHR',0)):5d} {dma_pct:4d}% {dma_edg:5.2f} {snap.get('dmaEarlyVsPoll',0):6d} {snap.get('dmaClosestVsExp',0):6d} {snap.get('dmaPollVsExp',0):6d} {sub_n:6d} {corr:+5d} {range_str:>11s}{fault_str}")
 
                 rows.append({
                     'time': round(t, 3),
@@ -431,6 +496,19 @@ def main():
                     'entry_score': snap.get('entryScore', 0),
                     'pred_enter': snap.get('predEnter', 0),
                     'pred_entry_late': snap.get('predEntryLate', 0),
+                    'pred_isr_fired': snap.get('predIsrFired', 0),
+                    'pred_isr_entries': snap.get('predIsrEntries', 0),
+                    'ic_bounce': snap.get('icBounce', 0),
+                    'dma_step_count': snap.get('dmaStepCount', 0),
+                    'dma_match_count': snap.get('dmaMatchCount', 0),
+                    'dma_edges_avg_x16': snap.get('dmaEdgesAvgX16', 0),
+                    'dma_ring_overflow': snap.get('dmaRingOverflow', 0),
+                    'dma_early_vs_poll': snap.get('dmaEarlyVsPoll', 0),
+                    'dma_early_vs_exp': snap.get('dmaEarlyVsExp', 0),
+                    'dma_closest_vs_exp': snap.get('dmaClosestVsExp', 0),
+                    'dma_poll_vs_exp': snap.get('dmaPollVsExp', 0),
+                    'dma_last_edge_count': snap.get('dmaLastEdgeCount', 0),
+                    'dma_last_found': snap.get('dmaLastFound', 0),
                 })
 
             time.sleep(0.01)

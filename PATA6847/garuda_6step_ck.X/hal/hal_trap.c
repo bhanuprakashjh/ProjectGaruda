@@ -34,9 +34,9 @@ static void TrapSafeStop(void)
     HAL_PWM_DisableOutputs();
 
 #if FEATURE_IC_ZC
-    /* Stop ZC polling and commutation timer */
+    /* Stop ZC polling and commutation scheduler */
     _CCT1IE = 0;
-    _CCP4IE = 0;
+    _CCT3IE = 0;
 #endif
 
     /* Fault LED on, run LED off */
