@@ -222,17 +222,20 @@ def decode_ck_snapshot(data):
         s['windowReject'] = 0
         s['windowRecovered'] = 0
     # V11 Step 3: predictive scheduling (182 bytes total)
+    # struct order: predCommOwned, predictiveMode, handoffPending, predExitMiss,
+    #               predExitTimeout, predEnter, predEntryLate, predVsReactiveDelta,
+    #               deltaOkCount, entryScore
     if len(data) >= 182:
         s['predCommOwned'] = struct.unpack_from('<H', data, 166)[0]
         s['predictiveMode'] = data[168]
         s['handoffPending'] = data[169]
         s['predExitMiss'] = struct.unpack_from('<H', data, 170)[0]
         s['predExitTimeout'] = struct.unpack_from('<H', data, 172)[0]
-        s['predVsReactiveDelta'] = struct.unpack_from('<h', data, 174)[0]
-        s['deltaOkCount'] = data[176]
-        s['entryScore'] = data[177]
-        s['predEnter'] = struct.unpack_from('<H', data, 178)[0]
-        s['predEntryLate'] = struct.unpack_from('<H', data, 180)[0]
+        s['predEnter'] = struct.unpack_from('<H', data, 174)[0]
+        s['predEntryLate'] = struct.unpack_from('<H', data, 176)[0]
+        s['predVsReactiveDelta'] = struct.unpack_from('<h', data, 178)[0]
+        s['deltaOkCount'] = data[180]
+        s['entryScore'] = data[181]
     else:
         s['predCommOwned'] = 0
         s['predictiveMode'] = 0

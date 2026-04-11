@@ -1024,10 +1024,12 @@ void __attribute__((interrupt, no_auto_psv)) _CCP4Interrupt(void)
          * destroy the freshly programmed target — so we set
          * deadlineActive=true and predictiveMode=true FIRST to
          * guard against that. */
+        /* Pure period-based handoff: predictor takes over reactive's
+         * scheduling pattern (comm + predStepHR), no advance change.
+         * Codex: separate observer (period) from control (advance).
+         * predZcOffsetHR is observer/supervision only, not used here. */
         bool doHandoff = gData.zcPred.handoffPending &&
-            gData.zcPred.predStepHR > 0 &&
-            gData.zcPred.predZcOffsetHR > 0 &&
-            gData.zcPred.predStepHR > gData.zcPred.predZcOffsetHR;
+            gData.zcPred.predStepHR > 0;
 
         if (doHandoff)
         {
@@ -1053,6 +1055,10 @@ void __attribute__((interrupt, no_auto_psv)) _CCP4Interrupt(void)
                 gData.zcPred.pendingPredValid = true;
                 gData.zcPred.diagPredCommOwned++;
                 gData.zcPred.diagPredEnter++;
+                /* Clear missCount — OnCommutation will increment it
+                 * but we just entered, so reset the counter to give
+                 * the predictor a clean window to operate. */
+                gData.zcPred.missCount = 0;
                 /* deadlineActive stays true — guards OnCommutation's Cancel */
                 gData.timing.deadlineActive = true;
             }

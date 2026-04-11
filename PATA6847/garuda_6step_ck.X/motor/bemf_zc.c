@@ -368,14 +368,17 @@ void BEMF_ZC_OnCommutation(volatile GARUDA_DATA_T *pData)
 
     pData->timing.lastCommTick = pData->timer1Tick;
     pData->timing.stepsSinceLastZc++;
-    pData->timing.deadlineActive = false;
-
+    /* Don't clear deadlineActive in predictive mode — the predictor
+     * already programmed the next compare and is relying on this flag
+     * to gate the next _CCP4Interrupt. */
 #if FEATURE_IC_ZC
-    /* Cancel any pending hardware commutation timer (forced step preempts).
-     * Skip when predictiveMode — the predictor already programmed the
-     * next compare target before OnCommutation was called. */
     if (!pData->zcPred.predictiveMode)
+    {
+        pData->timing.deadlineActive = false;
         HAL_ComTimer_Cancel();
+    }
+#else
+    pData->timing.deadlineActive = false;
 #endif
 
     /* Set forced commutation timeout: ZC_TIMEOUT_MULT * period.
@@ -600,13 +603,15 @@ void BEMF_ZC_OnCommutation(volatile GARUDA_DATA_T *pData)
             if (pData->zcPred.missCount > 4)
             {
                 pData->zcPred.locked = false;
-                pData->zcPred.deltaOkCount = 0;
-                pData->zcPred.entryScore = 0;
-                pData->zcPred.handoffPending = false;
+                /* Only clear entry-related state if predictive mode
+                 * is active. Otherwise let the entry path complete. */
                 if (pData->zcPred.predictiveMode)
                 {
                     pData->zcPred.predictiveMode = false;
                     pData->zcPred.pendingPredValid = false;
+                    pData->zcPred.deltaOkCount = 0;
+                    pData->zcPred.entryScore = 0;
+                    pData->zcPred.handoffPending = false;
                     pData->zcPred.diagPredExitMiss++;
                 }
             }
@@ -1314,6 +1319,14 @@ void RecordZcTiming(volatile GARUDA_DATA_T *pData,
             pData->zcPred.locked = true;
             pData->zcPred.missCount = 0;
         }
+        else if (pData->zcPred.predictiveMode)
+        {
+            /* In predictive mode, ANY accepted ZC is a correction
+             * arriving — reset missCount even if not "locked".
+             * The lock check is for entry decisions, not for proving
+             * the predictor is still receiving feedback. */
+            pData->zcPred.missCount = 0;
+        }
 
         /* Compute zone classification for entryScore.
          * Uses the scan window set in OnCommutation. */
@@ -1383,25 +1396,17 @@ void RecordZcTiming(volatile GARUDA_DATA_T *pData,
          *
          * The actual scheduling takeover happens in _CCP4Interrupt
          * on the NEXT commutation after handoffPending is set. */
+        /* Predictive entry: only requires period estimate + readiness.
+         * predZcOffsetHR is supervision-only, not part of scheduling.
+         * The ISR computes the target from CCP4RA + predStepHR. */
         if (!pData->zcPred.predictiveMode &&
             !pData->zcPred.handoffPending &&
             pData->zcPred.entryScore >= 24 &&
             pData->zcPred.predStepHR > 0 &&
-            pData->zcPred.predZcOffsetHR > 0 &&
-            pData->zcPred.predStepHR > pData->zcPred.predZcOffsetHR &&
             pData->zcDiag.lastScheduleMarginHR < 10)
         {
-            /* Pre-compute the first predictor target NOW while we
-             * have the freshest ZC timestamp. The ISR will just
-             * program this value without recomputing.
-             * Target: 2 steps from this ZC (current step is being
-             * handled by reactive, next step also reactive, predictor
-             * takes over the step after that). */
-            uint16_t zcToComm = pData->zcPred.predStepHR
-                                - pData->zcPred.predZcOffsetHR;
-            pData->zcPred.handoffTargetHR = hrTick + zcToComm
-                                            + pData->zcPred.predStepHR;
             pData->zcPred.handoffPending = true;
+            /* handoffTargetHR not used — ISR computes from CCP4RA */
         }
     }
 
@@ -1751,13 +1756,13 @@ bool BEMF_ZC_FastPoll(volatile GARUDA_DATA_T *pData)
                  * updating predZcOffsetHR. */
                 if (inRed)
                 {
-                    /* RED: disarm predictor trust immediately.
-                     * ZC is too far from expected — don't corrupt offset. */
+                    /* RED: disarm gate but DON'T touch handoffPending
+                     * or predictiveMode. The handoff race is too tight
+                     * to allow RED events to cancel pending entries. */
                     pData->zcPred.gateActive = false;
                     pData->zcPred.gateArmCount = 0;
                     pData->zcPred.diagWindowReject++;
                     pData->zcPred.deltaOkCount = 0;
-                    pData->zcPred.handoffPending = false;
                     /* RED zone disarms gate but does NOT exit predictive
                      * mode. Predictive exits are only via missCount > 4
                      * (no ZC corrections) or timeout (genuine desync).
