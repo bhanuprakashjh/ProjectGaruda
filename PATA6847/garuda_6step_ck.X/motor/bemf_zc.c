@@ -263,6 +263,14 @@ void BEMF_ZC_Init(volatile GARUDA_DATA_T *pData)
     pData->zcPred.diagPredExitYellow = 0;
     pData->zcPred.diagPredExitPhaseErr = 0;
     pData->zcPred.diagPredExitTimeout = 0;
+#if FEATURE_6STEP_DPLL
+    pData->zcPred.phaseBiasHR    = 0;
+    pData->zcPred.advanceCmdHR   = 0;    /* V1: zero, phaseBias absorbs all */
+    pData->zcPred.advanceTrimHR  = 0;
+    pData->zcPred.lastMeasTsHR   = 0;
+    pData->zcPred.measDeadlineHR = 0;
+    pData->zcPred.fallbackReason = 0;
+#endif
 #endif
 }
 
@@ -463,6 +471,19 @@ void BEMF_ZC_OnCommutation(volatile GARUDA_DATA_T *pData)
     {
         /* Record commutation time in SCCP4 ticks for interval rejection */
         pData->icZc.lastCommHR = HAL_ComTimer_ReadTimer();
+
+#if FEATURE_6STEP_DPLL
+        /* Set measurement deadline: ZC should arrive within 1.5× step.
+         * Independent of deadlineActive (which the predictor keeps
+         * armed for commutation scheduling). */
+        if (pData->zcPred.predictiveMode && pData->zcPred.predStepHR > 0)
+        {
+            pData->zcPred.measDeadlineHR = (uint16_t)(
+                pData->icZc.lastCommHR
+                + pData->zcPred.predStepHR
+                + (pData->zcPred.predStepHR >> 1));
+        }
+#endif
 
         /* PRODUCTION BLANKING: fixed minimum + 50% interval rejection.
          *
@@ -835,7 +856,37 @@ ZC_TIMEOUT_RESULT_T BEMF_ZC_CheckTimeout(volatile GARUDA_DATA_T *pData)
         return ZC_TIMEOUT_NONE;
 
     if (pData->timing.deadlineActive)
+    {
+#if FEATURE_6STEP_DPLL
+        /* In predictive mode, deadlineActive is always true (predictor
+         * keeps the timer armed). Use measDeadlineHR instead — it's
+         * the expected ZC arrival window, independent of the commutation
+         * timer. If the ZC hasn't arrived by 1.5× step period, it's
+         * a measurement timeout and the predictor should exit. */
+        if (pData->zcPred.predictiveMode &&
+            pData->zcPred.measDeadlineHR != 0)
+        {
+            int16_t sinceDl = (int16_t)(
+                HAL_ComTimer_ReadTimer() - pData->zcPred.measDeadlineHR);
+            if (sinceDl > 0)
+            {
+                /* Measurement timeout — ZC expected but not arrived */
+                pData->zcPred.missCount++;
+                pData->zcPred.measDeadlineHR = 0; /* prevent re-trigger */
+                if (pData->zcPred.missCount > 2)
+                {
+                    /* Exit predictive mode */
+                    pData->zcPred.predictiveMode = false;
+                    pData->zcPred.fallbackReason = 3; /* measTimeout */
+                    pData->zcPred.entryScore = 0;
+                    pData->timing.deadlineActive = false;
+                    /* Let the reactive timeout path run on next call */
+                }
+            }
+        }
+#endif
         return ZC_TIMEOUT_NONE;  /* Waiting for scheduled commutation */
+    }
 
     if (pData->timing.forcedCountdown > 0)
     {
@@ -1479,6 +1530,51 @@ void RecordZcTiming(volatile GARUDA_DATA_T *pData,
             pData->zcPred.predZcOffsetHR = actualDelayHR;
         }
 
+#if FEATURE_6STEP_DPLL
+        /* ── DPLL measurement update ───────────────────────────────
+         * Model: t_zc_pred = lastComm + T_hat/2 + A_cmd + phaseBias
+         * Error: e = t_meas - t_zc_pred
+         * Update: phaseBias += e/8  (Kp = 1/8)
+         *
+         * In V1 (A_cmd=0), phaseBias absorbs everything: poll
+         * latency + advance + comparator delay. The bias self-
+         * calibrates to whatever the combined offset is.
+         *
+         * Seed phaseBias on first valid step from predZcOffsetHR
+         * to avoid cold-start transient. */
+        if (pData->zcPred.phaseBiasHR == 0 &&
+            pData->zcPred.predZcOffsetHR > 0 &&
+            pData->zcPred.predStepHR > 0)
+        {
+            /* Seed: phaseBias = predZcOffset - T_hat/2 - A_cmd */
+            pData->zcPred.phaseBiasHR = (int16_t)(
+                pData->zcPred.predZcOffsetHR
+                - (pData->zcPred.predStepHR >> 1)
+                - pData->zcPred.advanceCmdHR);
+        }
+
+        {
+            uint16_t dpllPredZc = (uint16_t)(
+                pData->zcPred.lastCommHR
+                + (pData->zcPred.predStepHR >> 1)
+                + pData->zcPred.advanceCmdHR
+                + (uint16_t)pData->zcPred.phaseBiasHR);
+
+            int16_t dpllErr = (int16_t)(hrTick - dpllPredZc);
+
+            /* Bias update: Kp = 1/8 */
+            int16_t newBias = pData->zcPred.phaseBiasHR + (dpllErr >> 3);
+
+            /* Clamp to ±T_hat/2 */
+            int16_t bmax = (int16_t)(pData->zcPred.predStepHR >> 1);
+            if (newBias >  bmax) newBias =  bmax;
+            if (newBias < -bmax) newBias = -bmax;
+
+            pData->zcPred.phaseBiasHR = newBias;
+            pData->zcPred.lastMeasTsHR = hrTick;
+        }
+#endif /* FEATURE_6STEP_DPLL */
+
         /* Accumulate |phaseErr| for telemetry averaging */
         uint16_t absErr = (phaseErr >= 0) ? (uint16_t)phaseErr
                                           : (uint16_t)(-phaseErr);
@@ -1592,21 +1688,54 @@ void RecordZcTiming(volatile GARUDA_DATA_T *pData,
          *
          * The actual scheduling takeover happens in _CCP4Interrupt
          * on the NEXT commutation after handoffPending is set. */
-        /* Predictive entry DISABLED — validating baseline reactive
-         * SCCP3 scheduler first. Once IsrE climbs cleanly across the
-         * entire speed range with no plateaus or stalls, this can be
-         * re-enabled (but the ISR's `thisCommHR = CCP4RA` was wrong
-         * for SCCP3 anyway and now reads CCP4TMRL — predictor handoff
-         * math will need to be revisited before re-enabling). */
-#if 0
+#if FEATURE_6STEP_DPLL
+        /* ── DPLL predictive mode entry ────────────────────────────
+         * Enter when the DPLL is tracking well enough. The ISR at
+         * garuda_service.c:1103 will schedule commutations from
+         * lastPredCommHR + predStepHR (= T_hat). */
         if (!pData->zcPred.predictiveMode &&
             !pData->zcPred.handoffPending &&
             pData->zcPred.entryScore >= 24 &&
             pData->zcPred.predStepHR > 0 &&
-            pData->zcDiag.lastScheduleMarginHR < 10)
+            pData->state == ESC_CLOSED_LOOP)
         {
-            pData->zcPred.handoffPending = true;
+            /* Speed gate: only engage above DPLL_HANDOFF_ERPM */
+            uint32_t erpm = 0;
+            if (pData->zcCtrl.refIntervalHR > 0)
+                erpm = 15625000UL / pData->zcCtrl.refIntervalHR;
+            if (erpm >= DPLL_HANDOFF_ERPM)
+            {
+                pData->zcPred.handoffPending = true;
+                pData->zcPred.fallbackReason = 0;
+            }
         }
+
+        /* ── DPLL predictive mode exit checks ──────────────────────
+         * Called on every accepted ZC while in predictive mode.
+         * The measurement timeout (missCount > 2) is handled in
+         * BEMF_ZC_CheckTimeout. Here we check phase error. */
+        if (pData->zcPred.predictiveMode)
+        {
+            uint16_t exitThresh = pData->zcPred.predStepHR >> 2; /* T/4 */
+            if (absErr > exitThresh)
+            {
+                pData->zcPred.predictiveMode = false;
+                pData->zcPred.handoffPending = false;
+                pData->zcPred.fallbackReason = 2; /* phaseErr */
+                pData->zcPred.entryScore = 0;
+                pData->timing.deadlineActive = false;
+            }
+            else if (pData->state != ESC_CLOSED_LOOP)
+            {
+                pData->zcPred.predictiveMode = false;
+                pData->zcPred.handoffPending = false;
+                pData->zcPred.fallbackReason = 5; /* notCL */
+                pData->zcPred.entryScore = 0;
+                pData->timing.deadlineActive = false;
+            }
+        }
+#else
+        /* Predictive entry DISABLED when FEATURE_6STEP_DPLL is off. */
 #endif
     }
 

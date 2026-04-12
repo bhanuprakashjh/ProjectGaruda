@@ -209,6 +209,11 @@ typedef struct __attribute__((packed)) {
     uint16_t predIsrFired;      /* ISR entries while predictiveMode active */
     uint16_t predIsrEntries;    /* Total ISR entries with deadlineActive */
 
+    /* DPLL state (FEATURE_6STEP_DPLL) */
+    int16_t  dpllPhaseBiasHR;  /* B_hat: combined measurement/phase bias */
+    uint8_t  dpllFallbackReason; /* Why predictive mode exited (0=none) */
+    uint8_t  _dpllPad;         /* Alignment */
+
     /* IC capture diagnostics (2B) — added to debug high-speed wall.
      * icBounce climbs when the SCCP2 IC capture is rejected by the
      * 50% interval gate in _CCP2Interrupt — i.e. the IC fired before

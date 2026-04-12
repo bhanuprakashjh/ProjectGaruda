@@ -170,6 +170,16 @@ void GSP_CaptureSnapshot(GSP_CK_SNAPSHOT_T *dst)
     dst->predIsrFired      = src->zcPred.diagPredIsrFired;
     dst->predIsrEntries    = src->zcPred.diagPredIsrEntries;
 
+    /* DPLL state */
+#if FEATURE_6STEP_DPLL
+    dst->dpllPhaseBiasHR   = src->zcPred.phaseBiasHR;
+    dst->dpllFallbackReason = src->zcPred.fallbackReason;
+#else
+    dst->dpllPhaseBiasHR   = 0;
+    dst->dpllFallbackReason = 0;
+#endif
+    dst->_dpllPad          = 0;
+
     /* IC bounce: SCCP2 captures rejected by the 50% interval gate.
      * Gated on FEATURE_IC_ZC_CAPTURE because the field only exists
      * in that configuration. When FEATURE_IC_DMA_SHADOW takes over

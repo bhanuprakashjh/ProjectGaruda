@@ -243,6 +243,31 @@ typedef struct {
     uint16_t diagPredExitYellow;   /* Predictor exits due to repeated YELLOW */
     uint16_t diagPredExitPhaseErr; /* Predictor exits due to large phaseErr */
     uint16_t diagPredExitTimeout;  /* Predictor exits due to timeout */
+
+#if FEATURE_6STEP_DPLL
+    /* ── 6-step DPLL state ─────────────────────────────────────────
+     * Separates T_hat (predStepHR), measurement bias, and advance.
+     * The reactive path's delayHR = halfHR - advHR tangles them.
+     *
+     * Model:
+     *   t_comm[k+1]  = t_comm[k] + T_hat
+     *   t_zc_pred[k] = t_comm[k] + T_hat/2 + A_cmd + phaseBiasHR
+     *   e[k]         = t_meas[k] - t_zc_pred[k]
+     *
+     * In V1 (A_cmd=0), phaseBiasHR absorbs poll latency + advance
+     * + comparator delay — a combined bias. */
+    int16_t  phaseBiasHR;         /* B_hat: combined measurement/phase bias.
+                                   * Updated each ZC: += e/8.
+                                   * V1: absorbs latency+advance+phase. */
+    uint16_t advanceCmdHR;        /* A_cmd: commanded advance (V1: 0) */
+    int16_t  advanceTrimHR;       /* Slow trim on advance (future, init 0) */
+    uint16_t lastMeasTsHR;        /* Last accepted ZC timestamp used for DPLL */
+    uint16_t measDeadlineHR;      /* Measurement timeout: expected ZC + 1.5× step.
+                                   * Independent of deadlineActive. */
+    uint8_t  fallbackReason;      /* Why we exited predictive mode:
+                                   * 0=none, 1=missCount, 2=phaseErr,
+                                   * 3=measTimeout, 4=targetPast, 5=notCL */
+#endif
 } ZC_PRED_T;
 #endif
 

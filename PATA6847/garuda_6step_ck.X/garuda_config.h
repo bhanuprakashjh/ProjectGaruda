@@ -483,6 +483,28 @@
 #error "FEATURE_DMA_BURST_CAPTURE requires FEATURE_IC_DMA_SHADOW"
 #endif
 
+#ifndef FEATURE_6STEP_DPLL
+#define FEATURE_6STEP_DPLL  1       /* 6-step event DPLL for commutation.
+                                     * When 1: a digital PLL tracks rotor
+                                     * phase from ZC events and owns
+                                     * commutation scheduling at high speed.
+                                     * Separates T_hat (period), phaseBiasHR
+                                     * (measurement bias), and advanceCmdHR
+                                     * (torque advance) — the reactive path's
+                                     * delayHR = halfHR - advHR tangles them.
+                                     *
+                                     * V1: t_meas = pollHR (no DMA).
+                                     * V2: t_meas = DMA cluster midpoint.
+                                     *
+                                     * Requires FEATURE_IC_ZC. */
+#endif
+
+/* DPLL handoff speed threshold. Predictive mode only engages above
+ * this eRPM. Below this, reactive poll scheduling is sufficient. */
+#ifndef DPLL_HANDOFF_ERPM
+#define DPLL_HANDOFF_ERPM   50000UL
+#endif
+
 /* Speed threshold above which DMA-direct substitution is enabled.
  * Expressed as stepPeriodHR (HR ticks per commutation step).
  * 15,625,000 HR ticks/sec ÷ 312 ≈ 50,080 eRPM.
