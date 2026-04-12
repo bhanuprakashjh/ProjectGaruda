@@ -273,6 +273,7 @@ typedef struct {
     int16_t   lastCorrectionHR;     /* most recent (refined - poll) HR delta */
     int16_t   minCorrectionHR;      /* most negative correction seen so far */
     int16_t   maxCorrectionHR;      /* most positive correction seen so far */
+    uint16_t  smoothedLatencyHR;    /* IIR-averaged poll latency (positive HR ticks) */
 } DMA_SHADOW_T;
 #endif
 

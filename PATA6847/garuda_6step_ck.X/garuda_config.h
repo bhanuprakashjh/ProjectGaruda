@@ -444,25 +444,27 @@
 #endif
 
 #ifndef FEATURE_DMA_ZC_DIRECT
-#define FEATURE_DMA_ZC_DIRECT   0   /* DISABLED — naive substitution causes
-                                     * over-advance. See memory/ck_dma_direct_attempt.md.
+#define FEATURE_DMA_ZC_DIRECT   0   /* DISABLED — selector is validated but live
+                                     * deployment not production-ready.
                                      *
-                                     * The theory that poll-is-late-so-replace-with-
-                                     * DMA broke on first trial: the scheduler's
-                                     * advance compensation (TIMING_ADVANCE_LEVEL)
-                                     * was implicitly calibrated against the poll
-                                     * latency. Moving lastZcTickHR ~20 HR ticks
-                                     * earlier via DMA refinement is functionally
-                                     * equivalent to adding ~12° of advance at
-                                     * 50k eRPM — past peak torque, motor stalls
-                                     * around 52-55k. Observed margin dropped from
-                                     * -3 → -31 the moment substitution activated.
+                                     * The selector ("last ≥2-edge cluster before
+                                     * poll, return midpoint") is sound: 1.3–7 µs
+                                     * stdev, <3 µs polarity split, validated
+                                     * offline across 25–90k eRPM with and without
+                                     * prop. See memory/ck_bemf_signal_physics.md.
                                      *
-                                     * Keep all the hooks in place — we may revisit
-                                     * with a smarter strategy (use DMA for interval
-                                     * jitter reduction only, or speed-adaptive
-                                     * advance recalibration). Turn ON only after
-                                     * pairing with advance compensation. */
+                                     * Live deployment failed (V1 hrTick rewrite,
+                                     * V2 speed-adaptive bias, V3 scheduler
+                                     * latency subtraction) because the current
+                                     * TIMING_ADVANCE_LEVEL map was tuned with
+                                     * poll-delay compensation baked in. Any
+                                     * correction that removes poll delay — whether
+                                     * applied to hrTick or to delayHR — adds
+                                     * effective advance that TAL already provides.
+                                     *
+                                     * Next revisit: derive a new advance map from
+                                     * scratch with DMA timing as the reference,
+                                     * not bolt a correction onto the old one. */
 #endif
 
 #if FEATURE_DMA_ZC_DIRECT && !FEATURE_IC_DMA_SHADOW
@@ -494,6 +496,23 @@
  * ticks = ~192 μs — covers the worst observed poll latency. */
 #ifndef DMA_ZC_DIRECT_MAX_CORRECTION_HR
 #define DMA_ZC_DIRECT_MAX_CORRECTION_HR  300u
+#endif
+
+/* Speed-adaptive bias added to the refined timestamp AFTER
+ * substitution. Compensates for the advance shift caused by moving
+ * lastZcTickHR earlier. The measured backdate is speed-dependent:
+ *   ~22 HR at 30-50k eRPM (stepHR ~312)
+ *   ~24 HR at 50-60k       (stepHR ~260)
+ *   ~27 HR at 60-70k       (stepHR ~220)
+ *   ~29 HR at 70-90k       (stepHR ~195)
+ * A linear fit:
+ *   bias = BASE + (THRESHOLD - stepHR) / SLOPE
+ * maps these points well. */
+#ifndef DMA_ZC_DIRECT_BIAS_BASE_HR
+#define DMA_ZC_DIRECT_BIAS_BASE_HR     22u   /* bias at threshold crossing */
+#endif
+#ifndef DMA_ZC_DIRECT_BIAS_SLOPE
+#define DMA_ZC_DIRECT_BIAS_SLOPE       17u   /* HR ticks of stepHR per +1 bias */
 #endif
 
 #ifndef FEATURE_PRED_WINDOW_GATE

@@ -1008,6 +1008,25 @@ void BEMF_ZC_ScheduleCommutation(volatile GARUDA_DATA_T *pData)
             uint16_t advHR = (spHR >> 3) * tal;
             uint16_t delayHR = (halfHR > advHR) ? (halfHR - advHR) : 2;
 
+#if FEATURE_DMA_ZC_DIRECT
+            /* Subtract the measured poll latency from the delay.
+             * lastZcTickHR is still the poll timestamp (not modified).
+             * The DMA selector measured how far poll lags the real
+             * ZC cluster. Subtracting that latency from the delay
+             * makes the commutation fire at the physically correct
+             * absolute time, without touching the interval IIR.
+             *
+             * Effect: targetHR = pollHR + (delay - latency)
+             *       = (trueZC + latency) + (delay - latency)
+             *       = trueZC + delay
+             * The latency cancels exactly. */
+            {
+                uint16_t lat = pData->dmaShadow.smoothedLatencyHR;
+                if (lat > 0 && delayHR > lat + 2u)
+                    delayHR -= lat;
+            }
+#endif
+
             uint16_t targetHR = pData->timing.lastZcTickHR + delayHR;
 
             /* Shadow delta: what would the predictor schedule vs reactive?
@@ -1086,12 +1105,14 @@ void RecordZcTiming(volatile GARUDA_DATA_T *pData,
                     uint16_t zcTick, uint16_t hrTick)
 {
 #if FEATURE_DMA_ZC_DIRECT
-    /* ── Hybrid DMA-direct ZC timestamp substitution ───────────────────
-     * Above a speed threshold the poll path's latency eats a significant
-     * fraction of the step period. Replace hrTick with the hardware
-     * DMA-captured edge closest to it (within a sanity window).
-     * Below the threshold, or if DMA has no matching capture, use poll
-     * unchanged — worst case equals today's behavior. */
+    /* ── DMA poll-latency measurement (V3) ─────────────────────────────
+     * Measure how far the poll-accepted timestamp lags the hardware
+     * DMA edge. Store the result in dmaShadow.lastCorrectionHR for
+     * the commutation scheduler to use as an advance correction.
+     *
+     * IMPORTANT: hrTick is NOT modified. Intervals, IIR, and timeouts
+     * all use the unmodified poll timestamp. Only the scheduler's
+     * advance computation subtracts the measured latency. */
     if (pData->timing.hasPrevZcHR &&
         pData->timing.stepPeriodHR > 0 &&
         pData->timing.stepPeriodHR < DMA_ZC_DIRECT_THRESHOLD_HR)
@@ -1106,24 +1127,34 @@ void RecordZcTiming(volatile GARUDA_DATA_T *pData,
 
         if (refined != hrTick)
         {
-            /* Successfully substituted — hrTick is now the hardware edge */
-            hrTick = refined;
+            /* correction = (refined - pollHR), negative since refined
+             * is earlier. This is the raw poll latency. Store it for
+             * the scheduler — DO NOT modify hrTick. */
             pData->dmaShadow.substituteCount++;
             pData->dmaShadow.lastCorrectionHR = correction;
             if (correction < pData->dmaShadow.minCorrectionHR)
                 pData->dmaShadow.minCorrectionHR = correction;
             if (correction > pData->dmaShadow.maxCorrectionHR)
                 pData->dmaShadow.maxCorrectionHR = correction;
+
+            /* IIR-smooth the latency for stable scheduler correction.
+             * Use unsigned magnitude (correction is negative). */
+            uint16_t latency = (correction < 0)
+                ? (uint16_t)(-correction) : 0u;
+            if (pData->dmaShadow.smoothedLatencyHR == 0)
+                pData->dmaShadow.smoothedLatencyHR = latency;
+            else
+                pData->dmaShadow.smoothedLatencyHR = (uint16_t)(
+                    ((uint32_t)pData->dmaShadow.smoothedLatencyHR * 7u
+                     + latency) >> 3);
         }
         else
         {
-            /* DMA had no match in range — use poll */
             pData->dmaShadow.substituteSkipRange++;
         }
     }
     else if (pData->timing.hasPrevZcHR)
     {
-        /* Below speed threshold — poll path is better at low speed */
         pData->dmaShadow.substituteSkipGated++;
     }
 #endif /* FEATURE_DMA_ZC_DIRECT */

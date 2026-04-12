@@ -363,23 +363,36 @@ uint16_t HAL_ZcDma_RefineTimestamp(uint16_t  pollHR,
 
     uint8_t captures = (uint8_t)((head - mark) & DMA_ZC_RING_MASK);
 
-    /* No captures this step — nothing to refine. */
     if (captures == 0)
     {
         if (correctionOut) *correctionOut = 0;
         return pollHR;
     }
 
-    /* Walk all captures-since-mark, find the one whose HR-domain
-     * timestamp is closest (by absolute int16 distance) to pollHR.
+    /* ── Last-cluster-before-poll selector ──────────────────────────
      *
-     * Wrap-safe distance: cast the difference to int16_t and take the
-     * absolute value. This works as long as the true distance is
-     * < 32768 HR ticks (~21 ms) — far larger than any legitimate
-     * correction window. */
-    bool     haveClosest  = false;
-    uint16_t closestHR    = pollHR;
-    uint16_t bestAbsDist  = 0xFFFFu;
+     * Walk all captures since commutation in forward order, clustering
+     * edges with ≤ DMA_CLUSTER_GAP_HR between them. Track the last
+     * cluster with count ≥ 2 that ends strictly before pollHR.
+     *
+     * Return the cluster midpoint = (first + last) / 2, which offline
+     * analysis showed has stdev 1.3–7 µs across 25–90k eRPM,
+     * collapsing the rising/falling polarity split to < 3 µs.
+     *
+     * The maxLookbackHR bound still applies: if the winning cluster
+     * midpoint is further than maxLookbackHR from pollHR, fall back
+     * to pollHR unchanged. */
+
+    #define DMA_CLUSTER_GAP_HR  10u   /* 6.4 µs — matches offline gap=6 µs */
+
+    /* Cluster state — tracked as we walk forward. */
+    uint16_t clStart = 0;     /* HR of first edge in current cluster */
+    uint16_t clEnd   = 0;     /* HR of last edge so far in cluster */
+    uint8_t  clCount = 0;     /* edges in current cluster */
+
+    /* Best candidate: the last qualifying cluster before pollHR. */
+    bool     haveCandidate = false;
+    uint16_t candMidHR     = pollHR;
 
     uint8_t idx = mark;
     for (uint8_t i = 0; i < captures; i++)
@@ -387,31 +400,92 @@ uint16_t HAL_ZcDma_RefineTimestamp(uint16_t  pollHR,
         uint16_t rawCap = ring[idx];
         uint16_t hrCap  = (uint16_t)(rawCap + offset);
 
-        int16_t  diff    = (int16_t)(hrCap - pollHR);
-        uint16_t absDist = (diff < 0) ? (uint16_t)(-diff) : (uint16_t)diff;
-
-        if (absDist < bestAbsDist)
+        /* Is this edge before pollHR? (wrap-safe signed compare) */
+        int16_t vsPoll = (int16_t)(hrCap - pollHR);
+        if (vsPoll >= 0)
         {
-            bestAbsDist = absDist;
-            closestHR   = hrCap;
-            haveClosest = true;
+            /* At or past poll — stop scanning.  First close any open
+             * cluster that was still accumulating. */
+            if (clCount >= 2)
+            {
+                uint16_t mid = (uint16_t)(((uint32_t)clStart + clEnd) / 2u);
+                candMidHR     = mid;
+                haveCandidate = true;
+            }
+            break;
+        }
+
+        /* Cluster logic: if gap from previous edge > threshold,
+         * close the old cluster and open a new one. */
+        if (clCount == 0)
+        {
+            /* First edge — start a new cluster. */
+            clStart = hrCap;
+            clEnd   = hrCap;
+            clCount = 1;
+        }
+        else
+        {
+            uint16_t gap = (uint16_t)(hrCap - clEnd);
+            if (gap <= DMA_CLUSTER_GAP_HR)
+            {
+                /* Same cluster — extend. */
+                clEnd = hrCap;
+                clCount++;
+            }
+            else
+            {
+                /* Gap exceeded — close old cluster, possibly save it. */
+                if (clCount >= 2)
+                {
+                    uint16_t mid = (uint16_t)(((uint32_t)clStart + clEnd) / 2u);
+                    candMidHR     = mid;
+                    haveCandidate = true;
+                }
+                /* Open new cluster. */
+                clStart = hrCap;
+                clEnd   = hrCap;
+                clCount = 1;
+            }
         }
 
         idx = (uint8_t)((idx + 1u) & DMA_ZC_RING_MASK);
     }
 
-    /* Enforce the lookback bound. If the closest capture is outside
-     * the sanity window, fall back to pollHR unchanged — something is
-     * off and we shouldn't substitute. */
-    if (!haveClosest || bestAbsDist > maxLookbackHR)
+    /* If we exhausted the ring without hitting pollHR, close any
+     * trailing cluster. */
+    if (clCount >= 2)
+    {
+        int16_t tailVsPoll = (int16_t)(clEnd - pollHR);
+        if (tailVsPoll < 0)
+        {
+            uint16_t mid = (uint16_t)(((uint32_t)clStart + clEnd) / 2u);
+            candMidHR     = mid;
+            haveCandidate = true;
+        }
+    }
+
+    if (!haveCandidate)
+    {
+        if (correctionOut) *correctionOut = 0;
+        return pollHR;
+    }
+
+    /* Enforce the lookback bound. */
+    int16_t correction = (int16_t)(candMidHR - pollHR);
+    uint16_t absDist = (correction < 0) ? (uint16_t)(-correction)
+                                        : (uint16_t)correction;
+    if (absDist > maxLookbackHR)
     {
         if (correctionOut) *correctionOut = 0;
         return pollHR;
     }
 
     if (correctionOut)
-        *correctionOut = (int16_t)(closestHR - pollHR);
-    return closestHR;
+        *correctionOut = correction;
+    return candMidHR;
+
+    #undef DMA_CLUSTER_GAP_HR
 }
 
 /* ──────────────────────────────────────────────────────────────────── */
