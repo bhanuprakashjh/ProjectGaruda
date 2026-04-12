@@ -484,7 +484,7 @@
 #endif
 
 #ifndef FEATURE_6STEP_DPLL
-#define FEATURE_6STEP_DPLL  1       /* 6-step event DPLL for commutation.
+#define FEATURE_6STEP_DPLL  0       /* 6-step event DPLL for commutation.
                                      * When 1: a digital PLL tracks rotor
                                      * phase from ZC events and owns
                                      * commutation scheduling at high speed.

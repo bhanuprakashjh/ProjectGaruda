@@ -270,6 +270,7 @@ void BEMF_ZC_Init(volatile GARUDA_DATA_T *pData)
     pData->zcPred.lastMeasTsHR   = 0;
     pData->zcPred.measDeadlineHR = 0;
     pData->zcPred.fallbackReason = 0;
+    pData->zcPred.graceCount     = 0;
 #endif
 #endif
 }
@@ -1713,11 +1714,21 @@ void RecordZcTiming(volatile GARUDA_DATA_T *pData,
         /* ── DPLL predictive mode exit checks ──────────────────────
          * Called on every accepted ZC while in predictive mode.
          * The measurement timeout (missCount > 2) is handled in
-         * BEMF_ZC_CheckTimeout. Here we check phase error. */
+         * BEMF_ZC_CheckTimeout. Here we check phase error.
+         *
+         * Grace period: after entry, the bias IIR needs ~12 steps to
+         * absorb the scheduling discontinuity (predictor target ≠
+         * reactive target at handoff). During graceCount > 0,
+         * phaseErr exits are suppressed. missCount and state exits
+         * remain active for safety. */
         if (pData->zcPred.predictiveMode)
         {
+            /* Decrement grace counter */
+            if (pData->zcPred.graceCount > 0)
+                pData->zcPred.graceCount--;
+
             uint16_t exitThresh = pData->zcPred.predStepHR >> 2; /* T/4 */
-            if (absErr > exitThresh)
+            if (absErr > exitThresh && pData->zcPred.graceCount == 0)
             {
                 pData->zcPred.predictiveMode = false;
                 pData->zcPred.handoffPending = false;

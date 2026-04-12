@@ -267,6 +267,10 @@ typedef struct {
     uint8_t  fallbackReason;      /* Why we exited predictive mode:
                                    * 0=none, 1=missCount, 2=phaseErr,
                                    * 3=measTimeout, 4=targetPast, 5=notCL */
+    uint8_t  graceCount;          /* Steps remaining after entry where
+                                   * phaseErr exits are suppressed. The
+                                   * bias IIR needs ~12 steps to absorb
+                                   * the entry discontinuity. */
 #endif
 } ZC_PRED_T;
 #endif

@@ -1081,6 +1081,25 @@ void __attribute__((interrupt, no_auto_psv)) _CCT3Interrupt(void)
                 HAL_ComTimer_ScheduleAbsolute(nextTargetHR);
                 gData.zcPred.predictiveMode = true;
                 gData.zcPred.handoffPending = false;
+#if FEATURE_6STEP_DPLL
+                gData.zcPred.graceCount = 24;  /* suppress phaseErr exits
+                                                * while bias IIR absorbs
+                                                * the entry discontinuity.
+                                                * 24 steps ≈ 4 revolutions,
+                                                * absorbs 95% of error. */
+                /* Re-seed phaseBias from the shadow predictor's current
+                 * estimate. Without this, re-entries after a fallback
+                 * use a stale bias from a different speed, causing the
+                 * bias to swing wildly during the grace period. */
+                if (gData.zcPred.predZcOffsetHR > 0 &&
+                    gData.zcPred.predStepHR > 0)
+                {
+                    gData.zcPred.phaseBiasHR = (int16_t)(
+                        gData.zcPred.predZcOffsetHR
+                        - (gData.zcPred.predStepHR >> 1)
+                        - gData.zcPred.advanceCmdHR);
+                }
+#endif
                 gData.zcPred.lastPredCommHR = thisCommHR;
                 gData.zcPred.pendingPredCommHR = nextTargetHR;
                 gData.zcPred.pendingPredValid = true;
