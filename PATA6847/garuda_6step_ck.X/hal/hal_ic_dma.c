@@ -529,6 +529,106 @@ uint8_t HAL_ZcDma_DumpSinceCommutation(bool      risingZc,
 }
 
 /* ──────────────────────────────────────────────────────────────────── */
+
+bool HAL_ZcDma_DetectZc(uint16_t  windowOpenHR,
+                        bool      risingZc,
+                        uint16_t *zcTimestampOut)
+{
+    volatile uint16_t *ring;
+    uint16_t           offset;
+    uint8_t            mark;
+    uint8_t            head;
+
+    if (risingZc)
+    {
+        ring   = dmaRingRising;
+        offset = ccp2_to_hr_offset;
+        mark   = commHeadRising;
+        head   = dmaRingHeadRising();
+    }
+    else
+    {
+        ring   = dmaRingFalling;
+        offset = ccp5_to_hr_offset;
+        mark   = commHeadFalling;
+        head   = dmaRingHeadFalling();
+    }
+
+    uint8_t captures = (uint8_t)((head - mark) & DMA_ZC_RING_MASK);
+    if (captures < 2) return false;
+
+    /* Walk forward from commutation marker, cluster edges with
+     * gap ≤ DMA_CLUSTER_GAP_HR. Track the LAST cluster with ≥2
+     * edges that starts at or after windowOpenHR. */
+    #define DMA_DETECT_GAP_HR  10u   /* ~6.4 µs */
+
+    uint16_t clStart   = 0;
+    uint16_t clEnd     = 0;
+    uint8_t  clCount   = 0;
+    bool     haveMatch = false;
+    uint16_t matchMid  = 0;
+
+    uint8_t idx = mark;
+    for (uint8_t i = 0; i < captures; i++)
+    {
+        uint16_t rawCap = ring[idx];
+        uint16_t hrCap  = (uint16_t)(rawCap + offset);
+
+        if (clCount == 0)
+        {
+            clStart = hrCap;
+            clEnd   = hrCap;
+            clCount = 1;
+        }
+        else
+        {
+            uint16_t gap = (uint16_t)(hrCap - clEnd);
+            if (gap <= DMA_DETECT_GAP_HR)
+            {
+                clEnd = hrCap;
+                clCount++;
+            }
+            else
+            {
+                /* Close old cluster — check if qualifying */
+                if (clCount >= 2)
+                {
+                    int16_t sinceOpen = (int16_t)(clStart - windowOpenHR);
+                    if (sinceOpen >= 0)
+                    {
+                        matchMid  = (uint16_t)(((uint32_t)clStart + clEnd) / 2u);
+                        haveMatch = true;
+                    }
+                }
+                clStart = hrCap;
+                clEnd   = hrCap;
+                clCount = 1;
+            }
+        }
+
+        idx = (uint8_t)((idx + 1u) & DMA_ZC_RING_MASK);
+    }
+
+    /* Check trailing cluster */
+    if (clCount >= 2)
+    {
+        int16_t sinceOpen = (int16_t)(clStart - windowOpenHR);
+        if (sinceOpen >= 0)
+        {
+            matchMid  = (uint16_t)(((uint32_t)clStart + clEnd) / 2u);
+            haveMatch = true;
+        }
+    }
+
+    if (haveMatch && zcTimestampOut)
+        *zcTimestampOut = matchMid;
+
+    return haveMatch;
+
+    #undef DMA_DETECT_GAP_HR
+}
+
+/* ──────────────────────────────────────────────────────────────────── */
 /* Stub ISRs for CCP2 and CCP5.
  *
  * The DMA trigger on dsPIC33CK fires on the *interrupt source* being

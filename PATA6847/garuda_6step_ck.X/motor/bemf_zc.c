@@ -32,16 +32,38 @@
 #include "../hal/hal_clc.h"
 #endif
 
+/* Speed-adaptive front-end selector. Set by FastPoll at the start
+ * of each call based on stepPeriodHR vs ZC_IC_DIRECT_THRESHOLD_HR.
+ * When true, ReadBEMFComparator returns raw GPIO (0.64 µs resolution)
+ * instead of CLC D-FF (25 µs PWM-cycle quantization). */
+static bool useRawFrontEnd;
+
 /**
  * @brief Read the digital BEMF comparator output for a given phase.
  * @param phase 0=A, 1=B, 2=C
  * @return 1 if comparator output is high, 0 if low
+ *
+ * At low speed: CLC D-FF (noise-filtered, 1 sample per PWM cycle).
+ * At high speed: raw GPIO (9x faster, 4.75µs resolution).
+ * Threshold: ZC_IC_DIRECT_THRESHOLD_HR (~62k eRPM).
  */
 static inline uint8_t ReadBEMFComparator(uint8_t phase)
 {
 #if FEATURE_CLC_BLANKING
-    /* CLC D-FF output: sampled at mid-PWM, held between cycles.
-     * Eliminates switching noise aliasing (step-2 vector fix). */
+    if (useRawFrontEnd)
+    {
+        /* High speed: raw GPIO — CLC D-FF quantization (25µs) exceeds
+         * the reactive delay budget above ~80k eRPM. BEMF is strong
+         * at high speed so raw noise is manageable with corroboration. */
+        switch (phase)
+        {
+            case 0: return BEMF_A_GetValue() ? 1 : 0;
+            case 1: return BEMF_B_GetValue() ? 1 : 0;
+            case 2: return BEMF_C_GetValue() ? 1 : 0;
+            default: return 0;
+        }
+    }
+    /* Low speed: CLC D-FF (noise-filtered, PWM-synchronous). */
     return HAL_CLC_ReadOutput(phase);
 #else
     switch (phase)
@@ -1790,6 +1812,14 @@ bool BEMF_ZC_FastPoll(volatile GARUDA_DATA_T *pData)
     if (pData->bemf.zeroCrossDetected)
         return false;
 
+    /* Speed-adaptive front-end: above ZC_IC_DIRECT_THRESHOLD_HR,
+     * switch from CLC D-FF (25 µs quantization) to raw GPIO
+     * (0.64 µs resolution). This recovers ~25 µs of front-end
+     * latency that was consuming the entire reactive delay budget
+     * at 80-90k eRPM. */
+    useRawFrontEnd = (pData->timing.stepPeriodHR > 0 &&
+                      pData->timing.stepPeriodHR < ZC_IC_DIRECT_THRESHOLD_HR);
+
     pData->icZc.diagPollCycles++;
 
     /* BLANKING → ARMED transition.
@@ -1859,10 +1889,22 @@ bool BEMF_ZC_FastPoll(volatile GARUDA_DATA_T *pData)
      * Never accept wrong-polarity comparator state. */
     uint8_t expected = pData->bemf.cmpExpected;
 
-    /* Read raw GPIO in parallel with CLC for corroboration (TRACK only).
-     * Raw is NOT the primary detector — it's a sanity check to catch
-     * stale CLC D-FF holds and noise-coincidence fast accepts. */
+    /* Read corroboration channel in parallel with primary (TRACK only).
+     *
+     * Normal mode (CLC primary): rawCmp = raw GPIO.
+     *   Catches stale CLC D-FF holds and noise-coincidence fast accepts.
+     *
+     * Raw-primary mode (above ZC_IC_DIRECT_THRESHOLD_HR): rawCmp = CLC.
+     *   Raw GPIO is the fast primary; CLC is the filtered sanity check.
+     *   Without this flip, raw-vs-raw corroboration is trivially true
+     *   and the detector accepts PWM noise edges. */
+#if FEATURE_CLC_BLANKING
+    uint8_t rawCmp = useRawFrontEnd
+        ? HAL_CLC_ReadOutput(pData->icZc.activeChannel)
+        : ReadRawBEMFComparator(pData->icZc.activeChannel);
+#else
     uint8_t rawCmp = ReadRawBEMFComparator(pData->icZc.activeChannel);
+#endif
 
     if (cmp == expected)
     {
