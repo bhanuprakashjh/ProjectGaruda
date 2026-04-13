@@ -271,6 +271,9 @@ typedef struct {
                                    * phaseErr exits are suppressed. The
                                    * bias IIR needs ~12 steps to absorb
                                    * the entry discontinuity. */
+    int16_t  dpllErrHR;           /* Last DPLL phase error (tMeas - predZc) */
+    uint16_t dmaMeasUsedCount;    /* Steps where DMA passed plausibility gate */
+    uint16_t dmaMeasRejectCount;  /* Steps where DMA failed gate → poll used */
 #endif
 } ZC_PRED_T;
 #endif

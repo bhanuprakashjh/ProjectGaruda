@@ -293,6 +293,9 @@ void BEMF_ZC_Init(volatile GARUDA_DATA_T *pData)
     pData->zcPred.measDeadlineHR = 0;
     pData->zcPred.fallbackReason = 0;
     pData->zcPred.graceCount     = 0;
+    pData->zcPred.dpllErrHR      = 0;
+    pData->zcPred.dmaMeasUsedCount = 0;
+    pData->zcPred.dmaMeasRejectCount = 0;
 #endif
 #endif
 }
@@ -1487,6 +1490,60 @@ void RecordZcTiming(volatile GARUDA_DATA_T *pData,
     }
 #endif
 
+#if FEATURE_IC_DMA_SHADOW
+    /* ── Poll-bounded DMA timestamp (bootstrap) ────────────────────
+     * After poll accepted at hrTick, run the windowed DMA detector
+     * with close = hrTick. This produces a hardware-precise ZC
+     * timestamp bounded by the poll acceptance — the validated
+     * offline selector rule ("last ≥2 cluster before poll").
+     *
+     * Result stored in dmaShadow for:
+     *   1. Shadow telemetry (compare DMA vs poll per step)
+     *   2. Future DPLL consumption (phaseBiasHR update from DMA)
+     *   3. Future predicted-close comparison (once DPLL locks)
+     *
+     * Does NOT affect live scheduling. Poll still owns everything.
+     * dmaZcHR is hoisted to function scope for DPLL consumption. */
+    uint16_t dmaZcHR = 0;
+    bool     dmaFound = false;
+    if (pData->timing.hasPrevZcHR &&
+        pData->timing.stepPeriodHR > 0 &&
+        pData->timing.stepPeriodHR < ZC_IC_DIRECT_THRESHOLD_HR)
+    {
+        bool risingZc = (commutationTable[pData->currentStep].zcPolarity > 0);
+        uint16_t windowOpenHR = pData->timing.prevZcTickHR +
+            (pData->zcCtrl.refIntervalHR >> 1);
+
+        dmaFound = HAL_ZcDma_DetectZc(
+            windowOpenHR, hrTick, risingZc, &dmaZcHR);
+
+        if (dmaFound)
+        {
+            int16_t dmaVsPoll = (int16_t)(dmaZcHR - hrTick);
+            pData->dmaShadow.lastCorrectionHR = dmaVsPoll;
+            pData->dmaShadow.substituteCount++;
+            if (dmaVsPoll < pData->dmaShadow.minCorrectionHR)
+                pData->dmaShadow.minCorrectionHR = dmaVsPoll;
+            if (dmaVsPoll > pData->dmaShadow.maxCorrectionHR)
+                pData->dmaShadow.maxCorrectionHR = dmaVsPoll;
+
+            /* IIR-smooth the latency for DPLL consumption */
+            uint16_t latency = (dmaVsPoll < 0)
+                ? (uint16_t)(-dmaVsPoll) : 0u;
+            if (pData->dmaShadow.smoothedLatencyHR == 0)
+                pData->dmaShadow.smoothedLatencyHR = latency;
+            else
+                pData->dmaShadow.smoothedLatencyHR = (uint16_t)(
+                    ((uint32_t)pData->dmaShadow.smoothedLatencyHR * 7u
+                     + latency) >> 3);
+        }
+        else
+        {
+            pData->dmaShadow.substituteSkipRange++;
+        }
+    }
+#endif
+
     /* Per-polarity and per-step diagnostic counters */
     if (commutationTable[pData->currentStep].zcPolarity > 0)
         pData->zcDiag.diagRisingZcCount++;
@@ -1559,17 +1616,19 @@ void RecordZcTiming(volatile GARUDA_DATA_T *pData,
          * Error: e = t_meas - t_zc_pred
          * Update: phaseBias += e/8  (Kp = 1/8)
          *
-         * In V1 (A_cmd=0), phaseBias absorbs everything: poll
-         * latency + advance + comparator delay. The bias self-
-         * calibrates to whatever the combined offset is.
+         * t_meas source (bootstrap progression):
+         *   - If poll-bounded DMA found a cluster: use dmaZcHR
+         *     (hardware-precise, 1.3-7 µs stdev, ~20 ticks earlier)
+         *   - Else: fall back to hrTick (poll timestamp)
          *
-         * Seed phaseBias on first valid step from predZcOffsetHR
-         * to avoid cold-start transient. */
+         * With DMA as measurement, phaseBiasHR absorbs ~20 ticks
+         * LESS poll latency → converges to a value ~20 ticks higher
+         * than with poll-only. This is correct: the bias reflects
+         * the actual phase offset without poll delay. */
         if (pData->zcPred.phaseBiasHR == 0 &&
             pData->zcPred.predZcOffsetHR > 0 &&
             pData->zcPred.predStepHR > 0)
         {
-            /* Seed: phaseBias = predZcOffset - T_hat/2 - A_cmd */
             pData->zcPred.phaseBiasHR = (int16_t)(
                 pData->zcPred.predZcOffsetHR
                 - (pData->zcPred.predStepHR >> 1)
@@ -1577,13 +1636,35 @@ void RecordZcTiming(volatile GARUDA_DATA_T *pData,
         }
 
         {
+            /* Select measurement source with plausibility gate.
+             * The DMA detector sometimes picks the wrong cluster
+             * (previous PWM cycle or noise). Gate: only use DMA
+             * if the correction is within a sane band around the
+             * smoothed latency. Otherwise fall back to poll. */
+            bool dmaUsed = false;
+            uint16_t tMeas = hrTick;  /* default: poll */
+
+            if (dmaFound)
+            {
+                int16_t dmaVsPoll = (int16_t)(dmaZcHR - hrTick);
+                /* Sane band: -40 to -10 HR ticks (6-26 µs before poll).
+                 * Main band from offline analysis: -15 to -35 HR.
+                 * This rejects previous-burst picks (-58/-61) and
+                 * deep outliers (-90 to -145). */
+                if (dmaVsPoll >= -40 && dmaVsPoll <= -10)
+                {
+                    tMeas = dmaZcHR;
+                    dmaUsed = true;
+                }
+            }
+
             uint16_t dpllPredZc = (uint16_t)(
                 pData->zcPred.lastCommHR
                 + (pData->zcPred.predStepHR >> 1)
                 + pData->zcPred.advanceCmdHR
                 + (uint16_t)pData->zcPred.phaseBiasHR);
 
-            int16_t dpllErr = (int16_t)(hrTick - dpllPredZc);
+            int16_t dpllErr = (int16_t)(tMeas - dpllPredZc);
 
             /* Bias update: Kp = 1/8 */
             int16_t newBias = pData->zcPred.phaseBiasHR + (dpllErr >> 3);
@@ -1594,7 +1675,12 @@ void RecordZcTiming(volatile GARUDA_DATA_T *pData,
             if (newBias < -bmax) newBias = -bmax;
 
             pData->zcPred.phaseBiasHR = newBias;
-            pData->zcPred.lastMeasTsHR = hrTick;
+            pData->zcPred.dpllErrHR = dpllErr;
+            pData->zcPred.lastMeasTsHR = tMeas;
+            if (dmaUsed)
+                pData->zcPred.dmaMeasUsedCount++;
+            else if (dmaFound)
+                pData->zcPred.dmaMeasRejectCount++;
         }
 #endif /* FEATURE_6STEP_DPLL */
 

@@ -484,7 +484,7 @@
 #endif
 
 #ifndef FEATURE_6STEP_DPLL
-#define FEATURE_6STEP_DPLL  0       /* 6-step event DPLL for commutation.
+#define FEATURE_6STEP_DPLL  1       /* 6-step event DPLL for commutation.
                                      * When 1: a digital PLL tracks rotor
                                      * phase from ZC events and owns
                                      * commutation scheduling at high speed.
@@ -502,7 +502,11 @@
 /* DPLL handoff speed threshold. Predictive mode only engages above
  * this eRPM. Below this, reactive poll scheduling is sufficient. */
 #ifndef DPLL_HANDOFF_ERPM
-#define DPLL_HANDOFF_ERPM   50000UL
+#define DPLL_HANDOFF_ERPM   200000UL  /* Shadow-only: set impossibly high
+                                       * so DPLL runs measurement update
+                                       * but never enters predictive mode.
+                                       * Lower to 50000 when handoff is
+                                       * ready for live testing. */
 #endif
 
 /* Speed threshold above which DMA-direct substitution is enabled.

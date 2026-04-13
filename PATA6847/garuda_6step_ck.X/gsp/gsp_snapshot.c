@@ -172,13 +172,19 @@ void GSP_CaptureSnapshot(GSP_CK_SNAPSHOT_T *dst)
 
     /* DPLL state */
 #if FEATURE_6STEP_DPLL
-    dst->dpllPhaseBiasHR   = src->zcPred.phaseBiasHR;
+    dst->dpllPhaseBiasHR    = src->zcPred.phaseBiasHR;
+    dst->dpllErrHR          = src->zcPred.dpllErrHR;
+    dst->dmaMeasUsed        = src->zcPred.dmaMeasUsedCount;
+    dst->dmaMeasReject      = src->zcPred.dmaMeasRejectCount;
     dst->dpllFallbackReason = src->zcPred.fallbackReason;
 #else
-    dst->dpllPhaseBiasHR   = 0;
+    dst->dpllPhaseBiasHR    = 0;
+    dst->dpllErrHR          = 0;
+    dst->dmaMeasUsed        = 0;
+    dst->dmaMeasReject      = 0;
     dst->dpllFallbackReason = 0;
 #endif
-    dst->_dpllPad          = 0;
+    dst->_dpllPad           = 0;
 
     /* IC bounce: SCCP2 captures rejected by the 50% interval gate.
      * Gated on FEATURE_IC_ZC_CAPTURE because the field only exists

@@ -149,18 +149,25 @@ uint8_t HAL_ZcDma_DumpSinceCommutation(bool      risingZc,
                                        uint8_t   maxCount);
 
 /**
- * @brief Detect ZC from the DMA ring using the validated cluster rule.
+ * @brief Detect ZC from the DMA ring using a WINDOWED cluster rule.
  *
  * Scans the appropriate ring from commutation marker to current head.
- * Finds the LAST cluster with ≥2 edges (gap ≤ DMA_CLUSTER_GAP_HR)
- * that starts at or after windowOpenHR.
+ * Finds the LAST cluster with ≥2 edges (gap ≤ ~6.4 µs) whose start
+ * is at or after windowOpenHR AND whose end is at or before
+ * windowCloseHR.
  *
- * @param windowOpenHR  50% gate: ignore clusters before this time
- * @param risingZc      Which ring to scan
- * @param zcTimestampOut  Out: cluster midpoint HR tick (only if found)
+ * The close bound is critical: without it the detector picks post-ZC
+ * noise clusters. In the bootstrap phase, close = pollHR. Once the
+ * DPLL locks, close = predZcHR + margin.
+ *
+ * @param windowOpenHR   50% gate: ignore clusters before this time
+ * @param windowCloseHR  Upper bound: ignore clusters after this time
+ * @param risingZc       Which ring to scan
+ * @param zcTimestampOut Out: cluster midpoint HR tick (only if found)
  * @return true if a qualifying cluster was found
  */
 bool HAL_ZcDma_DetectZc(uint16_t  windowOpenHR,
+                        uint16_t  windowCloseHR,
                         bool      risingZc,
                         uint16_t *zcTimestampOut);
 

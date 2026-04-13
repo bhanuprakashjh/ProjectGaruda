@@ -531,6 +531,7 @@ uint8_t HAL_ZcDma_DumpSinceCommutation(bool      risingZc,
 /* ──────────────────────────────────────────────────────────────────── */
 
 bool HAL_ZcDma_DetectZc(uint16_t  windowOpenHR,
+                        uint16_t  windowCloseHR,
                         bool      risingZc,
                         uint16_t *zcTimestampOut)
 {
@@ -558,8 +559,11 @@ bool HAL_ZcDma_DetectZc(uint16_t  windowOpenHR,
     if (captures < 2) return false;
 
     /* Walk forward from commutation marker, cluster edges with
-     * gap ≤ DMA_CLUSTER_GAP_HR. Track the LAST cluster with ≥2
-     * edges that starts at or after windowOpenHR. */
+     * gap ≤ DMA_DETECT_GAP_HR. Track the LAST cluster with ≥2
+     * edges whose start >= windowOpenHR AND end <= windowCloseHR.
+     *
+     * The close bound prevents picking post-ZC noise clusters.
+     * Bootstrap: close = pollHR. After DPLL lock: close = predZcHR + margin. */
     #define DMA_DETECT_GAP_HR  10u   /* ~6.4 µs */
 
     uint16_t clStart   = 0;
@@ -573,6 +577,24 @@ bool HAL_ZcDma_DetectZc(uint16_t  windowOpenHR,
     {
         uint16_t rawCap = ring[idx];
         uint16_t hrCap  = (uint16_t)(rawCap + offset);
+
+        /* Stop scanning if we've passed the close bound */
+        int16_t pastClose = (int16_t)(hrCap - windowCloseHR);
+        if (pastClose > 0)
+        {
+            /* Close any open cluster before breaking */
+            if (clCount >= 2)
+            {
+                int16_t sinceOpen = (int16_t)(clStart - windowOpenHR);
+                int16_t endVsClose = (int16_t)(clEnd - windowCloseHR);
+                if (sinceOpen >= 0 && endVsClose <= 0)
+                {
+                    matchMid  = (uint16_t)(((uint32_t)clStart + clEnd) / 2u);
+                    haveMatch = true;
+                }
+            }
+            break;
+        }
 
         if (clCount == 0)
         {
@@ -594,7 +616,8 @@ bool HAL_ZcDma_DetectZc(uint16_t  windowOpenHR,
                 if (clCount >= 2)
                 {
                     int16_t sinceOpen = (int16_t)(clStart - windowOpenHR);
-                    if (sinceOpen >= 0)
+                    int16_t endVsClose = (int16_t)(clEnd - windowCloseHR);
+                    if (sinceOpen >= 0 && endVsClose <= 0)
                     {
                         matchMid  = (uint16_t)(((uint32_t)clStart + clEnd) / 2u);
                         haveMatch = true;
@@ -613,7 +636,8 @@ bool HAL_ZcDma_DetectZc(uint16_t  windowOpenHR,
     if (clCount >= 2)
     {
         int16_t sinceOpen = (int16_t)(clStart - windowOpenHR);
-        if (sinceOpen >= 0)
+        int16_t endVsClose = (int16_t)(clEnd - windowCloseHR);
+        if (sinceOpen >= 0 && endVsClose <= 0)
         {
             matchMid  = (uint16_t)(((uint32_t)clStart + clEnd) / 2u);
             haveMatch = true;
