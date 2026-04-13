@@ -176,12 +176,16 @@ void GSP_CaptureSnapshot(GSP_CK_SNAPSHOT_T *dst)
     dst->dpllErrHR          = src->zcPred.dpllErrHR;
     dst->dmaMeasUsed        = src->zcPred.dmaMeasUsedCount;
     dst->dmaMeasReject      = src->zcPred.dmaMeasRejectCount;
+    dst->predCloseAgree     = src->zcPred.predCloseAgreeCount;
+    dst->predCloseDisagree  = src->zcPred.predCloseDisagreeCount;
     dst->dpllFallbackReason = src->zcPred.fallbackReason;
 #else
     dst->dpllPhaseBiasHR    = 0;
     dst->dpllErrHR          = 0;
     dst->dmaMeasUsed        = 0;
     dst->dmaMeasReject      = 0;
+    dst->predCloseAgree     = 0;
+    dst->predCloseDisagree  = 0;
     dst->dpllFallbackReason = 0;
 #endif
     dst->_dpllPad           = 0;

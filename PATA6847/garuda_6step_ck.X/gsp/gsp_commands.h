@@ -214,6 +214,8 @@ typedef struct __attribute__((packed)) {
     int16_t  dpllErrHR;       /* Last DPLL phase error (tMeas - predZc) */
     uint16_t dmaMeasUsed;     /* Steps where DMA passed plausibility gate */
     uint16_t dmaMeasReject;   /* Steps where DMA failed gate → poll used */
+    uint16_t predCloseAgree;  /* Predicted-close matched poll-close */
+    uint16_t predCloseDisagree; /* Predicted-close differed from poll-close */
     uint8_t  dpllFallbackReason; /* Why predictive mode exited (0=none) */
     uint8_t  _dpllPad;         /* Alignment */
 

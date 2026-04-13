@@ -296,6 +296,8 @@ void BEMF_ZC_Init(volatile GARUDA_DATA_T *pData)
     pData->zcPred.dpllErrHR      = 0;
     pData->zcPred.dmaMeasUsedCount = 0;
     pData->zcPred.dmaMeasRejectCount = 0;
+    pData->zcPred.predCloseAgreeCount = 0;
+    pData->zcPred.predCloseDisagreeCount = 0;
 #endif
 #endif
 }
@@ -1541,6 +1543,46 @@ void RecordZcTiming(volatile GARUDA_DATA_T *pData,
         {
             pData->dmaShadow.substituteSkipRange++;
         }
+
+#if FEATURE_6STEP_DPLL
+        /* ── Predicted-close DMA detector (parallel shadow) ────────
+         * Run a SECOND windowed detector with close = predZcHR + margin
+         * instead of pollHR. Compare its result against the poll-bounded
+         * one. When both consistently find the same cluster, the
+         * predicted close can replace poll — breaking the circular
+         * dependency.
+         *
+         * Margin: +60 HR (~38 µs) accounts for ±50 HR DPLL phase error.
+         * Clamped to pollHR so we never look past the poll acceptance. */
+        if (pData->zcPred.predZcHR != 0 && pData->zcPred.predStepHR > 0)
+        {
+            uint16_t predCloseHR = (uint16_t)(pData->zcPred.predZcHR + 60u);
+            /* Don't extend past poll */
+            if ((int16_t)(predCloseHR - hrTick) > 0)
+                predCloseHR = hrTick;
+
+            uint16_t predDmaZcHR = 0;
+            bool predDmaFound = HAL_ZcDma_DetectZc(
+                windowOpenHR, predCloseHR, risingZc, &predDmaZcHR);
+
+            if (predDmaFound && dmaFound)
+            {
+                /* Both found a cluster — compare midpoints */
+                int16_t delta = (int16_t)(predDmaZcHR - dmaZcHR);
+                int16_t absDelta = (delta < 0) ? -delta : delta;
+                if (absDelta <= 5)  /* within 3.2 µs = same cluster */
+                    pData->zcPred.predCloseAgreeCount++;
+                else
+                    pData->zcPred.predCloseDisagreeCount++;
+            }
+            else if (predDmaFound != dmaFound)
+            {
+                /* One found, other didn't */
+                pData->zcPred.predCloseDisagreeCount++;
+            }
+            /* Both not found = no data, don't count */
+        }
+#endif
     }
 #endif
 
@@ -1666,7 +1708,9 @@ void RecordZcTiming(volatile GARUDA_DATA_T *pData,
 
             int16_t dpllErr = (int16_t)(tMeas - dpllPredZc);
 
-            /* Bias update: Kp = 1/8 */
+            /* Bias update: Kp = 1/8. Tried 1/4 — made predicted-close
+             * agreement WORSE (70% vs 79%) because the bias swings
+             * too aggressively on per-step jitter. */
             int16_t newBias = pData->zcPred.phaseBiasHR + (dpllErr >> 3);
 
             /* Clamp to ±T_hat/2 */
@@ -1698,7 +1742,8 @@ void RecordZcTiming(volatile GARUDA_DATA_T *pData,
             pData->zcPred.diagZcOutWindow++;
 
         /* Frequency correction: adjust predStepHR toward actual interval.
-         * Small IIR: 7/8 old + 1/8 correction. */
+         * IIR: 7/8 old + 1/8 correction. Tried 3/4 + 1/4 — made
+         * predicted-close agreement worse by amplifying jitter. */
         if (pData->timing.hasPrevZcHR && pData->timing.zcIntervalHR > 0)
         {
             uint16_t actualStepHR = pData->timing.zcIntervalHR;

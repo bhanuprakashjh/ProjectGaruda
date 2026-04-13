@@ -251,22 +251,26 @@ def decode_ck_snapshot(data):
         s['predEntryLate'] = 0
         s['predIsrFired'] = 0
         s['predIsrEntries'] = 0
-    # V12b: DPLL state (10 bytes at offset 186)
-    if len(data) >= 196:
+    # V12b: DPLL state (14 bytes at offset 186)
+    if len(data) >= 200:
         s['dpllPhaseBiasHR'] = struct.unpack_from('<h', data, 186)[0]
         s['dpllErrHR'] = struct.unpack_from('<h', data, 188)[0]
         s['dmaMeasUsed'] = struct.unpack_from('<H', data, 190)[0]
         s['dmaMeasReject'] = struct.unpack_from('<H', data, 192)[0]
-        s['dpllFallbackReason'] = data[194]
+        s['predCloseAgree'] = struct.unpack_from('<H', data, 194)[0]
+        s['predCloseDisagree'] = struct.unpack_from('<H', data, 196)[0]
+        s['dpllFallbackReason'] = data[198]
     else:
         s['dpllPhaseBiasHR'] = 0
         s['dpllErrHR'] = 0
         s['dmaMeasUsed'] = 0
         s['dmaMeasReject'] = 0
+        s['predCloseAgree'] = 0
+        s['predCloseDisagree'] = 0
         s['dpllFallbackReason'] = 0
-    # V12: icBounce — shifted +10 by DPLL fields
-    if len(data) >= 198:
-        s['icBounce'] = struct.unpack_from('<H', data, 196)[0]
+    # V12: icBounce — shifted +14 by DPLL fields
+    if len(data) >= 202:
+        s['icBounce'] = struct.unpack_from('<H', data, 200)[0]
     else:
         s['icBounce'] = 0
     # V13: DMA shadow telemetry (24 bytes starting at offset 198, was 192)
@@ -276,17 +280,17 @@ def decode_ck_snapshot(data):
     #         lastEdgeCount (u8), lastFound (u8)
     # 32-bit counters avoid the uint16 wrap that caused DmaM% display
     # glitches at 60k+ eRPM.
-    if len(data) >= 222:
-        s['dmaStepCount']       = struct.unpack_from('<I', data, 198)[0]
-        s['dmaMatchCount']      = struct.unpack_from('<I', data, 202)[0]
-        s['dmaRingOverflow']    = struct.unpack_from('<I', data, 206)[0]
-        s['dmaEdgesAvgX16']     = struct.unpack_from('<H', data, 210)[0]
-        s['dmaEarlyVsPoll']     = struct.unpack_from('<h', data, 212)[0]
-        s['dmaEarlyVsExp']      = struct.unpack_from('<h', data, 214)[0]
-        s['dmaClosestVsExp']    = struct.unpack_from('<h', data, 216)[0]
-        s['dmaPollVsExp']       = struct.unpack_from('<h', data, 218)[0]
-        s['dmaLastEdgeCount']   = data[220]
-        s['dmaLastFound']       = data[221]
+    if len(data) >= 226:
+        s['dmaStepCount']       = struct.unpack_from('<I', data, 202)[0]
+        s['dmaMatchCount']      = struct.unpack_from('<I', data, 206)[0]
+        s['dmaRingOverflow']    = struct.unpack_from('<I', data, 210)[0]
+        s['dmaEdgesAvgX16']     = struct.unpack_from('<H', data, 214)[0]
+        s['dmaEarlyVsPoll']     = struct.unpack_from('<h', data, 216)[0]
+        s['dmaEarlyVsExp']      = struct.unpack_from('<h', data, 218)[0]
+        s['dmaClosestVsExp']    = struct.unpack_from('<h', data, 220)[0]
+        s['dmaPollVsExp']       = struct.unpack_from('<h', data, 222)[0]
+        s['dmaLastEdgeCount']   = data[224]
+        s['dmaLastFound']       = data[225]
     else:
         s['dmaStepCount'] = 0
         s['dmaMatchCount'] = 0
@@ -302,13 +306,13 @@ def decode_ck_snapshot(data):
     # Fields: subCount (u32), subSkipGated (u32), subSkipRange (u32),
     #         lastCorrectionHR (i16), minCorrectionHR (i16),
     #         maxCorrectionHR (i16)
-    if len(data) >= 240:
-        s['dmaSubCount']        = struct.unpack_from('<I', data, 222)[0]
-        s['dmaSubSkipGated']    = struct.unpack_from('<I', data, 226)[0]
-        s['dmaSubSkipRange']    = struct.unpack_from('<I', data, 230)[0]
-        s['dmaLastCorrectionHR'] = struct.unpack_from('<h', data, 234)[0]
-        s['dmaMinCorrectionHR']  = struct.unpack_from('<h', data, 236)[0]
-        s['dmaMaxCorrectionHR']  = struct.unpack_from('<h', data, 238)[0]
+    if len(data) >= 244:
+        s['dmaSubCount']        = struct.unpack_from('<I', data, 226)[0]
+        s['dmaSubSkipGated']    = struct.unpack_from('<I', data, 230)[0]
+        s['dmaSubSkipRange']    = struct.unpack_from('<I', data, 234)[0]
+        s['dmaLastCorrectionHR'] = struct.unpack_from('<h', data, 238)[0]
+        s['dmaMinCorrectionHR']  = struct.unpack_from('<h', data, 240)[0]
+        s['dmaMaxCorrectionHR']  = struct.unpack_from('<h', data, 242)[0]
     else:
         s['dmaSubCount'] = 0
         s['dmaSubSkipGated'] = 0
@@ -363,7 +367,7 @@ def main():
     print(f"  Press Ctrl+C to stop")
     print()
     ZC_MODES = ['ACQ', 'TRK', 'RCV']
-    print(f"{'Time':>7s} {'State':>8s} {'ZcM':>3s} {'eRPM':>7s} {'Duty':>4s} {'Vbus':>6s} {'Mrgn':>5s} {'Bias':>5s} {'DErr':>5s} {'Corr':>5s} {'DUsed':>6s} {'DRej':>5s} {'Lkd':>3s}")
+    print(f"{'Time':>7s} {'State':>8s} {'ZcM':>3s} {'eRPM':>7s} {'Duty':>4s} {'Vbus':>6s} {'Mrgn':>5s} {'Bias':>5s} {'DErr':>5s} {'Corr':>5s} {'PAgr':>6s} {'PDis':>5s} {'Lkd':>3s}")
     print("-" * 105)
 
     rows = []
@@ -420,10 +424,10 @@ def main():
                 bias = snap.get('dpllPhaseBiasHR', 0)
                 derr = snap.get('dpllErrHR', 0)
                 corr = snap.get('dmaLastCorrectionHR', 0)
-                dused = snap.get('dmaMeasUsed', 0)
-                drej = snap.get('dmaMeasReject', 0)
+                pagr = snap.get('predCloseAgree', 0)
+                pdis = snap.get('predCloseDisagree', 0)
                 locked = snap.get('predLocked', 0)
-                print(f"{t:7.1f} {state_str:>8s} {zc_mode_str:>3s} {snap['eRpm']:7d} {snap['dutyPct']:3d}% {snap['vbusV']:5.1f}V {snap.get('sched_margin_hr', snap.get('schedMarginHR',0)):5d} {bias:+5d} {derr:+5d} {corr:+5d} {dused:6d} {drej:5d} {'Y' if locked else '.':>3s}{fault_str}")
+                print(f"{t:7.1f} {state_str:>8s} {zc_mode_str:>3s} {snap['eRpm']:7d} {snap['dutyPct']:3d}% {snap['vbusV']:5.1f}V {snap.get('sched_margin_hr', snap.get('schedMarginHR',0)):5d} {bias:+5d} {derr:+5d} {corr:+5d} {pagr:6d} {pdis:5d} {'Y' if locked else '.':>3s}{fault_str}")
 
                 rows.append({
                     'time': round(t, 3),
@@ -527,6 +531,8 @@ def main():
                     'dpll_err_hr': snap.get('dpllErrHR', 0),
                     'dma_meas_used': snap.get('dmaMeasUsed', 0),
                     'dma_meas_reject': snap.get('dmaMeasReject', 0),
+                    'pred_close_agree': snap.get('predCloseAgree', 0),
+                    'pred_close_disagree': snap.get('predCloseDisagree', 0),
                     'dpll_fallback_reason': snap.get('dpllFallbackReason', 0),
                     'pred_phase_err_hr': snap.get('predPhaseErrHR', 0),
                     'pred_locked': snap.get('predLocked', 0),

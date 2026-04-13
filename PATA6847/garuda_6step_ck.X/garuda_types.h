@@ -274,6 +274,8 @@ typedef struct {
     int16_t  dpllErrHR;           /* Last DPLL phase error (tMeas - predZc) */
     uint16_t dmaMeasUsedCount;    /* Steps where DMA passed plausibility gate */
     uint16_t dmaMeasRejectCount;  /* Steps where DMA failed gate → poll used */
+    uint16_t predCloseAgreeCount;   /* Predicted-close found same cluster as poll-close */
+    uint16_t predCloseDisagreeCount; /* Predicted-close found different or missing */
 #endif
 } ZC_PRED_T;
 #endif
