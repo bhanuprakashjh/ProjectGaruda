@@ -1719,6 +1719,37 @@ void RecordZcTiming(volatile GARUDA_DATA_T *pData,
             if (newBias < -bmax) newBias = -bmax;
 
             pData->zcPred.phaseBiasHR = newBias;
+
+            /* Frequency correction from phase error.
+             * Without this, T_hat deadlocks in predictive mode:
+             * T_hat sets commutation rate → ZC interval = T_hat →
+             * IIR sees no error → T_hat stays fixed → speed locked.
+             *
+             * Phase error IS the speed signal: negative dpllErr means
+             * the ZC arrived EARLIER than predicted → motor wants to
+             * go faster → T_hat should decrease. Positive dpllErr →
+             * motor wants to slow down → T_hat should increase.
+             *
+             * Use a very slow gain (1/32) to avoid jitter coupling.
+             * This is the "integral" path of the PLL — bias is the
+             * "proportional" path. */
+            /* Only correct T_hat when phase error is large enough to
+             * indicate a real speed mismatch (not just per-step jitter).
+             * Threshold: T_hat/16 (~12.5 HR at 200 HR step ≈ 8 µs).
+             * Correction: ±1 tick per qualifying step — very slow
+             * integral that won't couple jitter into frequency. */
+            {
+                int16_t threshold = (int16_t)(pData->zcPred.predStepHR >> 4);
+                if (threshold < 8) threshold = 8;
+                if (dpllErr < -threshold)
+                    pData->zcPred.predStepHR--;  /* motor wants faster */
+                else if (dpllErr > threshold)
+                    pData->zcPred.predStepHR++;  /* motor wants slower */
+                /* Floor */
+                if (pData->zcPred.predStepHR < 50)
+                    pData->zcPred.predStepHR = 50;
+            }
+
             pData->zcPred.dpllErrHR = dpllErr;
             pData->zcPred.lastMeasTsHR = tMeas;
             if (dmaUsed)

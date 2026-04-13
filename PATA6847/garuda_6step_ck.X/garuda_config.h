@@ -502,11 +502,13 @@
 /* DPLL handoff speed threshold. Predictive mode only engages above
  * this eRPM. Below this, reactive poll scheduling is sufficient. */
 #ifndef DPLL_HANDOFF_ERPM
-#define DPLL_HANDOFF_ERPM   200000UL  /* Shadow-only: set impossibly high
-                                       * so DPLL runs measurement update
-                                       * but never enters predictive mode.
-                                       * Lower to 50000 when handoff is
-                                       * ready for live testing. */
+#define DPLL_HANDOFF_ERPM   200000UL  /* Shadow-only: DPLL tracks but doesn't
+                                       * own commutation. Speed tracking is
+                                       * unsolved — T_hat deadlocks because
+                                       * zcInterval = T_hat when the DPLL
+                                       * owns scheduling. Needs external
+                                       * speed reference (duty/pot) to drive
+                                       * T_hat, not just phase error. */
 #endif
 
 /* Speed threshold above which DMA-direct substitution is enabled.
