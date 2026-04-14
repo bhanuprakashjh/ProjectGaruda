@@ -1915,65 +1915,40 @@ void RecordZcTiming(volatile GARUDA_DATA_T *pData,
         if (pData->zcSync.mode >= 1 &&  /* SHADOW or OWNED */
             pData->zcSync.T_hatHR > 0)
         {
-            /* Anchor the expected ZC and corridor to refIntervalHR
-             * (the reactive IIR), NOT to T_hat. This prevents the
-             * self-reinforcing selector failure where a shrinking
-             * T_hat moves the corridor earlier, finds noise clusters,
-             * and confirms the bad T_hat.
+            /* Shadow PI measurement: use the poll-bounded DMA timestamp
+             * (dmaZcHR from HAL_ZcDma_DetectZc above, with close=pollHR).
+             * This gives 79% acceptance with validated timestamps vs
+             * 5-13% from the autonomous corridor selector.
              *
-             * For the DMA cluster SEARCH, use the reactive advance
-             * (TAL-based) so the expected position matches where the
-             * motor actually commutates. The sync PI MODEL uses its
-             * own advance (advanceCmdHR) for setValueHR.
+             * The poll-bounded selector finds the last ≥2-edge cluster
+             * before the poll acceptance time — the same cluster the
+             * legacy shadow probe uses. The plausibility gate (-40 to
+             * -10 HR) already validated it.
              *
-             * Once sync owns commutation (Phase 5), the search can
-             * switch to using sync's own advance model. */
-            uint16_t refHR = pData->zcCtrl.refIntervalHR;
-            if (refHR == 0) refHR = pData->zcSync.T_hatHR;
-
-            /* Use the reactive TAL that was already computed by
-             * ScheduleCommutation for this step. Do NOT call
-             * AdaptiveTimingAdvance() here — it has a static local
-             * variable that would be corrupted by a second call
-             * with a different eRPM. */
+             * For ownership (Phase 5), an autonomous selector will be
+             * needed. That is a separate experiment to run in parallel
+             * with this validated measurement source. */
             uint8_t searchTal = pData->zcPred.lastReactiveTAL;
 
-            /* Expected ZC position within sector.
-             * With advance, commutation fires earlier relative to the
-             * rotor → ZC arrives LATER in the sector.
-             * expectedCapValue = halfStep + advance + detDelay
-             *
-             * Use reactive TAL for the search advance so the expected
-             * position matches where the motor actually operates.
-             * The sync PI model (setValueHR) uses its own advance. */
-            uint16_t refAdvHR = (refHR >> 3) * searchTal;
-            uint16_t expectedHR = (uint16_t)(
-                pData->zcSync.lastCommHR
-                + (refHR >> 1)
-                + refAdvHR
-                + pData->zcSync.detDelayHR);
+            /* Use poll-bounded DMA timestamp if available and plausible */
+            bool syncMeasValid = false;
+            uint16_t syncMeasHR = 0;
 
-            uint16_t corridorHR = refHR / ZC_SYNC_CORRIDOR_DIV;
-            uint16_t windowOpenHR = pData->zcSync.lastCommHR
-                                  + (refHR >> 2);
-            /* Use blanking end if it's later than 25% gate */
-            if ((int16_t)(pData->icZc.blankingEndHR - windowOpenHR) > 0)
-                windowOpenHR = pData->icZc.blankingEndHR;
-            uint16_t windowCloseHR = HAL_ComTimer_ReadTimer();
-
-            bool risingZc = pData->zcSync.prevStepRisingZc;
-            HAL_ZcDma_ClusterResult cl;
-
-            if (HAL_ZcDma_DetectZcEx(windowOpenHR, windowCloseHR,
-                                     expectedHR, corridorHR,
-                                     risingZc, &cl))
+            if (dmaFound)
             {
-                uint16_t capValueHR = cl.midpointHR - pData->zcSync.lastCommHR;
-                /* In shadow mode, the motor is driven by reactive
-                 * scheduling with TAL-based advance. The PI model must
-                 * match what reactive actually does, not sync's own
-                 * advance constant. Use the same searchTal-based advance
-                 * that was used for the DMA cluster search. */
+                int16_t dmaVsPoll = (int16_t)(dmaZcHR - hrTick);
+                if (dmaVsPoll >= -40 && dmaVsPoll <= -10)
+                {
+                    syncMeasHR = dmaZcHR;
+                    syncMeasValid = true;
+                }
+            }
+
+            if (syncMeasValid)
+            {
+                uint16_t capValueHR = syncMeasHR - pData->zcSync.lastCommHR;
+                /* PI model: use reactive TAL so setValueHR matches
+                 * where the motor actually operates. */
                 uint16_t modelAdvHR = (pData->zcSync.T_hatHR >> 3) * searchTal;
                 uint16_t setValueHR = (pData->zcSync.T_hatHR >> 1)
                                     + pData->zcSync.detDelayHR
@@ -2007,10 +1982,10 @@ void RecordZcTiming(volatile GARUDA_DATA_T *pData,
                 pData->zcSync.capValueHR  = capValueHR;
                 pData->zcSync.setValueHR  = setValueHR;
                 pData->zcSync.syncErrHR   = errHR;
-                pData->zcSync.clusterMidHR = cl.midpointHR;
-                pData->zcSync.clusterCount = cl.edgeCount;
-                pData->zcSync.clusterWidthHR = cl.widthHR;
-                pData->zcSync.lastMeasHR  = cl.midpointHR;
+                pData->zcSync.clusterMidHR = syncMeasHR;
+                pData->zcSync.clusterCount = 2; /* poll-bounded: at least 2 */
+                pData->zcSync.clusterWidthHR = 0; /* not available from legacy */
+                pData->zcSync.lastMeasHR  = syncMeasHR;
                 pData->zcSync.diagSyncAccepts++;
                 pData->zcSync.missStreak  = 0;
 
@@ -2038,8 +2013,10 @@ void RecordZcTiming(volatile GARUDA_DATA_T *pData,
             }
             else
             {
+                /* Poll-bounded DMA not available or failed plausibility */
                 pData->zcSync.diagSyncMisses++;
-                pData->zcSync.clusterRejectReason = cl.rejectReason;
+                pData->zcSync.clusterRejectReason =
+                    dmaFound ? 3 : 1;  /* 3=out_of_corridor(gate), 1=no_edges */
                 if (pData->zcSync.missStreak < 255)
                     pData->zcSync.missStreak++;
                 pData->zcSync.goodStreak = 0;
