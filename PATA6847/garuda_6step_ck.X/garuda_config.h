@@ -499,10 +499,13 @@
  * Entry at 60k: above TAL transition zone, DMA has data.
  * Exit at 50k: below DMA threshold, poll is reliable. */
 #ifndef ZC_SYNC_ENTRY_ERPM
-#define ZC_SYNC_ENTRY_ERPM       60000UL
+#define ZC_SYNC_ENTRY_ERPM       26000UL  /* Lowered for debugging: get PI
+                                           * measurements at lower speed where
+                                           * reactive margin is positive and
+                                           * motor runs cleanly. */
 #endif
 #ifndef ZC_SYNC_EXIT_ERPM
-#define ZC_SYNC_EXIT_ERPM        50000UL
+#define ZC_SYNC_EXIT_ERPM        20000UL
 #endif
 
 /* Corridor half-width for DMA cluster selection.

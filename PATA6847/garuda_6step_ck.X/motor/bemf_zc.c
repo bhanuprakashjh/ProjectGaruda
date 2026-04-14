@@ -1621,9 +1621,14 @@ void RecordZcTiming(volatile GARUDA_DATA_T *pData,
      * stops feeding the DPLL (e.g. during predictive ownership). */
     pData->dmaShadow.lastCorrectionHR = 0;
     pData->dmaShadow.measSource = 0;  /* 0=none */
+    /* DMA probe: run at any speed where DMA ring has data.
+     * Was previously gated at ZC_IC_DIRECT_THRESHOLD_HR (62k eRPM).
+     * Lowered to ~26k eRPM (600 HR) so the shadow sector PI can get
+     * measurements at lower speeds for debugging. The DMA ring captures
+     * edges at all speeds — this gate only controls when we read it. */
     if (pData->timing.hasPrevZcHR &&
         pData->timing.stepPeriodHR > 0 &&
-        pData->timing.stepPeriodHR < ZC_IC_DIRECT_THRESHOLD_HR)
+        pData->timing.stepPeriodHR < 600u)
     {
         bool risingZc = (commutationTable[pData->currentStep].zcPolarity > 0);
         uint16_t windowOpenHR = pData->timing.prevZcTickHR +

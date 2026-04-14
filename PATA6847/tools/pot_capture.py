@@ -374,7 +374,7 @@ def main():
     print()
     ZC_MODES = ['ACQ', 'TRK', 'RCV']
     SYNC_MODES = ['.', 'S', 'O']  # OFF, SHADOW, OWNED
-    print(f"{'Time':>7s} {'State':>8s} {'ZcM':>3s} {'eRPM':>7s} {'Duty':>4s} {'Vbus':>6s} {'Mrgn':>5s} {'SErr':>5s} {'ST_h':>5s} {'SvR':>5s} {'SM':>2s} {'SGd':>3s} {'SAcc':>5s} {'Corr':>5s} {'Lkd':>3s}")
+    print(f"{'Time':>7s} {'State':>8s} {'ZcM':>3s} {'eRPM':>7s} {'Duty':>4s} {'Vbus':>6s} {'Mrgn':>5s} {'SErr':>5s} {'ST_h':>5s} {'Cap':>5s} {'SM':>2s} {'SGd':>3s} {'SAcc':>5s} {'Corr':>5s} {'Lkd':>3s}")
     print("-" * 120)
 
     rows = []
@@ -436,7 +436,8 @@ def main():
                 sgood = snap.get('syncGoodStreak', 0)
                 sacc = snap.get('syncAccepts', 0)
                 sm_str = SYNC_MODES[smode] if smode < len(SYNC_MODES) else '?'
-                print(f"{t:7.1f} {state_str:>8s} {zc_mode_str:>3s} {snap['eRpm']:7d} {snap['dutyPct']:3d}% {snap['vbusV']:5.1f}V {snap.get('sched_margin_hr', snap.get('schedMarginHR',0)):5d} {serr:+5d} {sthat:5d} {svr:+5d} {sm_str:>2s} {sgood:3d} {sacc:5d} {corr:+5d} {'Y' if locked else '.':>3s}{fault_str}")
+                capv = snap.get('syncVsReactive', 0)  # repurposed: carries capValueHR
+                print(f"{t:7.1f} {state_str:>8s} {zc_mode_str:>3s} {snap['eRpm']:7d} {snap['dutyPct']:3d}% {snap['vbusV']:5.1f}V {snap.get('sched_margin_hr', snap.get('schedMarginHR',0)):5d} {serr:+5d} {sthat:5d} {capv:5d} {sm_str:>2s} {sgood:3d} {sacc:5d} {corr:+5d} {'Y' if locked else '.':>3s}{fault_str}")
 
                 rows.append({
                     'time': round(t, 3),

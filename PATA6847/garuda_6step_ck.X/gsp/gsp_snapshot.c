@@ -191,7 +191,7 @@ void GSP_CaptureSnapshot(GSP_CK_SNAPSHOT_T *dst)
 #if FEATURE_SECTOR_PI
     dst->syncErrHR          = src->zcSync.syncErrHR;
     dst->syncT_hatHR        = src->zcSync.T_hatHR;
-    dst->syncVsReactive     = src->zcSync.syncVsReactiveDelta;
+    dst->syncVsReactive     = (int16_t)src->zcSync.capValueHR;  /* DEBUG: repurposed for capValueHR */
     dst->syncMode           = src->zcSync.mode;
     dst->syncGoodStreak     = src->zcSync.goodStreak;
     dst->syncMissStreak     = src->zcSync.missStreak;
