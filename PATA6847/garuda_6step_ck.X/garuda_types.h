@@ -286,6 +286,62 @@ typedef struct {
 } ZC_PRED_T;
 #endif
 
+/* ── Sector PI synchronizer state (FEATURE_SECTOR_PI) ──────────────── */
+#if FEATURE_SECTOR_PI
+typedef struct {
+    /* ── Control state ─────────────────────────────────────────────
+     * PI synchronizer modeled on Microchip AVR high-speed example.
+     * Measures ZC position within sector (elapsed from commutation),
+     * compares to expected position, drives sector period via PI.
+     *
+     * Model:
+     *   capValueHR  = t_meas - lastCommHR        (where ZC fell)
+     *   setValueHR  = T_hat/2 + detDelay + advCmd (where ZC expected)
+     *   syncErrHR   = capValue - setValue
+     *   syncIntHR  += syncErr >> KI_SHIFT
+     *   T_hatHR     = syncIntHR + (syncErr >> KP_SHIFT)
+     *   nextCommHR  = lastCommHR + T_hatHR
+     */
+    uint16_t T_hatHR;             /* Sector period estimate (60° electrical) */
+    uint16_t syncIntHR;           /* PI integrator state */
+    uint16_t lastCommHR;          /* HR timestamp of last commutation */
+    uint16_t lastMeasHR;          /* HR timestamp of last accepted ZC measurement */
+    bool     prevStepRisingZc;    /* Polarity of the step that just completed */
+
+    /* Per-sector measurement (from DMA) */
+    uint16_t capValueHR;          /* Elapsed: measHR - lastCommHR */
+    uint16_t setValueHR;          /* Expected: T_hat/2 + detDelay + advCmd */
+    int16_t  syncErrHR;           /* Phase error: capValue - setValue */
+
+    /* Explicit advance/delay (NOT mixed, NOT estimated online) */
+    uint16_t detDelayHR;          /* Fixed detector pipeline delay (HR ticks) */
+    uint16_t advanceCmdHR;        /* Speed-dependent torque advance (HR ticks) */
+
+    /* Cluster info from extended DMA selector */
+    uint16_t clusterMidHR;        /* Selected cluster midpoint */
+    uint8_t  clusterCount;        /* Edges in selected cluster */
+    uint16_t clusterWidthHR;      /* Last - first edge in cluster */
+    uint8_t  clusterRejectReason; /* 0=accepted, 1=no_edges, 2=no_cluster,
+                                   * 3=out_of_corridor, 4=single_edge */
+
+    /* Mode control */
+    uint8_t  mode;                /* 0=OFF, 1=SHADOW, 2=OWNED */
+    uint8_t  goodStreak;          /* Consecutive sectors with |syncErr| < threshold */
+    uint8_t  missStreak;          /* Consecutive sectors with no DMA ZC */
+    uint8_t  fallbackReason;      /* Why ownership exited (0=none, 1=miss,
+                                   * 2=syncErr, 3=speed, 4=notCL) */
+
+    /* Shadow comparison */
+    int16_t  syncVsReactiveDelta; /* nextCommHR(sync) - targetHR(reactive) */
+
+    /* Telemetry counters */
+    uint16_t diagSyncAccepts;     /* Sectors with valid DMA measurement */
+    uint16_t diagSyncMisses;      /* Sectors with no DMA measurement */
+    uint16_t diagSyncEntries;     /* Times ownership was entered */
+    uint16_t diagSyncExits;       /* Times ownership was exited */
+} ZC_SYNC_T;
+#endif
+
 /* ── DMA shadow capture state ───────────────────────────────────────── */
 #if FEATURE_IC_DMA_SHADOW
 typedef struct {
@@ -419,6 +475,9 @@ typedef struct {
 #endif
 #if FEATURE_IC_DMA_SHADOW
     DMA_SHADOW_T   dmaShadow;
+#endif
+#if FEATURE_SECTOR_PI
+    ZC_SYNC_T      zcSync;
 #endif
     SPEED_PD_T     speedPd;
 

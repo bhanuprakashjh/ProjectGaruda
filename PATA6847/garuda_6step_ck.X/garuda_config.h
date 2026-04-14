@@ -443,6 +443,75 @@
 #define FEATURE_IC_ZC_CAPTURE   0   /* Shadow takes exclusive ownership of CCP2 */
 #endif
 
+/* ── Sector PI synchronizer (FEATURE_SECTOR_PI) ────────────────────
+ * New high-speed control path modeled on Microchip AVR high-speed
+ * example. Uses hardware-captured ZC (DMA ring) + PI on phase error
+ * + explicit fixed detector delay + explicit torque advance.
+ *
+ * Does NOT modify the reactive poll-timed path. Runs in shadow
+ * first (mode=1), then takes ownership (mode=2) at high speed.
+ * Reactive path stays as fallback.
+ *
+ * Requires FEATURE_IC_DMA_SHADOW. */
+#ifndef FEATURE_SECTOR_PI
+#define FEATURE_SECTOR_PI        1
+#endif
+
+/* Detector delay: sum of three fixed hardware pipeline components.
+ * Precomputed to integer HR ticks (640 ns each). No float in hot path.
+ *
+ * ATA6847 comparator propagation:  ~2 µs → 3 HR ticks
+ * RC filter on phase inputs:       ~0 µs → 0 HR ticks (CK board has CLC, no RC)
+ * DMA cluster selector bias:       ~1 µs → 2 HR ticks (midpoint vs true edge) */
+#ifndef ZC_EXTCMP_DELAY_HR
+#define ZC_EXTCMP_DELAY_HR       3U
+#endif
+#ifndef ZC_RC_DELAY_HR
+#define ZC_RC_DELAY_HR           0U
+#endif
+#ifndef ZC_CLUSTER_BIAS_HR
+#define ZC_CLUSTER_BIAS_HR       2U
+#endif
+#define ZC_SYNC_DET_DELAY_HR     (ZC_EXTCMP_DELAY_HR + ZC_RC_DELAY_HR + ZC_CLUSTER_BIAS_HR)
+
+/* Torque advance: pure motor-dependent angle (electrical degrees).
+ * 10° is the Microchip default for similar KV motors (A2207-2500KV).
+ * NOT mixed with detector latency. Converted to HR ticks at runtime
+ * using integer multiply: advHR = (deg * 256 / 60) * T_hatHR >> 8.
+ * The constant below is the fixed-point multiplier (deg * 256 / 60). */
+#ifndef ZC_SYNC_ADVANCE_DEG
+#define ZC_SYNC_ADVANCE_DEG      10.0f
+#endif
+#define ZC_SYNC_ADVANCE_FP8      ((uint16_t)(ZC_SYNC_ADVANCE_DEG * 256.0f / 60.0f + 0.5f))
+
+/* PI gains (bit shifts for division).
+ * Kp = 1/4: fast transient response to speed changes.
+ * Ki = 1/16: smooth long-term frequency tracking.
+ * Matches Microchip example: motor.c lines 444 (>>4) and 448 (>>2). */
+#ifndef ZC_SYNC_KP_SHIFT
+#define ZC_SYNC_KP_SHIFT         2
+#endif
+#ifndef ZC_SYNC_KI_SHIFT
+#define ZC_SYNC_KI_SHIFT         4
+#endif
+
+/* Speed thresholds with hysteresis.
+ * Entry at 60k: above TAL transition zone, DMA has data.
+ * Exit at 50k: below DMA threshold, poll is reliable. */
+#ifndef ZC_SYNC_ENTRY_ERPM
+#define ZC_SYNC_ENTRY_ERPM       60000UL
+#endif
+#ifndef ZC_SYNC_EXIT_ERPM
+#define ZC_SYNC_EXIT_ERPM        50000UL
+#endif
+
+/* Corridor half-width for DMA cluster selection.
+ * Clusters outside expectedHR ± corridor are rejected.
+ * Default: T_hatHR/4 (±15° = ±25% of sector period). */
+#ifndef ZC_SYNC_CORRIDOR_DIV
+#define ZC_SYNC_CORRIDOR_DIV     4
+#endif
+
 #ifndef FEATURE_REACTIVE_LATENCY_SPLIT
 #define FEATURE_REACTIVE_LATENCY_SPLIT  0  /* DISABLED — experiment proved that
                                             * splitting TAL in the reactive path

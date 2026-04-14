@@ -304,6 +304,32 @@ void BEMF_ZC_Init(volatile GARUDA_DATA_T *pData)
     pData->zcPred.predCloseDisagreeCount = 0;
 #endif
 #endif
+
+#if FEATURE_SECTOR_PI
+    pData->zcSync.T_hatHR           = 0;
+    pData->zcSync.syncIntHR         = 0;
+    pData->zcSync.lastCommHR        = 0;
+    pData->zcSync.lastMeasHR        = 0;
+    pData->zcSync.prevStepRisingZc  = false;
+    pData->zcSync.capValueHR        = 0;
+    pData->zcSync.setValueHR        = 0;
+    pData->zcSync.syncErrHR         = 0;
+    pData->zcSync.detDelayHR        = ZC_SYNC_DET_DELAY_HR;
+    pData->zcSync.advanceCmdHR      = 0;
+    pData->zcSync.clusterMidHR      = 0;
+    pData->zcSync.clusterCount      = 0;
+    pData->zcSync.clusterWidthHR    = 0;
+    pData->zcSync.clusterRejectReason = 0;
+    pData->zcSync.mode              = 0;  /* OFF */
+    pData->zcSync.goodStreak        = 0;
+    pData->zcSync.missStreak        = 0;
+    pData->zcSync.fallbackReason    = 0;
+    pData->zcSync.syncVsReactiveDelta = 0;
+    pData->zcSync.diagSyncAccepts   = 0;
+    pData->zcSync.diagSyncMisses    = 0;
+    pData->zcSync.diagSyncEntries   = 0;
+    pData->zcSync.diagSyncExits     = 0;
+#endif
 }
 
 #if FEATURE_IC_ZC
