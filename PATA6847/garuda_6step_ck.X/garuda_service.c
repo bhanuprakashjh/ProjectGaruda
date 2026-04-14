@@ -1234,8 +1234,11 @@ void __attribute__((interrupt, no_auto_psv)) _CCT3Interrupt(void)
                 gData.timing.deadlineActive = true;
             }
 
-            /* Update lastCommHR for next sector's PI */
-            gData.zcSync.lastCommHR = gData.zcPred.lastReactiveTargetHR;
+            /* Update lastCommHR for next sector's PI.
+             * In owned mode, use the PI's own commutation time —
+             * NOT lastReactiveTargetHR, which stops updating when
+             * reactive scheduling is skipped. */
+            gData.zcSync.lastCommHR = thisCommHR;
             /* prevStepRisingZc updated in OnCommutation below */
 
             /* Exit conditions */
