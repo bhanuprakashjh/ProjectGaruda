@@ -1931,10 +1931,12 @@ void RecordZcTiming(volatile GARUDA_DATA_T *pData,
             uint16_t refHR = pData->zcCtrl.refIntervalHR;
             if (refHR == 0) refHR = pData->zcSync.T_hatHR;
 
-            /* Compute eRPM for reactive advance lookup */
-            uint32_t syncERPM = 0;
-            if (refHR > 0) syncERPM = 15625000UL / refHR;
-            uint8_t searchTal = AdaptiveTimingAdvance(syncERPM);
+            /* Use the reactive TAL that was already computed by
+             * ScheduleCommutation for this step. Do NOT call
+             * AdaptiveTimingAdvance() here — it has a static local
+             * variable that would be corrupted by a second call
+             * with a different eRPM. */
+            uint8_t searchTal = pData->zcPred.lastReactiveTAL;
 
             /* Expected ZC position within sector.
              * With advance, commutation fires earlier relative to the
