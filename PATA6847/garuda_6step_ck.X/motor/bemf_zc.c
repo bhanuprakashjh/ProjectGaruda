@@ -1947,7 +1947,14 @@ void RecordZcTiming(volatile GARUDA_DATA_T *pData,
             if (dmaFound)
             {
                 int16_t dmaVsPoll = (int16_t)(dmaZcHR - hrTick);
-                if (dmaVsPoll >= -40 && dmaVsPoll <= -10)
+                /* Gate: DMA cluster must be before poll but not too far.
+                 * Old gate was -40 to -10. The -10 lower bound rejected
+                 * valid clusters at high speed where poll accepts fast
+                 * and the DMA-poll gap shrinks to 0-10 HR. This biased
+                 * capValueHR early, causing the -25 HR T_hat gap.
+                 * Widened to -40 to 0 — any DMA cluster at or before
+                 * poll is accepted. */
+                if (dmaVsPoll >= -40 && dmaVsPoll <= 0)
                 {
                     syncMeasHR = dmaZcHR;
                     syncMeasValid = true;
