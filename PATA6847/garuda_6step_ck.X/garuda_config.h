@@ -464,6 +464,18 @@
  * RC filter on phase inputs:       ~0 µs → 0 HR ticks (CK board has CLC, no RC)
  * DMA cluster selector bias:       ~1 µs → 2 HR ticks (midpoint vs true edge) */
 #ifndef ZC_EXTCMP_DELAY_HR
+/* Detector delay components in HR ticks (640 ns each).
+ *
+ * Measured from CSV pot_capture_20260414_175759.csv:
+ * T_hat gap is consistently -24 to -27 HR in the 26-60k band
+ * where acceptance is 99% and the motor runs cleanly.
+ * This gap = true detector delay not accounted for in the model.
+ *
+ * ATA6847 comparator propagation:       ~2 µs →  3 HR
+ * Poll filter delay (multi-read):       ~10 µs → 16 HR
+ * DMA cluster bias (midpoint vs edge):  ~1 µs →  2 HR
+ * Poll-to-DMA offset residual:          ~2 µs →  4 HR
+ * Total:                                ~15 µs   25 HR */
 #define ZC_EXTCMP_DELAY_HR       3U
 #endif
 #ifndef ZC_RC_DELAY_HR
@@ -472,7 +484,10 @@
 #ifndef ZC_CLUSTER_BIAS_HR
 #define ZC_CLUSTER_BIAS_HR       2U
 #endif
-#define ZC_SYNC_DET_DELAY_HR     (ZC_EXTCMP_DELAY_HR + ZC_RC_DELAY_HR + ZC_CLUSTER_BIAS_HR)
+#ifndef ZC_POLL_FILTER_DELAY_HR
+#define ZC_POLL_FILTER_DELAY_HR  20U   /* Poll multi-read filter + DMA offset */
+#endif
+#define ZC_SYNC_DET_DELAY_HR     (ZC_EXTCMP_DELAY_HR + ZC_RC_DELAY_HR + ZC_CLUSTER_BIAS_HR + ZC_POLL_FILTER_DELAY_HR)
 
 /* Torque advance: pure motor-dependent angle (electrical degrees).
  * 10° is the Microchip default for similar KV motors (A2207-2500KV).
