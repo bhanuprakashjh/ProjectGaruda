@@ -485,7 +485,9 @@
 #define ZC_CLUSTER_BIAS_HR       2U
 #endif
 #ifndef ZC_POLL_FILTER_DELAY_HR
-#define ZC_POLL_FILTER_DELAY_HR  20U   /* Poll multi-read filter + DMA offset */
+#define ZC_POLL_FILTER_DELAY_HR  0U    /* Reverted: increasing delay made gap
+                                        * WORSE not better. The model sign needs
+                                        * review before tuning this. */
 #endif
 #define ZC_SYNC_DET_DELAY_HR     (ZC_EXTCMP_DELAY_HR + ZC_RC_DELAY_HR + ZC_CLUSTER_BIAS_HR + ZC_POLL_FILTER_DELAY_HR)
 
