@@ -530,7 +530,11 @@ void BEMF_ZC_OnCommutation(volatile GARUDA_DATA_T *pData)
      * already programmed the next compare and is relying on this flag
      * to gate the next _CCP4Interrupt. */
 #if FEATURE_IC_ZC
-    if (!pData->zcPred.predictiveMode)
+    if (!pData->zcPred.predictiveMode
+#if FEATURE_SECTOR_PI
+        && pData->zcSync.mode != 2
+#endif
+        )
     {
         pData->timing.deadlineActive = false;
         HAL_ComTimer_Cancel();

@@ -1169,6 +1169,10 @@ void __attribute__((interrupt, no_auto_psv)) _CCT3Interrupt(void)
             bool zcFound = HAL_ZcDma_DetectZc(
                 windowOpenHR, windowCloseHR, risingZc, &dmaZcHR);
 
+            /* DEBUG: store window for telemetry diagnosis */
+            gData.zcSync.capValueHR = (uint16_t)(windowCloseHR - windowOpenHR);
+            gData.zcSync.setValueHR = zcFound ? (uint16_t)(dmaZcHR - windowOpenHR) : 0;
+
             if (zcFound)
             {
                 int16_t dmaVsPoll = (int16_t)(dmaZcHR - windowCloseHR);
