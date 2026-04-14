@@ -306,7 +306,7 @@ typedef struct {
     uint16_t syncIntHR;           /* PI integrator state */
     uint16_t lastCommHR;          /* HR timestamp of last commutation */
     uint16_t lastMeasHR;          /* HR timestamp of last accepted ZC measurement */
-    bool     prevStepRisingZc;    /* Polarity of the step that just completed */
+    bool     prevStepRisingZc;    /* Polarity of current active sector (after AdvanceStep) */
 
     /* Per-sector measurement (from DMA) */
     uint16_t capValueHR;          /* Elapsed: measHR - lastCommHR */

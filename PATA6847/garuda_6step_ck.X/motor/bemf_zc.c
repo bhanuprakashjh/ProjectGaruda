@@ -822,9 +822,11 @@ void BEMF_ZC_OnCommutation(volatile GARUDA_DATA_T *pData)
 
 #if FEATURE_SECTOR_PI && FEATURE_IC_DMA_SHADOW
     /* ── Sector PI: update per-commutation state ──────────────────
-     * prevStepRisingZc records the polarity of the step that just
-     * completed (needed by the DMA query, which reads the previous
-     * step's ring). lastCommHR tracks commutation time.
+     * prevStepRisingZc records the polarity of the CURRENT active
+     * sector (after AdvanceStep). In shadow mode the DMA comm marker
+     * is also refreshed for the current sector, so this is consistent.
+     * NOTE: for Phase 5 ownership, the ISR must query the DMA ring
+     * BEFORE AdvanceStep/OnCommutation update the markers.
      *
      * Mode entry: when speed crosses ZC_SYNC_ENTRY_ERPM, activate
      * shadow mode and seed T_hat from the reactive IIR. */
@@ -1913,15 +1915,30 @@ void RecordZcTiming(volatile GARUDA_DATA_T *pData,
         if (pData->zcSync.mode >= 1 &&  /* SHADOW or OWNED */
             pData->zcSync.T_hatHR > 0)
         {
+            /* Anchor the expected ZC and corridor to refIntervalHR
+             * (the reactive IIR), NOT to T_hat. This prevents the
+             * self-reinforcing selector failure where a shrinking
+             * T_hat moves the corridor earlier, finds noise clusters,
+             * and confirms the bad T_hat.
+             *
+             * T_hat is only used for the PI model (setValueHR).
+             * The DMA cluster search uses the reactive period as the
+             * independent reference for where to look. */
+            uint16_t refHR = pData->zcCtrl.refIntervalHR;
+            if (refHR == 0) refHR = pData->zcSync.T_hatHR;
+
+            /* Expected ZC from reactive reference (for cluster search) */
+            uint16_t refAdvHR = (uint16_t)(
+                (uint32_t)ZC_SYNC_ADVANCE_FP8 * refHR >> 8);
             uint16_t expectedHR = (uint16_t)(
                 pData->zcSync.lastCommHR
-                + (pData->zcSync.T_hatHR >> 1)
+                + (refHR >> 1)
                 + pData->zcSync.detDelayHR
-                + pData->zcSync.advanceCmdHR);
+                + refAdvHR);
 
-            uint16_t corridorHR = pData->zcSync.T_hatHR / ZC_SYNC_CORRIDOR_DIV;
+            uint16_t corridorHR = refHR / ZC_SYNC_CORRIDOR_DIV;
             uint16_t windowOpenHR = pData->zcSync.lastCommHR
-                                  + (pData->zcSync.T_hatHR >> 2);
+                                  + (refHR >> 2);
             /* Use blanking end if it's later than 25% gate */
             if ((int16_t)(pData->icZc.blankingEndHR - windowOpenHR) > 0)
                 windowOpenHR = pData->icZc.blankingEndHR;
@@ -1940,15 +1957,25 @@ void RecordZcTiming(volatile GARUDA_DATA_T *pData,
                                     + pData->zcSync.advanceCmdHR;
                 int16_t errHR = (int16_t)(capValueHR - setValueHR);
 
-                /* PI update */
-                int32_t newInt = (int32_t)pData->zcSync.syncIntHR
-                               + (errHR >> ZC_SYNC_KI_SHIFT);
+                /* PI update — unbiased rounding on right shift.
+                 * Arithmetic right shift of negative values truncates
+                 * toward -∞: (-12 >> 4) = -1, but (+12 >> 4) = 0.
+                 * This ratchets the integrator downward even when the
+                 * mean error is zero. Fix: negate-shift-negate for
+                 * negative values to get symmetric truncation toward 0. */
+                int16_t kiCorr = (errHR >= 0)
+                    ? (errHR >> ZC_SYNC_KI_SHIFT)
+                    : -((-errHR) >> ZC_SYNC_KI_SHIFT);
+                int16_t kpCorr = (errHR >= 0)
+                    ? (errHR >> ZC_SYNC_KP_SHIFT)
+                    : -((-errHR) >> ZC_SYNC_KP_SHIFT);
+
+                int32_t newInt = (int32_t)pData->zcSync.syncIntHR + kiCorr;
                 if (newInt < 50) newInt = 50;
                 if (newInt > 2000) newInt = 2000;
                 pData->zcSync.syncIntHR = (uint16_t)newInt;
 
-                int32_t newT = (int32_t)pData->zcSync.syncIntHR
-                             + (errHR >> ZC_SYNC_KP_SHIFT);
+                int32_t newT = (int32_t)pData->zcSync.syncIntHR + kpCorr;
                 if (newT < 50) newT = 50;
                 if (newT > 2000) newT = 2000;
                 pData->zcSync.T_hatHR = (uint16_t)newT;
