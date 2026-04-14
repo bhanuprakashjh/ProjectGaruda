@@ -2031,9 +2031,14 @@ void RecordZcTiming(volatile GARUDA_DATA_T *pData,
                 /* PI model: use reactive TAL so setValueHR matches
                  * where the motor actually operates. */
                 uint16_t modelAdvHR = (pData->zcSync.T_hatHR >> 3) * searchTal;
+                /* Microchip ADDS RC delay because their filter makes
+                 * the capture arrive LATE. Our DMA captures EARLY
+                 * (before poll), so we SUBTRACT the detector offset.
+                 * capValue = trueElapsed - dmaEarlyOffset
+                 * setValue must match: T_hat/2 + adv - detDelay */
                 uint16_t setValueHR = (pData->zcSync.T_hatHR >> 1)
-                                    + pData->zcSync.detDelayHR
-                                    + modelAdvHR;
+                                    + modelAdvHR
+                                    - pData->zcSync.detDelayHR;
                 int16_t errHR = (int16_t)(capValueHR - setValueHR);
 
                 /* PI update — unbiased rounding on right shift.

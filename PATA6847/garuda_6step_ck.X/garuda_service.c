@@ -1197,8 +1197,8 @@ void __attribute__((interrupt, no_auto_psv)) _CCT3Interrupt(void)
                     uint8_t searchTal = gData.zcPred.lastReactiveTAL;
                     uint16_t modelAdvHR = (gData.zcSync.T_hatHR >> 3) * searchTal;
                     uint16_t setValueHR = (gData.zcSync.T_hatHR >> 1)
-                                        + gData.zcSync.detDelayHR
-                                        + modelAdvHR;
+                                        + modelAdvHR
+                                        - gData.zcSync.detDelayHR;
                     int16_t errHR = (int16_t)(capValueHR - setValueHR);
 
                     /* PI update — symmetric truncation */

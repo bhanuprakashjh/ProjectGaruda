@@ -485,9 +485,11 @@
 #define ZC_CLUSTER_BIAS_HR       2U
 #endif
 #ifndef ZC_POLL_FILTER_DELAY_HR
-#define ZC_POLL_FILTER_DELAY_HR  0U    /* Reverted: increasing delay made gap
-                                        * WORSE not better. The model sign needs
-                                        * review before tuning this. */
+#define ZC_POLL_FILTER_DELAY_HR  20U   /* DMA captures ZC ~25 HR BEFORE poll.
+                                        * This is SUBTRACTED from setValueHR
+                                        * (not added) because the DMA measurement
+                                        * is EARLY, unlike Microchip's RC filter
+                                        * which makes measurements LATE. */
 #endif
 #define ZC_SYNC_DET_DELAY_HR     (ZC_EXTCMP_DELAY_HR + ZC_RC_DELAY_HR + ZC_CLUSTER_BIAS_HR + ZC_POLL_FILTER_DELAY_HR)
 
