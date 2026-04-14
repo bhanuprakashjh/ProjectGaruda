@@ -832,7 +832,12 @@ void BEMF_ZC_OnCommutation(volatile GARUDA_DATA_T *pData)
      * shadow mode and seed T_hat from the reactive IIR. */
     pData->zcSync.prevStepRisingZc =
         (commutationTable[pData->currentStep].zcPolarity > 0);
-    pData->zcSync.lastCommHR = pData->icZc.lastCommHR;
+    /* Use lastReactiveTargetHR — the value passed to ScheduleAbsolute,
+     * which is the actual commutation time (SCCP4 compare match target).
+     * ReadTimer() at ISR entry includes interrupt latency (1-5 µs).
+     * icZc.lastCommHR includes ISR + processing latency (10-30 µs).
+     * The scheduled target is the true commutation moment. */
+    pData->zcSync.lastCommHR = pData->zcPred.lastReactiveTargetHR;
 
     if (pData->state == ESC_CLOSED_LOOP &&
         pData->zcSync.mode == 0 &&
