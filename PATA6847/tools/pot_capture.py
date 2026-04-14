@@ -270,29 +270,48 @@ def decode_ck_snapshot(data):
         s['predCloseDisagree'] = 0
         s['dpllFallbackReason'] = 0
         s['measSource'] = 0
-    # V12: icBounce — shifted +14 by DPLL fields
-    if len(data) >= 202:
-        s['icBounce'] = struct.unpack_from('<H', data, 200)[0]
+    # Sector PI synchronizer telemetry (14 bytes at offset 200)
+    if len(data) >= 214:
+        s['syncErrHR'] = struct.unpack_from('<h', data, 200)[0]
+        s['syncT_hatHR'] = struct.unpack_from('<H', data, 202)[0]
+        s['syncVsReactive'] = struct.unpack_from('<h', data, 204)[0]
+        s['syncMode'] = data[206]
+        s['syncGoodStreak'] = data[207]
+        s['syncMissStreak'] = data[208]
+        s['syncClusterCount'] = data[209]
+        s['syncAccepts'] = struct.unpack_from('<H', data, 210)[0]
+        s['syncMisses'] = struct.unpack_from('<H', data, 212)[0]
+    else:
+        s['syncErrHR'] = 0
+        s['syncT_hatHR'] = 0
+        s['syncVsReactive'] = 0
+        s['syncMode'] = 0
+        s['syncGoodStreak'] = 0
+        s['syncMissStreak'] = 0
+        s['syncClusterCount'] = 0
+        s['syncAccepts'] = 0
+        s['syncMisses'] = 0
+    # V12: icBounce — shifted +14 by sync fields
+    if len(data) >= 216:
+        s['icBounce'] = struct.unpack_from('<H', data, 214)[0]
     else:
         s['icBounce'] = 0
-    # V13: DMA shadow telemetry (24 bytes starting at offset 198, was 192)
+    # V13: DMA shadow telemetry (24 bytes, shifted +14 by sync fields)
     # Fields: stepCount (u32), matchCount (u32), ringOverflow (u32),
     #         edgesAvgX16 (u16), earliestVsPoll (i16), earliestVsExp (i16),
     #         closestVsExp (i16), pollVsExp (i16),
     #         lastEdgeCount (u8), lastFound (u8)
-    # 32-bit counters avoid the uint16 wrap that caused DmaM% display
-    # glitches at 60k+ eRPM.
-    if len(data) >= 226:
-        s['dmaStepCount']       = struct.unpack_from('<I', data, 202)[0]
-        s['dmaMatchCount']      = struct.unpack_from('<I', data, 206)[0]
-        s['dmaRingOverflow']    = struct.unpack_from('<I', data, 210)[0]
-        s['dmaEdgesAvgX16']     = struct.unpack_from('<H', data, 214)[0]
-        s['dmaEarlyVsPoll']     = struct.unpack_from('<h', data, 216)[0]
-        s['dmaEarlyVsExp']      = struct.unpack_from('<h', data, 218)[0]
-        s['dmaClosestVsExp']    = struct.unpack_from('<h', data, 220)[0]
-        s['dmaPollVsExp']       = struct.unpack_from('<h', data, 222)[0]
-        s['dmaLastEdgeCount']   = data[224]
-        s['dmaLastFound']       = data[225]
+    if len(data) >= 240:
+        s['dmaStepCount']       = struct.unpack_from('<I', data, 216)[0]
+        s['dmaMatchCount']      = struct.unpack_from('<I', data, 220)[0]
+        s['dmaRingOverflow']    = struct.unpack_from('<I', data, 224)[0]
+        s['dmaEdgesAvgX16']     = struct.unpack_from('<H', data, 228)[0]
+        s['dmaEarlyVsPoll']     = struct.unpack_from('<h', data, 230)[0]
+        s['dmaEarlyVsExp']      = struct.unpack_from('<h', data, 232)[0]
+        s['dmaClosestVsExp']    = struct.unpack_from('<h', data, 234)[0]
+        s['dmaPollVsExp']       = struct.unpack_from('<h', data, 236)[0]
+        s['dmaLastEdgeCount']   = data[238]
+        s['dmaLastFound']       = data[239]
     else:
         s['dmaStepCount'] = 0
         s['dmaMatchCount'] = 0
@@ -308,13 +327,13 @@ def decode_ck_snapshot(data):
     # Fields: subCount (u32), subSkipGated (u32), subSkipRange (u32),
     #         lastCorrectionHR (i16), minCorrectionHR (i16),
     #         maxCorrectionHR (i16)
-    if len(data) >= 244:
-        s['dmaSubCount']        = struct.unpack_from('<I', data, 226)[0]
-        s['dmaSubSkipGated']    = struct.unpack_from('<I', data, 230)[0]
-        s['dmaSubSkipRange']    = struct.unpack_from('<I', data, 234)[0]
-        s['dmaLastCorrectionHR'] = struct.unpack_from('<h', data, 238)[0]
-        s['dmaMinCorrectionHR']  = struct.unpack_from('<h', data, 240)[0]
-        s['dmaMaxCorrectionHR']  = struct.unpack_from('<h', data, 242)[0]
+    if len(data) >= 258:
+        s['dmaSubCount']        = struct.unpack_from('<I', data, 240)[0]
+        s['dmaSubSkipGated']    = struct.unpack_from('<I', data, 244)[0]
+        s['dmaSubSkipRange']    = struct.unpack_from('<I', data, 248)[0]
+        s['dmaLastCorrectionHR'] = struct.unpack_from('<h', data, 252)[0]
+        s['dmaMinCorrectionHR']  = struct.unpack_from('<h', data, 254)[0]
+        s['dmaMaxCorrectionHR']  = struct.unpack_from('<h', data, 256)[0]
     else:
         s['dmaSubCount'] = 0
         s['dmaSubSkipGated'] = 0
@@ -369,7 +388,8 @@ def main():
     print(f"  Press Ctrl+C to stop")
     print()
     ZC_MODES = ['ACQ', 'TRK', 'RCV']
-    print(f"{'Time':>7s} {'State':>8s} {'ZcM':>3s} {'eRPM':>7s} {'Duty':>4s} {'Vbus':>6s} {'Mrgn':>5s} {'Bias':>5s} {'DErr':>5s} {'Corr':>5s} {'PrM':>3s} {'POwn':>6s} {'PAgr':>6s} {'PDis':>5s} {'Lkd':>3s}")
+    SYNC_MODES = ['.', 'S', 'O']  # OFF, SHADOW, OWNED
+    print(f"{'Time':>7s} {'State':>8s} {'ZcM':>3s} {'eRPM':>7s} {'Duty':>4s} {'Vbus':>6s} {'Mrgn':>5s} {'SErr':>5s} {'ST_h':>5s} {'SvR':>5s} {'SM':>2s} {'SGd':>3s} {'SAcc':>5s} {'Corr':>5s} {'Lkd':>3s}")
     print("-" * 120)
 
     rows = []
@@ -422,16 +442,16 @@ def main():
                 rft = f"{snap['risingTimeouts']:5d}/{snap['fallingTimeouts']:<5d}"
                 lck = 'Y' if snap.get('predLocked', 0) else 'N'
                 gat = 'Y' if snap.get('gateActive', 0) else 'N'
-                prd = 'Y' if snap.get('predictiveMode', 0) else 'N'
-                bias = snap.get('dpllPhaseBiasHR', 0)
-                derr = snap.get('dpllErrHR', 0)
-                corr = snap.get('dmaLastCorrectionHR', 0)
-                pagr = snap.get('predCloseAgree', 0)
-                pdis = snap.get('predCloseDisagree', 0)
                 locked = snap.get('predLocked', 0)
-                prm = snap.get('predictiveMode', 0)
-                pown = snap.get('predCommOwned', 0)
-                print(f"{t:7.1f} {state_str:>8s} {zc_mode_str:>3s} {snap['eRpm']:7d} {snap['dutyPct']:3d}% {snap['vbusV']:5.1f}V {snap.get('sched_margin_hr', snap.get('schedMarginHR',0)):5d} {bias:+5d} {derr:+5d} {corr:+5d} {prm:3d} {pown:6d} {pagr:6d} {pdis:5d} {'Y' if locked else '.':>3s}{fault_str}")
+                corr = snap.get('dmaLastCorrectionHR', 0)
+                serr = snap.get('syncErrHR', 0)
+                sthat = snap.get('syncT_hatHR', 0)
+                svr = snap.get('syncVsReactive', 0)
+                smode = snap.get('syncMode', 0)
+                sgood = snap.get('syncGoodStreak', 0)
+                sacc = snap.get('syncAccepts', 0)
+                sm_str = SYNC_MODES[smode] if smode < len(SYNC_MODES) else '?'
+                print(f"{t:7.1f} {state_str:>8s} {zc_mode_str:>3s} {snap['eRpm']:7d} {snap['dutyPct']:3d}% {snap['vbusV']:5.1f}V {snap.get('sched_margin_hr', snap.get('schedMarginHR',0)):5d} {serr:+5d} {sthat:5d} {svr:+5d} {sm_str:>2s} {sgood:3d} {sacc:5d} {corr:+5d} {'Y' if locked else '.':>3s}{fault_str}")
 
                 rows.append({
                     'time': round(t, 3),
@@ -542,6 +562,15 @@ def main():
                     'pred_phase_err_hr': snap.get('predPhaseErrHR', 0),
                     'pred_locked': snap.get('predLocked', 0),
                     'pred_step_hr': snap.get('predStepHR', 0),
+                    'sync_err_hr': snap.get('syncErrHR', 0),
+                    'sync_t_hat_hr': snap.get('syncT_hatHR', 0),
+                    'sync_vs_reactive': snap.get('syncVsReactive', 0),
+                    'sync_mode': snap.get('syncMode', 0),
+                    'sync_good_streak': snap.get('syncGoodStreak', 0),
+                    'sync_miss_streak': snap.get('syncMissStreak', 0),
+                    'sync_cluster_count': snap.get('syncClusterCount', 0),
+                    'sync_accepts': snap.get('syncAccepts', 0),
+                    'sync_misses': snap.get('syncMisses', 0),
                 })
 
             time.sleep(0.01)

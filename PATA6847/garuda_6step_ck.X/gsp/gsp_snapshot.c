@@ -195,6 +195,29 @@ void GSP_CaptureSnapshot(GSP_CK_SNAPSHOT_T *dst)
     dst->measSource         = 0;
 #endif
 
+    /* Sector PI synchronizer telemetry */
+#if FEATURE_SECTOR_PI
+    dst->syncErrHR          = src->zcSync.syncErrHR;
+    dst->syncT_hatHR        = src->zcSync.T_hatHR;
+    dst->syncVsReactive     = src->zcSync.syncVsReactiveDelta;
+    dst->syncMode           = src->zcSync.mode;
+    dst->syncGoodStreak     = src->zcSync.goodStreak;
+    dst->syncMissStreak     = src->zcSync.missStreak;
+    dst->syncClusterCount   = src->zcSync.clusterCount;
+    dst->syncAccepts        = src->zcSync.diagSyncAccepts;
+    dst->syncMisses         = src->zcSync.diagSyncMisses;
+#else
+    dst->syncErrHR          = 0;
+    dst->syncT_hatHR        = 0;
+    dst->syncVsReactive     = 0;
+    dst->syncMode           = 0;
+    dst->syncGoodStreak     = 0;
+    dst->syncMissStreak     = 0;
+    dst->syncClusterCount   = 0;
+    dst->syncAccepts        = 0;
+    dst->syncMisses         = 0;
+#endif
+
     /* IC bounce: SCCP2 captures rejected by the 50% interval gate.
      * Gated on FEATURE_IC_ZC_CAPTURE because the field only exists
      * in that configuration. When FEATURE_IC_DMA_SHADOW takes over

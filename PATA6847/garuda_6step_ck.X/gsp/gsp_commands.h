@@ -219,6 +219,17 @@ typedef struct __attribute__((packed)) {
     uint8_t  dpllFallbackReason; /* Why predictive mode exited (0=none) */
     uint8_t  measSource;       /* What fed DPLL this step: 0=none 1=poll 2=DMA */
 
+    /* Sector PI synchronizer telemetry (14B) */
+    int16_t  syncErrHR;       /* Phase error: capValue - setValue */
+    uint16_t syncT_hatHR;     /* Current sector period estimate */
+    int16_t  syncVsReactive;  /* nextComm(sync) - targetHR(reactive) */
+    uint8_t  syncMode;        /* 0=OFF, 1=SHADOW, 2=OWNED */
+    uint8_t  syncGoodStreak;  /* Consecutive small-error sectors */
+    uint8_t  syncMissStreak;  /* Consecutive missed DMA clusters */
+    uint8_t  syncClusterCount;/* Edges in last selected cluster */
+    uint16_t syncAccepts;     /* Total sectors with valid DMA measurement */
+    uint16_t syncMisses;      /* Total sectors with no DMA measurement */
+
     /* IC capture diagnostics (2B) — added to debug high-speed wall.
      * icBounce climbs when the SCCP2 IC capture is rejected by the
      * 50% interval gate in _CCP2Interrupt — i.e. the IC fired before

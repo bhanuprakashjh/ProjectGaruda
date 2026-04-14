@@ -819,6 +819,50 @@ void BEMF_ZC_OnCommutation(volatile GARUDA_DATA_T *pData)
         }
     }
 #endif
+
+#if FEATURE_SECTOR_PI && FEATURE_IC_DMA_SHADOW
+    /* ── Sector PI: update per-commutation state ──────────────────
+     * prevStepRisingZc records the polarity of the step that just
+     * completed (needed by the DMA query, which reads the previous
+     * step's ring). lastCommHR tracks commutation time.
+     *
+     * Mode entry: when speed crosses ZC_SYNC_ENTRY_ERPM, activate
+     * shadow mode and seed T_hat from the reactive IIR. */
+    pData->zcSync.prevStepRisingZc =
+        (commutationTable[pData->currentStep].zcPolarity > 0);
+    pData->zcSync.lastCommHR = pData->icZc.lastCommHR;
+
+    if (pData->state == ESC_CLOSED_LOOP &&
+        pData->zcSync.mode == 0 &&
+        pData->zcCtrl.refIntervalHR > 0)
+    {
+        uint32_t eRPM = 0;
+        if (pData->zcCtrl.refIntervalHR > 0)
+            eRPM = 15625000UL / pData->zcCtrl.refIntervalHR;
+
+        if (eRPM >= ZC_SYNC_ENTRY_ERPM)
+        {
+            pData->zcSync.mode       = 1;  /* SHADOW */
+            pData->zcSync.T_hatHR    = pData->zcCtrl.refIntervalHR;
+            pData->zcSync.syncIntHR  = pData->zcCtrl.refIntervalHR;
+            pData->zcSync.detDelayHR = ZC_SYNC_DET_DELAY_HR;
+            pData->zcSync.goodStreak = 0;
+            pData->zcSync.missStreak = 0;
+            /* Seed torque advance for current speed */
+            pData->zcSync.advanceCmdHR = (uint16_t)(
+                (uint32_t)ZC_SYNC_ADVANCE_FP8
+                * pData->zcSync.T_hatHR >> 8);
+        }
+    }
+    /* Exit shadow if speed drops below hysteresis threshold */
+    else if (pData->zcSync.mode == 1 &&
+             pData->zcCtrl.refIntervalHR > 0)
+    {
+        uint32_t eRPM = 15625000UL / pData->zcCtrl.refIntervalHR;
+        if (eRPM < ZC_SYNC_EXIT_ERPM)
+            pData->zcSync.mode = 0;  /* OFF */
+    }
+#endif
 }
 
 /**
@@ -1851,6 +1895,107 @@ void RecordZcTiming(volatile GARUDA_DATA_T *pData,
             }
         }
 #endif /* FEATURE_6STEP_DPLL */
+
+#if FEATURE_SECTOR_PI && FEATURE_IC_DMA_SHADOW
+        /* ── Sector PI shadow synchronizer ────────────────────────
+         * On each poll-accepted ZC, query the DMA ring for the
+         * hardware-captured ZC cluster closest to the expected
+         * position within the sector. Compute phase error and
+         * run PI to update T_hat. Does NOT affect scheduling.
+         *
+         * Model (from Microchip AVR high-speed motor.c:437):
+         *   capValueHR = measHR - lastCommHR
+         *   setValueHR = T_hat/2 + detDelay + advanceCmd
+         *   syncErrHR  = capValue - setValue
+         *   syncIntHR += syncErr >> KI_SHIFT
+         *   T_hatHR    = syncIntHR + (syncErr >> KP_SHIFT)
+         */
+        if (pData->zcSync.mode >= 1 &&  /* SHADOW or OWNED */
+            pData->zcSync.T_hatHR > 0)
+        {
+            uint16_t expectedHR = (uint16_t)(
+                pData->zcSync.lastCommHR
+                + (pData->zcSync.T_hatHR >> 1)
+                + pData->zcSync.detDelayHR
+                + pData->zcSync.advanceCmdHR);
+
+            uint16_t corridorHR = pData->zcSync.T_hatHR / ZC_SYNC_CORRIDOR_DIV;
+            uint16_t windowOpenHR = pData->zcSync.lastCommHR
+                                  + (pData->zcSync.T_hatHR >> 2);
+            /* Use blanking end if it's later than 25% gate */
+            if ((int16_t)(pData->icZc.blankingEndHR - windowOpenHR) > 0)
+                windowOpenHR = pData->icZc.blankingEndHR;
+            uint16_t windowCloseHR = HAL_ComTimer_ReadTimer();
+
+            bool risingZc = pData->zcSync.prevStepRisingZc;
+            HAL_ZcDma_ClusterResult cl;
+
+            if (HAL_ZcDma_DetectZcEx(windowOpenHR, windowCloseHR,
+                                     expectedHR, corridorHR,
+                                     risingZc, &cl))
+            {
+                uint16_t capValueHR = cl.midpointHR - pData->zcSync.lastCommHR;
+                uint16_t setValueHR = (pData->zcSync.T_hatHR >> 1)
+                                    + pData->zcSync.detDelayHR
+                                    + pData->zcSync.advanceCmdHR;
+                int16_t errHR = (int16_t)(capValueHR - setValueHR);
+
+                /* PI update */
+                int32_t newInt = (int32_t)pData->zcSync.syncIntHR
+                               + (errHR >> ZC_SYNC_KI_SHIFT);
+                if (newInt < 50) newInt = 50;
+                if (newInt > 2000) newInt = 2000;
+                pData->zcSync.syncIntHR = (uint16_t)newInt;
+
+                int32_t newT = (int32_t)pData->zcSync.syncIntHR
+                             + (errHR >> ZC_SYNC_KP_SHIFT);
+                if (newT < 50) newT = 50;
+                if (newT > 2000) newT = 2000;
+                pData->zcSync.T_hatHR = (uint16_t)newT;
+
+                /* Per-sector telemetry */
+                pData->zcSync.capValueHR  = capValueHR;
+                pData->zcSync.setValueHR  = setValueHR;
+                pData->zcSync.syncErrHR   = errHR;
+                pData->zcSync.clusterMidHR = cl.midpointHR;
+                pData->zcSync.clusterCount = cl.edgeCount;
+                pData->zcSync.clusterWidthHR = cl.widthHR;
+                pData->zcSync.lastMeasHR  = cl.midpointHR;
+                pData->zcSync.diagSyncAccepts++;
+                pData->zcSync.missStreak  = 0;
+
+                /* Streak tracking */
+                int16_t absErr = (errHR >= 0) ? errHR : -errHR;
+                if (absErr < (int16_t)(pData->zcSync.T_hatHR >> 3))
+                {
+                    if (pData->zcSync.goodStreak < 255)
+                        pData->zcSync.goodStreak++;
+                }
+                else
+                    pData->zcSync.goodStreak = 0;
+
+                /* Shadow comparison: sync vs reactive */
+                uint16_t syncNextComm = pData->zcSync.lastCommHR
+                                      + pData->zcSync.T_hatHR;
+                pData->zcSync.syncVsReactiveDelta =
+                    (int16_t)(syncNextComm
+                              - pData->zcPred.lastReactiveTargetHR);
+
+                /* Update torque advance for current speed */
+                pData->zcSync.advanceCmdHR = (uint16_t)(
+                    (uint32_t)ZC_SYNC_ADVANCE_FP8
+                    * pData->zcSync.T_hatHR >> 8);
+            }
+            else
+            {
+                pData->zcSync.diagSyncMisses++;
+                pData->zcSync.clusterRejectReason = cl.rejectReason;
+                if (pData->zcSync.missStreak < 255)
+                    pData->zcSync.missStreak++;
+                pData->zcSync.goodStreak = 0;
+            }
+        }
+#endif /* FEATURE_SECTOR_PI */
 
         /* Accumulate |phaseErr| for telemetry averaging */
         uint16_t absErr = (phaseErr >= 0) ? (uint16_t)phaseErr
