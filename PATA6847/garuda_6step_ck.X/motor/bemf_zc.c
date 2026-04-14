@@ -848,7 +848,11 @@ void BEMF_ZC_OnCommutation(volatile GARUDA_DATA_T *pData)
      * ReadTimer() at ISR entry includes interrupt latency (1-5 µs).
      * icZc.lastCommHR includes ISR + processing latency (10-30 µs).
      * The scheduled target is the true commutation moment. */
-    pData->zcSync.lastCommHR = pData->zcPred.lastReactiveTargetHR;
+    /* In owned mode, the ISR updates lastCommHR with thisCommHR.
+     * Don't overwrite it here with lastReactiveTargetHR (which
+     * stops updating when reactive scheduling is skipped). */
+    if (pData->zcSync.mode != 2)
+        pData->zcSync.lastCommHR = pData->zcPred.lastReactiveTargetHR;
 
     if (pData->state == ESC_CLOSED_LOOP &&
         pData->zcSync.mode == 0 &&
@@ -891,6 +895,20 @@ void BEMF_ZC_OnCommutation(volatile GARUDA_DATA_T *pData)
             pData->zcSync.fallbackReason = 0;
             pData->zcSync.missStreak = 0;
             pData->zcSync.diagSyncEntries++;
+            /* Arm the FIRST owned commutation schedule.
+             * Mode flips inside OnCommutation, AFTER the ISR's
+             * mode==2 block already ran (and skipped because mode
+             * was still 1). Without this, no SCCP3 compare is armed,
+             * _CCT3IE stays 0, and the ISR never fires again.
+             * The ADC backup path takes over instead. */
+            {
+                uint16_t nowHR = HAL_ComTimer_ReadTimer();
+                uint16_t nextHR = nowHR + pData->zcSync.T_hatHR;
+                HAL_ComTimer_ScheduleAbsolute(nextHR);
+                pData->timing.deadlineActive = true;
+            }
+            /* Use current comm time as lastCommHR for the PI */
+            pData->zcSync.lastCommHR = pData->icZc.lastCommHR;
         }
     }
     /* Exit owned if speed drops */
