@@ -171,5 +171,41 @@ bool HAL_ZcDma_DetectZc(uint16_t  windowOpenHR,
                         bool      risingZc,
                         uint16_t *zcTimestampOut);
 
+/**
+ * @brief Extended cluster result for sector PI synchronizer.
+ */
+typedef struct {
+    bool     found;           /**< true if a qualifying cluster was selected */
+    uint16_t midpointHR;      /**< Cluster midpoint in HR domain */
+    uint16_t startHR;         /**< First edge of cluster */
+    uint16_t endHR;           /**< Last edge of cluster */
+    uint8_t  edgeCount;       /**< Edges in selected cluster */
+    uint16_t widthHR;         /**< endHR - startHR */
+    uint8_t  rejectReason;    /**< 0=accepted, 1=no_edges, 2=no_cluster,
+                               *   3=out_of_corridor, 4=single_edge */
+} HAL_ZcDma_ClusterResult;
+
+/**
+ * @brief Corridor-gated closest-cluster ZC detection for sector PI.
+ *
+ * Among all ≥2-edge clusters within [windowOpen, windowClose], selects
+ * the one whose midpoint is closest to expectedHR AND within
+ * expectedHR ± corridorHR. Clusters outside the corridor are rejected.
+ *
+ * @param windowOpenHR   Lower bound (blanking / 50% gate)
+ * @param windowCloseHR  Upper bound (current time)
+ * @param expectedHR     Expected ZC position (corridor center)
+ * @param corridorHR     Half-width of corridor around expected
+ * @param risingZc       Which ring to scan
+ * @param result         Out: cluster details (only valid if returned true)
+ * @return true if a qualifying cluster was found within corridor
+ */
+bool HAL_ZcDma_DetectZcEx(uint16_t  windowOpenHR,
+                          uint16_t  windowCloseHR,
+                          uint16_t  expectedHR,
+                          uint16_t  corridorHR,
+                          bool      risingZc,
+                          HAL_ZcDma_ClusterResult *result);
+
 #endif /* FEATURE_IC_ZC && FEATURE_IC_DMA_SHADOW */
 #endif /* HAL_IC_DMA_H */

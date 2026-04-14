@@ -653,6 +653,214 @@ bool HAL_ZcDma_DetectZc(uint16_t  windowOpenHR,
 }
 
 /* ──────────────────────────────────────────────────────────────────── */
+
+bool HAL_ZcDma_DetectZcEx(uint16_t  windowOpenHR,
+                          uint16_t  windowCloseHR,
+                          uint16_t  expectedHR,
+                          uint16_t  corridorHR,
+                          bool      risingZc,
+                          HAL_ZcDma_ClusterResult *result)
+{
+    volatile uint16_t *ring;
+    uint16_t           offset;
+    uint8_t            mark;
+    uint8_t            head;
+
+    if (risingZc)
+    {
+        ring   = dmaRingRising;
+        offset = ccp2_to_hr_offset;
+        mark   = commHeadRising;
+        head   = dmaRingHeadRising();
+    }
+    else
+    {
+        ring   = dmaRingFalling;
+        offset = ccp5_to_hr_offset;
+        mark   = commHeadFalling;
+        head   = dmaRingHeadFalling();
+    }
+
+    /* Default: nothing found */
+    result->found        = false;
+    result->midpointHR   = 0;
+    result->startHR      = 0;
+    result->endHR        = 0;
+    result->edgeCount    = 0;
+    result->widthHR      = 0;
+    result->rejectReason = 1;  /* no_edges */
+
+    uint8_t captures = (uint8_t)((head - mark) & DMA_ZC_RING_MASK);
+    if (captures == 0)
+        return false;
+
+    /* Corridor bounds */
+    uint16_t corrLow  = expectedHR - corridorHR;
+    uint16_t corrHigh = expectedHR + corridorHR;
+
+    #define DETECT_EX_GAP_HR  10u   /* ~6.4 µs cluster gap threshold */
+
+    /* Walk forward from commutation marker, cluster edges.
+     * Track the cluster whose midpoint is closest to expectedHR
+     * AND within the corridor [corrLow, corrHigh]. */
+    uint16_t clStart     = 0;
+    uint16_t clEnd       = 0;
+    uint8_t  clCount     = 0;
+    bool     haveMatch   = false;
+    uint16_t bestMid     = 0;
+    uint16_t bestStart   = 0;
+    uint16_t bestEnd     = 0;
+    uint8_t  bestCount   = 0;
+    uint16_t bestDist    = 0xFFFF;
+    bool     hadSingleEdge = false;
+
+    uint8_t idx = mark;
+    for (uint8_t i = 0; i < captures; i++)
+    {
+        uint16_t rawCap = ring[idx];
+        uint16_t hrCap  = (uint16_t)(rawCap + offset);
+
+        /* Stop scanning past the close bound */
+        if ((int16_t)(hrCap - windowCloseHR) > 0)
+        {
+            /* Close any open cluster before breaking */
+            if (clCount >= 2)
+            {
+                int16_t sinceOpen = (int16_t)(clStart - windowOpenHR);
+                if (sinceOpen >= 0)
+                {
+                    uint16_t mid = (uint16_t)(((uint32_t)clStart + clEnd) / 2u);
+                    /* Check corridor */
+                    if ((int16_t)(mid - corrLow) >= 0 &&
+                        (int16_t)(corrHigh - mid) >= 0)
+                    {
+                        uint16_t dist = (mid >= expectedHR)
+                                      ? (mid - expectedHR)
+                                      : (expectedHR - mid);
+                        if (dist < bestDist)
+                        {
+                            bestDist  = dist;
+                            bestMid   = mid;
+                            bestStart = clStart;
+                            bestEnd   = clEnd;
+                            bestCount = clCount;
+                            haveMatch = true;
+                        }
+                    }
+                }
+            }
+            else if (clCount == 1)
+                hadSingleEdge = true;
+            break;
+        }
+
+        if (clCount == 0)
+        {
+            clStart = hrCap;
+            clEnd   = hrCap;
+            clCount = 1;
+        }
+        else
+        {
+            uint16_t gap = (uint16_t)(hrCap - clEnd);
+            if (gap <= DETECT_EX_GAP_HR)
+            {
+                clEnd = hrCap;
+                clCount++;
+            }
+            else
+            {
+                /* Close old cluster — evaluate */
+                if (clCount >= 2)
+                {
+                    int16_t sinceOpen = (int16_t)(clStart - windowOpenHR);
+                    if (sinceOpen >= 0)
+                    {
+                        uint16_t mid = (uint16_t)(((uint32_t)clStart + clEnd) / 2u);
+                        if ((int16_t)(mid - corrLow) >= 0 &&
+                            (int16_t)(corrHigh - mid) >= 0)
+                        {
+                            uint16_t dist = (mid >= expectedHR)
+                                          ? (mid - expectedHR)
+                                          : (expectedHR - mid);
+                            if (dist < bestDist)
+                            {
+                                bestDist  = dist;
+                                bestMid   = mid;
+                                bestStart = clStart;
+                                bestEnd   = clEnd;
+                                bestCount = clCount;
+                                haveMatch = true;
+                            }
+                        }
+                    }
+                }
+                else if (clCount == 1)
+                    hadSingleEdge = true;
+
+                clStart = hrCap;
+                clEnd   = hrCap;
+                clCount = 1;
+            }
+        }
+
+        idx = (uint8_t)((idx + 1u) & DMA_ZC_RING_MASK);
+    }
+
+    /* Check trailing cluster */
+    if (clCount >= 2)
+    {
+        int16_t sinceOpen = (int16_t)(clStart - windowOpenHR);
+        if (sinceOpen >= 0)
+        {
+            uint16_t mid = (uint16_t)(((uint32_t)clStart + clEnd) / 2u);
+            if ((int16_t)(mid - corrLow) >= 0 &&
+                (int16_t)(corrHigh - mid) >= 0)
+            {
+                uint16_t dist = (mid >= expectedHR)
+                              ? (mid - expectedHR)
+                              : (expectedHR - mid);
+                if (dist < bestDist)
+                {
+                    bestDist  = dist;
+                    bestMid   = mid;
+                    bestStart = clStart;
+                    bestEnd   = clEnd;
+                    bestCount = clCount;
+                    haveMatch = true;
+                }
+            }
+        }
+    }
+    else if (clCount == 1)
+        hadSingleEdge = true;
+
+    if (haveMatch)
+    {
+        result->found      = true;
+        result->midpointHR = bestMid;
+        result->startHR    = bestStart;
+        result->endHR      = bestEnd;
+        result->edgeCount  = bestCount;
+        result->widthHR    = bestEnd - bestStart;
+        result->rejectReason = 0;  /* accepted */
+        return true;
+    }
+
+    /* Set reject reason */
+    if (hadSingleEdge)
+        result->rejectReason = 4;  /* single_edge — log for future threshold analysis */
+    else if (captures > 0)
+        result->rejectReason = 3;  /* out_of_corridor */
+    else
+        result->rejectReason = 2;  /* no_cluster */
+
+    return false;
+
+    #undef DETECT_EX_GAP_HR
+}
+
+/* ──────────────────────────────────────────────────────────────────── */
 /* Stub ISRs for CCP2 and CCP5.
  *
  * The DMA trigger on dsPIC33CK fires on the *interrupt source* being
