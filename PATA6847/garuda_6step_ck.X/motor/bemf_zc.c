@@ -1129,29 +1129,12 @@ void BEMF_ZC_ScheduleCommutation(volatile GARUDA_DATA_T *pData)
                           ? pData->zcCtrl.refIntervalHR
                           : pData->timing.stepPeriodHR;
 
-            uint8_t reactiveTal = tal;
-            uint16_t latCompHR = 0;
-
-            /* Split the reactive HR target into:
-             *   half-step
-             * - pure torque advance
-             * - detector/poll latency compensation
-             *
-             * Above the high-speed threshold the legacy TAL map carries
-             * about one TAL chunk of hidden poll-latency compensation.
-             * Remove that chunk from torque advance and add back a
-             * bounded detector-latency term from DMA shadow. */
-            reactiveTal = ReactiveTorqueAdvanceLevel(tal, spHR);
-            latCompHR = ReactiveDetectorLatencyCompHR(pData, spHR);
-
-            /* AM32-style: half interval minus torque-advance fraction.
-             * Detector latency is handled separately below. */
+            /* AM32-style: half interval minus advance fraction.
+             * Uses the same speed-adaptive `tal` computed above so
+             * the HR scheduling path tracks the Timer1 path. */
             uint16_t halfHR = spHR >> 1;
-            uint16_t advHR = (spHR >> 3) * reactiveTal;
+            uint16_t advHR = (spHR >> 3) * tal;
             uint16_t delayHR = (halfHR > advHR) ? (halfHR - advHR) : 2;
-
-            if (latCompHR > 0u && delayHR > latCompHR + 2u)
-                delayHR -= latCompHR;
 
             uint16_t targetHR = pData->timing.lastZcTickHR + delayHR;
 
@@ -1159,7 +1142,7 @@ void BEMF_ZC_ScheduleCommutation(volatile GARUDA_DATA_T *pData)
              * The predictor must seed from this exact target and TAL
              * to avoid a phase jump at entry. */
             pData->zcPred.lastReactiveTargetHR = targetHR;
-            pData->zcPred.lastReactiveTAL = reactiveTal;
+            pData->zcPred.lastReactiveTAL = tal;
 
             /* Shadow delta: what would the predictor schedule vs reactive?
              * Predictor formula: lastZcHR + (predStepHR - predZcOffsetHR)

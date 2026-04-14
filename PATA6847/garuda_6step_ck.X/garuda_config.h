@@ -444,35 +444,17 @@
 #endif
 
 #ifndef FEATURE_REACTIVE_LATENCY_SPLIT
-#define FEATURE_REACTIVE_LATENCY_SPLIT  1  /* Reactive HR scheduling keeps
-                                            * using poll timestamps, but the
-                                            * commutation target is now split
-                                            * into:
-                                            *   half-step
-                                            * - pure torque advance
-                                            * - explicit detector-latency comp
-                                            *
-                                            * With poll timestamps, latency
-                                            * compensation comes from the DMA
-                                            * shadow estimator. With future
-                                            * DMA-direct timestamps, the
-                                            * latency term can drop to zero
-                                            * without retuning torque advance
-                                            * from scratch. */
+#define FEATURE_REACTIVE_LATENCY_SPLIT  0  /* DISABLED — experiment proved that
+                                            * splitting TAL in the reactive path
+                                            * doesn't help without also changing
+                                            * the measurement source. The sector
+                                            * PI synchronizer (FEATURE_SECTOR_PI)
+                                            * handles advance/delay separation
+                                            * in a new control path instead. */
 #endif
 
-/* Cap reactive detector-latency compensation to a fixed number of
- * TAL-sized chunks (one chunk = stepHR/8 = 7.5 electrical degrees).
- *
- * Bench data says the poll path carries about one TAL level worth of
- * hidden delay at high speed. The split therefore:
- *   1. lowers the reactive torque-advance TAL by one level
- *   2. adds back up to one TAL level of explicit detector latency
- *
- * Poll-timed scheduling should stay close to current behavior, while
- * non-poll timestamps later can run with the latency term removed. */
 #ifndef REACTIVE_LATENCY_COMP_LEVELS
-#define REACTIVE_LATENCY_COMP_LEVELS  1U
+#define REACTIVE_LATENCY_COMP_LEVELS  1U   /* Only used when FEATURE_REACTIVE_LATENCY_SPLIT=1 */
 #endif
 
 #ifndef FEATURE_DMA_ZC_DIRECT
