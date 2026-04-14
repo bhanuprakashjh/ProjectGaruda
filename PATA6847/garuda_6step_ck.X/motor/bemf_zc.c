@@ -142,6 +142,8 @@ void BEMF_ZC_Init(volatile GARUDA_DATA_T *pData)
     pData->icZc.lastCommHR = 0;
     pData->icZc.zcCandidateHR = 0;
     pData->icZc.zcCandidateT1 = 0;
+    pData->icZc.diagDmaPrimaryAccept = 0;
+    pData->icZc.diagDmaPrimaryMiss = 0;
     pData->icZc.diagAccepted = 0;
     pData->icZc.diagLcoutAccepted = 0;
     pData->icZc.diagFalseZc = 0;
@@ -272,6 +274,8 @@ void BEMF_ZC_Init(volatile GARUDA_DATA_T *pData)
     pData->zcPred.lastPredCommHR = 0;
     pData->zcPred.pendingPredCommHR = 0;
     pData->zcPred.pendingPredValid = false;
+    pData->zcPred.lastReactiveTargetHR = 0;
+    pData->zcPred.lastReactiveTAL = TIMING_ADVANCE_LEVEL;
     pData->zcPred.predVsReactiveDelta = 0;
     pData->zcPred.deltaOkCount = 0;
     pData->zcPred.entryScore = 0;
@@ -331,13 +335,14 @@ static inline uint8_t ComputeFilterLevel(uint16_t stepPeriod)
  *                                    margin ≈ −3 µs (matches CSV).
  * With TAL=2 at the same speed:      delayHR = 25 µs, margin ≈ +9 µs.
  *
- * Curve (with hysteresis to avoid thrashing at the boundary):
- *   eRPM <  65k → TAL = compile-time default (typically 3)
- *   eRPM >  75k → TAL = max(default-1, 1)
- *   eRPM > 115k → TAL = max(default-2, 1)   (only if default >= 3)
+ * This function remains the legacy "effective" advance map: the TAL
+ * that made the poll-timed reactive path run acceptably on the bench.
+ * On the HR path below, that effective TAL is split into:
+ *   1. pure torque advance
+ *   2. explicit detector-latency compensation
  *
- * AM32 / BLHeli / ESCape32 all back off advance at high speed for
- * the same reason.
+ * The split keeps poll-timed scheduling near the old behavior while
+ * giving DMA-timed paths a place to remove only the detector delay.
  */
 static inline uint8_t AdaptiveTimingAdvance(uint32_t eRPM)
 {
@@ -360,6 +365,48 @@ static inline uint8_t AdaptiveTimingAdvance(uint32_t eRPM)
         level = TIMING_ADVANCE_LEVEL;
 
     return level;
+}
+
+static inline uint8_t ReactiveTorqueAdvanceLevel(uint8_t effectiveTal,
+                                                 uint16_t stepHR)
+{
+#if FEATURE_REACTIVE_LATENCY_SPLIT && FEATURE_IC_DMA_SHADOW
+    if (stepHR > 0u && stepHR < DMA_ZC_DIRECT_THRESHOLD_HR)
+    {
+        if (effectiveTal > REACTIVE_LATENCY_COMP_LEVELS)
+            return (uint8_t)(effectiveTal - REACTIVE_LATENCY_COMP_LEVELS);
+        return 0u;
+    }
+#else
+    (void)stepHR;
+#endif
+
+    return effectiveTal;
+}
+
+static inline uint16_t ReactiveDetectorLatencyCompHR(
+    volatile GARUDA_DATA_T *pData, uint16_t stepHR)
+{
+#if FEATURE_REACTIVE_LATENCY_SPLIT && FEATURE_IC_DMA_SHADOW
+    if (stepHR > 0u &&
+        stepHR < DMA_ZC_DIRECT_THRESHOLD_HR &&
+        pData->dmaShadow.smoothedLatencyHR > 0u)
+    {
+        uint16_t maxCompHR = (uint16_t)((stepHR >> 3) *
+                                        REACTIVE_LATENCY_COMP_LEVELS);
+        uint16_t latHR = pData->dmaShadow.smoothedLatencyHR;
+
+        if (maxCompHR > 0u && latHR > maxCompHR)
+            latHR = maxCompHR;
+
+        return latHR;
+    }
+#else
+    (void)pData;
+    (void)stepHR;
+#endif
+
+    return 0u;
 }
 #endif
 
@@ -1052,10 +1099,12 @@ void BEMF_ZC_ScheduleCommutation(volatile GARUDA_DATA_T *pData)
      *
      * advance_level: 0=0°, 1=7.5°, 2=15°, 3=22.5°
      *
-     * Speed-adaptive: AdaptiveTimingAdvance() backs off TAL at high
-     * eRPM so the delayHR budget stays larger than the detection
-     * pipeline latency. See AdaptiveTimingAdvance() comment for the
-     * curve and the measurement that motivated it. */
+     * The HR path below further splits this into:
+     *   pure torque advance
+     *   explicit detector-latency compensation
+     *
+     * That split only applies once HR timing is valid and the DMA
+     * shadow estimator has learned a plausible poll latency. */
 #if FEATURE_IC_ZC
     uint8_t tal = AdaptiveTimingAdvance(eRPM);
 #else
@@ -1080,33 +1129,37 @@ void BEMF_ZC_ScheduleCommutation(volatile GARUDA_DATA_T *pData)
                           ? pData->zcCtrl.refIntervalHR
                           : pData->timing.stepPeriodHR;
 
-            /* AM32-style: half interval minus advance fraction.
-             * Uses the same speed-adaptive `tal` computed above so
-             * the HR scheduling path tracks the Timer1 path. */
+            uint8_t reactiveTal = tal;
+            uint16_t latCompHR = 0;
+
+            /* Split the reactive HR target into:
+             *   half-step
+             * - pure torque advance
+             * - detector/poll latency compensation
+             *
+             * Above the high-speed threshold the legacy TAL map carries
+             * about one TAL chunk of hidden poll-latency compensation.
+             * Remove that chunk from torque advance and add back a
+             * bounded detector-latency term from DMA shadow. */
+            reactiveTal = ReactiveTorqueAdvanceLevel(tal, spHR);
+            latCompHR = ReactiveDetectorLatencyCompHR(pData, spHR);
+
+            /* AM32-style: half interval minus torque-advance fraction.
+             * Detector latency is handled separately below. */
             uint16_t halfHR = spHR >> 1;
-            uint16_t advHR = (spHR >> 3) * tal;
+            uint16_t advHR = (spHR >> 3) * reactiveTal;
             uint16_t delayHR = (halfHR > advHR) ? (halfHR - advHR) : 2;
 
-#if FEATURE_DMA_ZC_DIRECT
-            /* Subtract the measured poll latency from the delay.
-             * lastZcTickHR is still the poll timestamp (not modified).
-             * The DMA selector measured how far poll lags the real
-             * ZC cluster. Subtracting that latency from the delay
-             * makes the commutation fire at the physically correct
-             * absolute time, without touching the interval IIR.
-             *
-             * Effect: targetHR = pollHR + (delay - latency)
-             *       = (trueZC + latency) + (delay - latency)
-             *       = trueZC + delay
-             * The latency cancels exactly. */
-            {
-                uint16_t lat = pData->dmaShadow.smoothedLatencyHR;
-                if (lat > 0 && delayHR > lat + 2u)
-                    delayHR -= lat;
-            }
-#endif
+            if (latCompHR > 0u && delayHR > latCompHR + 2u)
+                delayHR -= latCompHR;
 
             uint16_t targetHR = pData->timing.lastZcTickHR + delayHR;
+
+            /* Capture reactive scheduling state for handoff continuity.
+             * The predictor must seed from this exact target and TAL
+             * to avoid a phase jump at entry. */
+            pData->zcPred.lastReactiveTargetHR = targetHR;
+            pData->zcPred.lastReactiveTAL = reactiveTal;
 
             /* Shadow delta: what would the predictor schedule vs reactive?
              * Predictor formula: lastZcHR + (predStepHR - predZcOffsetHR)
@@ -1508,6 +1561,11 @@ void RecordZcTiming(volatile GARUDA_DATA_T *pData,
      * dmaZcHR is hoisted to function scope for DPLL consumption. */
     uint16_t dmaZcHR = 0;
     bool     dmaFound = false;
+    /* Zero per-step telemetry — only set when DMA is actually used.
+     * Prevents stale Corr values from appearing in snapshot when DMA
+     * stops feeding the DPLL (e.g. during predictive ownership). */
+    pData->dmaShadow.lastCorrectionHR = 0;
+    pData->dmaShadow.measSource = 0;  /* 0=none */
     if (pData->timing.hasPrevZcHR &&
         pData->timing.stepPeriodHR > 0 &&
         pData->timing.stepPeriodHR < ZC_IC_DIRECT_THRESHOLD_HR)
@@ -1538,6 +1596,20 @@ void RecordZcTiming(volatile GARUDA_DATA_T *pData,
                 pData->dmaShadow.smoothedLatencyHR = (uint16_t)(
                     ((uint32_t)pData->dmaShadow.smoothedLatencyHR * 7u
                      + latency) >> 3);
+
+            /* DMA timestamp is NOT substituted into lastZcTickHR.
+             * The reactive advance law (delayHR = half - TAL*sp/8)
+             * was calibrated for poll timing — TAL bakes in poll
+             * latency compensation. Substituting an earlier DMA
+             * timestamp makes margin WORSE (target further in past)
+             * because the latency removal is double-counted.
+             *
+             * DMA feeds the DPLL (which has its own advance model)
+             * and telemetry only. */
+            if (dmaVsPoll >= -40 && dmaVsPoll <= -10)
+            {
+                pData->dmaShadow.measSource = 2;  /* DMA-gated */
+            }
         }
         else
         {
@@ -1700,16 +1772,19 @@ void RecordZcTiming(volatile GARUDA_DATA_T *pData,
                 }
             }
 
-            /* Compute speed-based phase advance — separate from detector
-             * bias. This is the torque optimization term, NOT latency
-             * compensation. Detector lag is in phaseBiasHR.
+            /* Compute phase advance — must match reactive's advance law
+             * to avoid a phase jump at handoff. Reactive uses
+             * AdaptiveTimingAdvance(eRPM) which gives TAL levels:
+             *   TAL=3: 22.5° (below 75k)
+             *   TAL=2: 15°   (75k-115k)
+             *   TAL=1: 7.5°  (above 115k)
              *
-             * Use 1 TAL level worth of advance (7.5° = sp/8).
-             * The old AdaptiveTimingAdvance baked ~1 TAL level of
-             * detector-latency compensation into TAL=3. With detector
-             * bias separated, pure advance is ~1 level. */
+             * advanceCmdHR = (predStepHR / 8) * TAL, same as reactive's
+             * advHR = (spHR / 8) * TAL. Using lastReactiveTAL ensures
+             * perfect continuity at handoff. */
             pData->zcPred.advanceCmdHR =
-                pData->zcPred.predStepHR >> 3;  /* 1 level = 7.5° */
+                (pData->zcPred.predStepHR >> 3)
+                * pData->zcPred.lastReactiveTAL;
 
             uint16_t dpllPredZc = (uint16_t)(
                 pData->zcPred.lastCommHR
@@ -1757,9 +1832,14 @@ void RecordZcTiming(volatile GARUDA_DATA_T *pData,
             pData->zcPred.dpllErrHR = dpllErr;
             pData->zcPred.lastMeasTsHR = tMeas;
             if (dmaUsed)
+            {
                 pData->zcPred.dmaMeasUsedCount++;
-            else if (dmaFound)
-                pData->zcPred.dmaMeasRejectCount++;
+            }
+            else
+            {
+                if (dmaFound)
+                    pData->zcPred.dmaMeasRejectCount++;
+            }
         }
 #endif /* FEATURE_6STEP_DPLL */
 
@@ -2035,6 +2115,61 @@ bool BEMF_ZC_FastPoll(volatile GARUDA_DATA_T *pData)
         if (halfInterval > 0 && (int16_t)(elapsed - halfInterval) < 0)
             return false;  /* Too early — reject (demag/noise) */
     }
+
+#if FEATURE_DMA_PRIMARY_ZC && FEATURE_IC_DMA_SHADOW
+    /* ── DMA-primary ZC detection ─────────────────────────────────
+     * Above the speed threshold, query the DMA ring for a qualifying
+     * edge cluster instead of reading GPIO with multi-read filtering.
+     *
+     * The DMA ring has hardware-precise timestamps of every comparator
+     * edge. We walk it looking for a ≥2-edge cluster within a window:
+     *   open  = lastZcTickHR + halfInterval  (50% gate, already passed above)
+     *   close = now                          (don't look into future)
+     *
+     * If found: accept immediately with DMA timestamp, skip poll filter.
+     * If not found: fall through to existing poll/raw path (fallback).
+     *
+     * This eliminates ~16 µs of poll filter latency. At 100k eRPM
+     * that turns margin from -16 HR to roughly +9 HR. */
+    if (pData->timing.stepPeriodHR > 0 &&
+        pData->timing.stepPeriodHR < DMA_ZC_DIRECT_THRESHOLD_HR &&
+        pData->zcCtrl.mode == ZC_MODE_TRACK)
+    {
+        bool risingZc = (commutationTable[pData->currentStep].zcPolarity > 0);
+        uint16_t windowOpenHR = pData->timing.lastZcTickHR +
+            (pData->zcCtrl.refIntervalHR >> 1);
+        uint16_t windowCloseHR = HAL_ComTimer_ReadTimer();
+        uint16_t dmaZcHR = 0;
+
+        if (HAL_ZcDma_DetectZc(windowOpenHR, windowCloseHR,
+                               risingZc, &dmaZcHR))
+        {
+            /* Convert DMA HR timestamp to Timer1 domain for RecordZcTiming */
+            uint16_t nowHR = windowCloseHR;
+            uint16_t age = nowHR - dmaZcHR;
+            uint16_t ageT1 = (uint16_t)((uint32_t)age * COM_TIMER_T1_DENOM
+                                         / COM_TIMER_T1_NUMER);
+            uint16_t tsT1 = pData->timer1Tick - ageT1;
+
+            pData->bemf.zeroCrossDetected = true;
+            RecordZcTiming(pData, tsT1, dmaZcHR);
+
+            if (pData->bemf.zeroCrossDetected)
+            {
+                pData->icZc.diagDmaPrimaryAccept++;
+                pData->icZc.phase = IC_ZC_DONE;
+                return true;
+            }
+            /* RecordZcTiming rejected — reset and fall through to poll */
+            pData->icZc.pollFilter = 0;
+            pData->icZc.rawCoro = 0;
+            pData->icZc.hasFirstClcMatch = false;
+            pData->icZc.hasRawFirstMatch = false;
+        }
+        /* No qualifying cluster yet — fall through to poll/raw path.
+         * Poll continues as fallback for steps where DMA has no match. */
+    }
+#endif /* FEATURE_DMA_PRIMARY_ZC */
 
     /* Read comparator for the floating phase. */
     uint8_t cmp = ReadBEMFComparator(pData->icZc.activeChannel);

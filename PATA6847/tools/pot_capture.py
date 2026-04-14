@@ -260,6 +260,7 @@ def decode_ck_snapshot(data):
         s['predCloseAgree'] = struct.unpack_from('<H', data, 194)[0]
         s['predCloseDisagree'] = struct.unpack_from('<H', data, 196)[0]
         s['dpllFallbackReason'] = data[198]
+        s['measSource'] = data[199]  # 0=none 1=poll 2=DMA
     else:
         s['dpllPhaseBiasHR'] = 0
         s['dpllErrHR'] = 0
@@ -268,6 +269,7 @@ def decode_ck_snapshot(data):
         s['predCloseAgree'] = 0
         s['predCloseDisagree'] = 0
         s['dpllFallbackReason'] = 0
+        s['measSource'] = 0
     # V12: icBounce — shifted +14 by DPLL fields
     if len(data) >= 202:
         s['icBounce'] = struct.unpack_from('<H', data, 200)[0]
@@ -367,8 +369,8 @@ def main():
     print(f"  Press Ctrl+C to stop")
     print()
     ZC_MODES = ['ACQ', 'TRK', 'RCV']
-    print(f"{'Time':>7s} {'State':>8s} {'ZcM':>3s} {'eRPM':>7s} {'Duty':>4s} {'Vbus':>6s} {'Mrgn':>5s} {'Bias':>5s} {'DErr':>5s} {'Corr':>5s} {'PAgr':>6s} {'PDis':>5s} {'Lkd':>3s}")
-    print("-" * 105)
+    print(f"{'Time':>7s} {'State':>8s} {'ZcM':>3s} {'eRPM':>7s} {'Duty':>4s} {'Vbus':>6s} {'Mrgn':>5s} {'Bias':>5s} {'DErr':>5s} {'Corr':>5s} {'PrM':>3s} {'POwn':>6s} {'PAgr':>6s} {'PDis':>5s} {'Lkd':>3s}")
+    print("-" * 120)
 
     rows = []
     buf = b''
@@ -427,7 +429,9 @@ def main():
                 pagr = snap.get('predCloseAgree', 0)
                 pdis = snap.get('predCloseDisagree', 0)
                 locked = snap.get('predLocked', 0)
-                print(f"{t:7.1f} {state_str:>8s} {zc_mode_str:>3s} {snap['eRpm']:7d} {snap['dutyPct']:3d}% {snap['vbusV']:5.1f}V {snap.get('sched_margin_hr', snap.get('schedMarginHR',0)):5d} {bias:+5d} {derr:+5d} {corr:+5d} {pagr:6d} {pdis:5d} {'Y' if locked else '.':>3s}{fault_str}")
+                prm = snap.get('predictiveMode', 0)
+                pown = snap.get('predCommOwned', 0)
+                print(f"{t:7.1f} {state_str:>8s} {zc_mode_str:>3s} {snap['eRpm']:7d} {snap['dutyPct']:3d}% {snap['vbusV']:5.1f}V {snap.get('sched_margin_hr', snap.get('schedMarginHR',0)):5d} {bias:+5d} {derr:+5d} {corr:+5d} {prm:3d} {pown:6d} {pagr:6d} {pdis:5d} {'Y' if locked else '.':>3s}{fault_str}")
 
                 rows.append({
                     'time': round(t, 3),
@@ -534,6 +538,7 @@ def main():
                     'pred_close_agree': snap.get('predCloseAgree', 0),
                     'pred_close_disagree': snap.get('predCloseDisagree', 0),
                     'dpll_fallback_reason': snap.get('dpllFallbackReason', 0),
+                    'meas_source': snap.get('measSource', 0),
                     'pred_phase_err_hr': snap.get('predPhaseErrHR', 0),
                     'pred_locked': snap.get('predLocked', 0),
                     'pred_step_hr': snap.get('predStepHR', 0),

@@ -217,7 +217,7 @@ typedef struct __attribute__((packed)) {
     uint16_t predCloseAgree;  /* Predicted-close matched poll-close */
     uint16_t predCloseDisagree; /* Predicted-close differed from poll-close */
     uint8_t  dpllFallbackReason; /* Why predictive mode exited (0=none) */
-    uint8_t  _dpllPad;         /* Alignment */
+    uint8_t  measSource;       /* What fed DPLL this step: 0=none 1=poll 2=DMA */
 
     /* IC capture diagnostics (2B) — added to debug high-speed wall.
      * icBounce climbs when the SCCP2 IC capture is rejected by the

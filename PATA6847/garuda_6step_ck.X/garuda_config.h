@@ -443,6 +443,38 @@
 #define FEATURE_IC_ZC_CAPTURE   0   /* Shadow takes exclusive ownership of CCP2 */
 #endif
 
+#ifndef FEATURE_REACTIVE_LATENCY_SPLIT
+#define FEATURE_REACTIVE_LATENCY_SPLIT  1  /* Reactive HR scheduling keeps
+                                            * using poll timestamps, but the
+                                            * commutation target is now split
+                                            * into:
+                                            *   half-step
+                                            * - pure torque advance
+                                            * - explicit detector-latency comp
+                                            *
+                                            * With poll timestamps, latency
+                                            * compensation comes from the DMA
+                                            * shadow estimator. With future
+                                            * DMA-direct timestamps, the
+                                            * latency term can drop to zero
+                                            * without retuning torque advance
+                                            * from scratch. */
+#endif
+
+/* Cap reactive detector-latency compensation to a fixed number of
+ * TAL-sized chunks (one chunk = stepHR/8 = 7.5 electrical degrees).
+ *
+ * Bench data says the poll path carries about one TAL level worth of
+ * hidden delay at high speed. The split therefore:
+ *   1. lowers the reactive torque-advance TAL by one level
+ *   2. adds back up to one TAL level of explicit detector latency
+ *
+ * Poll-timed scheduling should stay close to current behavior, while
+ * non-poll timestamps later can run with the latency term removed. */
+#ifndef REACTIVE_LATENCY_COMP_LEVELS
+#define REACTIVE_LATENCY_COMP_LEVELS  1U
+#endif
+
 #ifndef FEATURE_DMA_ZC_DIRECT
 #define FEATURE_DMA_ZC_DIRECT   0   /* DISABLED — selector is validated but live
                                      * deployment not production-ready.
@@ -453,18 +485,11 @@
                                      * offline across 25–90k eRPM with and without
                                      * prop. See memory/ck_bemf_signal_physics.md.
                                      *
-                                     * Live deployment failed (V1 hrTick rewrite,
-                                     * V2 speed-adaptive bias, V3 scheduler
-                                     * latency subtraction) because the current
-                                     * TIMING_ADVANCE_LEVEL map was tuned with
-                                     * poll-delay compensation baked in. Any
-                                     * correction that removes poll delay — whether
-                                     * applied to hrTick or to delayHR — adds
-                                     * effective advance that TAL already provides.
-                                     *
-                                     * Next revisit: derive a new advance map from
-                                     * scratch with DMA timing as the reference,
-                                     * not bolt a correction onto the old one. */
+                                     * The reactive scheduler now has an explicit
+                                     * latency-compensation term, but live DMA
+                                     * substitution is still off until bench data
+                                     * confirms the split is calibrated well enough
+                                     * to replace poll timing in the hot path. */
 #endif
 
 #if FEATURE_DMA_ZC_DIRECT && !FEATURE_IC_DMA_SHADOW
@@ -502,13 +527,38 @@
 /* DPLL handoff speed threshold. Predictive mode only engages above
  * this eRPM. Below this, reactive poll scheduling is sufficient. */
 #ifndef DPLL_HANDOFF_ERPM
-#define DPLL_HANDOFF_ERPM   50000UL   /* V2 architecture: separated detector
-                                       * bias (phaseBiasHR) from phase advance
-                                       * (advanceCmdHR). Real Ki=1/128 integral
-                                       * on T_hat for speed tracking. */
+#define DPLL_HANDOFF_ERPM   200000UL  /* Shadow-only. Predictive ownership
+                                       * causes limit cycle: T_hat drift →
+                                       * phase error → exit → re-enter.
+                                       * Need T_hat to track actual period
+                                       * during ownership before enabling. */
 #endif
 
-/* Speed threshold above which DMA-direct substitution is enabled.
+/* DMA-primary ZC detection: above the speed threshold, FastPoll
+ * queries the DMA ring for qualifying edge clusters instead of
+ * reading the comparator GPIO with multi-read filtering.
+ *
+ * Eliminates ~16 µs of poll filter latency. The DMA ring already
+ * has hardware-precise timestamps of every comparator edge.
+ * Poll ISR becomes a DMA consumer, not a GPIO sampler.
+ *
+ * Window: open = max(blankingEnd, 50% gate), close = now.
+ * Cluster: ≥2 edges within DMA_DETECT_GAP_HR (6.4 µs).
+ * Fallback: if no qualifying cluster by late bound, fall through
+ *           to the existing poll/raw path.
+ *
+ * Requires FEATURE_IC_DMA_SHADOW. */
+#ifndef FEATURE_DMA_PRIMARY_ZC
+#define FEATURE_DMA_PRIMARY_ZC   0    /* DISABLED: DMA timestamp is ~20 HR
+                                       * earlier than poll. Reactive scheduling
+                                       * now separates detector latency from
+                                       * torque advance, but DMA-primary still
+                                       * stays off until the new split is bench-
+                                       * tuned and validated across the 50-100k
+                                       * eRPM band. */
+#endif
+
+/* Speed threshold for DMA-primary ZC and DMA-direct substitution.
  * Expressed as stepPeriodHR (HR ticks per commutation step).
  * 15,625,000 HR ticks/sec ÷ 312 ≈ 50,080 eRPM.
  * Lower (smaller) stepPeriodHR means FASTER motor → gate opens. */

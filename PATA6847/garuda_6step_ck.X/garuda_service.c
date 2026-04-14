@@ -1060,12 +1060,23 @@ void __attribute__((interrupt, no_auto_psv)) _CCT3Interrupt(void)
 
         if (doHandoff)
         {
-            /* First predictor target: prefer exact comm-to-comm timing,
-             * fall back to "future from now" if nominal is already past.
-             * This preserves phase accuracy when CCP4RA is valid but
-             * handles the target-past reactive case safely. */
+            /* Seed first predictive target from the LAST REACTIVE TARGET,
+             * not from thisCommHR + predStepHR. The reactive path computed
+             * targetHR = lastZcTickHR + delayHR using AdaptiveTimingAdvance,
+             * so this preserves the exact phase/advance that was scheduled.
+             *
+             * Using thisCommHR + predStepHR guarantees a phase jump because:
+             * (1) predStepHR uses a different time-base than reactive's delay
+             * (2) advanceCmdHR may differ from reactive's TAL-based advance
+             *
+             * lastReactiveTargetHR is set every reactive scheduling call,
+             * so it always reflects the most recent reactive decision. */
             uint16_t nowHR = HAL_ComTimer_ReadTimer();
-            uint16_t nominalTargetHR = thisCommHR + gData.zcPred.predStepHR;
+            uint16_t nominalTargetHR = gData.zcPred.lastReactiveTargetHR;
+            /* Fallback if lastReactiveTargetHR was never set (shouldn't
+             * happen — reactive runs before handoff can be requested) */
+            if (nominalTargetHR == 0)
+                nominalTargetHR = thisCommHR + gData.zcPred.predStepHR;
             /* Handoff guard: target must be >= now + 24 ticks (~15µs).
              * Codex: 8 ticks was too close — hardware can miss the
              * compare match if the timer ticks past before the

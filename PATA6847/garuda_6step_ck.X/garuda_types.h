@@ -107,6 +107,8 @@ typedef struct {
     uint16_t zcCandidateHR;     /* SCCP4 tick at first matching read */
     uint16_t zcCandidateT1;     /* Timer1 tick at first matching read */
     /* Diagnostics */
+    uint16_t diagDmaPrimaryAccept; /* ZCs accepted via DMA-primary path */
+    uint16_t diagDmaPrimaryMiss;   /* DMA-primary: no qualifying cluster, fell through to poll */
     uint16_t diagAccepted;      /* ZCs accepted via fast poll */
     uint16_t diagLcoutAccepted; /* ZCs accepted via ADC ISR backup */
     uint16_t diagFalseZc;       /* Rejected by RecordZcTiming */
@@ -225,6 +227,10 @@ typedef struct {
     uint16_t lastPredCommHR;       /* Exact HR time of last predictor-owned commutation */
     uint16_t pendingPredCommHR;    /* Next scheduled predictor commutation target */
     bool     pendingPredValid;     /* true when pendingPredCommHR is programmed */
+    /* Reactive scheduling state captured for handoff continuity */
+    uint16_t lastReactiveTargetHR; /* Most recent reactive targetHR — seed for
+                                    * first predictive target to avoid phase jump */
+    uint8_t  lastReactiveTAL;      /* TAL used by reactive — predictor must match */
     /* Shadow delta: predictor vs reactive target comparison */
     int16_t  predVsReactiveDelta;  /* predNextComm - reactiveTarget (HR ticks) */
     uint8_t  deltaOkCount;         /* Consecutive steps with |delta| < threshold */
@@ -304,10 +310,14 @@ typedef struct {
     uint32_t  substituteCount;      /* times hrTick was replaced by DMA edge */
     uint32_t  substituteSkipGated;  /* below speed threshold, left alone */
     uint32_t  substituteSkipRange;  /* DMA edge outside sanity window */
-    int16_t   lastCorrectionHR;     /* most recent (refined - poll) HR delta */
+    int16_t   lastCorrectionHR;     /* most recent (refined - poll) HR delta.
+                                     * Zeroed each step; only set when DMA is
+                                     * actually used this step. 0 = no DMA. */
     int16_t   minCorrectionHR;      /* most negative correction seen so far */
     int16_t   maxCorrectionHR;      /* most positive correction seen so far */
     uint16_t  smoothedLatencyHR;    /* IIR-averaged poll latency (positive HR ticks) */
+    uint8_t   measSource;           /* What fed the DPLL this step:
+                                     * 0=none, 1=poll, 2=DMA-gated */
 } DMA_SHADOW_T;
 #endif
 

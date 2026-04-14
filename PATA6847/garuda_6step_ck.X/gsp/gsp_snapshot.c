@@ -188,7 +188,12 @@ void GSP_CaptureSnapshot(GSP_CK_SNAPSHOT_T *dst)
     dst->predCloseDisagree  = 0;
     dst->dpllFallbackReason = 0;
 #endif
-    dst->_dpllPad           = 0;
+
+#if FEATURE_IC_DMA_SHADOW
+    dst->measSource         = src->dmaShadow.measSource;
+#else
+    dst->measSource         = 0;
+#endif
 
     /* IC bounce: SCCP2 captures rejected by the 50% interval gate.
      * Gated on FEATURE_IC_ZC_CAPTURE because the field only exists
