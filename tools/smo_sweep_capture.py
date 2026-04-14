@@ -388,8 +388,9 @@ def main():
                         help="Ramp duration in seconds (default 3)")
     parser.add_argument("--hold-time", type=float, default=2.0,
                         help="Hold duration at each end (default 2)")
-    parser.add_argument("--arm-throttle", type=int, default=100,
-                        help="Throttle for arming/idle (default 100, GSP 0-2000)")
+    parser.add_argument("--arm-throttle", type=int, default=200,
+                        help="Throttle for arming/idle (default 200, GSP 0-2000). "
+                             "Must be >147 to stay above firmware deadband (300/4095).")
     parser.add_argument("--steps", type=int, default=1,
                         help="Number of staircase steps (default 1 = simple ramp). "
                              "E.g. --steps 4 does 25%%→50%%→75%%→100%% and back down.")
@@ -449,7 +450,7 @@ def main():
         pole_pairs = resp[1][7] if resp[1][7] > 0 else 1
         print(f"  Mode: {'FOC' if is_foc else '6-step'} (flags=0x{flags:08X}, pp={pole_pairs})")
 
-    # Check/clear fault
+    # Ensure motor is in IDLE before switching throttle source
     resp = send_cmd(ser, GSP_CMD_GET_SNAPSHOT)
     if resp and resp[0] == GSP_CMD_GET_SNAPSHOT:
         init_state = resp[1][0]
@@ -457,7 +458,18 @@ def main():
         if init_state == 9:
             print("  Clearing fault...")
             send_cmd(ser, GSP_CMD_CLEAR_FAULT)
-            time.sleep(0.3)
+            time.sleep(0.5)
+        elif init_state != 0:  # Not IDLE — stop motor first
+            print("  Motor running — sending STOP...")
+            send_cmd(ser, GSP_CMD_STOP_MOTOR)
+            time.sleep(1.0)
+            # Wait for IDLE
+            for _ in range(20):
+                resp2 = send_cmd(ser, GSP_CMD_GET_SNAPSHOT, timeout=0.3)
+                if resp2 and resp2[0] == GSP_CMD_GET_SNAPSHOT and resp2[1][0] == 0:
+                    break
+                time.sleep(0.1)
+            print(f"  Motor stopped.")
 
     # Open CSV
     csvfile = open(filename, "w", newline="")
@@ -489,10 +501,10 @@ def main():
             print("  WARNING: Failed to set throttle source to GSP")
             print("           Speed control will use physical pot instead")
 
-    # Set initial throttle and arm
+    # Set throttle to 0 for arming (firmware requires throttle <= deadband to arm)
     if not args.manual:
-        set_throttle(ser, args.arm_throttle)
-        print(f"  Throttle set to {args.arm_throttle} (GSP 0-2000)")
+        set_throttle(ser, 0)
+        print(f"  Throttle set to 0 for arming (idle will use {args.arm_throttle})")
 
     print(f"  Sending START command...")
     resp = send_cmd(ser, GSP_CMD_START_MOTOR)

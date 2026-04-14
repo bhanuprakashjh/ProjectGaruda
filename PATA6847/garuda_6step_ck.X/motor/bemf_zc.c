@@ -1921,20 +1921,35 @@ void RecordZcTiming(volatile GARUDA_DATA_T *pData,
              * T_hat moves the corridor earlier, finds noise clusters,
              * and confirms the bad T_hat.
              *
-             * T_hat is only used for the PI model (setValueHR).
-             * The DMA cluster search uses the reactive period as the
-             * independent reference for where to look. */
+             * For the DMA cluster SEARCH, use the reactive advance
+             * (TAL-based) so the expected position matches where the
+             * motor actually commutates. The sync PI MODEL uses its
+             * own advance (advanceCmdHR) for setValueHR.
+             *
+             * Once sync owns commutation (Phase 5), the search can
+             * switch to using sync's own advance model. */
             uint16_t refHR = pData->zcCtrl.refIntervalHR;
             if (refHR == 0) refHR = pData->zcSync.T_hatHR;
 
-            /* Expected ZC from reactive reference (for cluster search) */
-            uint16_t refAdvHR = (uint16_t)(
-                (uint32_t)ZC_SYNC_ADVANCE_FP8 * refHR >> 8);
+            /* Compute eRPM for reactive advance lookup */
+            uint32_t syncERPM = 0;
+            if (refHR > 0) syncERPM = 15625000UL / refHR;
+            uint8_t searchTal = AdaptiveTimingAdvance(syncERPM);
+
+            /* Expected ZC position within sector.
+             * With advance, commutation fires earlier relative to the
+             * rotor → ZC arrives LATER in the sector.
+             * expectedCapValue = halfStep + advance + detDelay
+             *
+             * Use reactive TAL for the search advance so the expected
+             * position matches where the motor actually operates.
+             * The sync PI model (setValueHR) uses its own advance. */
+            uint16_t refAdvHR = (refHR >> 3) * searchTal;
             uint16_t expectedHR = (uint16_t)(
                 pData->zcSync.lastCommHR
                 + (refHR >> 1)
-                + pData->zcSync.detDelayHR
-                + refAdvHR);
+                + refAdvHR
+                + pData->zcSync.detDelayHR);
 
             uint16_t corridorHR = refHR / ZC_SYNC_CORRIDOR_DIV;
             uint16_t windowOpenHR = pData->zcSync.lastCommHR
@@ -1952,9 +1967,15 @@ void RecordZcTiming(volatile GARUDA_DATA_T *pData,
                                      risingZc, &cl))
             {
                 uint16_t capValueHR = cl.midpointHR - pData->zcSync.lastCommHR;
+                /* In shadow mode, the motor is driven by reactive
+                 * scheduling with TAL-based advance. The PI model must
+                 * match what reactive actually does, not sync's own
+                 * advance constant. Use the same searchTal-based advance
+                 * that was used for the DMA cluster search. */
+                uint16_t modelAdvHR = (pData->zcSync.T_hatHR >> 3) * searchTal;
                 uint16_t setValueHR = (pData->zcSync.T_hatHR >> 1)
                                     + pData->zcSync.detDelayHR
-                                    + pData->zcSync.advanceCmdHR;
+                                    + modelAdvHR;
                 int16_t errHR = (int16_t)(capValueHR - setValueHR);
 
                 /* PI update — unbiased rounding on right shift.
@@ -2001,14 +2022,14 @@ void RecordZcTiming(volatile GARUDA_DATA_T *pData,
                 else
                     pData->zcSync.goodStreak = 0;
 
-                /* Shadow comparison: sync vs reactive */
-                uint16_t syncNextComm = pData->zcSync.lastCommHR
-                                      + pData->zcSync.T_hatHR;
-                pData->zcSync.syncVsReactiveDelta =
-                    (int16_t)(syncNextComm
-                              - pData->zcPred.lastReactiveTargetHR);
+                /* SvR comparison deferred — lastReactiveTargetHR is
+                 * not updated until ScheduleCommutation runs after
+                 * RecordZcTiming returns. Set to 0 to avoid stale data. */
+                pData->zcSync.syncVsReactiveDelta = 0;
 
-                /* Update torque advance for current speed */
+                /* Update advanceCmdHR — stores the sync model's own
+                 * advance for future ownership mode. In shadow mode
+                 * the PI model uses searchTal-based advance instead. */
                 pData->zcSync.advanceCmdHR = (uint16_t)(
                     (uint32_t)ZC_SYNC_ADVANCE_FP8
                     * pData->zcSync.T_hatHR >> 8);
