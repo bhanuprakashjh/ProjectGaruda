@@ -799,8 +799,13 @@ void __attribute__((interrupt, auto_psv)) _T1Interrupt(void)
 #if FEATURE_IC_ZC
                 gData.bemf.zeroCrossDetected = true;  /* Block SCCP1 polling */
                 gData.icZc.phase = IC_ZC_DONE;        /* Block FastPoll */
-                HAL_ComTimer_Cancel();                 /* Cancel pending SCCP4 */
-                gData.timing.deadlineActive = false;
+#if FEATURE_SECTOR_PI
+                if (gData.zcSync.mode != 2)  /* Don't kill PI's timer */
+#endif
+                {
+                    HAL_ComTimer_Cancel();
+                    gData.timing.deadlineActive = false;
+                }
                 gData.zcPred.lastCommHR = HAL_ComTimer_ReadTimer();
 #endif
                 COMMUTATION_AdvanceStep((volatile GARUDA_DATA_T *)&gData);
@@ -941,7 +946,13 @@ void __attribute__((interrupt, auto_psv)) _ADCInterrupt(void)
             {
 #if FEATURE_IC_ZC
                 gData.icZc.phase = IC_ZC_DONE;
-                HAL_ComTimer_Cancel();
+#if FEATURE_SECTOR_PI
+                if (gData.zcSync.mode != 2)
+#endif
+                    HAL_ComTimer_Cancel();
+#endif
+#if FEATURE_SECTOR_PI
+                if (gData.zcSync.mode != 2)
 #endif
                 gData.timing.deadlineActive = false;
                 gData.zcPred.lastCommHR = HAL_ComTimer_ReadTimer();
