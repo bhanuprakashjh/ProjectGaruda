@@ -14,6 +14,7 @@ import { MotorTuningPanel } from './components/MotorTuningPanel';
 import { CkDashboard } from './components/CkDashboard';
 import { CkMotorSetup } from './components/CkMotorSetup';
 import { CkScopePanel } from './components/CkScopePanel';
+import { DmaEdgeTimeline } from './components/DmaEdgeTimeline';
 import { CkMotorTest } from './components/CkMotorTest';
 import { useEscStore, type TabId } from './store/useEscStore';
 import { isCkBoard, BOARD_NAMES } from './protocol/types';
@@ -141,7 +142,12 @@ function DashboardTab() {
 function ScopeTab() {
   const info = useEscStore(s => s.info);
   if (info && isCkBoard(info.boardId)) {
-    return <CkScopePanel />;
+    return (
+      <>
+        <CkScopePanel />
+        <DmaEdgeTimeline />
+      </>
+    );
   }
   return (
     <>

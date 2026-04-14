@@ -178,6 +178,9 @@ export function ConnectionBar() {
         break;
       }
     }
+    // Forward burst-related packets to the DMA edge timeline component
+    const burstHandler = useEscStore.getState().burstPacketHandler;
+    if (burstHandler) burstHandler(cmdId, payload);
   }, [setInfo, pushSnapshot, pushCkSnapshot, setParams, setParamValue, setActiveProfile, addToast, handleParamListPage, refetchAllParams, setScopeStatus, appendScopeSamples, clearScopeSamples, setScopeReading]);
 
   const connect = useCallback(async () => {

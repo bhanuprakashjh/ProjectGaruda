@@ -71,6 +71,7 @@ interface EscStore {
   scopeStatus: ScopeStatus | null;
   scopeSamples: ScopeSample[];
   scopeReading: boolean;
+  burstPacketHandler?: (cmd: number, payload: Uint8Array) => void;
 
   setConnected: (v: boolean) => void;
   setInfo: (info: GspInfo) => void;

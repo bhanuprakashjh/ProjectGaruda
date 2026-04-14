@@ -117,7 +117,11 @@ export const CMD = {
   TELEM_STOP: 0x15,
   GET_PARAM_LIST: 0x16,
   LOAD_PROFILE: 0x17,
-  AUTO_DETECT: 0x20,
+  AUTO_DETECT: 0x20,     // AK board only
+  // CK board DMA burst capture (same IDs as AUTO_DETECT — board-specific)
+  BURST_ARM: 0x20,       // CK board: arm DMA edge burst
+  BURST_STATUS: 0x21,    // CK board: query burst state
+  BURST_GET_STEP: 0x22,  // CK board: download one step (74 bytes)
   GET_RX_STATUS: 0x26,
   SCOPE_ARM: 0x30,
   SCOPE_STATUS: 0x31,
@@ -191,4 +195,69 @@ export function decodeScopeSamples(data: Uint8Array): { offset: number; samples:
     });
   }
   return { offset, samples };
+}
+
+/* ── DMA Burst Edge Helpers (CK board) ─────────────────────── */
+
+export const BURST_EDGES_PER_STEP = 32;
+export const BURST_STEP_SIZE = 74;  // 2+2+2 + 32×2 + 1+1+1+1
+export const BURST_STEPS = 12;
+export const HR_TICK_US = 0.640;    // 640 ns per HR tick
+
+const PHASE_NAMES = ['C', 'A', 'B', 'C', 'A', 'B'];
+const POLARITY_NAMES = ['Rising', 'Falling', 'Rising', 'Falling', 'Rising', 'Falling'];
+
+export interface BurstStep {
+  commHR: number;
+  pollHR: number;
+  predictedHR: number;
+  edges: number[];       // HR ticks, up to 32
+  edgeCount: number;
+  stepIndex: number;     // 0..5
+  risingZc: boolean;
+  wasTimeout: boolean;
+  // Derived
+  edgesUs: number[];     // µs from commutation
+  pollUs: number;
+  predictedUs: number;
+  phase: string;
+  polarity: string;
+}
+
+export function decodeBurstStep(data: Uint8Array): BurstStep | null {
+  if (data.length < BURST_STEP_SIZE) return null;
+  const v = new DataView(data.buffer, data.byteOffset, data.byteLength);
+
+  const commHR = v.getUint16(0, true);
+  const pollHR = v.getUint16(2, true);
+  const predictedHR = v.getUint16(4, true);
+
+  const edgeCount = data[6 + BURST_EDGES_PER_STEP * 2];
+  const stepIndex = data[6 + BURST_EDGES_PER_STEP * 2 + 1];
+  const risingZc = data[6 + BURST_EDGES_PER_STEP * 2 + 2] !== 0;
+  const wasTimeout = data[6 + BURST_EDGES_PER_STEP * 2 + 3] !== 0;
+
+  const edges: number[] = [];
+  for (let i = 0; i < Math.min(edgeCount, BURST_EDGES_PER_STEP); i++) {
+    edges.push(v.getUint16(6 + i * 2, true));
+  }
+
+  // Convert to µs from commutation (wrap-safe signed delta)
+  function hrDeltaUs(a: number, b: number): number {
+    let d = (a - b) & 0xFFFF;
+    if (d >= 0x8000) d -= 0x10000;
+    return d * HR_TICK_US;
+  }
+
+  const edgesUs = edges.map(e => hrDeltaUs(e, commHR));
+  const pollUs = pollHR !== 0 ? hrDeltaUs(pollHR, commHR) : 0;
+  const predictedUs = predictedHR !== 0 ? hrDeltaUs(predictedHR, commHR) : 0;
+
+  return {
+    commHR, pollHR, predictedHR,
+    edges, edgeCount, stepIndex, risingZc, wasTimeout,
+    edgesUs, pollUs, predictedUs,
+    phase: PHASE_NAMES[stepIndex] ?? '?',
+    polarity: POLARITY_NAMES[stepIndex] ?? '?',
+  };
 }
