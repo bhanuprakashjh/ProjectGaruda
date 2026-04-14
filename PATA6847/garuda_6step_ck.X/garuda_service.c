@@ -1271,7 +1271,7 @@ void __attribute__((interrupt, no_auto_psv)) _CCT3Interrupt(void)
                 int16_t absErr = (gData.zcSync.syncErrHR >= 0)
                     ? gData.zcSync.syncErrHR
                     : -gData.zcSync.syncErrHR;
-                if (absErr > (int16_t)(gData.zcSync.T_hatHR >> 2))
+                if (absErr > (int16_t)(gData.zcSync.T_hatHR >> 1))
                 {
                     gData.zcSync.mode = 1;
                     gData.zcSync.fallbackReason = 2;
