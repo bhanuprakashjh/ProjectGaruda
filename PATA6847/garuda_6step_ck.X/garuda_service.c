@@ -1157,6 +1157,9 @@ void __attribute__((interrupt, no_auto_psv)) _CCT3Interrupt(void)
          * Poll detection still runs for supervision and fallback. */
         if (gData.zcSync.mode == 2)
         {
+            /* DEBUG: prove this block executes — count in clusterWidthHR */
+            gData.zcSync.clusterWidthHR++;
+
             bool risingZc = gData.zcSync.prevStepRisingZc;
             uint16_t windowOpenHR = gData.zcSync.lastCommHR
                                   + (gData.zcSync.T_hatHR >> 2);

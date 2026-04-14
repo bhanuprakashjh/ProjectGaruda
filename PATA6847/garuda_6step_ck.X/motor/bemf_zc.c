@@ -529,12 +529,19 @@ void BEMF_ZC_OnCommutation(volatile GARUDA_DATA_T *pData)
     /* Don't clear deadlineActive in predictive mode — the predictor
      * already programmed the next compare and is relying on this flag
      * to gate the next _CCP4Interrupt. */
-#if FEATURE_IC_ZC
-    if (!pData->zcPred.predictiveMode
 #if FEATURE_SECTOR_PI
-        && pData->zcSync.mode != 2
-#endif
-        )
+    /* When sector PI can own scheduling, NEVER cancel the timer here.
+     * The PI block in _CCT3Interrupt manages the timer directly.
+     * In shadow mode (mode!=2), reactive scheduling handles the timer
+     * via ScheduleCommutation, and the one-shot ISR pattern means
+     * there's no stale target to cancel. */
+    if (!pData->zcPred.predictiveMode && pData->zcSync.mode != 2)
+    {
+        pData->timing.deadlineActive = false;
+        HAL_ComTimer_Cancel();
+    }
+#elif FEATURE_IC_ZC
+    if (!pData->zcPred.predictiveMode)
     {
         pData->timing.deadlineActive = false;
         HAL_ComTimer_Cancel();
