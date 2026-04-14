@@ -1259,12 +1259,24 @@ void __attribute__((interrupt, no_auto_psv)) _CCT3Interrupt(void)
             gData.zcSync.lastCommHR = thisCommHR;
             /* prevStepRisingZc updated in OnCommutation below */
 
-            /* Exit conditions */
+            /* Exit conditions — with grace period after entry.
+             * The PI needs ~24 sectors to absorb the entry transient
+             * (model offset + timing discontinuity). During grace,
+             * only missStreak exit is active (safety). */
             if (gData.zcSync.missStreak > 3)
             {
                 gData.zcSync.mode = 1;  /* SHADOW */
                 gData.zcSync.fallbackReason = 1;
                 gData.zcSync.diagSyncExits++;
+                gData.zcSync.goodStreak = 0;
+            }
+            else if (gData.zcSync.goodStreak > 0)
+            {
+                /* Grace period: goodStreak counts down from entry.
+                 * Repurpose it as a grace counter — decrement each
+                 * owned sector. Only check syncErr exit after grace
+                 * expires (goodStreak reaches 0). */
+                gData.zcSync.goodStreak--;
             }
             else if (gData.zcSync.T_hatHR > 0)
             {
