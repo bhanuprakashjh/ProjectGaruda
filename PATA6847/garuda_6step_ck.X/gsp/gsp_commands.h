@@ -185,15 +185,10 @@ typedef struct __attribute__((packed)) {
     uint16_t predRealZcDelayHR; /* Last measured comm-to-ZC delay */
     uint16_t predZcOffsetHR;    /* Adaptive phase offset (IIR-tracked) */
 
-    /* Step 2: gate readiness (8B) */
-    uint16_t winCandInGated;    /* In-window while gateActive */
-    uint16_t winCandOutGated;   /* Out-of-window while gateActive */
-    uint16_t winOutEarly;       /* ZC before scanOpen */
-    uint16_t winOutLate;        /* ZC after scanClose */
-    uint8_t  gateActive;        /* Gate armed */
-    uint8_t  _pad1;             /* alignment */
-    uint16_t windowReject;      /* ZCs vetoed by live gate */
-    uint16_t windowRecovered;   /* Vetoed steps that got later valid ZC */
+    /* Gate readiness removed — 14B reclaimed for sector PI sync.
+     * Old fields (winCandInGated, winCandOutGated, winOutEarly,
+     * winOutLate, gateActive, windowReject, windowRecovered)
+     * were old predictor supervision. */
 
     /* Step 3: predictive scheduling (12B) */
     uint16_t predCommOwned;     /* Commutations scheduled by predictor */

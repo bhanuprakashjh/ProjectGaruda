@@ -67,6 +67,8 @@ def parse_packet(buf):
         crc_recv = (buf[2 + pkt_len] << 8) | buf[2 + pkt_len + 1]
         crc_calc = crc16(body)
         if crc_recv != crc_calc:
+            import sys
+            print(f"  [CRC FAIL] len={pkt_len} cmd=0x{buf[2]:02x} recv=0x{crc_recv:04x} calc=0x{crc_calc:04x}", file=sys.stderr)
             buf = buf[1:]
             continue
         cmd = buf[2]
@@ -203,41 +205,28 @@ def decode_ck_snapshot(data):
         s['predMinMarginHR'] = 0
         s['predRealZcDelayHR'] = 0
         s['predZcOffsetHR'] = 0
-    # V10 Step 2: gate readiness + live veto (166 bytes total)
-    if len(data) >= 166:
-        s['winCandInGated'] = struct.unpack_from('<H', data, 152)[0]
-        s['winCandOutGated'] = struct.unpack_from('<H', data, 154)[0]
-        s['winOutEarly'] = struct.unpack_from('<H', data, 156)[0]
-        s['winOutLate'] = struct.unpack_from('<H', data, 158)[0]
-        s['gateActive'] = data[160]
-        # pad at 161
-        s['windowReject'] = struct.unpack_from('<H', data, 162)[0]
-        s['windowRecovered'] = struct.unpack_from('<H', data, 164)[0]
-    else:
-        s['winCandInGated'] = 0
-        s['winCandOutGated'] = 0
-        s['winOutEarly'] = 0
-        s['winOutLate'] = 0
-        s['gateActive'] = 0
-        s['windowReject'] = 0
-        s['windowRecovered'] = 0
-    # V11 Step 3: predictive scheduling (186 bytes total)
-    # struct order: predCommOwned, predictiveMode, handoffPending, predExitMiss,
-    #               predExitTimeout, predEnter, predEntryLate, predVsReactiveDelta,
-    #               deltaOkCount, entryScore, predIsrFired, predIsrEntries
-    if len(data) >= 186:
-        s['predCommOwned'] = struct.unpack_from('<H', data, 166)[0]
-        s['predictiveMode'] = data[168]
-        s['handoffPending'] = data[169]
-        s['predExitMiss'] = struct.unpack_from('<H', data, 170)[0]
-        s['predExitTimeout'] = struct.unpack_from('<H', data, 172)[0]
-        s['predEnter'] = struct.unpack_from('<H', data, 174)[0]
-        s['predEntryLate'] = struct.unpack_from('<H', data, 176)[0]
-        s['predVsReactiveDelta'] = struct.unpack_from('<h', data, 178)[0]
-        s['deltaOkCount'] = data[180]
-        s['entryScore'] = data[181]
-        s['predIsrFired'] = struct.unpack_from('<H', data, 182)[0]
-        s['predIsrEntries'] = struct.unpack_from('<H', data, 184)[0]
+    # Gate readiness fields removed from snapshot — zero-fill for CSV compat
+    s['winCandInGated'] = 0
+    s['winCandOutGated'] = 0
+    s['winOutEarly'] = 0
+    s['winOutLate'] = 0
+    s['gateActive'] = 0
+    s['windowReject'] = 0
+    s['windowRecovered'] = 0
+    # V11 Step 3: predictive scheduling (shifted -14 by gate removal)
+    if len(data) >= 172:
+        s['predCommOwned'] = struct.unpack_from('<H', data, 152)[0]
+        s['predictiveMode'] = data[154]
+        s['handoffPending'] = data[155]
+        s['predExitMiss'] = struct.unpack_from('<H', data, 156)[0]
+        s['predExitTimeout'] = struct.unpack_from('<H', data, 158)[0]
+        s['predEnter'] = struct.unpack_from('<H', data, 160)[0]
+        s['predEntryLate'] = struct.unpack_from('<H', data, 162)[0]
+        s['predVsReactiveDelta'] = struct.unpack_from('<h', data, 164)[0]
+        s['deltaOkCount'] = data[166]
+        s['entryScore'] = data[167]
+        s['predIsrFired'] = struct.unpack_from('<H', data, 168)[0]
+        s['predIsrEntries'] = struct.unpack_from('<H', data, 170)[0]
     else:
         s['predCommOwned'] = 0
         s['predictiveMode'] = 0
@@ -251,16 +240,16 @@ def decode_ck_snapshot(data):
         s['predEntryLate'] = 0
         s['predIsrFired'] = 0
         s['predIsrEntries'] = 0
-    # V12b: DPLL state (14 bytes at offset 186)
-    if len(data) >= 200:
-        s['dpllPhaseBiasHR'] = struct.unpack_from('<h', data, 186)[0]
-        s['dpllErrHR'] = struct.unpack_from('<h', data, 188)[0]
-        s['dmaMeasUsed'] = struct.unpack_from('<H', data, 190)[0]
-        s['dmaMeasReject'] = struct.unpack_from('<H', data, 192)[0]
-        s['predCloseAgree'] = struct.unpack_from('<H', data, 194)[0]
-        s['predCloseDisagree'] = struct.unpack_from('<H', data, 196)[0]
-        s['dpllFallbackReason'] = data[198]
-        s['measSource'] = data[199]  # 0=none 1=poll 2=DMA
+    # V12b: DPLL state (shifted -14 by gate removal)
+    if len(data) >= 186:
+        s['dpllPhaseBiasHR'] = struct.unpack_from('<h', data, 172)[0]
+        s['dpllErrHR'] = struct.unpack_from('<h', data, 174)[0]
+        s['dmaMeasUsed'] = struct.unpack_from('<H', data, 176)[0]
+        s['dmaMeasReject'] = struct.unpack_from('<H', data, 178)[0]
+        s['predCloseAgree'] = struct.unpack_from('<H', data, 180)[0]
+        s['predCloseDisagree'] = struct.unpack_from('<H', data, 182)[0]
+        s['dpllFallbackReason'] = data[184]
+        s['measSource'] = data[185]
     else:
         s['dpllPhaseBiasHR'] = 0
         s['dpllErrHR'] = 0
@@ -270,17 +259,17 @@ def decode_ck_snapshot(data):
         s['predCloseDisagree'] = 0
         s['dpllFallbackReason'] = 0
         s['measSource'] = 0
-    # Sector PI synchronizer telemetry (14 bytes at offset 200)
-    if len(data) >= 214:
-        s['syncErrHR'] = struct.unpack_from('<h', data, 200)[0]
-        s['syncT_hatHR'] = struct.unpack_from('<H', data, 202)[0]
-        s['syncVsReactive'] = struct.unpack_from('<h', data, 204)[0]
-        s['syncMode'] = data[206]
-        s['syncGoodStreak'] = data[207]
-        s['syncMissStreak'] = data[208]
-        s['syncClusterCount'] = data[209]
-        s['syncAccepts'] = struct.unpack_from('<H', data, 210)[0]
-        s['syncMisses'] = struct.unpack_from('<H', data, 212)[0]
+    # Sector PI synchronizer telemetry (14 bytes, shifted -14)
+    if len(data) >= 200:
+        s['syncErrHR'] = struct.unpack_from('<h', data, 186)[0]
+        s['syncT_hatHR'] = struct.unpack_from('<H', data, 188)[0]
+        s['syncVsReactive'] = struct.unpack_from('<h', data, 190)[0]
+        s['syncMode'] = data[192]
+        s['syncGoodStreak'] = data[193]
+        s['syncMissStreak'] = data[194]
+        s['syncClusterCount'] = data[195]
+        s['syncAccepts'] = struct.unpack_from('<H', data, 196)[0]
+        s['syncMisses'] = struct.unpack_from('<H', data, 198)[0]
     else:
         s['syncErrHR'] = 0
         s['syncT_hatHR'] = 0
@@ -291,27 +280,23 @@ def decode_ck_snapshot(data):
         s['syncClusterCount'] = 0
         s['syncAccepts'] = 0
         s['syncMisses'] = 0
-    # V12: icBounce — shifted +14 by sync fields
-    if len(data) >= 216:
-        s['icBounce'] = struct.unpack_from('<H', data, 214)[0]
+    # V12: icBounce (shifted -14 by gate removal, net 0 from sync add)
+    if len(data) >= 202:
+        s['icBounce'] = struct.unpack_from('<H', data, 200)[0]
     else:
         s['icBounce'] = 0
-    # V13: DMA shadow telemetry (24 bytes, shifted +14 by sync fields)
-    # Fields: stepCount (u32), matchCount (u32), ringOverflow (u32),
-    #         edgesAvgX16 (u16), earliestVsPoll (i16), earliestVsExp (i16),
-    #         closestVsExp (i16), pollVsExp (i16),
-    #         lastEdgeCount (u8), lastFound (u8)
-    if len(data) >= 240:
-        s['dmaStepCount']       = struct.unpack_from('<I', data, 216)[0]
-        s['dmaMatchCount']      = struct.unpack_from('<I', data, 220)[0]
-        s['dmaRingOverflow']    = struct.unpack_from('<I', data, 224)[0]
-        s['dmaEdgesAvgX16']     = struct.unpack_from('<H', data, 228)[0]
-        s['dmaEarlyVsPoll']     = struct.unpack_from('<h', data, 230)[0]
-        s['dmaEarlyVsExp']      = struct.unpack_from('<h', data, 232)[0]
-        s['dmaClosestVsExp']    = struct.unpack_from('<h', data, 234)[0]
-        s['dmaPollVsExp']       = struct.unpack_from('<h', data, 236)[0]
-        s['dmaLastEdgeCount']   = data[238]
-        s['dmaLastFound']       = data[239]
+    # V13: DMA shadow telemetry (24 bytes, net 0 offset shift)
+    if len(data) >= 226:
+        s['dmaStepCount']       = struct.unpack_from('<I', data, 202)[0]
+        s['dmaMatchCount']      = struct.unpack_from('<I', data, 206)[0]
+        s['dmaRingOverflow']    = struct.unpack_from('<I', data, 210)[0]
+        s['dmaEdgesAvgX16']     = struct.unpack_from('<H', data, 214)[0]
+        s['dmaEarlyVsPoll']     = struct.unpack_from('<h', data, 216)[0]
+        s['dmaEarlyVsExp']      = struct.unpack_from('<h', data, 218)[0]
+        s['dmaClosestVsExp']    = struct.unpack_from('<h', data, 220)[0]
+        s['dmaPollVsExp']       = struct.unpack_from('<h', data, 222)[0]
+        s['dmaLastEdgeCount']   = data[224]
+        s['dmaLastFound']       = data[225]
     else:
         s['dmaStepCount'] = 0
         s['dmaMatchCount'] = 0
@@ -327,13 +312,13 @@ def decode_ck_snapshot(data):
     # Fields: subCount (u32), subSkipGated (u32), subSkipRange (u32),
     #         lastCorrectionHR (i16), minCorrectionHR (i16),
     #         maxCorrectionHR (i16)
-    if len(data) >= 258:
-        s['dmaSubCount']        = struct.unpack_from('<I', data, 240)[0]
-        s['dmaSubSkipGated']    = struct.unpack_from('<I', data, 244)[0]
-        s['dmaSubSkipRange']    = struct.unpack_from('<I', data, 248)[0]
-        s['dmaLastCorrectionHR'] = struct.unpack_from('<h', data, 252)[0]
-        s['dmaMinCorrectionHR']  = struct.unpack_from('<h', data, 254)[0]
-        s['dmaMaxCorrectionHR']  = struct.unpack_from('<h', data, 256)[0]
+    if len(data) >= 244:
+        s['dmaSubCount']        = struct.unpack_from('<I', data, 226)[0]
+        s['dmaSubSkipGated']    = struct.unpack_from('<I', data, 230)[0]
+        s['dmaSubSkipRange']    = struct.unpack_from('<I', data, 234)[0]
+        s['dmaLastCorrectionHR'] = struct.unpack_from('<h', data, 238)[0]
+        s['dmaMinCorrectionHR']  = struct.unpack_from('<h', data, 240)[0]
+        s['dmaMaxCorrectionHR']  = struct.unpack_from('<h', data, 242)[0]
     else:
         s['dmaSubCount'] = 0
         s['dmaSubSkipGated'] = 0
