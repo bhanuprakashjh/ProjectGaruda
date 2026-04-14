@@ -34,6 +34,9 @@
 #include "hal/hal_ic.h"
 #include "hal/hal_com_timer.h"
 #endif
+#if FEATURE_IC_DMA_SHADOW
+#include "hal/hal_ic_dma.h"
+#endif
 #if FEATURE_PTG_ZC
 #include "hal/hal_ptg.h"
 #endif
@@ -1143,11 +1146,132 @@ void __attribute__((interrupt, no_auto_psv)) _CCT3Interrupt(void)
             gData.timing.deadlineActive = true;
         }
 
+#if FEATURE_SECTOR_PI && FEATURE_IC_DMA_SHADOW
+        /* ── Sector PI ownership: query DMA + schedule from T_hat ──
+         * MUST run BEFORE AdvanceStep/OnCommutation because those
+         * update the DMA commHead markers for the NEW step. The DMA
+         * query needs markers pointing to the PREVIOUS step's edges.
+         *
+         * When mode==2 (OWNED): PI drives commutation scheduling.
+         * Reactive scheduling is skipped (guard in ScheduleCommutation).
+         * Poll detection still runs for supervision and fallback. */
+        if (gData.zcSync.mode == 2)
+        {
+            bool risingZc = gData.zcSync.prevStepRisingZc;
+            uint16_t windowOpenHR = gData.zcSync.lastCommHR
+                                  + (gData.zcSync.T_hatHR >> 2);
+            /* Use blanking end if later */
+            if ((int16_t)(gData.icZc.blankingEndHR - windowOpenHR) > 0)
+                windowOpenHR = gData.icZc.blankingEndHR;
+            uint16_t windowCloseHR = thisCommHR;  /* up to this commutation */
+            uint16_t dmaZcHR = 0;
+
+            bool zcFound = HAL_ZcDma_DetectZc(
+                windowOpenHR, windowCloseHR, risingZc, &dmaZcHR);
+
+            if (zcFound)
+            {
+                int16_t dmaVsPoll = (int16_t)(dmaZcHR - windowCloseHR);
+                /* Accept if DMA is before this commutation */
+                if (dmaVsPoll >= -200 && dmaVsPoll <= 0)
+                {
+                    uint16_t capValueHR = dmaZcHR - gData.zcSync.lastCommHR;
+                    uint8_t searchTal = gData.zcPred.lastReactiveTAL;
+                    uint16_t modelAdvHR = (gData.zcSync.T_hatHR >> 3) * searchTal;
+                    uint16_t setValueHR = (gData.zcSync.T_hatHR >> 1)
+                                        + gData.zcSync.detDelayHR
+                                        + modelAdvHR;
+                    int16_t errHR = (int16_t)(capValueHR - setValueHR);
+
+                    /* PI update — symmetric truncation */
+                    int16_t kiCorr = (errHR >= 0)
+                        ? (errHR >> ZC_SYNC_KI_SHIFT)
+                        : -((-errHR) >> ZC_SYNC_KI_SHIFT);
+                    int16_t kpCorr = (errHR >= 0)
+                        ? (errHR >> ZC_SYNC_KP_SHIFT)
+                        : -((-errHR) >> ZC_SYNC_KP_SHIFT);
+
+                    int32_t newInt = (int32_t)gData.zcSync.syncIntHR + kiCorr;
+                    if (newInt < 50) newInt = 50;
+                    if (newInt > 2000) newInt = 2000;
+                    gData.zcSync.syncIntHR = (uint16_t)newInt;
+
+                    int32_t newT = (int32_t)gData.zcSync.syncIntHR + kpCorr;
+                    if (newT < 50) newT = 50;
+                    if (newT > 2000) newT = 2000;
+                    gData.zcSync.T_hatHR = (uint16_t)newT;
+
+                    gData.zcSync.syncErrHR = errHR;
+                    gData.zcSync.lastMeasHR = dmaZcHR;
+                    gData.zcSync.diagSyncAccepts++;
+                    gData.zcSync.missStreak = 0;
+                }
+                else
+                {
+                    gData.zcSync.missStreak++;
+                    gData.zcSync.diagSyncMisses++;
+                }
+            }
+            else
+            {
+                gData.zcSync.missStreak++;
+                gData.zcSync.diagSyncMisses++;
+            }
+
+            /* Schedule next commutation from PI */
+            uint16_t nextTargetHR = thisCommHR + gData.zcSync.T_hatHR;
+            uint16_t nowHR = HAL_ComTimer_ReadTimer();
+            int16_t margin = (int16_t)(nextTargetHR - nowHR);
+            if (margin > 2)
+            {
+                HAL_ComTimer_ScheduleAbsolute(nextTargetHR);
+                gData.timing.deadlineActive = true;
+            }
+            else
+            {
+                /* Target already past — fire ASAP */
+                HAL_ComTimer_ScheduleAbsolute(nowHR + 4);
+                gData.timing.deadlineActive = true;
+            }
+
+            /* Update lastCommHR for next sector's PI */
+            gData.zcSync.lastCommHR = gData.zcPred.lastReactiveTargetHR;
+            /* prevStepRisingZc updated in OnCommutation below */
+
+            /* Exit conditions */
+            if (gData.zcSync.missStreak > 3)
+            {
+                gData.zcSync.mode = 1;  /* SHADOW */
+                gData.zcSync.fallbackReason = 1;
+                gData.zcSync.diagSyncExits++;
+            }
+            else if (gData.zcSync.T_hatHR > 0)
+            {
+                int16_t absErr = (gData.zcSync.syncErrHR >= 0)
+                    ? gData.zcSync.syncErrHR
+                    : -gData.zcSync.syncErrHR;
+                if (absErr > (int16_t)(gData.zcSync.T_hatHR >> 2))
+                {
+                    gData.zcSync.mode = 1;
+                    gData.zcSync.fallbackReason = 2;
+                    gData.zcSync.diagSyncExits++;
+                }
+            }
+
+            if (gData.state != ESC_CLOSED_LOOP)
+            {
+                gData.zcSync.mode = 0;  /* OFF */
+                gData.zcSync.fallbackReason = 4;
+                gData.zcSync.diagSyncExits++;
+            }
+        }
+#endif /* FEATURE_SECTOR_PI */
+
         /* Gate out SCCP1 fast poll during transition.
          * Only clear deadlineActive if predictor hasn't scheduled
          * the next compare already. */
         gData.icZc.phase = IC_ZC_DONE;
-        if (!gData.zcPred.predictiveMode)
+        if (!gData.zcPred.predictiveMode && gData.zcSync.mode != 2)
             gData.timing.deadlineActive = false;
         COMMUTATION_AdvanceStep((volatile GARUDA_DATA_T *)&gData);
         BEMF_ZC_OnCommutation((volatile GARUDA_DATA_T *)&gData);
@@ -1156,6 +1280,10 @@ void __attribute__((interrupt, no_auto_psv)) _CCT3Interrupt(void)
          * it unconditionally at bemf_zc.c:371). */
         if (gData.zcPred.predictiveMode && gData.zcPred.pendingPredValid)
             gData.timing.deadlineActive = true;
+#if FEATURE_SECTOR_PI
+        if (gData.zcSync.mode == 2)
+            gData.timing.deadlineActive = true;
+#endif
     }
 }
 

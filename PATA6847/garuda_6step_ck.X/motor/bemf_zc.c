@@ -868,6 +868,31 @@ void BEMF_ZC_OnCommutation(volatile GARUDA_DATA_T *pData)
         uint32_t eRPM = 15625000UL / pData->zcCtrl.refIntervalHR;
         if (eRPM < ZC_SYNC_EXIT_ERPM)
             pData->zcSync.mode = 0;  /* OFF */
+
+        /* Shadow → Owned transition:
+         * goodStreak proves the PI model tracks consistently.
+         * Entry only when reactive is in TRACK mode (stable). */
+        if (pData->zcSync.goodStreak >= 12 &&
+            pData->zcCtrl.mode == ZC_MODE_TRACK &&
+            eRPM >= ZC_SYNC_ENTRY_ERPM)
+        {
+            pData->zcSync.mode = 2;  /* OWNED */
+            pData->zcSync.fallbackReason = 0;
+            pData->zcSync.missStreak = 0;
+            pData->zcSync.diagSyncEntries++;
+        }
+    }
+    /* Exit owned if speed drops */
+    else if (pData->zcSync.mode == 2 &&
+             pData->zcCtrl.refIntervalHR > 0)
+    {
+        uint32_t eRPM = 15625000UL / pData->zcCtrl.refIntervalHR;
+        if (eRPM < ZC_SYNC_EXIT_ERPM)
+        {
+            pData->zcSync.mode = 1;  /* back to SHADOW */
+            pData->zcSync.fallbackReason = 3;
+            pData->zcSync.diagSyncExits++;
+        }
     }
 #endif
 }
@@ -1146,6 +1171,13 @@ void BEMF_ZC_ScheduleCommutation(volatile GARUDA_DATA_T *pData)
      * by _CCP4Interrupt. ZC detection only updates the predictor. */
 #if FEATURE_IC_ZC
     if (pData->zcPred.predictiveMode)
+        return;
+#endif
+
+#if FEATURE_SECTOR_PI
+    /* Sector PI owns commutation — skip reactive scheduling.
+     * Poll detection and RecordZcTiming still run for supervision. */
+    if (pData->zcSync.mode == 2)
         return;
 #endif
 
