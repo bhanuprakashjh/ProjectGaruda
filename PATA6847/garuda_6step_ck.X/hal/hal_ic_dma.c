@@ -221,6 +221,19 @@ void HAL_ZcDma_OnCommutation(uint16_t rpPin, bool risingZc)
     RPINR7bits.ICM5R = (uint8_t)rpPin;   /* CCP5 IC input */
     __builtin_write_RPCON(0x0800);       /* lock */
 
+    /* Reset CCP2/CCP5 timers at commutation.
+     * After reset, raw captures are directly "ticks since commutation."
+     * Update the offset so rawCap + offset still gives absolute HR time
+     * (needed by legacy shadow probe and DPLL). The offset becomes
+     * "HR time at this commutation" since CCP timer is now 0. */
+    CCP2TMRL = 0;
+    CCP5TMRL = 0;
+    {
+        uint16_t hrNow = HAL_ComTimer_ReadTimer();
+        ccp2_to_hr_offset = hrNow;
+        ccp5_to_hr_offset = hrNow;
+    }
+
     /* Capture current write heads — ring scan for this step will only
      * look at captures added since this commutation. */
     commHeadRising  = dmaRingHeadRising();
