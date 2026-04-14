@@ -1189,9 +1189,11 @@ void __attribute__((interrupt, no_auto_psv)) _CCT3Interrupt(void)
 
             if (zcFound)
             {
-                int16_t dmaVsPoll = (int16_t)(dmaZcHR - windowCloseHR);
-                /* Accept if DMA is before this commutation */
-                if (dmaVsPoll >= -200 && dmaVsPoll <= 0)
+                int16_t dmaVsClose = (int16_t)(dmaZcHR - windowCloseHR);
+                /* Same gate as shadow: DMA must be within [-40, 0]
+                 * of the close bound. The old [-200, 0] was too loose
+                 * and admitted wrong PWM clusters. */
+                if (dmaVsClose >= -40 && dmaVsClose <= 0)
                 {
                     uint16_t capValueHR = dmaZcHR - gData.zcSync.lastCommHR;
                     uint8_t searchTal = gData.zcPred.lastReactiveTAL;

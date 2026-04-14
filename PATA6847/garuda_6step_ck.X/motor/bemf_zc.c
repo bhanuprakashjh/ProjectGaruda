@@ -887,10 +887,7 @@ void BEMF_ZC_OnCommutation(volatile GARUDA_DATA_T *pData)
         /* Shadow → Owned transition:
          * goodStreak proves the PI model tracks consistently.
          * Entry only when reactive is in TRACK mode (stable). */
-        if (pData->zcSync.goodStreak >= 255 &&  /* DISABLED: ownership still desyncs
-                                                * even with corrected model sign.
-                                                * The ISR DMA context differs from
-                                                * shadow — PI diverges under ownership. */
+        if (pData->zcSync.goodStreak >= 12 &&
             pData->zcCtrl.mode == ZC_MODE_TRACK &&
             eRPM >= ZC_SYNC_ENTRY_ERPM)
         {
