@@ -59,7 +59,8 @@ static          uint8_t    stallCounter;
 static volatile bool       commandEnabled;
 static volatile uint16_t   actualAmplitude;
 static volatile uint16_t   targetAmplitude;
-static volatile uint16_t   targetPeriod;    /* pot-commanded timerPeriod */
+static volatile uint16_t   targetPeriod;    /* pot-commanded speed */
+static volatile uint16_t   basePeriod;      /* ramped toward targetPeriod */
 static volatile uint16_t   lastCommHR;      /* HR time of last commutation */
 
 /* ── Speed measurement ──────────────────────────────────────────── */
@@ -139,7 +140,8 @@ static void EnterCL(void)
     corridorGoodStreak = 0;
     piEnabled = false;
 
-    targetPeriod = timerPeriod;  /* seed at 4000 eRPM */
+    targetPeriod = timerPeriod;
+    basePeriod = timerPeriod;
 
     /* Keep current duty from ramp */
     actualAmplitude = (uint16_t)((rampDuty * 32768UL) / LOOPTIME_TCY);
@@ -393,12 +395,16 @@ void SectorPI_Commutate(void)
         int32_t delta = (int32_t)capValue - (int32_t)setVal;
         diagDelta = (int16_t)delta;
 
-        int32_t newInt = (int32_t)integrator + (delta >> V4_KI_SHIFT);
-        if (newInt < 1) newInt = 1;
-        if (newInt > 0xFFFF) newInt = 0xFFFF;
-        integrator = (uint16_t)newInt;
+        /* PI phase correction — bounded around basePeriod.
+         * The pot sets basePeriod (coarse speed). The PI only
+         * makes small corrections to keep commutation in phase
+         * with actual ZC. Correction clamped to ±basePeriod/8. */
+        int32_t correction = (delta >> V4_KP_SHIFT);
+        int16_t maxCorr = (int16_t)(basePeriod >> 3);
+        if (correction > maxCorr) correction = maxCorr;
+        if (correction < -maxCorr) correction = -maxCorr;
 
-        int32_t newP = (int32_t)integrator + (delta >> V4_KP_SHIFT);
+        int32_t newP = (int32_t)basePeriod + correction;
         if (newP < V4_MIN_PERIOD) newP = V4_MIN_PERIOD;
         if (newP > 0xFFFF) newP = 0xFFFF;
         timerPeriod = (uint16_t)newP;
@@ -465,34 +471,44 @@ void SectorPI_TimeTick(void)
         speedBase = 0;
     }
 
-    /* Simple pot→duty. Speed control deferred to next session. */
-    if (commandEnabled)
+    /* Speed control: pot sets coarse speed (targetPeriod).
+     * Ramp timerPeriod toward targetPeriod slowly.
+     * The sector PI adds a bounded phase correction on top
+     * via the normal delta→integrator path in Commutate.
+     * Duty scales with speed automatically. */
+    if (commandEnabled && piEnabled)
     {
-        if (actualAmplitude < targetAmplitude)
+        /* Ramp base period toward target */
+        if (basePeriod > targetPeriod + 2)
         {
-            actualAmplitude += 13;
-            if (actualAmplitude > targetAmplitude)
-                actualAmplitude = targetAmplitude;
+            basePeriod -= 2;
         }
-        else if (actualAmplitude > targetAmplitude)
+        else if (basePeriod + 2 < targetPeriod)
         {
-            if (actualAmplitude > 13)
-                actualAmplitude -= 13;
-            else
-                actualAmplitude = 0;
+            basePeriod += 2;
         }
+
+        /* Apply: timerPeriod = basePeriod (PI correction happens in Commutate) */
+        timerPeriod = basePeriod;
+        integrator = basePeriod;
+
+        /* Keep duty at ramp level. No-load motor doesn't need
+         * more duty to go faster. With prop, duty will need
+         * to scale — but that's a later tuning step. */
     }
 }
 
-#define V4_MIN_AMPLITUDE  3000U
-
 void SectorPI_CommandSet(uint16_t amplitude)
 {
+    /* pot (0..32768) → target eRPM (4000..60000) → targetPeriod */
     if (commandEnabled)
     {
-        if (amplitude < V4_MIN_AMPLITUDE)
-            amplitude = V4_MIN_AMPLITUDE;
-        targetAmplitude = amplitude;
+        uint32_t eRpm = 4000UL +
+            ((uint32_t)amplitude * 56000UL) / 32768UL;
+        uint32_t period = 15625000UL / eRpm;
+        if (period < V4_MIN_PERIOD) period = V4_MIN_PERIOD;
+        if (period > 5000) period = 5000;
+        targetPeriod = (uint16_t)period;
     }
 }
 
