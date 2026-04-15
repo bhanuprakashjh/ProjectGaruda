@@ -109,6 +109,7 @@ static void ShutOff(void)
 {
     HAL_Capture_Stop();
     HAL_ComTimer_Cancel();
+    HAL_PWM_ExitSinglePulse();
     HAL_PWM_ForceAllFloat();
     HAL_PWM_SetDutyCycle(0);
     running = false;
@@ -432,8 +433,40 @@ void SectorPI_Commutate(void)
         }
     }
 
-    /* 6. PWM duty */
-    HAL_PWM_SetDutyCycle((uint32_t)FixpMulU16(actualAmplitude, LOOPTIME_TCY));
+    /* 6. PWM duty — normal or single-pulse mode */
+    {
+        /* Check SP mode transition (with hysteresis) */
+        uint32_t erpmNow = (uint32_t)timerPeriod > 0 ?
+            (60UL * V4_TIMER_FREQ_HZ / (6UL * timerPeriod)) : 0;
+
+        if (!HAL_PWM_IsSinglePulse() && erpmNow > SP_ENTER_ERPM)
+        {
+            /* Enter single-pulse: MPER = sector period */
+            uint32_t duty = (uint32_t)FixpMulU16(actualAmplitude,
+                            (uint16_t)((uint32_t)timerPeriod * 128UL > 0xFFFF ?
+                             0xFFFF : (uint32_t)timerPeriod * 128UL));
+            HAL_PWM_SetSinglePulse(timerPeriod, duty);
+        }
+        else if (HAL_PWM_IsSinglePulse() && erpmNow < SP_EXIT_ERPM)
+        {
+            /* Exit back to normal PWM */
+            HAL_PWM_ExitSinglePulse();
+            HAL_PWM_SetDutyCycle((uint32_t)FixpMulU16(actualAmplitude, LOOPTIME_TCY));
+        }
+        else if (HAL_PWM_IsSinglePulse())
+        {
+            /* Update SP duty each sector */
+            uint32_t duty = (uint32_t)FixpMulU16(actualAmplitude,
+                            (uint16_t)((uint32_t)timerPeriod * 128UL > 0xFFFF ?
+                             0xFFFF : (uint32_t)timerPeriod * 128UL));
+            HAL_PWM_SetSinglePulse(timerPeriod, duty);
+        }
+        else
+        {
+            /* Normal PWM */
+            HAL_PWM_SetDutyCycle((uint32_t)FixpMulU16(actualAmplitude, LOOPTIME_TCY));
+        }
+    }
 
     /* 7. Speed counting */
     speedCounter++;

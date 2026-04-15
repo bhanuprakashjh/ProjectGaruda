@@ -240,3 +240,54 @@ void HAL_PWM_ForceAllLow(void)
     PG2IOCONL = (PG2IOCONL | 0x3000u | 0x0400u) & ~0x0800u;
     PG3IOCONL = (PG3IOCONL | 0x3000u | 0x0400u) & ~0x0800u;
 }
+
+/* ── Single-Pulse Mode (AVR-style) ─────────────────────────────── */
+/* Above 90k eRPM, change MPER from fixed 40kHz to match sector
+ * duration. One ON + one OFF per sector instead of many PWM pulses.
+ * No switching edges mid-sector → clean BEMF comparator output. */
+
+static bool spMode = false;
+
+void HAL_PWM_SetSinglePulse(uint16_t sectorPeriodTCY, uint32_t duty)
+{
+    /* sectorPeriodTCY is in HR ticks (640ns). Convert to PWM ticks.
+     * PWM clock = Fosc/2 = 200MHz, 1 tick = 5ns.
+     * HR tick = 640ns = 128 PWM ticks.
+     * sectorPWM = sectorPeriodHR × 128. */
+    uint32_t sectorPWM = (uint32_t)sectorPeriodTCY * 128UL;
+    if (sectorPWM > 0xFFFF) sectorPWM = 0xFFFF;
+    if (sectorPWM < 200) sectorPWM = 200;  /* minimum for dead-time */
+
+    /* Set master period to sector duration */
+    MPER = (uint16_t)sectorPWM;
+
+    /* Scale duty to new period */
+    if (duty > sectorPWM) duty = sectorPWM;
+
+    PG2DC = (uint16_t)duty;
+    PG3DC = (uint16_t)duty;
+    PG1DC = (uint16_t)duty;
+
+    PG1STATbits.UPDREQ = 1;
+    PG2STATbits.UPDREQ = 1;
+    PG3STATbits.UPDREQ = 1;
+
+    spMode = true;
+}
+
+void HAL_PWM_ExitSinglePulse(void)
+{
+    if (spMode)
+    {
+        MPER = LOOPTIME_TCY;
+        PG1STATbits.UPDREQ = 1;
+        PG2STATbits.UPDREQ = 1;
+        PG3STATbits.UPDREQ = 1;
+        spMode = false;
+    }
+}
+
+bool HAL_PWM_IsSinglePulse(void)
+{
+    return spMode;
+}
