@@ -37,6 +37,8 @@ typedef struct {
     uint16_t diagPiRuns;
     uint16_t diagLastCapValue;
     int16_t  diagDelta;
+    bool     spMode;        /* single-pulse mode active */
+    uint32_t erpmNow;       /* instantaneous eRPM from timerPeriod */
 } V4_TELEM_T;
 
 void     SectorPI_Init(void);

@@ -606,6 +606,9 @@ void GSP_TelemTick(void)
     memcpy(&d[32], &t.diagCaptures, 2);      /* icAccepted → captures accepted */
     memcpy(&d[34], &t.diagPiRuns, 2);        /* icFalse → PI run count */
     d[36] = t.stallCounter;                  /* filterLevel → stallCounter */
+    d[37] = t.spMode ? 1 : 0;               /* SP mode active flag */
+    { uint16_t erpm16 = (t.erpmNow > 0xFFFF) ? 0xFFFF : (uint16_t)t.erpmNow;
+      memcpy(&d[38], &erpm16, 2); }          /* erpmNow from timerPeriod */
 
     /* System (offset 40-47) */
     memcpy(&d[40], &gV4SystemTick, 4);       /* systemTick */

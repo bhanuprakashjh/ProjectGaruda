@@ -433,13 +433,13 @@ void SectorPI_Commutate(void)
         }
     }
 
-    /* 6. PWM duty — normal or single-pulse mode */
+    /* 6. PWM duty — SP mode disabled for now (adds ISR overhead).
+     * Pure midpoint mode 1 reaches 119k without SP. */
     {
-        /* Check SP mode transition (with hysteresis) */
-        uint32_t erpmNow = (uint32_t)timerPeriod > 0 ?
-            (60UL * V4_TIMER_FREQ_HZ / (6UL * timerPeriod)) : 0;
+#if 0  /* SP mode — needs implementation outside ISR */
+        uint32_t erpmSC = SectorPI_ErpmGet();
 
-        if (!HAL_PWM_IsSinglePulse() && erpmNow > SP_ENTER_ERPM)
+        if (!HAL_PWM_IsSinglePulse() && erpmSC > SP_ENTER_ERPM)
         {
             /* Enter single-pulse: MPER = sector period */
             uint32_t duty = (uint32_t)FixpMulU16(actualAmplitude,
@@ -447,7 +447,7 @@ void SectorPI_Commutate(void)
                              0xFFFF : (uint32_t)timerPeriod * 128UL));
             HAL_PWM_SetSinglePulse(timerPeriod, duty);
         }
-        else if (HAL_PWM_IsSinglePulse() && erpmNow < SP_EXIT_ERPM)
+        else if (HAL_PWM_IsSinglePulse() && erpmSC < SP_EXIT_ERPM)
         {
             /* Exit back to normal PWM */
             HAL_PWM_ExitSinglePulse();
@@ -466,6 +466,9 @@ void SectorPI_Commutate(void)
             /* Normal PWM */
             HAL_PWM_SetDutyCycle((uint32_t)FixpMulU16(actualAmplitude, LOOPTIME_TCY));
         }
+#else
+        HAL_PWM_SetDutyCycle((uint32_t)FixpMulU16(actualAmplitude, LOOPTIME_TCY));
+#endif
     }
 
     /* 7. Speed counting */
@@ -566,6 +569,9 @@ void SectorPI_TelemGet(V4_TELEM_T *out)
     out->diagPiRuns      = diagPiRuns;
     out->diagLastCapValue = diagLastCapValue;
     out->diagDelta       = diagDelta;
+    out->spMode          = HAL_PWM_IsSinglePulse();
+    out->erpmNow         = (timerPeriod > 0) ?
+        (60UL * V4_TIMER_FREQ_HZ / (6UL * (uint32_t)timerPeriod)) : 0;
 }
 
 #endif /* FEATURE_V4_SECTOR_PI */

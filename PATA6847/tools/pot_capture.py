@@ -101,9 +101,9 @@ def decode_ck_snapshot(data):
     s['icAccepted'] = struct.unpack_from('<H', data, 32)[0]
     s['icFalse'] = struct.unpack_from('<H', data, 34)[0]
     s['filterLevel'] = data[36]
-    s['missed'] = data[37]
-    s['forced'] = data[38]
-    s['ilimActive'] = data[39] != 0
+    s['spMode'] = data[37]          # V4: SP mode active flag
+    s['erpmTP'] = struct.unpack_from('<H', data, 38)[0]  # V4: eRPM from timerPeriod
+    # s['ilimActive'] = data[39] != 0  # overwritten by erpmTP high byte
     s['systemTick'] = struct.unpack_from('<I', data, 40)[0]
     s['uptime'] = struct.unpack_from('<I', data, 44)[0]
     if len(data) >= 52:
@@ -374,7 +374,7 @@ def main():
     print()
     ZC_MODES = ['ACQ', 'TRK', 'RCV']
     SYNC_MODES = ['.', 'S', 'O']  # OFF, SHADOW, OWNED
-    print(f"{'Time':>7s} {'State':>8s} {'ZcM':>3s} {'eRPM':>7s} {'Duty':>4s} {'Vbus':>6s} {'Mrgn':>5s} {'SErr':>5s} {'ST_h':>5s} {'Cap':>5s} {'SM':>2s} {'SGd':>3s} {'SAcc':>5s} {'Corr':>5s} {'Lkd':>3s}")
+    print(f"{'Time':>7s} {'State':>8s} {'ZcM':>3s} {'eRPM':>7s} {'Duty':>4s} {'Vbus':>6s} {'SP':>2s} {'eTP':>6s} {'Mrgn':>5s} {'SErr':>5s} {'ST_h':>5s} {'Cap':>5s} {'SM':>2s} {'SGd':>3s} {'SAcc':>5s} {'Corr':>5s} {'Lkd':>3s}")
     print("-" * 120)
 
     rows = []
@@ -437,7 +437,9 @@ def main():
                 sacc = snap.get('syncAccepts', 0)
                 sm_str = SYNC_MODES[smode] if smode < len(SYNC_MODES) else '?'
                 capv = snap.get('syncVsReactive', 0)  # repurposed: carries capValueHR
-                print(f"{t:7.1f} {state_str:>8s} {zc_mode_str:>3s} {snap['eRpm']:7d} {snap['dutyPct']:3d}% {snap['vbusV']:5.1f}V {snap.get('sched_margin_hr', snap.get('schedMarginHR',0)):5d} {serr:+5d} {sthat:5d} {capv:5d} {sm_str:>2s} {sgood:3d} {sacc:5d} {corr:+5d} {'Y' if locked else '.':>3s}{fault_str}")
+                sp_str = 'SP' if snap.get('spMode', 0) else '  '
+                etp = snap.get('erpmTP', 0)
+                print(f"{t:7.1f} {state_str:>8s} {zc_mode_str:>3s} {snap['eRpm']:7d} {snap['dutyPct']:3d}% {snap['vbusV']:5.1f}V {sp_str:>2s} {etp:6d} {snap.get('sched_margin_hr', snap.get('schedMarginHR',0)):5d} {serr:+5d} {sthat:5d} {capv:5d} {sm_str:>2s} {sgood:3d} {sacc:5d} {corr:+5d} {'Y' if locked else '.':>3s}{fault_str}")
 
                 rows.append({
                     'time': round(t, 3),
@@ -451,8 +453,8 @@ def main():
                     'ib_mA': snap['ibMa'],
                     'vbus_V': snap['vbusV'],
                     'zc_synced': 1 if snap['zcSynced'] else 0,
-                    'missed': snap['missed'],
-                    'forced': snap['forced'],
+                    'missed': snap.get('spMode', 0),
+                    'forced': snap.get('erpmTP', 0),
                     'step_period': snap['stepPeriod'],
                     'step_period_hr': snap['stepPeriodHR'],
                     'filter_level': snap['filterLevel'],
