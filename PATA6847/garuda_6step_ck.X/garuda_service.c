@@ -185,20 +185,11 @@ void __attribute__((interrupt, auto_psv)) _T1Interrupt(void)
         }
     }
 
-    /* ATA6847 nIRQ check every ~10ms, suppressed for 2s after start */
-    if (++gV4AtaCheckDiv >= 200)
-    {
-        gV4AtaCheckDiv = 0;
-        if ((gV4State == ESC_CLOSED_LOOP || gV4State == ESC_OL_RAMP) &&
-            (gV4SystemTick - gV4StartTick) > 30000 && /* suppress 30s — debug */
-            !_RB5)
-        {
-            SectorPI_Stop();
-            HAL_PWM_DisableOutputs();
-            gV4State = ESC_FAULT;
-            LED_FAULT = 1;
-        }
-    }
+    /* ATA6847 nIRQ check — DISABLED for now.
+     * At high speed/duty the ATA6847 VDS monitor triggers spurious
+     * nIRQ faults. Need to read the actual fault register and
+     * distinguish real faults (short circuit) from transient VDS
+     * trips before re-enabling. */
 }
 
 /* ── V4 ADC ISR ───────────────────────────────────────────────────── */
@@ -216,7 +207,12 @@ void __attribute__((interrupt, auto_psv)) _ADCInterrupt(void)
 /* ── V4 Commutation ISR (SCCP3 sector timer period match) ─────── */
 void __attribute__((interrupt, no_auto_psv)) _CCT3Interrupt(void)
 {
+    /* One-shot guard: disable interrupt + push PRL to prevent
+     * stray re-trigger while SectorPI_Commutate runs.
+     * Commutate will call ScheduleAbsolute to arm the next one. */
+    _CCT3IE = 0;
     _CCT3IF = 0;
+    CCP3PRL = 0xFFFF;
     SectorPI_Commutate();
 }
 
@@ -272,7 +268,7 @@ void __attribute__((interrupt, no_auto_psv)) _CCP2Interrupt(void)
         if ((int16_t)(hr - v4_blankingEndHR) >= 0)
         {
             /* Deglitch: 3 reads, all must be 1 (rising ZC = comp HIGH).
-             * ~500ns between reads (5 NOPs at 100MHz = 50ns each). */
+             * ~500ns between reads (10 NOPs at 100MHz = 100ns each). */
             uint8_t r1 = ReadBEMFComp();
             Nop(); Nop(); Nop(); Nop(); Nop();
             Nop(); Nop(); Nop(); Nop(); Nop();
@@ -302,6 +298,8 @@ void __attribute__((interrupt, no_auto_psv)) _CCP5Interrupt(void)
         uint16_t hr = (uint16_t)(ts + HAL_Capture_GetCcp5Offset());
         if ((int16_t)(hr - v4_blankingEndHR) >= 0)
         {
+            /* Deglitch: 3 reads, all must be 0 (falling ZC = comp LOW).
+             * ~500ns between reads (10 NOPs at 100MHz = 100ns each). */
             uint8_t r1 = ReadBEMFComp();
             Nop(); Nop(); Nop(); Nop(); Nop();
             Nop(); Nop(); Nop(); Nop(); Nop();

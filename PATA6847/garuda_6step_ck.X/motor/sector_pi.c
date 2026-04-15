@@ -147,17 +147,22 @@ static void EnterCL(void)
     actualAmplitude = (uint16_t)((rampDuty * 32768UL) / LOOPTIME_TCY);
     targetAmplitude = actualAmplitude;
 
-    /* Configure CCP2 for current floating phase */
+    /* Configure CCP2 for current floating phase.
+     * Flush FIFOs and clear flags BEFORE enabling ISRs to prevent
+     * stale noise edges from setting v4_captureValid. */
     const COMMUTATION_STEP_T *step = &commutationTable[position];
     HAL_Capture_Configure(bemfRpPin[step->floatingPhase],
                           step->zcPolarity > 0);
     HAL_Capture_SetBlanking(timerPeriod);
-    HAL_Capture_Start();
-    /* Flush FIFOs + clear IFs after start to prevent bogus captures */
+
+    /* Flush any accumulated edges before enabling capture ISRs */
     while (CCP2STATLbits.ICBNE) (void)CCP2BUFL;
     while (CCP5STATLbits.ICBNE) (void)CCP5BUFL;
     _CCP2IF = 0;
     _CCP5IF = 0;
+    v4_captureValid = false;
+
+    HAL_Capture_Start();
 
     /* Seed lastCommHR for PI elapsed calculation */
     lastCommHR = HAL_ComTimer_ReadTimer();
@@ -357,25 +362,19 @@ void SectorPI_Commutate(void)
     _CCP2IE = 1;
     _CCP5IE = 1;
 
-    /* Track corridor streak — PI only runs after 12 consecutive
-     * sectors with valid corridor captures. This ensures the
-     * measurement stream is coherent before PI adjusts timing. */
+    /* Track good-capture streak for diagnostics */
     if (capValue != CAP_SENTINEL)
     {
         if (corridorGoodStreak < 255) corridorGoodStreak++;
-        if (corridorGoodStreak >= CORRIDOR_GOOD_THRESHOLD)
-            piEnabled = true;
     }
     else
     {
         corridorGoodStreak = 0;
-        /* Don't clear piEnabled — once locked, stay locked
-         * unless stall detection intervenes. */
     }
 
-    /* Reactive scheduling — like V3 but with hardware timestamp.
-     * When ZC is captured: schedule commutation at ZC + delay.
-     * When no ZC: use last timerPeriod as timeout (forced comm).
+    /* Reactive scheduling — IIR + reactive from first valid capture.
+     * Safety against rapid-fire is the one-shot guard in CCT3 ISR
+     * (disables CCT3IE + resets PRL before calling Commutate).
      * Pot controls duty. Speed follows motor naturally. */
     diagLastCapValue = capValue;
     if (capValue != CAP_SENTINEL)
@@ -384,9 +383,8 @@ void SectorPI_Commutate(void)
 
         /* Update step period estimate from actual ZC timing.
          * capValue = elapsed from lastComm to ZC.
-         * ZC is at (30°+advance)/60° = 40°/60° = 66.7% of sector.
-         * stepPeriod = capValue / 0.667 = capValue * 3 / 2.
-         * IIR smooth: timerPeriod = (3*old + new) >> 2 */
+         * Approximate ZC at ~67% of sector → stepPeriod ≈ capValue * 3/2.
+         * IIR smooth: timerPeriod = (3*old + new) >> 2. */
         uint16_t measuredStep = (uint16_t)((uint32_t)capValue * 3 / 2);
         uint32_t iir = ((uint32_t)timerPeriod * 3 + measuredStep) >> 2;
         if (iir < V4_MIN_PERIOD) iir = V4_MIN_PERIOD;
@@ -394,12 +392,13 @@ void SectorPI_Commutate(void)
         timerPeriod = (uint16_t)iir;
         integrator = timerPeriod;
 
-        /* V3-style reactive target:
-         * target = zcTimestamp + halfPeriod - advance
-         * halfPeriod = timerPeriod / 2
-         * advance = TAL * timerPeriod / 8 (TAL=2 for 15°) */
+        /* Reactive target: ZC timestamp + halfPeriod - advance.
+         * TAL=2 (15°) at low speed for stable startup.
+         * TAL=3 (22.5°) above 60k eRPM for high-speed margin.
+         * 60k eRPM = 15.6M/60000 = 260 ticks. */
         uint16_t halfHR = timerPeriod >> 1;
-        uint16_t advHR = (timerPeriod >> 3) * 2;  /* TAL=2 = 15° */
+        uint16_t tal = (timerPeriod < 260) ? 3 : 2;
+        uint16_t advHR = (timerPeriod >> 3) * tal;
         uint16_t delayHR = (halfHR > advHR) ? (halfHR - advHR) : 2;
         uint16_t targetHR = (uint16_t)(v4_lastCaptureHR + delayHR);
 
@@ -409,6 +408,7 @@ void SectorPI_Commutate(void)
     else
     {
         /* No ZC this sector — forced commutation at timerPeriod */
+        diagDelta = 0;
         HAL_ComTimer_ScheduleAbsolute(thisCommHR + timerPeriod);
     }
 
@@ -487,7 +487,7 @@ void SectorPI_TimeTick(void)
     }
 }
 
-#define V4_MIN_AMPLITUDE  3000U
+#define V4_MIN_AMPLITUDE  4000U  /* ~12% duty — enough BEMF at CL entry */
 
 void SectorPI_CommandSet(uint16_t amplitude)
 {
