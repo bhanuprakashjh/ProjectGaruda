@@ -58,6 +58,7 @@ volatile uint16_t v4_timerPeriod;           /* exposed for CCP ISR speed check *
 static volatile uint16_t   integrator;
 static          uint8_t    stallCounter;
 static volatile bool       commandEnabled;
+static volatile bool       spRequested;     /* Set in TimeTick, checked in Commutate */
 static volatile uint16_t   actualAmplitude;
 static volatile uint16_t   targetAmplitude;
 static volatile uint16_t   targetPeriod;    /* pot-commanded speed */
@@ -109,6 +110,7 @@ static void ShutOff(void)
 {
     HAL_Capture_Stop();
     HAL_ComTimer_Cancel();
+    spRequested = false;
     HAL_PWM_ExitSinglePulse();
     HAL_PWM_ForceAllFloat();
     HAL_PWM_SetDutyCycle(0);
@@ -433,42 +435,47 @@ void SectorPI_Commutate(void)
         }
     }
 
-    /* 6. PWM duty — SP mode disabled for now (adds ISR overhead).
-     * Pure midpoint mode 1 reaches 119k without SP. */
+    /* 6. PWM duty — AVR-style SP mode (minimal ISR overhead).
+     * spRequested flag is set in TimeTick (1ms), checked here.
+     * Mode switch = one MPER write. Duty always recalculated. */
     {
-#if 0  /* SP mode — needs implementation outside ISR */
-        uint32_t erpmSC = SectorPI_ErpmGet();
-
-        if (!HAL_PWM_IsSinglePulse() && erpmSC > SP_ENTER_ERPM)
+        /* SP mode transition: set MPER to sector duration.
+         * Can't use 0xFFFF because PG1TRIGA=0 (ADC midpoint trigger)
+         * would fire at center of 0xFFFF period = 163µs, which is
+         * AFTER the sector ends at 90k+. Must match sector period
+         * so ADC still fires at sector midpoint for ZC detection. */
+        if (spRequested && !HAL_PWM_IsSinglePulse())
         {
-            /* Enter single-pulse: MPER = sector period */
-            uint32_t duty = (uint32_t)FixpMulU16(actualAmplitude,
-                            (uint16_t)((uint32_t)timerPeriod * 128UL > 0xFFFF ?
-                             0xFFFF : (uint32_t)timerPeriod * 128UL));
-            HAL_PWM_SetSinglePulse(timerPeriod, duty);
+            HAL_PWM_SetSPFlag(true);
         }
-        else if (HAL_PWM_IsSinglePulse() && erpmSC < SP_EXIT_ERPM)
+        else if (!spRequested && HAL_PWM_IsSinglePulse())
         {
-            /* Exit back to normal PWM */
             HAL_PWM_ExitSinglePulse();
-            HAL_PWM_SetDutyCycle((uint32_t)FixpMulU16(actualAmplitude, LOOPTIME_TCY));
         }
-        else if (HAL_PWM_IsSinglePulse())
+
+        if (HAL_PWM_IsSinglePulse())
         {
-            /* Update SP duty each sector */
-            uint32_t duty = (uint32_t)FixpMulU16(actualAmplitude,
-                            (uint16_t)((uint32_t)timerPeriod * 128UL > 0xFFFF ?
-                             0xFFFF : (uint32_t)timerPeriod * 128UL));
-            HAL_PWM_SetSinglePulse(timerPeriod, duty);
+            /* SP: MPER = sector period, duty scaled to it.
+             * per = timerPeriod * 128 (HR→PWM ticks).
+             * MPER updated every sector so ADC trigger (PG1TRIGA=0)
+             * fires at sector midpoint for ZC detection. */
+            uint32_t per = (uint32_t)timerPeriod * 128UL;
+            if (per > 0xFFFF) per = 0xFFFF;
+            if (per < 200) per = 200;
+            MPER = (uint16_t)per;
+            uint16_t duty = FixpMulU16(actualAmplitude, (uint16_t)per);
+            PG2DC = duty;
+            PG3DC = duty;
+            PG1DC = duty;
+            PG1STATbits.UPDREQ = 1;
+            PG2STATbits.UPDREQ = 1;
+            PG3STATbits.UPDREQ = 1;
         }
         else
         {
             /* Normal PWM */
             HAL_PWM_SetDutyCycle((uint32_t)FixpMulU16(actualAmplitude, LOOPTIME_TCY));
         }
-#else
-        HAL_PWM_SetDutyCycle((uint32_t)FixpMulU16(actualAmplitude, LOOPTIME_TCY));
-#endif
     }
 
     /* 7. Speed counting */
@@ -503,6 +510,12 @@ void SectorPI_TimeTick(void)
         measuredSpeed = speedCounter;
         speedCounter = 0;
         speedBase = 0;
+
+        /* SP mode request — evaluated at 50Hz (every 20ms), not in ISR.
+         * measuredSpeed * 500 = eRPM. Hysteresis: 90k enter, 75k exit. */
+        uint32_t erpm = (uint32_t)measuredSpeed * 500UL;
+        if (erpm > SP_ENTER_ERPM)  spRequested = true;
+        if (erpm < SP_EXIT_ERPM)   spRequested = false;
     }
 
     /* Pot→duty direct. Reactive scheduling in Commutate handles

@@ -291,3 +291,8 @@ bool HAL_PWM_IsSinglePulse(void)
 {
     return spMode;
 }
+
+void HAL_PWM_SetSPFlag(bool on)
+{
+    spMode = on;
+}

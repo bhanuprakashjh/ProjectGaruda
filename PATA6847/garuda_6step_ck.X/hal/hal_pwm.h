@@ -24,6 +24,7 @@ void     HAL_PWM_ForceAllLow(void);
 void     HAL_PWM_SetSinglePulse(uint16_t sectorPeriodTCY, uint32_t duty);
 void     HAL_PWM_ExitSinglePulse(void);
 bool     HAL_PWM_IsSinglePulse(void);
+void     HAL_PWM_SetSPFlag(bool on);
 
 #define SP_ENTER_ERPM   90000UL
 #define SP_EXIT_ERPM    75000UL
