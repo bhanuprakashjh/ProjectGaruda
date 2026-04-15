@@ -54,6 +54,7 @@ static volatile uint32_t   rampDuty;
 
 /* ── PI state (SCCP3 driven, active in CL only) ────────────────── */
 static volatile uint16_t   timerPeriod;     /* sector period (PI output) */
+volatile uint16_t v4_timerPeriod;           /* exposed for CCP ISR speed check */
 static volatile uint16_t   integrator;
 static          uint8_t    stallCounter;
 static volatile bool       commandEnabled;
@@ -390,6 +391,7 @@ void SectorPI_Commutate(void)
         if (iir < V4_MIN_PERIOD) iir = V4_MIN_PERIOD;
         if (iir > 0xFFFF) iir = 0xFFFF;
         timerPeriod = (uint16_t)iir;
+        v4_timerPeriod = timerPeriod;  /* expose for CCP ISR */
         integrator = timerPeriod;
 
         /* Reactive target: ZC timestamp + halfPeriod - advance.

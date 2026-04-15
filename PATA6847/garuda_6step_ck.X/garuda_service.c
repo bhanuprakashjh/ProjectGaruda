@@ -192,11 +192,14 @@ void __attribute__((interrupt, auto_psv)) _T1Interrupt(void)
      * trips before re-enabling. */
 }
 
-/* Forward declarations for midpoint ZC sampling */
-#if FEATURE_V4_MIDPOINT_ZC >= 1
+/* Forward declarations for ZC detection */
 static inline uint8_t ReadBEMFComp(void);
 extern volatile uint8_t v4_floatingPhase;
 extern volatile uint16_t v4_blankingEndHR;
+extern volatile uint16_t v4_timerPeriod;  /* from sector_pi.c */
+
+#if FEATURE_V4_MIDPOINT_ZC >= 1
+/* (midpoint modes also need these) */
 #endif
 
 /* Mode 2 hybrid: midpoint confirms ZC state, CCP provides timestamp */
@@ -321,19 +324,29 @@ void __attribute__((interrupt, no_auto_psv)) _CCP2Interrupt(void)
         uint16_t hr = (uint16_t)(ts + HAL_Capture_GetCcp2Offset());
         if ((int16_t)(hr - v4_blankingEndHR) >= 0)
         {
-            /* 3-read deglitch + AM32 mask after acceptance */
-            uint8_t r1 = ReadBEMFComp();
-            Nop(); Nop(); Nop(); Nop(); Nop();
-            Nop(); Nop(); Nop(); Nop(); Nop();
-            uint8_t r2 = ReadBEMFComp();
-            Nop(); Nop(); Nop(); Nop(); Nop();
-            Nop(); Nop(); Nop(); Nop(); Nop();
-            uint8_t r3 = ReadBEMFComp();
-            if (r1 == 1 && r2 == 1 && r3 == 1)
+            /* Speed-adaptive deglitch + AM32 mask.
+             * Low speed (<60k): 3 reads — reject noise, BEMF weak.
+             * High speed (>60k): 1 read — BEMF strong, minimize
+             * ISR time, avoid spanning a PWM edge. */
+            bool accept;
+            if (v4_timerPeriod < 260) {
+                /* High speed: single read */
+                accept = (ReadBEMFComp() == 1);
+            } else {
+                /* Low speed: 3-read deglitch */
+                uint8_t r1 = ReadBEMFComp();
+                Nop(); Nop(); Nop(); Nop(); Nop();
+                Nop(); Nop(); Nop(); Nop(); Nop();
+                uint8_t r2 = ReadBEMFComp();
+                Nop(); Nop(); Nop(); Nop(); Nop();
+                Nop(); Nop(); Nop(); Nop(); Nop();
+                uint8_t r3 = ReadBEMFComp();
+                accept = (r1 == 1 && r2 == 1 && r3 == 1);
+            }
+            if (accept)
             {
                 v4_lastCaptureHR = hr;
                 v4_captureValid = true;
-                /* AM32 mask: disable CCP after acceptance */
                 _CCP2IE = 0;
                 _CCP5IE = 0;
             }
@@ -365,14 +378,20 @@ void __attribute__((interrupt, no_auto_psv)) _CCP5Interrupt(void)
         uint16_t hr = (uint16_t)(ts + HAL_Capture_GetCcp5Offset());
         if ((int16_t)(hr - v4_blankingEndHR) >= 0)
         {
-            uint8_t r1 = ReadBEMFComp();
-            Nop(); Nop(); Nop(); Nop(); Nop();
-            Nop(); Nop(); Nop(); Nop(); Nop();
-            uint8_t r2 = ReadBEMFComp();
-            Nop(); Nop(); Nop(); Nop(); Nop();
-            Nop(); Nop(); Nop(); Nop(); Nop();
-            uint8_t r3 = ReadBEMFComp();
-            if (r1 == 0 && r2 == 0 && r3 == 0)
+            bool accept;
+            if (v4_timerPeriod < 260) {
+                accept = (ReadBEMFComp() == 0);
+            } else {
+                uint8_t r1 = ReadBEMFComp();
+                Nop(); Nop(); Nop(); Nop(); Nop();
+                Nop(); Nop(); Nop(); Nop(); Nop();
+                uint8_t r2 = ReadBEMFComp();
+                Nop(); Nop(); Nop(); Nop(); Nop();
+                Nop(); Nop(); Nop(); Nop(); Nop();
+                uint8_t r3 = ReadBEMFComp();
+                accept = (r1 == 0 && r2 == 0 && r3 == 0);
+            }
+            if (accept)
             {
                 v4_lastCaptureHR = hr;
                 v4_captureValid = true;
