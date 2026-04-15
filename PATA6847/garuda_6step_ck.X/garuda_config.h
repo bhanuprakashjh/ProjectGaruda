@@ -761,9 +761,10 @@
 
 /* ZC detection method:
  * 0 = CCP edge capture + 3-read deglitch (works to ~100k eRPM)
- * 1 = PWM-midpoint sampling in ADC ISR (clean read at center of ON-time,
- *     avoids PWM switching noise on comparator — for high speed) */
-#define FEATURE_V4_MIDPOINT_ZC  1
+ * 1 = PWM-midpoint sampling in ADC ISR (reaches 119k but late timestamp)
+ * 2 = Hybrid: ADC midpoint confirms ZC state, CCP provides accurate
+ *     timestamp. Mask CCP after acceptance like AM32. Best of both. */
+#define FEATURE_V4_MIDPOINT_ZC  0
 
 #endif /* FEATURE_V4_SECTOR_PI */
 
