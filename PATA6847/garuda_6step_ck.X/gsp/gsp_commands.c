@@ -9,7 +9,7 @@
 
 #include "../garuda_config.h"
 
-#if FEATURE_GSP
+#if FEATURE_GSP && !FEATURE_V4_SECTOR_PI
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -463,4 +463,155 @@ void GSP_DispatchCommand(uint8_t cmdId, const uint8_t *payload,
     SendError(GSP_ERR_UNKNOWN_CMD);
 }
 
-#endif /* FEATURE_GSP */
+#endif /* FEATURE_GSP && !FEATURE_V4_SECTOR_PI */
+
+/* V4: minimal GSP command handlers — PING, START, STOP, CLEAR_FAULT */
+#if FEATURE_GSP && FEATURE_V4_SECTOR_PI
+#include <stdint.h>
+#include <string.h>
+#include "gsp_commands.h"
+#include "gsp.h"
+#include "../garuda_service.h"
+#include "../garuda_config.h"
+#include "../motor/sector_pi.h"
+
+extern volatile ESC_STATE_T gV4State;
+extern volatile uint32_t gV4SystemTick;
+extern volatile uint16_t gV4PotRaw;
+extern volatile uint16_t gV4VbusRaw;
+extern volatile int16_t  gV4IaRaw;
+extern volatile int16_t  gV4IbRaw;
+
+static bool     v4_telemActive = false;
+static uint16_t v4_telemSeq = 0;
+static uint32_t v4_telemLastTick = 0;
+
+void GSP_DispatchCommand(uint8_t cmdId, const uint8_t *payload, uint8_t payloadLen)
+{
+    (void)payload; (void)payloadLen;
+
+    switch (cmdId)
+    {
+        case GSP_CMD_PING:
+            GSP_FlushTx();
+            GSP_SendResponse(GSP_CMD_PING, NULL, 0);
+            break;
+
+        case GSP_CMD_GET_INFO:
+        {
+            uint8_t info[16];
+            memset(info, 0, sizeof(info));
+            info[0] = 2;                    /* protocol version */
+            info[1] = MOTOR_PROFILE;
+            info[2] = 4;                    /* firmware version = V4 */
+            info[3] = 0;
+            /* feature flags: just mark V4 */
+            uint32_t f = 0x80000000UL;      /* bit 31 = V4 */
+            memcpy(&info[4], &f, 4);
+            GSP_SendResponse(GSP_CMD_GET_INFO, info, 8);
+            break;
+        }
+
+        case GSP_CMD_GET_SNAPSHOT:
+        case GSP_CMD_TELEM_START:
+        case GSP_CMD_TELEM_STOP:
+            /* Handled below in TelemTick */
+            if (cmdId == GSP_CMD_TELEM_START)
+                v4_telemActive = true;
+            else if (cmdId == GSP_CMD_TELEM_STOP)
+                v4_telemActive = false;
+            GSP_SendResponse(cmdId, NULL, 0);
+            break;
+
+        case GSP_CMD_START_MOTOR:
+            if (gV4State == ESC_IDLE)
+                GarudaService_StartMotor();
+            GSP_SendResponse(GSP_CMD_START_MOTOR, NULL, 0);
+            break;
+
+        case GSP_CMD_STOP_MOTOR:
+            GarudaService_StopMotor();
+            GSP_SendResponse(GSP_CMD_STOP_MOTOR, NULL, 0);
+            break;
+
+        case GSP_CMD_CLEAR_FAULT:
+            GarudaService_ClearFault();
+            GSP_SendResponse(GSP_CMD_CLEAR_FAULT, NULL, 0);
+            break;
+
+        default:
+        {
+            uint8_t err = GSP_ERR_UNKNOWN_CMD;
+            GSP_SendResponse(GSP_CMD_ERROR, &err, 1);
+            break;
+        }
+    }
+}
+
+void GSP_TelemTick(void)
+{
+    if (!v4_telemActive) return;
+
+    /* Rate limit: ~10 Hz (every 100ms) */
+    uint32_t now = gV4SystemTick;
+    if ((now - v4_telemLastTick) < 100) return;
+    v4_telemLastTick = now;
+
+    /* Build a V3-compatible 48-byte snapshot so pot_capture.py can decode it.
+     * Fields we can populate are filled; rest is zeroed. */
+    V4_TELEM_T t;
+    SectorPI_TelemGet(&t);
+
+    uint8_t snap[50];  /* 2-byte seq + 48-byte snapshot */
+    memset(snap, 0, sizeof(snap));
+
+    /* Seq counter (2 bytes) */
+    snap[0] = (uint8_t)(v4_telemSeq & 0xFF);
+    snap[1] = (uint8_t)(v4_telemSeq >> 8);
+    v4_telemSeq++;
+
+    uint8_t *d = &snap[2];  /* snapshot starts at offset 2 */
+
+    /* Core state (offset 0-7) */
+    d[0] = (uint8_t)gV4State;               /* state */
+    d[1] = 0;                                /* fault */
+    d[2] = t.position;                       /* step */
+    d[3] = 0;                                /* ataStatus */
+    d[4] = (uint8_t)(gV4PotRaw & 0xFF);     /* potRaw L */
+    d[5] = (uint8_t)(gV4PotRaw >> 8);       /* potRaw H */
+    uint8_t dutyPct = 0;
+    if (t.actualAmplitude > 0)
+        dutyPct = (uint8_t)((uint32_t)t.actualAmplitude * 100 / 32768);
+    d[6] = dutyPct;                          /* dutyPct */
+    d[7] = t.commandEnabled ? 1 : 0;        /* zcSynced (repurpose as PI active) */
+
+    /* Electrical (offset 8-17) */
+    memcpy(&d[8],  &gV4VbusRaw, 2);         /* vbusRaw */
+    memcpy(&d[10], &gV4IaRaw, 2);           /* iaRaw */
+    memcpy(&d[12], &gV4IbRaw, 2);           /* ibRaw */
+    /* ibusRaw = 0 */
+    memcpy(&d[16], &t.actualAmplitude, 2);   /* duty (raw) */
+
+    /* Speed/Timing (offset 18-31) */
+    memcpy(&d[18], &t.timerPeriod, 2);       /* stepPeriod → timerPeriod */
+    memcpy(&d[20], &t.timerPeriod, 2);       /* stepPeriodHR → same */
+    uint32_t eRpm = SectorPI_ErpmGet();
+    memcpy(&d[22], &eRpm, 4);               /* eRpm */
+    memcpy(&d[26], &t.sectorCount, 2);      /* goodZc → sectorCount low */
+    /* zcInterval, prevZcInterval = 0 */
+
+    /* ZC diagnostics (offset 28-39) — repurposed for V4 diag */
+    memcpy(&d[28], &t.diagLastCapValue, 2);  /* zcInterval → lastCapValue */
+    memcpy(&d[30], &t.diagDelta, 2);         /* prevZcInterval → PI delta (signed) */
+    memcpy(&d[32], &t.diagCaptures, 2);      /* icAccepted → captures accepted */
+    memcpy(&d[34], &t.diagPiRuns, 2);        /* icFalse → PI run count */
+    d[36] = t.stallCounter;                  /* filterLevel → stallCounter */
+
+    /* System (offset 40-47) */
+    memcpy(&d[40], &gV4SystemTick, 4);       /* systemTick */
+    uint32_t uptime = gV4SystemTick / 1000;
+    memcpy(&d[44], &uptime, 4);              /* uptime */
+
+    GSP_SendResponse(GSP_CMD_TELEM_FRAME, snap, sizeof(snap));
+}
+#endif

@@ -63,8 +63,15 @@ static RING_T  rxRing;
 static RING_T  txRing;
 static PARSER_T parser;
 
-/* Access systemTick via gData (declared in garuda_service.h) */
+/* Access systemTick */
 #include "../garuda_service.h"
+#include "../garuda_config.h"
+#if FEATURE_V4_SECTOR_PI
+extern volatile uint32_t gV4SystemTick;
+#define GSP_SYSTEM_TICK  gV4SystemTick
+#else
+#define GSP_SYSTEM_TICK  gData.systemTick
+#endif
 
 /* ── CRC-16-CCITT ────────────────────────────────────────────────── */
 
@@ -181,7 +188,7 @@ static void ParserProcess(void)
     uint8_t cmdsProcessed = 0;
 
     if (parser.state != PARSE_WAIT_START) {
-        uint32_t elapsed = gData.systemTick - parser.lastRxTick;
+        uint32_t elapsed = GSP_SYSTEM_TICK - parser.lastRxTick;
         if (elapsed > GSP_PARSER_TIMEOUT_MS)
             ParserReset();
     }
@@ -189,7 +196,7 @@ static void ParserProcess(void)
     while (RingCount(&rxRing, GSP_RX_RING_MASK) > 0 &&
            cmdsProcessed < GSP_MAX_CMDS_PER_SVC) {
         uint8_t b = RingGet(&rxRing, GSP_RX_RING_MASK);
-        parser.lastRxTick = gData.systemTick;
+        parser.lastRxTick = GSP_SYSTEM_TICK;
 
         switch (parser.state) {
         case PARSE_WAIT_START:

@@ -24,7 +24,7 @@
 #include "../garuda_config.h"
 #include "../garuda_types.h"
 
-#if FEATURE_PTG_ZC
+#if FEATURE_PTG_ZC && !FEATURE_V4_SECTOR_PI
 
 extern volatile GARUDA_DATA_T gData;
 
@@ -157,4 +157,4 @@ void __attribute__((interrupt, no_auto_psv)) _PTG0Interrupt(void)
     HAL_CLC_ForceState(ch, raw);
 }
 
-#endif /* FEATURE_PTG_ZC */
+#endif /* FEATURE_PTG_ZC && !FEATURE_V4_SECTOR_PI */

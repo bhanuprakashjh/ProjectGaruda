@@ -20,7 +20,7 @@
 
 #include "../garuda_config.h"
 
-#if FEATURE_IC_ZC
+#if FEATURE_IC_ZC || FEATURE_V4_SECTOR_PI
 
 #include <stdint.h>
 #include <xc.h>
@@ -71,5 +71,5 @@ void HAL_ComTimer_ScheduleAbsolute(uint16_t targetTick);
  */
 void HAL_ComTimer_Cancel(void);
 
-#endif /* FEATURE_IC_ZC */
+#endif /* FEATURE_IC_ZC || FEATURE_V4_SECTOR_PI */
 #endif /* HAL_COM_TIMER_H */

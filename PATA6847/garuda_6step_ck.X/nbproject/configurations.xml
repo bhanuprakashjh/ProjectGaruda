@@ -60,9 +60,14 @@
       <itemPath>hal/hal_ptg.c</itemPath>
       <itemPath>hal/hal_trap.c</itemPath>
       <itemPath>hal/board_service.c</itemPath>
+      <itemPath>hal/hal_ic_dma.c</itemPath>
+      <itemPath>hal/hal_dma_burst.c</itemPath>
+      <itemPath>hal/hal_sector_timer.c</itemPath>
+      <itemPath>hal/hal_capture.c</itemPath>
       <itemPath>motor/commutation.c</itemPath>
       <itemPath>motor/startup.c</itemPath>
       <itemPath>motor/bemf_zc.c</itemPath>
+      <itemPath>motor/sector_pi.c</itemPath>
       <itemPath>gsp/gsp.c</itemPath>
       <itemPath>gsp/gsp_commands.c</itemPath>
       <itemPath>gsp/gsp_snapshot.c</itemPath>

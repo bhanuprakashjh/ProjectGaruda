@@ -46,9 +46,12 @@ SRCS = main.c \
        hal/hal_ptg.c \
        hal/hal_trap.c \
        hal/board_service.c \
+       hal/hal_sector_timer.c \
+       hal/hal_capture.c \
        motor/commutation.c \
        motor/startup.c \
        motor/bemf_zc.c \
+       motor/sector_pi.c \
        gsp/gsp.c \
        gsp/gsp_commands.c \
        gsp/gsp_snapshot.c \

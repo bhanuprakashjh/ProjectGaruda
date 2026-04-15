@@ -28,6 +28,12 @@
 #include "hal/hal_uart.h"
 #include "hal/port_config.h"
 #include "motor/commutation.h"
+
+#if FEATURE_V4_SECTOR_PI
+#include "motor/sector_pi.h"
+#include "hal/hal_com_timer.h"
+#include "hal/hal_capture.h"
+#else
 #include "motor/startup.h"
 #include "motor/bemf_zc.h"
 #if FEATURE_IC_ZC
@@ -40,9 +46,277 @@
 #if FEATURE_PTG_ZC
 #include "hal/hal_ptg.h"
 #endif
+#endif /* !FEATURE_V4_SECTOR_PI */
 
-/* Global ESC runtime data */
+#if !FEATURE_V4_SECTOR_PI
+/* Global ESC runtime data (V3 only) */
 volatile GARUDA_DATA_T gData;
+#endif
+
+#if FEATURE_V4_SECTOR_PI
+/* ====================================================================
+ * V4 SECTOR PI ARCHITECTURE
+ * ==================================================================== */
+
+/* Minimal state for V4 (sector_pi.c owns motor state) */
+volatile ESC_STATE_T gV4State = ESC_IDLE;
+volatile bool gStateChanged = false;
+volatile ESC_STATE_T gPrevState = ESC_IDLE;
+volatile uint16_t gV4PotRaw = 0;
+volatile uint16_t gV4VbusRaw = 0;
+volatile int16_t  gV4IaRaw = 0;
+volatile int16_t  gV4IbRaw = 0;
+static volatile uint8_t  gV4TickDiv = 0;
+volatile uint32_t gV4SystemTick = 0;
+
+/* ATA6847 fault check interval */
+static volatile uint8_t gV4AtaCheckDiv = 0;
+static volatile uint32_t gV4StartTick = 0;  /* systemTick when motor started */
+
+void GarudaService_Init(void)
+{
+    gV4State = ESC_IDLE;
+    SectorPI_Init();
+    HAL_Timer1_Start();
+}
+
+void GarudaService_StartMotor(void)
+{
+    if (gV4State != ESC_IDLE) return;
+
+    HAL_UART_WriteString("V4:clr ");
+    HAL_ATA6847_ClearFaults();
+    { volatile uint32_t d; for (d = 0; d < 50000UL; d++); }
+    HAL_ATA6847_ClearFaults();
+
+    HAL_UART_WriteString("gdu ");
+    if (!HAL_ATA6847_EnterGduNormal())
+    {
+        { volatile uint32_t d; for (d = 0; d < 100000UL; d++); }
+        HAL_ATA6847_ClearFaults();
+        { volatile uint32_t d; for (d = 0; d < 50000UL; d++); }
+    }
+    if (!HAL_ATA6847_EnterGduNormal())
+    {
+        HAL_UART_WriteString("FAIL!\r\n");
+        gV4State = ESC_FAULT;
+        return;
+    }
+
+    HAL_UART_WriteString("pwm ");
+    HAL_PWM_EnableOutputs();
+    HAL_PWM_ChargeBootstrap();
+
+    /* Settle delay after GDU power-up + bootstrap charge.
+     * ATA6847 needs time for VDS monitors to clear after
+     * bootstrap charging. V3 uses 200ms ARM state for this. */
+    { volatile uint32_t d; for (d = 0; d < 200000UL; d++); }  /* ~20ms */
+
+    /* Clear any transient faults from bootstrap charging */
+    HAL_ATA6847_ClearFaults();
+    { volatile uint32_t d; for (d = 0; d < 50000UL; d++); }
+
+    HAL_UART_WriteString("adc ");
+    HAL_OPA_Enable();
+    HAL_ADC_InterruptEnable();
+
+    LED_RUN = 1;
+    LED_FAULT = 0;
+
+    HAL_UART_WriteString("V4:START\r\n");
+
+    /* SectorPI_Start is NON-BLOCKING. It sets up alignment state.
+     * Timer1 ISR drives ALIGN + OL_RAMP via SectorPI_OlTick().
+     * When ramp completes, sector_pi.c starts SCCP3 + CCP2 for CL. */
+    SectorPI_Start(gV4VbusRaw);
+
+    gV4State = ESC_OL_RAMP;  /* V3-style state during ramp */
+    gStateChanged = true;
+    gPrevState = ESC_IDLE;
+    gV4AtaCheckDiv = 0;
+    gV4StartTick = gV4SystemTick;
+}
+
+void GarudaService_StopMotor(void)
+{
+    SectorPI_Stop();
+    HAL_PWM_DisableOutputs();
+    HAL_ADC_InterruptDisable();
+    HAL_OPA_Disable();
+    HAL_ATA6847_EnterGduStandby();
+    gV4State = ESC_IDLE;
+    gStateChanged = true;
+    LED_RUN = 0;
+}
+
+/* ── V4 Timer1 ISR ────────────────────────────────────────────────── */
+void __attribute__((interrupt, auto_psv)) _T1Interrupt(void)
+{
+    IFS0bits.T1IF = 0;
+
+    /* OL ramp: Timer1 drives commutation at 20kHz during ALIGN+OL_RAMP.
+     * This is the V3-proven approach. Every 50µs tick, the ramp countdown
+     * decrements. When it hits 0, the next commutation step fires. */
+    if (SectorPI_IsRunning())
+        SectorPI_OlTick();
+
+    /* 1ms tick (divide 20kHz by 20) */
+    if (++gV4TickDiv >= 20)
+    {
+        gV4TickDiv = 0;
+        gV4SystemTick++;
+
+        if (SectorPI_IsRunning())
+        {
+            SectorPI_TimeTick();
+
+            /* Throttle */
+            uint16_t amp = gV4PotRaw >> 1;
+            if (amp < 1500) amp = 0;
+            SectorPI_CommandSet(amp);
+
+            /* Track phase transitions for telemetry state */
+            if (gV4State == ESC_OL_RAMP && SectorPI_GetPhase() == 3)
+            {
+                gV4State = ESC_CLOSED_LOOP;
+                gV4StartTick = gV4SystemTick;
+                gStateChanged = true;
+            }
+        }
+    }
+
+    /* ATA6847 nIRQ check every ~10ms, suppressed for 2s after start */
+    if (++gV4AtaCheckDiv >= 200)
+    {
+        gV4AtaCheckDiv = 0;
+        if ((gV4State == ESC_CLOSED_LOOP || gV4State == ESC_OL_RAMP) &&
+            (gV4SystemTick - gV4StartTick) > 30000 && /* suppress 30s — debug */
+            !_RB5)
+        {
+            SectorPI_Stop();
+            HAL_PWM_DisableOutputs();
+            gV4State = ESC_FAULT;
+            LED_FAULT = 1;
+        }
+    }
+}
+
+/* ── V4 ADC ISR ───────────────────────────────────────────────────── */
+void __attribute__((interrupt, auto_psv)) _ADCInterrupt(void)
+{
+    gV4PotRaw  = ADCBUF_POT;
+    gV4VbusRaw = ADCBUF_VBUS;
+    gV4IaRaw   = (int16_t)ADCBUF1;
+    gV4IbRaw   = (int16_t)ADCBUF4;
+    (void)ADCBUF0;  /* Must read to clear data-ready */
+
+    IFS5bits.ADCIF = 0;
+}
+
+/* ── V4 Commutation ISR (SCCP3 sector timer period match) ─────── */
+void __attribute__((interrupt, no_auto_psv)) _CCT3Interrupt(void)
+{
+    _CCT3IF = 0;
+    SectorPI_Commutate();
+}
+
+/* ── V4 CCP ISRs — drain FIFO, store last edge unconditionally ── */
+/* No blanking here — blanking is in the commutation ISR.
+ * These ISRs prevent FIFO overflow (4-deep FIFO loses new
+ * captures when full). By draining on every edge, the real
+ * ZC capture survives instead of being discarded. */
+
+/* ── Cluster detection state (per-polarity) ──────────────────── */
+/* A ZC produces a burst of 2+ comparator edges within ~10 HR ticks.
+ * Single PWM noise edges are spaced ~25µs (39 HR ticks) apart.
+ * Detect cluster: current edge within CLUSTER_GAP of previous → ZC.
+ * This is V3's DMA cluster detection running in the ISR. */
+#define CLUSTER_GAP_HR  15u   /* ~10µs — wide enough for ZC burst,
+                               * narrow enough to reject PWM noise */
+uint16_t prevEdgeCCP2 = 0;
+uint16_t prevEdgeCCP5 = 0;
+
+/* ── Corridor selector state ─────────────────────────────────── */
+/* Closest-to-expected capture per sector. Set at commutation,
+ * evaluated in CCP ISR, consumed at next commutation. */
+volatile uint16_t v4_expectedZcHR = 0;   /* center of corridor */
+volatile uint16_t v4_corridorWidth = 40; /* half-width in HR ticks */
+volatile uint16_t v4_bestAbsErr = 0xFFFF;/* best |ts - expected| so far */
+
+void __attribute__((interrupt, no_auto_psv)) _CCP2Interrupt(void)
+{
+    uint16_t ts = 0;
+    bool got = false;
+    while (CCP2STATLbits.ICBNE) { ts = CCP2BUFL; got = true; }
+
+    if (got && HAL_Capture_IsRisingZc())
+    {
+        uint16_t hr = (uint16_t)(ts + HAL_Capture_GetCcp2Offset());
+        /* Corridor: is this edge close to expectedZcHR? */
+        int16_t err = (int16_t)(hr - v4_expectedZcHR);
+        uint16_t absErr = (err < 0) ? (uint16_t)(-err) : (uint16_t)err;
+        if (absErr < v4_corridorWidth && absErr < v4_bestAbsErr)
+        {
+            v4_bestAbsErr = absErr;
+            v4_lastCaptureHR = hr;
+            v4_captureValid = true;
+        }
+    }
+    _CCP2IF = 0;
+}
+
+void __attribute__((interrupt, no_auto_psv)) _CCP5Interrupt(void)
+{
+    uint16_t ts = 0;
+    bool got = false;
+    while (CCP5STATLbits.ICBNE) { ts = CCP5BUFL; got = true; }
+
+    if (got && !HAL_Capture_IsRisingZc())
+    {
+        uint16_t hr = (uint16_t)(ts + HAL_Capture_GetCcp5Offset());
+        int16_t err = (int16_t)(hr - v4_expectedZcHR);
+        uint16_t absErr = (err < 0) ? (uint16_t)(-err) : (uint16_t)err;
+        if (absErr < v4_corridorWidth && absErr < v4_bestAbsErr)
+        {
+            v4_bestAbsErr = absErr;
+            v4_lastCaptureHR = hr;
+            v4_captureValid = true;
+        }
+    }
+    _CCP5IF = 0;
+}
+
+/* ── V4 service tick (called from main loop) ─────────────────── */
+void GarudaService_Tasks(void)
+{
+    /* Check for stall → restart */
+    if (gV4State == ESC_CLOSED_LOOP && !SectorPI_IsRunning())
+    {
+        HAL_UART_WriteString("V4:STALL\r\n");
+        GarudaService_StopMotor();
+    }
+}
+
+void GarudaService_ClearFault(void)
+{
+    if (gV4State == ESC_FAULT)
+    {
+        gV4State = ESC_IDLE;
+        LED_FAULT = 0;
+    }
+}
+
+void GarudaService_MainLoop(void)
+{
+    if (gV4State != gPrevState)
+    {
+        gStateChanged = true;
+        gPrevState = gV4State;
+    }
+    GarudaService_Tasks();
+}
+
+#else /* !FEATURE_V4_SECTOR_PI — V3 code below */
 
 /* State change flag — set in ISR, consumed in main loop for debug print */
 volatile bool gStateChanged = false;
@@ -1408,3 +1682,5 @@ void __attribute__((interrupt, no_auto_psv)) _CCP2Interrupt(void)
 #endif /* FEATURE_IC_ZC_CAPTURE */
 
 #endif /* FEATURE_IC_ZC */
+
+#endif /* !FEATURE_V4_SECTOR_PI — end of V3 code */

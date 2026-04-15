@@ -697,6 +697,71 @@
                                      * Set to 1 when using GUI or gsp_ck_test.py */
 #endif
 
+/* ── V4 Sector PI Architecture ────────────────────────────────────────
+ * Ground-up rewrite modeled on Microchip AVR high-speed motor control.
+ * Two timers + one PI. No poll, no DMA, no reactive/predictive modes.
+ * SCCP3 = sector timer (periodic, fires commutation ISR).
+ * CCP2  = capture timer (IC mode, ISR drains FIFO, last edge wins).
+ * PI always owns commutation scheduling from startup onward.
+ *
+ * When FEATURE_V4_SECTOR_PI=1, ALL V3 motor control code is gated off:
+ * FEATURE_IC_ZC, FEATURE_CLC_BLANKING, FEATURE_IC_DMA_SHADOW, etc.
+ * are ignored. Only V4 files compile. V3 code remains for fallback
+ * (set FEATURE_V4_SECTOR_PI=0 to restore V3). */
+#ifndef FEATURE_V4_SECTOR_PI
+#define FEATURE_V4_SECTOR_PI    1
+#endif
+
+#if FEATURE_V4_SECTOR_PI
+
+/* Motor phase advance (electrical degrees, 0..30).
+ * 10° is Microchip default for similar KV motors (A2207-2500KV). */
+#define V4_PHASE_ADVANCE_DEG    10.0f
+
+/* Board detector delay (µs). ATA6847 comparator propagation ~2 µs.
+ * CK board has no RC filter on BEMF inputs (unlike Microchip MPPB
+ * which has 10 µs RC delay). */
+#define V4_RC_DELAY_US          2.0f
+
+/* Pre-computed constants (compile-time, no float in hot path) */
+#define V4_ADVANCE_PLUS_30_FP8  ((uint16_t)((V4_PHASE_ADVANCE_DEG + 30.0f) * 256.0f / 60.0f + 0.5f))
+#define V4_RC_DELAY_HR          ((uint16_t)(V4_RC_DELAY_US * 1.5625f + 0.5f))
+
+/* PI gains (bit shifts). Matches Microchip AVR motor.c:444,448. */
+#define V4_KP_SHIFT             2       /* Kp = 1/4 */
+#define V4_KI_SHIFT             4       /* Ki = 1/16 */
+
+/* Startup */
+#if MOTOR_PROFILE == 0   /* Hurst */
+#define V4_STARTUP_SPEED_ERPM   3000UL
+#define V4_STARTUP_CURRENT_MA   2000.0f
+#define V4_ALIGN_DURATION_MS    200U
+#elif MOTOR_PROFILE == 1  /* A2212 */
+#define V4_STARTUP_SPEED_ERPM   500UL
+#define V4_STARTUP_CURRENT_MA   3000.0f
+#define V4_ALIGN_DURATION_MS    100U
+#elif MOTOR_PROFILE == 2  /* 2810 */
+#define V4_STARTUP_SPEED_ERPM   500UL
+#define V4_STARTUP_CURRENT_MA   3000.0f
+#define V4_ALIGN_DURATION_MS    100U
+#endif
+
+#define V4_STARTUP_TIME_MS      1000U   /* Forced ramp duration before commands accepted */
+#define V4_STALL_THRESHOLD      200U    /* Consecutive no-capture sectors → stall.
+                                         * At 3000 eRPM: 200 sectors ≈ 0.4s */
+#define V4_MIN_PERIOD           10U     /* Timer period floor (~1.5M eRPM, safety) */
+
+/* Sector timer clock: same as SCCP4 HR timer */
+#define V4_TIMER_FREQ_HZ        (FCY / 64UL)   /* 1,562,500 Hz = 640 ns/tick */
+#define V4_ERPM_TO_PERIOD(e)    (uint16_t)(60UL * V4_TIMER_FREQ_HZ / (6UL * (e)))
+
+/* ISR priorities */
+#define V4_SECTOR_ISR_PRIORITY  6       /* Commutation — highest motor ISR */
+#define V4_CAPTURE_ISR_PRIORITY 5       /* ZC edge capture — below sector */
+
+#endif /* FEATURE_V4_SECTOR_PI */
+
+#if !FEATURE_V4_SECTOR_PI
 /* ── SCCP1 Fast ZC Polling Timer (FEATURE_IC_ZC=1) ────────────────── */
 /* Replaces edge-triggered IC with periodic timer that polls ATA6847
  * BEMF comparator directly. Step 0 experiment confirmed comparator
@@ -777,6 +842,8 @@
 #define RECOVERY_TIME_MS    50U    /* Shortened from 200ms — PWM is OFF during
                                     * recovery so no current risk. Faster restart. */
 #define RECOVERY_COUNTS     ((uint16_t)((uint32_t)RECOVERY_TIME_MS * TIMER1_FREQ_HZ / 1000))
+
+#endif /* !FEATURE_V4_SECTOR_PI — end of V3-only config */
 
 /* ── ARM ───────────────────────────────────────────────────────────── */
 #define ARM_TIME_MS         200U

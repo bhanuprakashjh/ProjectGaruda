@@ -40,6 +40,18 @@
 static bool verboseMode = false;
 bool DIAG_IsVerbose(void) { return verboseMode; }
 
+#if FEATURE_V4_SECTOR_PI
+/* V4: diagnostic commands not yet ported — stub out ProcessCommand */
+void DIAG_ProcessCommand(uint8_t cmd)
+{
+    if (cmd == 'v') verboseMode = !verboseMode;
+    else if (cmd == 'h')
+    {
+        HAL_UART_WriteString("V4 mode — diag commands TBD\r\n");
+    }
+}
+#else /* V3 diag code */
+
 /* Helper: print register name and 16-bit hex value */
 static void PrintReg16(const char *name, uint16_t val)
 {
@@ -716,3 +728,5 @@ void DIAG_DumpAll(void)
     CmdAdcSnap();
     CmdState();
 }
+
+#endif /* !FEATURE_V4_SECTOR_PI */

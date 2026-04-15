@@ -20,7 +20,7 @@
 
 #include "hal_ic.h"
 
-#if FEATURE_IC_ZC
+#if FEATURE_IC_ZC && !FEATURE_V4_SECTOR_PI
 
 #include <xc.h>
 

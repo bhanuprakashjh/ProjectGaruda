@@ -8,7 +8,7 @@
 
 #include "../garuda_config.h"
 
-#if FEATURE_GSP
+#if FEATURE_GSP && !FEATURE_V4_SECTOR_PI
 
 #include <string.h>
 #include "gsp_snapshot.h"

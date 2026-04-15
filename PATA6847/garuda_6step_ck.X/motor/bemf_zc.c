@@ -32,6 +32,8 @@
 #include "../hal/hal_clc.h"
 #endif
 
+#if !FEATURE_V4_SECTOR_PI
+
 /* Speed-adaptive front-end selector. Set by FastPoll at the start
  * of each call based on stepPeriodHR vs ZC_IC_DIRECT_THRESHOLD_HR.
  * When true, ReadBEMFComparator returns raw GPIO (0.64 µs resolution)
@@ -2788,3 +2790,5 @@ bool BEMF_ZC_FastPoll(volatile GARUDA_DATA_T *pData)
 }
 
 #endif /* FEATURE_IC_ZC */
+
+#endif /* !FEATURE_V4_SECTOR_PI */

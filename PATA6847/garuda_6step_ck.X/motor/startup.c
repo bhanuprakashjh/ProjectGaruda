@@ -15,6 +15,8 @@
 #include "../hal/hal_pwm.h"
 #include "../garuda_config.h"
 
+#if !FEATURE_V4_SECTOR_PI
+
 void STARTUP_Init(volatile GARUDA_DATA_T *pData)
 {
     pData->currentStep = 0;
@@ -108,3 +110,5 @@ bool STARTUP_OpenLoopRamp(volatile GARUDA_DATA_T *pData)
 
     return false;
 }
+
+#endif /* !FEATURE_V4_SECTOR_PI */

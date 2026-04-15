@@ -15,7 +15,7 @@
 
 #include "hal_clc.h"
 
-#if FEATURE_IC_ZC && FEATURE_CLC_BLANKING
+#if FEATURE_IC_ZC && FEATURE_CLC_BLANKING && !FEATURE_V4_SECTOR_PI
 
 #include <xc.h>
 
@@ -92,4 +92,4 @@ void HAL_CLC_ConfigureStep(uint8_t floatingPhase, uint8_t pwmPhase)
     (void)pwmPhase;
 }
 
-#endif /* FEATURE_IC_ZC && FEATURE_CLC_BLANKING */
+#endif /* FEATURE_IC_ZC && FEATURE_CLC_BLANKING && !FEATURE_V4_SECTOR_PI */

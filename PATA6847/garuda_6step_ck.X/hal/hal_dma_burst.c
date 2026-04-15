@@ -5,7 +5,7 @@
 
 #include "hal_dma_burst.h"
 
-#if FEATURE_DMA_BURST_CAPTURE
+#if FEATURE_DMA_BURST_CAPTURE && !FEATURE_V4_SECTOR_PI
 
 #include <string.h>
 #include "hal_ic_dma.h"
@@ -120,4 +120,4 @@ void HAL_DmaBurst_OnZc(uint16_t pollHR, uint16_t predictedHR, bool wasTimeout)
     s->wasTimeout  = wasTimeout ? 1u : 0u;
 }
 
-#endif /* FEATURE_DMA_BURST_CAPTURE */
+#endif /* FEATURE_DMA_BURST_CAPTURE && !FEATURE_V4_SECTOR_PI */
