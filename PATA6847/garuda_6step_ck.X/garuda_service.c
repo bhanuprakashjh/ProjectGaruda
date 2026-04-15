@@ -227,14 +227,8 @@ void __attribute__((interrupt, auto_psv)) _ADCInterrupt(void)
             uint8_t expected = HAL_Capture_IsRisingZc() ? 1 : 0;
             if (comp == expected)
             {
-                /* Compensate: ZC happened ~half PWM cycle before detection.
-                 * PWM period at 40kHz = 25µs = 39 HR ticks.
-                 * Subtract half = 20 ticks for average ZC position. */
-                v4_lastCaptureHR = (uint16_t)(nowHR - 20);
+                v4_lastCaptureHR = nowHR;
                 v4_captureValid = true;
-                /* AM32 mask: stop CCP noise ISRs for rest of sector */
-                _CCP2IE = 0;
-                _CCP5IE = 0;
             }
         }
     }
