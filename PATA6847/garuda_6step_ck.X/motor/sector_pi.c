@@ -340,29 +340,17 @@ void SectorPI_Commutate(void)
         _CCP5IF = 0;
     }
 
-    /* 5. Set up corridor for NEXT sector.
-     * expectedZcHR = thisCommHR + setValue (absolute HR time of expected ZC).
-     * Width = min(timerPeriod/6, 40) — tight around expected position. */
+    /* 5. Set blanking + floating phase for deglitch ISR */
     {
-        extern volatile uint16_t v4_expectedZcHR;
-        extern volatile uint16_t v4_corridorWidth;
-        extern volatile uint16_t v4_bestAbsErr;
+        extern volatile uint16_t v4_blankingEndHR;
+        extern volatile uint8_t v4_floatingPhase;
 
-        uint16_t setVal = PhaseAdvance(V4_ADVANCE_PLUS_30_FP8, timerPeriod)
-                        + V4_RC_DELAY_HR;
-        v4_expectedZcHR = (uint16_t)(thisCommHR + setVal);
+        /* Blanking: 25% of sector after commutation */
+        v4_blankingEndHR = (uint16_t)(thisCommHR + (timerPeriod >> 2));
 
-        uint16_t w = timerPeriod / 6;
-        /* Start tight (40 HR) for initial lock at 4000 eRPM.
-         * Once PI is locked, use full timerPeriod/6 (±10% of sector)
-         * to let ZC shift as speed changes with duty. */
-        if (!piEnabled) {
-            if (w > 40) w = 40;
-        }
-        /* else: w = timerPeriod/6, no cap — allows speed changes */
-        if (w < 5) w = 5;
-        v4_corridorWidth = w;
-        v4_bestAbsErr = 0xFFFF;  /* reset for new sector */
+        /* Floating phase for GPIO deglitch reads */
+        const COMMUTATION_STEP_T *step = &commutationTable[position];
+        v4_floatingPhase = step->floatingPhase;
     }
 
     /* 6. Re-enable CCP ISRs */

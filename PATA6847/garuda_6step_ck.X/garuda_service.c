@@ -236,12 +236,28 @@ void __attribute__((interrupt, no_auto_psv)) _CCT3Interrupt(void)
 uint16_t prevEdgeCCP2 = 0;
 uint16_t prevEdgeCCP5 = 0;
 
-/* ── Corridor selector state ─────────────────────────────────── */
-/* Closest-to-expected capture per sector. Set at commutation,
- * evaluated in CCP ISR, consumed at next commutation. */
-volatile uint16_t v4_expectedZcHR = 0;   /* center of corridor */
-volatile uint16_t v4_corridorWidth = 40; /* half-width in HR ticks */
-volatile uint16_t v4_bestAbsErr = 0xFFFF;/* best |ts - expected| so far */
+/* ── ZC detection with deglitch ──────────────────────────────── */
+/* CCP ISR fires on every comparator edge. After blanking, read
+ * the comparator GPIO 3 times with ~500ns delays. All 3 must
+ * match the expected post-ZC state. This rejects PWM ringing
+ * (brief pulses that bounce back) and detects real ZC (sustained
+ * state change). Once detected, lock v4_captureValid. */
+
+/* Floating phase GPIO readers */
+volatile uint8_t v4_floatingPhase = 0;
+
+static inline uint8_t ReadBEMFComp(void)
+{
+    switch (v4_floatingPhase) {
+        case 0: return _RC6;
+        case 1: return _RC7;
+        case 2: return _RD10;
+        default: return 0;
+    }
+}
+
+/* Blanking state */
+volatile uint16_t v4_blankingEndHR = 0;
 
 void __attribute__((interrupt, no_auto_psv)) _CCP2Interrupt(void)
 {
@@ -249,17 +265,27 @@ void __attribute__((interrupt, no_auto_psv)) _CCP2Interrupt(void)
     bool got = false;
     while (CCP2STATLbits.ICBNE) { ts = CCP2BUFL; got = true; }
 
-    if (got && HAL_Capture_IsRisingZc())
+    if (got && HAL_Capture_IsRisingZc() && !v4_captureValid)
     {
         uint16_t hr = (uint16_t)(ts + HAL_Capture_GetCcp2Offset());
-        /* Corridor: is this edge close to expectedZcHR? */
-        int16_t err = (int16_t)(hr - v4_expectedZcHR);
-        uint16_t absErr = (err < 0) ? (uint16_t)(-err) : (uint16_t)err;
-        if (absErr < v4_corridorWidth && absErr < v4_bestAbsErr)
+        /* Blanking */
+        if ((int16_t)(hr - v4_blankingEndHR) >= 0)
         {
-            v4_bestAbsErr = absErr;
-            v4_lastCaptureHR = hr;
-            v4_captureValid = true;
+            /* Deglitch: 3 reads, all must be 1 (rising ZC = comp HIGH).
+             * ~500ns between reads (5 NOPs at 100MHz = 50ns each). */
+            uint8_t r1 = ReadBEMFComp();
+            Nop(); Nop(); Nop(); Nop(); Nop();
+            Nop(); Nop(); Nop(); Nop(); Nop();
+            uint8_t r2 = ReadBEMFComp();
+            Nop(); Nop(); Nop(); Nop(); Nop();
+            Nop(); Nop(); Nop(); Nop(); Nop();
+            uint8_t r3 = ReadBEMFComp();
+
+            if (r1 == 1 && r2 == 1 && r3 == 1)
+            {
+                v4_lastCaptureHR = hr;
+                v4_captureValid = true;
+            }
         }
     }
     _CCP2IF = 0;
@@ -271,16 +297,24 @@ void __attribute__((interrupt, no_auto_psv)) _CCP5Interrupt(void)
     bool got = false;
     while (CCP5STATLbits.ICBNE) { ts = CCP5BUFL; got = true; }
 
-    if (got && !HAL_Capture_IsRisingZc())
+    if (got && !HAL_Capture_IsRisingZc() && !v4_captureValid)
     {
         uint16_t hr = (uint16_t)(ts + HAL_Capture_GetCcp5Offset());
-        int16_t err = (int16_t)(hr - v4_expectedZcHR);
-        uint16_t absErr = (err < 0) ? (uint16_t)(-err) : (uint16_t)err;
-        if (absErr < v4_corridorWidth && absErr < v4_bestAbsErr)
+        if ((int16_t)(hr - v4_blankingEndHR) >= 0)
         {
-            v4_bestAbsErr = absErr;
-            v4_lastCaptureHR = hr;
-            v4_captureValid = true;
+            uint8_t r1 = ReadBEMFComp();
+            Nop(); Nop(); Nop(); Nop(); Nop();
+            Nop(); Nop(); Nop(); Nop(); Nop();
+            uint8_t r2 = ReadBEMFComp();
+            Nop(); Nop(); Nop(); Nop(); Nop();
+            Nop(); Nop(); Nop(); Nop(); Nop();
+            uint8_t r3 = ReadBEMFComp();
+
+            if (r1 == 0 && r2 == 0 && r3 == 0)
+            {
+                v4_lastCaptureHR = hr;
+                v4_captureValid = true;
+            }
         }
     }
     _CCP5IF = 0;
