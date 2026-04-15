@@ -759,6 +759,12 @@
 #define V4_SECTOR_ISR_PRIORITY  6       /* Commutation — highest motor ISR */
 #define V4_CAPTURE_ISR_PRIORITY 5       /* ZC edge capture — below sector */
 
+/* ZC detection method:
+ * 0 = CCP edge capture + 3-read deglitch (works to ~100k eRPM)
+ * 1 = PWM-midpoint sampling in ADC ISR (clean read at center of ON-time,
+ *     avoids PWM switching noise on comparator — for high speed) */
+#define FEATURE_V4_MIDPOINT_ZC  1
+
 #endif /* FEATURE_V4_SECTOR_PI */
 
 #if !FEATURE_V4_SECTOR_PI

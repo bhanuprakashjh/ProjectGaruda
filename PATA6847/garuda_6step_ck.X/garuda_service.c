@@ -192,6 +192,13 @@ void __attribute__((interrupt, auto_psv)) _T1Interrupt(void)
      * trips before re-enabling. */
 }
 
+/* Forward declarations for midpoint ZC sampling */
+#if FEATURE_V4_MIDPOINT_ZC
+static inline uint8_t ReadBEMFComp(void);
+extern volatile uint8_t v4_floatingPhase;
+extern volatile uint16_t v4_blankingEndHR;
+#endif
+
 /* ── V4 ADC ISR ───────────────────────────────────────────────────── */
 void __attribute__((interrupt, auto_psv)) _ADCInterrupt(void)
 {
@@ -200,6 +207,34 @@ void __attribute__((interrupt, auto_psv)) _ADCInterrupt(void)
     gV4IaRaw   = (int16_t)ADCBUF1;
     gV4IbRaw   = (int16_t)ADCBUF4;
     (void)ADCBUF0;  /* Must read to clear data-ready */
+
+#if FEATURE_V4_MIDPOINT_ZC
+    /* PWM-midpoint BEMF sampling: read comparator GPIO at center of
+     * ON-time (triggered by PG1TRIGA=0). This is the only clean point
+     * in the PWM cycle — switching transients have settled, BEMF is
+     * visible on the floating phase. No hysteresis/filter in ATA6847,
+     * so CCP edge capture picks up PWM noise. This doesn't.
+     *
+     * Detect ZC: comparator state transitions to expected post-ZC value.
+     * Use blanking: ignore reads in first 25% of sector after commutation. */
+    if (SectorPI_IsRunning() && SectorPI_GetPhase() == 3 && !v4_captureValid)
+    {
+        uint16_t nowHR = CCP4TMRL;
+
+        /* Blanking check */
+        if ((int16_t)(nowHR - v4_blankingEndHR) >= 0)
+        {
+            uint8_t comp = ReadBEMFComp();
+            uint8_t expected = HAL_Capture_IsRisingZc() ? 1 : 0;
+
+            if (comp == expected)
+            {
+                v4_lastCaptureHR = nowHR;
+                v4_captureValid = true;
+            }
+        }
+    }
+#endif
 
     IFS5bits.ADCIF = 0;
 }
@@ -261,6 +296,7 @@ void __attribute__((interrupt, no_auto_psv)) _CCP2Interrupt(void)
     bool got = false;
     while (CCP2STATLbits.ICBNE) { ts = CCP2BUFL; got = true; }
 
+#if !FEATURE_V4_MIDPOINT_ZC
     if (got && HAL_Capture_IsRisingZc() && !v4_captureValid)
     {
         uint16_t hr = (uint16_t)(ts + HAL_Capture_GetCcp2Offset());
@@ -284,6 +320,7 @@ void __attribute__((interrupt, no_auto_psv)) _CCP2Interrupt(void)
             }
         }
     }
+#endif
     _CCP2IF = 0;
 }
 
@@ -293,6 +330,7 @@ void __attribute__((interrupt, no_auto_psv)) _CCP5Interrupt(void)
     bool got = false;
     while (CCP5STATLbits.ICBNE) { ts = CCP5BUFL; got = true; }
 
+#if !FEATURE_V4_MIDPOINT_ZC
     if (got && !HAL_Capture_IsRisingZc() && !v4_captureValid)
     {
         uint16_t hr = (uint16_t)(ts + HAL_Capture_GetCcp5Offset());
@@ -315,6 +353,7 @@ void __attribute__((interrupt, no_auto_psv)) _CCP5Interrupt(void)
             }
         }
     }
+#endif
     _CCP5IF = 0;
 }
 
