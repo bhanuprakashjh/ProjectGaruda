@@ -59,6 +59,7 @@ static          uint8_t    stallCounter;
 static volatile bool       commandEnabled;
 static volatile uint16_t   actualAmplitude;
 static volatile uint16_t   targetAmplitude;
+static volatile uint16_t   targetPeriod;    /* pot-commanded timerPeriod */
 static volatile uint16_t   lastCommHR;      /* HR time of last commutation */
 
 /* ── Speed measurement ──────────────────────────────────────────── */
@@ -66,6 +67,17 @@ static volatile uint16_t   lastCommHR;      /* HR time of last commutation */
 static volatile uint16_t   speedCounter;
 static volatile uint16_t   speedBase;
 static volatile uint16_t   measuredSpeed;
+
+/* ── Speed regulation (outer loop) ─────────────────────────────── */
+/* pot → targetSpeed, PI on (targetSpeed - measuredSpeed) → amplitude.
+ * This is the AVR's __Speed_Control. Runs at 1ms in TimeTick.
+ * Separate from the sector PI (inner loop) which tracks ZC phase. */
+static volatile uint16_t   targetSpeed;     /* in measuredSpeed units */
+static volatile int32_t    speedIntegrator; /* fixp16 amplitude integrator */
+#define SPEED_KP            1U              /* proportional gain */
+#define SPEED_KI_DT         3U              /* Ki * dt (integral step) */
+#define SPEED_MIN_RPM       4000UL          /* minimum target eRPM */
+#define SPEED_MAX_RPM       100000UL        /* maximum target eRPM */
 
 /* ── Diagnostics ────────────────────────────────────────────────── */
 volatile uint16_t diagCaptures;
@@ -126,6 +138,8 @@ static void EnterCL(void)
     diagLastCapValue = 0xFFFF;
     corridorGoodStreak = 0;
     piEnabled = false;
+
+    targetPeriod = timerPeriod;  /* seed at 4000 eRPM */
 
     /* Keep current duty from ramp */
     actualAmplitude = (uint16_t)((rampDuty * 32768UL) / LOOPTIME_TCY);
@@ -337,7 +351,13 @@ void SectorPI_Commutate(void)
         v4_expectedZcHR = (uint16_t)(thisCommHR + setVal);
 
         uint16_t w = timerPeriod / 6;
-        if (w > 40) w = 40;
+        /* Start tight (40 HR) for initial lock at 4000 eRPM.
+         * Once PI is locked, use full timerPeriod/6 (±10% of sector)
+         * to let ZC shift as speed changes with duty. */
+        if (!piEnabled) {
+            if (w > 40) w = 40;
+        }
+        /* else: w = timerPeriod/6, no cap — allows speed changes */
         if (w < 5) w = 5;
         v4_corridorWidth = w;
         v4_bestAbsErr = 0xFFFF;  /* reset for new sector */
@@ -445,26 +465,25 @@ void SectorPI_TimeTick(void)
         speedBase = 0;
     }
 
-    /* Amplitude control (only after settle) */
+    /* Simple pot→duty. Speed control deferred to next session. */
     if (commandEnabled)
     {
-        if (actualAmplitude > targetAmplitude)
+        if (actualAmplitude < targetAmplitude)
+        {
+            actualAmplitude += 13;
+            if (actualAmplitude > targetAmplitude)
+                actualAmplitude = targetAmplitude;
+        }
+        else if (actualAmplitude > targetAmplitude)
         {
             if (actualAmplitude > 13)
                 actualAmplitude -= 13;
             else
                 actualAmplitude = 0;
         }
-        else if (actualAmplitude < targetAmplitude)
-        {
-            actualAmplitude += 13;
-            if (actualAmplitude > 32768U)
-                actualAmplitude = 32768U;
-        }
     }
 }
 
-/* Minimum amplitude: keep motor spinning */
 #define V4_MIN_AMPLITUDE  3000U
 
 void SectorPI_CommandSet(uint16_t amplitude)
