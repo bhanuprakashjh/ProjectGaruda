@@ -385,36 +385,44 @@ void SectorPI_Commutate(void)
          * unless stall detection intervenes. */
     }
 
-    /* PI synchronizer — only after corridor locks */
+    /* Reactive scheduling — like V3 but with hardware timestamp.
+     * When ZC is captured: schedule commutation at ZC + delay.
+     * When no ZC: use last timerPeriod as timeout (forced comm).
+     * Pot controls duty. Speed follows motor naturally. */
     diagLastCapValue = capValue;
-    if (capValue != CAP_SENTINEL && piEnabled)
+    if (capValue != CAP_SENTINEL)
     {
         diagPiRuns++;
-        uint16_t setVal = PhaseAdvance(V4_ADVANCE_PLUS_30_FP8, timerPeriod)
-                        + V4_RC_DELAY_HR;
-        int32_t delta = (int32_t)capValue - (int32_t)setVal;
-        diagDelta = (int16_t)delta;
 
-        /* PI phase correction — bounded around basePeriod.
-         * The pot sets basePeriod (coarse speed). The PI only
-         * makes small corrections to keep commutation in phase
-         * with actual ZC. Correction clamped to ±basePeriod/8. */
-        int32_t correction = (delta >> V4_KP_SHIFT);
-        int16_t maxCorr = (int16_t)(basePeriod >> 3);
-        if (correction > maxCorr) correction = maxCorr;
-        if (correction < -maxCorr) correction = -maxCorr;
+        /* Update step period estimate from actual ZC timing.
+         * capValue = elapsed from lastComm to ZC.
+         * ZC is at (30°+advance)/60° = 40°/60° = 66.7% of sector.
+         * stepPeriod = capValue / 0.667 = capValue * 3 / 2.
+         * IIR smooth: timerPeriod = (3*old + new) >> 2 */
+        uint16_t measuredStep = (uint16_t)((uint32_t)capValue * 3 / 2);
+        uint32_t iir = ((uint32_t)timerPeriod * 3 + measuredStep) >> 2;
+        if (iir < V4_MIN_PERIOD) iir = V4_MIN_PERIOD;
+        if (iir > 0xFFFF) iir = 0xFFFF;
+        timerPeriod = (uint16_t)iir;
+        integrator = timerPeriod;
 
-        int32_t newP = (int32_t)basePeriod + correction;
-        if (newP < V4_MIN_PERIOD) newP = V4_MIN_PERIOD;
-        if (newP > 0xFFFF) newP = 0xFFFF;
-        timerPeriod = (uint16_t)newP;
+        /* V3-style reactive target:
+         * target = zcTimestamp + halfPeriod - advance
+         * halfPeriod = timerPeriod / 2
+         * advance = TAL * timerPeriod / 8 (TAL=2 for 15°) */
+        uint16_t halfHR = timerPeriod >> 1;
+        uint16_t advHR = (timerPeriod >> 3) * 2;  /* TAL=2 = 15° */
+        uint16_t delayHR = (halfHR > advHR) ? (halfHR - advHR) : 2;
+        uint16_t targetHR = (uint16_t)(v4_lastCaptureHR + delayHR);
+
+        diagDelta = (int16_t)(targetHR - thisCommHR);  /* margin */
+        HAL_ComTimer_ScheduleAbsolute(targetHR);
     }
-
-    /* 5. Schedule NEXT commutation from thisCommHR (not nowHR).
-     * Using thisCommHR removes ISR execution jitter from the
-     * scheduling — each sector is exactly timerPeriod from the
-     * FET switch, not from whenever the ISR finishes. */
-    HAL_ComTimer_ScheduleAbsolute(thisCommHR + timerPeriod);
+    else
+    {
+        /* No ZC this sector — forced commutation at timerPeriod */
+        HAL_ComTimer_ScheduleAbsolute(thisCommHR + timerPeriod);
+    }
 
     /* 7. Stall detection */
     if (commandEnabled)
@@ -471,44 +479,35 @@ void SectorPI_TimeTick(void)
         speedBase = 0;
     }
 
-    /* Speed control: pot sets coarse speed (targetPeriod).
-     * Ramp timerPeriod toward targetPeriod slowly.
-     * The sector PI adds a bounded phase correction on top
-     * via the normal delta→integrator path in Commutate.
-     * Duty scales with speed automatically. */
-    if (commandEnabled && piEnabled)
+    /* Pot→duty direct. Reactive scheduling in Commutate handles
+     * speed — more duty = more torque = faster = earlier ZC. */
+    if (commandEnabled)
     {
-        /* Ramp base period toward target */
-        if (basePeriod > targetPeriod + 2)
+        if (actualAmplitude < targetAmplitude)
         {
-            basePeriod -= 2;
+            actualAmplitude += 13;
+            if (actualAmplitude > targetAmplitude)
+                actualAmplitude = targetAmplitude;
         }
-        else if (basePeriod + 2 < targetPeriod)
+        else if (actualAmplitude > targetAmplitude)
         {
-            basePeriod += 2;
+            if (actualAmplitude > 13)
+                actualAmplitude -= 13;
+            else
+                actualAmplitude = 0;
         }
-
-        /* Apply: timerPeriod = basePeriod (PI correction happens in Commutate) */
-        timerPeriod = basePeriod;
-        integrator = basePeriod;
-
-        /* Keep duty at ramp level. No-load motor doesn't need
-         * more duty to go faster. With prop, duty will need
-         * to scale — but that's a later tuning step. */
     }
 }
 
+#define V4_MIN_AMPLITUDE  3000U
+
 void SectorPI_CommandSet(uint16_t amplitude)
 {
-    /* pot (0..32768) → target eRPM (4000..60000) → targetPeriod */
     if (commandEnabled)
     {
-        uint32_t eRpm = 4000UL +
-            ((uint32_t)amplitude * 56000UL) / 32768UL;
-        uint32_t period = 15625000UL / eRpm;
-        if (period < V4_MIN_PERIOD) period = V4_MIN_PERIOD;
-        if (period > 5000) period = 5000;
-        targetPeriod = (uint16_t)period;
+        if (amplitude < V4_MIN_AMPLITUDE)
+            amplitude = V4_MIN_AMPLITUDE;
+        targetAmplitude = amplitude;
     }
 }
 
