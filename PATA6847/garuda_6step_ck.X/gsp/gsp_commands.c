@@ -499,16 +499,34 @@ void GSP_DispatchCommand(uint8_t cmdId, const uint8_t *payload, uint8_t payloadL
 
         case GSP_CMD_GET_INFO:
         {
-            uint8_t info[16];
+            /* GUI's decodeInfo expects 20 bytes (matches GSP_INFO_T):
+             *   [0]    protocolVersion (u8)
+             *   [1..3] fwMajor, fwMinor, fwPatch (u8 each)
+             *   [4..5] boardId (u16 LE) — 0x0002 for CK board
+             *   [6]    motorProfile (u8)
+             *   [7]    motorPolePairs (u8)
+             *   [8..11]  featureFlags (u32 LE)
+             *   [12..15] pwmFrequency (u32 LE)
+             *   [16..19] maxErpm (u32 LE)
+             * Sending fewer bytes makes the GUI's DataView throw, which
+             * kills the read loop → disconnect → writes fail. */
+            uint8_t info[20];
             memset(info, 0, sizeof(info));
-            info[0] = 2;                    /* protocol version */
-            info[1] = MOTOR_PROFILE;
-            info[2] = 4;                    /* firmware version = V4 */
-            info[3] = 0;
-            /* feature flags: just mark V4 */
-            uint32_t f = 0x80000000UL;      /* bit 31 = V4 */
-            memcpy(&info[4], &f, 4);
-            GSP_SendResponse(GSP_CMD_GET_INFO, info, 8);
+            info[0] = GSP_PROTOCOL_VERSION;
+            info[1] = 4;                    /* fwMajor — V4 */
+            info[2] = 0;                    /* fwMinor */
+            info[3] = 0;                    /* fwPatch */
+            uint16_t boardId = GSP_BOARD_EV43F54A;
+            memcpy(&info[4], &boardId, 2);
+            info[6] = MOTOR_PROFILE;
+            info[7] = 7;                    /* polePairs (placeholder) */
+            uint32_t f = 0x80000000UL;      /* bit 31 = V4 marker */
+            memcpy(&info[8],  &f, 4);
+            uint32_t pwmHz = PWMFREQUENCY_HZ;
+            memcpy(&info[12], &pwmHz, 4);
+            uint32_t maxErpm = 200000UL;
+            memcpy(&info[16], &maxErpm, 4);
+            GSP_SendResponse(GSP_CMD_GET_INFO, info, 20);
             break;
         }
 
@@ -538,6 +556,30 @@ void GSP_DispatchCommand(uint8_t cmdId, const uint8_t *payload, uint8_t payloadL
             GarudaService_ClearFault();
             GSP_SendResponse(GSP_CMD_CLEAR_FAULT, NULL, 0);
             break;
+
+        case GSP_CMD_HEARTBEAT:
+            /* GUI sends HEARTBEAT every 200ms while telemetry is active
+             * to keep the connection alive. V4 has no watchdog action —
+             * just acknowledge so the GUI doesn't spam unknown-command
+             * error toasts. */
+            GSP_SendResponse(GSP_CMD_HEARTBEAT, NULL, 0);
+            break;
+
+        case GSP_CMD_SET_THROTTLE:
+            /* V4 reads pot directly via ADC; ignore GUI throttle commands
+             * silently rather than spam unknown-command errors. */
+            GSP_SendResponse(GSP_CMD_SET_THROTTLE, NULL, 0);
+            break;
+
+        case GSP_CMD_GET_PARAM_LIST:
+            /* V4 has no GUI-tunable parameters. Send an empty list
+             * (3-byte header: totalCount=0, startIndex=0, entryCount=0)
+             * instead of an error — keeps the GUI quiet. */
+        {
+            uint8_t emptyList[3] = { 0, 0, 0 };
+            GSP_SendResponse(GSP_CMD_GET_PARAM_LIST, emptyList, 3);
+            break;
+        }
 
         default:
         {
