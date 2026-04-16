@@ -38,6 +38,7 @@ typedef struct {
     uint16_t diagLastCapValue;
     int16_t  diagDelta;
     bool     spMode;        /* single-pulse mode active */
+    bool     spRequest;     /* single-pulse mode requested (may lag spMode) */
     uint32_t erpmNow;       /* instantaneous eRPM from timerPeriod */
 } V4_TELEM_T;
 
@@ -54,4 +55,13 @@ bool     SectorPI_IsRunning(void);
 uint8_t  SectorPI_GetPhase(void);     /* 0=OFF, 1=ALIGN, 2=OL_RAMP, 3=CL */
 
 #endif /* FEATURE_V4_SECTOR_PI */
+
+/* ── Single-Pulse mode shared state ────────────────────────────── */
+/* g_pwmPer: current PWM period in TCY units.
+ * Equals LOOPTIME_TCY in normal mode, or MPER (sector-matched) in SP mode.
+ * Updated by SectorPI_TimeTick — NOT by the Commutate ISR.
+ * The ISR reads it for duty scaling with zero branch overhead. */
+extern volatile uint16_t g_pwmPer;
+
 #endif /* SECTOR_PI_H */
+

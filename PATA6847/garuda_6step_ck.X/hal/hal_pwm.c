@@ -19,6 +19,11 @@
 #include "port_config.h"
 #include "../garuda_config.h"
 
+/* SP mode flag from sector_pi.c — read here to switch active-phase drive
+ * from complementary to unipolar while SP is engaged. Complementary braking
+ * during the long OFF portion of an SP frame decelerates the motor. */
+extern volatile bool v4_spActive;
+
 /* Override data bits: [11:10] = OVRDAT, bit11=H, bit10=L
  *                     [13]    = OVRENH, [12] = OVRENL
  *
@@ -46,9 +51,22 @@ static inline void ApplyPhaseState(volatile uint16_t *ioconl,
             val |= 0x1000u;             /* Set OVRENL — override L */
             val &= ~0x0400u;            /* OVRDAT_L = 0 — L forced OFF */
 #else
-            /* Complementary: H and L alternate with dead time.
-             * Active braking during OFF → needs higher MAX_DUTY (~100%). */
-            val &= ~(0x3000u);          /* Clear OVRENH and OVRENL */
+            if (v4_spActive)
+            {
+                /* SP mode needs unipolar drive: MPER=0xFFFF means PWM is
+                 * LOW for ~60% of each sector. Under complementary drive
+                 * that lights the LS FET → motor brakes continuously →
+                 * catastrophic deceleration the instant SP engages. */
+                val &= ~0x2000u;        /* Clear OVRENH — PWM drives H */
+                val |= 0x1000u;         /* Set OVRENL — override L */
+                val &= ~0x0400u;        /* OVRDAT_L = 0 — L forced OFF */
+            }
+            else
+            {
+                /* Complementary: H and L alternate with dead time.
+                 * Active braking during OFF → needs higher MAX_DUTY. */
+                val &= ~(0x3000u);      /* Clear OVRENH and OVRENL */
+            }
 #endif
             break;
         case PHASE_LOW:
@@ -198,6 +216,26 @@ void HAL_PWM_SetDutyCycle(uint32_t duty)
     PG3STATbits.UPDREQ = 1;
 }
 
+/* Period-aware variant. Clamps duty to [MIN_DUTY, per - 200], NOT against
+ * MPER. In SP mode MPER = 0xFFFF but the intended pulse basis is the
+ * sector-matched `per` (timerPeriod << 7). Using MPER would let the ON
+ * pulse run wider than the sector. Non-SP callers pass per=LOOPTIME_TCY,
+ * so behavior matches HAL_PWM_SetDutyCycle (per-200 ≈ MAX_DUTY). */
+void HAL_PWM_SetDutyCyclePeriod(uint32_t duty, uint16_t per)
+{
+    uint32_t maxD = (per > 200U) ? (uint32_t)(per - 200U) : (uint32_t)per;
+    if (duty > maxD) duty = maxD;
+    if (duty < MIN_DUTY) duty = MIN_DUTY;
+
+    PG2DC = (uint16_t)duty;
+    PG3DC = (uint16_t)duty;
+    PG1DC = (uint16_t)duty;
+
+    PG1STATbits.UPDREQ = 1;
+    PG2STATbits.UPDREQ = 1;
+    PG3STATbits.UPDREQ = 1;
+}
+
 /**
  * @brief Apply 6-step commutation pattern.
  * Uses the same commutation table as the AK project.
@@ -280,6 +318,8 @@ void HAL_PWM_ExitSinglePulse(void)
     if (spMode)
     {
         MPER = LOOPTIME_TCY;
+        /* Restore ADC trigger to valley (counter=0 in center-aligned = midpoint) */
+        PG1TRIGA = 0x0000U;
         PG1STATbits.UPDREQ = 1;
         PG2STATbits.UPDREQ = 1;
         PG3STATbits.UPDREQ = 1;

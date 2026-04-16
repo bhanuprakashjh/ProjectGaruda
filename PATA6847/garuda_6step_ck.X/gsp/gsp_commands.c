@@ -606,7 +606,12 @@ void GSP_TelemTick(void)
     memcpy(&d[32], &t.diagCaptures, 2);      /* icAccepted → captures accepted */
     memcpy(&d[34], &t.diagPiRuns, 2);        /* icFalse → PI run count */
     d[36] = t.stallCounter;                  /* filterLevel → stallCounter */
-    d[37] = t.spMode ? 1 : 0;               /* SP mode active flag */
+    /* Pack both SP bits: bit0 = active, bit1 = request.
+     * 0 = no request, not active
+     * 2 = request latched but SP not yet applied (boundary lag / error)
+     * 3 = SP active and requested
+     * 1 = stale/impossible active state */
+    d[37] = (t.spMode ? 1U : 0U) | (t.spRequest ? 2U : 0U);
     { uint16_t erpm16 = (t.erpmNow > 0xFFFF) ? 0xFFFF : (uint16_t)t.erpmNow;
       memcpy(&d[38], &erpm16, 2); }          /* erpmNow from timerPeriod */
 

@@ -197,6 +197,7 @@ static inline uint8_t ReadBEMFComp(void);
 extern volatile uint8_t v4_floatingPhase;
 extern volatile uint16_t v4_blankingEndHR;
 extern volatile uint16_t v4_timerPeriod;  /* from sector_pi.c */
+extern volatile bool     v4_spActive;     /* from sector_pi.c: SP mode flag */
 
 #if FEATURE_V4_MIDPOINT_ZC >= 1
 /* (midpoint modes also need these) */
@@ -217,8 +218,13 @@ void __attribute__((interrupt, auto_psv)) _ADCInterrupt(void)
     (void)ADCBUF0;  /* Must read to clear data-ready */
 
 #if FEATURE_V4_MIDPOINT_ZC == 1
-    /* Mode 1: Pure midpoint — ADC ISR owns ZC detection entirely */
-    if (SectorPI_IsRunning() && SectorPI_GetPhase() == 3 && !v4_captureValid)
+    /* Mode 1: Pure midpoint — ADC ISR owns ZC detection entirely.
+     * In SP mode MPER=0xFFFF destroys the ADC trigger cadence, so
+     * midpoint sampling is meaningless and must be skipped. The CCP
+     * ISRs take over as ZC source while v4_spActive is true. */
+    if (!v4_spActive
+        && SectorPI_IsRunning() && SectorPI_GetPhase() == 3
+        && !v4_captureValid)
     {
         uint16_t nowHR = CCP4TMRL;
         if ((int16_t)(nowHR - v4_blankingEndHR) >= 0)
@@ -311,12 +317,33 @@ static inline uint8_t ReadBEMFComp(void)
 
 /* Blanking state */
 volatile uint16_t v4_blankingEndHR = 0;
+/* Expected ZC HR timestamp (center of corridor for SP CCP ISR) */
+volatile uint16_t v4_expectedZcHR = 0;
 
 void __attribute__((interrupt, no_auto_psv)) _CCP2Interrupt(void)
 {
     uint16_t ts = 0;
     bool got = false;
     while (CCP2STATLbits.ICBNE) { ts = CCP2BUFL; got = true; }
+
+    /* SP mode: hardware comparator IC owns ZC. Dynamic blanking in the
+     * commutation ISR physically rejects the pulse turn-off edge
+     * (blanking extends past amp×T + settle). A single GPIO state read
+     * is the remaining discriminator — no ISR busy-wait. */
+    if (v4_spActive && got && HAL_Capture_IsRisingZc() && !v4_captureValid)
+    {
+        uint16_t hr = (uint16_t)(ts + HAL_Capture_GetCcp2Offset());
+        if ((int16_t)(hr - v4_blankingEndHR) >= 0
+            && ReadBEMFComp() == 1)
+        {
+            v4_lastCaptureHR = hr;
+            v4_captureValid = true;
+            _CCP2IE = 0;
+            _CCP5IE = 0;
+        }
+        _CCP2IF = 0;
+        return;
+    }
 
 #if FEATURE_V4_MIDPOINT_ZC == 0
     if (got && HAL_Capture_IsRisingZc() && !v4_captureValid)
@@ -371,6 +398,23 @@ void __attribute__((interrupt, no_auto_psv)) _CCP5Interrupt(void)
     uint16_t ts = 0;
     bool got = false;
     while (CCP5STATLbits.ICBNE) { ts = CCP5BUFL; got = true; }
+
+    /* SP mode: falling-ZC hardware capture. Dynamic blanking +
+     * single GPIO read. Mirror of CCP2 path. */
+    if (v4_spActive && got && !HAL_Capture_IsRisingZc() && !v4_captureValid)
+    {
+        uint16_t hr = (uint16_t)(ts + HAL_Capture_GetCcp5Offset());
+        if ((int16_t)(hr - v4_blankingEndHR) >= 0
+            && ReadBEMFComp() == 0)
+        {
+            v4_lastCaptureHR = hr;
+            v4_captureValid = true;
+            _CCP2IE = 0;
+            _CCP5IE = 0;
+        }
+        _CCP5IF = 0;
+        return;
+    }
 
 #if FEATURE_V4_MIDPOINT_ZC == 0
     if (got && !HAL_Capture_IsRisingZc() && !v4_captureValid)

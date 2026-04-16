@@ -101,7 +101,10 @@ def decode_ck_snapshot(data):
     s['icAccepted'] = struct.unpack_from('<H', data, 32)[0]
     s['icFalse'] = struct.unpack_from('<H', data, 34)[0]
     s['filterLevel'] = data[36]
-    s['spMode'] = data[37]          # V4: SP mode active flag
+    sp_bits = data[37]              # V4: bit0=SP active, bit1=SP requested
+    s['spBits'] = sp_bits
+    s['spMode'] = sp_bits & 0x01
+    s['spRequest'] = (sp_bits >> 1) & 0x01
     s['erpmTP'] = struct.unpack_from('<H', data, 38)[0]  # V4: eRPM from timerPeriod
     # s['ilimActive'] = data[39] != 0  # overwritten by erpmTP high byte
     s['systemTick'] = struct.unpack_from('<I', data, 40)[0]
@@ -437,7 +440,12 @@ def main():
                 sacc = snap.get('syncAccepts', 0)
                 sm_str = SYNC_MODES[smode] if smode < len(SYNC_MODES) else '?'
                 capv = snap.get('syncVsReactive', 0)  # repurposed: carries capValueHR
-                sp_str = 'SP' if snap.get('spMode', 0) else '  '
+                if snap.get('spMode', 0):
+                    sp_str = 'SP'
+                elif snap.get('spRequest', 0):
+                    sp_str = 'RQ'
+                else:
+                    sp_str = '  '
                 etp = snap.get('erpmTP', 0)
                 print(f"{t:7.1f} {state_str:>8s} {zc_mode_str:>3s} {snap['eRpm']:7d} {snap['dutyPct']:3d}% {snap['vbusV']:5.1f}V {sp_str:>2s} {etp:6d} {snap.get('sched_margin_hr', snap.get('schedMarginHR',0)):5d} {serr:+5d} {sthat:5d} {capv:5d} {sm_str:>2s} {sgood:3d} {sacc:5d} {corr:+5d} {'Y' if locked else '.':>3s}{fault_str}")
 
@@ -453,7 +461,7 @@ def main():
                     'ib_mA': snap['ibMa'],
                     'vbus_V': snap['vbusV'],
                     'zc_synced': 1 if snap['zcSynced'] else 0,
-                    'missed': snap.get('spMode', 0),
+                    'missed': snap.get('spBits', 0),
                     'forced': snap.get('erpmTP', 0),
                     'step_period': snap['stepPeriod'],
                     'step_period_hr': snap['stepPeriodHR'],

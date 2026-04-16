@@ -23,12 +23,15 @@
 #define FOSC_PWM_MHZ        400U         /* PWM timing base (CK: 2x Fosc) */
 
 /* ── PWM ───────────────────────────────────────────────────────────── */
-#define PWMFREQUENCY_HZ     40000U       /* 40 kHz — zero timeouts at 100k with fixes.
-                                          * 15kHz gave 19x fewer ZC timeouts
-                                          * but was audible. 24kHz should give
-                                          * cleaner ZC than 20kHz while staying
-                                          * above hearing. Aliasing at 72k eRPM
-                                          * (was 60k at 20kHz). */
+#define PWMFREQUENCY_HZ     40000U       /* 40 kHz — proven baseline reaching
+                                          * 124k eRPM at 56% duty with
+                                          * complementary drive + midpoint ZC.
+                                          * 20 kHz tested: marginally better at
+                                          * low duty, worse at high duty due to
+                                          * doubled current ripple. Discarded.
+                                          * Higher headroom now requires ZC
+                                          * detection improvements (PI, deglitch,
+                                          * blanking, EGBLT). */
 #define LOOPTIME_MICROSEC   (uint16_t)(1000000UL / PWMFREQUENCY_HZ)  /* 50 us */
 #define LOOPTIME_TCY        (uint16_t)((uint32_t)LOOPTIME_MICROSEC * FOSC_PWM_MHZ / 2 - 1)
 /* PWM drive mode: complementary vs unipolar.
