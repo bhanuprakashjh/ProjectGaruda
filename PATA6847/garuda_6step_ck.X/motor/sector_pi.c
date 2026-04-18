@@ -505,6 +505,16 @@ void SectorPI_Commutate(void)
         /* Floating phase for GPIO deglitch reads */
         const COMMUTATION_STEP_T *step = &commutationTable[position];
         v4_floatingPhase = step->floatingPhase;
+
+        /* V5.0 PTG: per-sector sample offset.
+         *  Rising sector → short delay, sample near PWM valley (HS on).
+         *  Falling sector → half-period delay, sample near PWM peak (LS on)
+         *                   where the virtual neutral collapses and the
+         *                   comparator signal for a falling ZC is strongest.
+         * No-op when FEATURE_V5_PTG_ZC=0 (HAL_PTG_SetDelay is static-inline
+         * empty). */
+        HAL_PTG_SetDelay((step->zcPolarity > 0) ? V5_PTG_VALLEY_DELAY
+                                                : V5_PTG_PEAK_DELAY);
     }
 
     /* 6. Re-enable CCP ISRs */
@@ -776,7 +786,11 @@ void SectorPI_TelemGet(V4_TELEM_T *out)
         extern volatile uint32_t v4_offMidMismatch;
         out->offMidCapture  = v4_offMidCapture;
         out->offMidMismatch = v4_offMidMismatch;
-        out->ptgFires       = v5_ptgFires;  /* 0 when FEATURE_V5_PTG_ZC=0 */
+        out->ptgFires       = v5_ptgFires;       /* 0 when V5_PTG=0 */
+        out->ptgRisingAcc   = v5_ptgRisingAcc;
+        out->ptgRisingRej   = v5_ptgRisingRej;
+        out->ptgFallingAcc  = v5_ptgFallingAcc;
+        out->ptgFallingRej  = v5_ptgFallingRej;
     }
 }
 

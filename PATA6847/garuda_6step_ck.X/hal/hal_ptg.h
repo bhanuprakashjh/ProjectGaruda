@@ -33,6 +33,17 @@ extern "C" {
  *  the telemetry populator doesn't need to be flag-gated. */
 extern volatile uint32_t v5_ptgFires;
 
+/** Per-polarity ZC shadow counters — incremented in _PTG0Interrupt
+ *  while the motor is in CL. Accept = comp state matches what the
+ *  post-ZC state should be for the current sector polarity (0 for
+ *  rising, 1 for falling on the inverted ATA6847 comparator).
+ *  Reject = comp state still pre-ZC. These are shadow-only — the
+ *  motor PI does not consume these samples yet. */
+extern volatile uint32_t v5_ptgRisingAcc;
+extern volatile uint32_t v5_ptgRisingRej;
+extern volatile uint32_t v5_ptgFallingAcc;
+extern volatile uint32_t v5_ptgFallingRej;
+
 #if FEATURE_V5_PTG_ZC
 
 /** Initialise PTG to a stopped, known-safe state. Idempotent. */

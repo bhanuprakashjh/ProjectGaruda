@@ -138,6 +138,20 @@ def decode_ck_snapshot(data):
         s['ptgFires'] = struct.unpack_from('<I', data, 72)[0]
     else:
         s['ptgFires'] = 0
+    # V5.0 per-polarity shadow counters. The key diagnostic is pAcc%
+    # (falling accept / (falling accept+reject)). Target ≈ 50 if PTG
+    # actually catches falling ZCs; 0 means the peak-sample moment
+    # doesn't see a falling-ZC transition.
+    if len(data) >= 92:
+        s['ptgRisingAcc']  = struct.unpack_from('<I', data, 76)[0]
+        s['ptgRisingRej']  = struct.unpack_from('<I', data, 80)[0]
+        s['ptgFallingAcc'] = struct.unpack_from('<I', data, 84)[0]
+        s['ptgFallingRej'] = struct.unpack_from('<I', data, 88)[0]
+    else:
+        s['ptgRisingAcc']  = 0
+        s['ptgRisingRej']  = 0
+        s['ptgFallingAcc'] = 0
+        s['ptgFallingRej'] = 0
     # Derive the falling-ZC share.
     s['adcSetFalling'] = max(0, s['adcCaptureSet'] - s['adcSetRising'])
     # adcAlreadySet no longer shipped; left zeroed for legacy code.
@@ -408,11 +422,13 @@ def main():
     #           If R/F is ~50/50 the rising-vs-falling polarity hypothesis
     #           fails and we look elsewhere. If 100/0 or 0/100, one polarity
     #           class is wholly missing its ZC every commutation.
-    # V5.0 PTG column: raw _PTG0Interrupt fire count since motor start.
-    # With FEATURE_V5_PTG_ZC=1 expect ~40k/s at 40 kHz PWM.
-    # 0 otherwise. Low but nonzero indicates PTG starts but stalls.
-    print(f"{'Time':>7s} {'State':>8s} {'eRPM':>7s} {'Duty':>4s} {'Vbus':>6s} {'SP':>2s} {'eTP':>6s} {'Cap%':>5s} {'Bnk%':>5s} {'Mis%':>5s} {'Set%':>5s} {'R/F%':>7s} {'Fires':>9s} {'OffOK':>7s} {'OffBd':>7s} {'PTG':>8s}")
-    print("-" * 122)
+    # V5.0 PTG columns.
+    #   PTG  — _PTG0Interrupt raw fire count since motor start (~40 kHz)
+    #   pR%  — rising-sector accept rate (acc / (acc+rej)). Baseline > 0.
+    #   pF%  — falling-sector accept rate. The new data point. Was ~0
+    #          in all V4 paths (ADC valley, SCCP1 polling). Target ≈50.
+    print(f"{'Time':>7s} {'State':>8s} {'eRPM':>7s} {'Duty':>4s} {'Vbus':>6s} {'SP':>2s} {'eTP':>6s} {'Cap%':>5s} {'Bnk%':>5s} {'Mis%':>5s} {'Set%':>5s} {'R/F%':>7s} {'Fires':>9s} {'OffOK':>7s} {'OffBd':>7s} {'PTG':>8s} {'pR%':>4s} {'pF%':>4s}")
+    print("-" * 132)
 
     rows = []
     buf = b''
@@ -538,7 +554,13 @@ def main():
                     ptg_s = f"{ptg/1000:.1f}k"
                 else:
                     ptg_s = f"{ptg}"
-                print(f"{t:7.1f} {state_str:>8s} {snap['eRpm']:7d} {snap['dutyPct']:3d}% {snap['vbusV']:5.1f}V {sp_str:>2s} {etp:6d} {cap_pct:4d}% {bnk_pct:4.0f}% {mis_pct:4.0f}% {set_pct:4.0f}% {rf_s:>7s} {fires_s:>9s} {offok_s:>7s} {offbd_s:>7s} {ptg_s:>8s}{fault_str}")
+                pr_acc = snap.get('ptgRisingAcc', 0)
+                pr_rej = snap.get('ptgRisingRej', 0)
+                pf_acc = snap.get('ptgFallingAcc', 0)
+                pf_rej = snap.get('ptgFallingRej', 0)
+                pr_pct = (100 * pr_acc / (pr_acc + pr_rej)) if (pr_acc + pr_rej) > 0 else 0
+                pf_pct = (100 * pf_acc / (pf_acc + pf_rej)) if (pf_acc + pf_rej) > 0 else 0
+                print(f"{t:7.1f} {state_str:>8s} {snap['eRpm']:7d} {snap['dutyPct']:3d}% {snap['vbusV']:5.1f}V {sp_str:>2s} {etp:6d} {cap_pct:4d}% {bnk_pct:4.0f}% {mis_pct:4.0f}% {set_pct:4.0f}% {rf_s:>7s} {fires_s:>9s} {offok_s:>7s} {offbd_s:>7s} {ptg_s:>8s} {pr_pct:3.0f}% {pf_pct:3.0f}%{fault_str}")
 
                 rows.append({
                     'time': round(t, 3),
@@ -667,6 +689,10 @@ def main():
                     'off_mid_capture':   snap.get('offMidCapture', 0),
                     'off_mid_mismatch':  snap.get('offMidMismatch', 0),
                     'ptg_fires':         snap.get('ptgFires', 0),
+                    'ptg_rising_acc':    snap.get('ptgRisingAcc', 0),
+                    'ptg_rising_rej':    snap.get('ptgRisingRej', 0),
+                    'ptg_falling_acc':   snap.get('ptgFallingAcc', 0),
+                    'ptg_falling_rej':   snap.get('ptgFallingRej', 0),
                 })
 
             time.sleep(0.01)

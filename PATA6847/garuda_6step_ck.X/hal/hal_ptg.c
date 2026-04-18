@@ -19,14 +19,37 @@
 
 #include "hal_ptg.h"
 
-/* Counter is defined unconditionally so telemetry code can read it
- * without a flag gate. It stays at 0 when FEATURE_V5_PTG_ZC=0 because
- * the ISR that increments it is also only compiled with the flag on. */
-volatile uint32_t v5_ptgFires = 0;
+/* Counters defined unconditionally so telemetry code can read them
+ * without a flag gate. They stay at 0 when FEATURE_V5_PTG_ZC=0 because
+ * the ISR that increments them is also only compiled with the flag on. */
+volatile uint32_t v5_ptgFires      = 0;
+volatile uint32_t v5_ptgRisingAcc  = 0;
+volatile uint32_t v5_ptgRisingRej  = 0;
+volatile uint32_t v5_ptgFallingAcc = 0;
+volatile uint32_t v5_ptgFallingRej = 0;
 
 #if FEATURE_V5_PTG_ZC
 
 #include <xc.h>
+#include "hal_capture.h"
+#include "../motor/sector_pi.h"  /* for SectorPI_IsRunning / SectorPI_GetPhase */
+
+/* The floating-phase GPIO-read logic lives in garuda_service.c as a
+ * static inline. Replicate here so we can read BEMF from the PTG ISR
+ * without exposing the static symbol. v4_floatingPhase itself is an
+ * extern volatile global written in Commutate. */
+extern volatile uint8_t v4_floatingPhase;
+extern volatile bool    v4_spActive;
+
+static inline uint8_t ReadBemfCompLocal(void)
+{
+    switch (v4_floatingPhase) {
+        case 0:  return _RC6;
+        case 1:  return _RC7;
+        case 2:  return _RD10;
+        default: return 0;
+    }
+}
 
 /* ── PTG step-command opcodes (CMD<3:0> in upper nibble) ─────────── */
 #define PTG_OP_CTRL     (0x0u << 4)   /* 0x00 — PTGCTRL */
@@ -97,13 +120,39 @@ void HAL_PTG_SetDelay(uint16_t ptgTicks)
 }
 
 /* ── PTG0 ISR ─────────────────────────────────────────────────────── */
-/* V5.0-step1 body: just count. Per-sector BEMF accept logic lands in
- * a subsequent commit after we verify on the bench that the ISR fires
- * at the expected rate. */
+/* Fires at (PWM valley + PTGT0LIM PTG ticks). PTGT0LIM is reloaded by
+ * Commutate every sector: rising sectors use V5_PTG_VALLEY_DELAY (small
+ * offset, sample at ON midpoint), falling sectors use V5_PTG_PEAK_DELAY
+ * (sample at OFF midpoint) — different PWM phases for different polarity
+ * physics.
+ *
+ * Accept logic (inverted ATA6847 comparator):
+ *   rising sector  → post-ZC comp = 0 (BEMF has crossed upward)
+ *   falling sector → post-ZC comp = 1 (BEMF has crossed downward)
+ *
+ * Shadow only — does not set v4_captureValid. Once the counter ratio
+ * confirms falling sectors genuinely yield accept>>reject, the next V5
+ * step promotes this to a real capture source. */
 void __attribute__((interrupt, no_auto_psv)) _PTG0Interrupt(void)
 {
     _PTG0IF = 0;
     v5_ptgFires++;
+
+    /* Guard on motor state so idle runs and OL_RAMP don't pollute the
+     * counters. SP mode has its own CCP-based capture path. */
+    if (v4_spActive || !SectorPI_IsRunning() || SectorPI_GetPhase() != 3)
+        return;
+
+    uint8_t comp = ReadBemfCompLocal();
+    bool    rising = HAL_Capture_IsRisingZc();
+
+    if (rising) {
+        if (comp == 0) v5_ptgRisingAcc++;
+        else           v5_ptgRisingRej++;
+    } else {
+        if (comp == 1) v5_ptgFallingAcc++;
+        else           v5_ptgFallingRej++;
+    }
 }
 
 #endif /* FEATURE_V5_PTG_ZC */
