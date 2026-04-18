@@ -40,6 +40,16 @@ typedef struct {
     bool     spMode;        /* single-pulse mode active */
     bool     spRequest;     /* single-pulse mode requested (may lag spMode) */
     uint32_t erpmNow;       /* instantaneous eRPM from timerPeriod */
+    /* ADC midpoint ZC capture-rate diagnostics (Mode 1).
+     * 32-bit — ADC fires at 40kHz so uint16 wraps every ~1.6s. */
+    uint32_t adcBlankReject;        /* ADC fired pre-blanking-end */
+    uint32_t adcStateMismatch;      /* past blanking, GPIO != expected */
+    uint32_t adcCaptureSet;         /* set v4_captureValid (candidate) */
+    uint32_t adcSetRising;          /* subset of adcCaptureSet on rising-ZC sectors (0,2,4) */
+    uint32_t adcAlreadySet;         /* skipped — already true */
+    uint32_t commutateNoCapture;    /* Commutate found capValue == SENTINEL */
+    uint32_t offMidCapture;         /* falling ZC confirmed at PWM OFF-mid */
+    uint32_t offMidMismatch;        /* falling ZC wrong at PWM OFF-mid */
 } V4_TELEM_T;
 
 void     SectorPI_Init(void);

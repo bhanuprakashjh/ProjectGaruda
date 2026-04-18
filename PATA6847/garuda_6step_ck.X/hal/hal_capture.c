@@ -12,6 +12,7 @@
 #if FEATURE_V4_SECTOR_PI
 
 #include <xc.h>
+#include "../motor/v4_params.h"
 
 /* Shared state */
 volatile uint16_t v4_lastCaptureHR = 0;
@@ -72,6 +73,23 @@ void HAL_Capture_Init(void)
         ccp2HrOffset = (uint16_t)(hr - c2);
         ccp5HrOffset = (uint16_t)(hr - c5);
     }
+
+    /* ── SCCP1: 40 kHz periodic timer for OFF-mid falling ZC ──────
+     * Fires CCT1IF at PWM peak (12.5 µs offset from valley).
+     * Fp/4 = 25 MHz → 40 ns/tick, period 625 = 25 µs = PWM period.
+     * Counter seeded at half-period in HAL_Capture_Start to align. */
+    CCP1CON1L = 0; CCP1CON1H = 0; CCP1CON2L = 0; CCP1CON2H = 0;
+    CCP1CON1Lbits.CCSEL  = 0;          /* Timer mode */
+    CCP1CON1Lbits.T32    = 0;          /* 16-bit */
+    CCP1CON1Lbits.CLKSEL = 0b000;      /* Fp = 100 MHz */
+    CCP1CON1Lbits.TMRPS  = 0b10;       /* 1:4 → 25 MHz, 40 ns/tick */
+    CCP1CON1Lbits.MOD    = 0b0000;     /* Auto-reload on period match */
+    CCP1PRL = (FCY / 4 / PWMFREQUENCY_HZ) - 2;  /* 623 = 24.96 µs — deliberate drift vs PWM */
+    _CCT1IP = 2;                        /* Priority 2: below ADC(3) */
+    _CCT1IF = 0;
+    _CCT1IE = 0;                        /* Enabled at motor start */
+    _CCP1IF = 0; _CCP1IE = 0;
+    CCP1CON1Lbits.CCPON = 1;           /* Start free-running */
 }
 
 void HAL_Capture_Start(void)
@@ -82,12 +100,19 @@ void HAL_Capture_Start(void)
     v4_captureValid = false;
     _CCP2IF = 0; _CCP5IF = 0;
     _CCP2IE = 1; _CCP5IE = 1;   /* ISR drains FIFO continuously */
+
+    /* Seed SCCP1 counter at half-period so it fires at PWM peak.
+     * ADC fires at valley (counter=0); we want SCCP1 12.5 µs later. */
+    CCP1TMRL = CCP1PRL / 2;
+    _CCT1IF = 0;
+    _CCT1IE = 1;
 }
 
 void HAL_Capture_Stop(void)
 {
     _CCP2IE = 0; _CCP5IE = 0;
     _CCP2IF = 0; _CCP5IF = 0;
+    _CCT1IE = 0; _CCT1IF = 0;  /* Stop off-mid ISR */
     v4_captureValid = false;
 }
 
@@ -109,11 +134,13 @@ void HAL_Capture_Configure(uint8_t rpPin, bool risingZc)
 
 void HAL_Capture_SetBlanking(uint16_t sectorPeriodHR)
 {
-    /* Blanking: ignore captures in first 40% of sector.
-     * Demagnetization on the floating phase lasts ~30-35% of
-     * the sector. True ZC is at ~50%. 40% blanking rejects
-     * all demagnetization noise while keeping the ZC window. */
-    blankingEndHR = (uint16_t)(commTimeHR + ((uint32_t)sectorPeriodHR * 40 / 100));
+    /* Blanking: ignore captures in the first v4Params.blankingPct% of the
+     * sector. Demagnetization typically lasts ~30-35% of the sector and
+     * true ZC is around 50%. Default 40% rejects demag while preserving
+     * the ZC window — runtime tunable via GUI for per-board / per-motor
+     * adjustment. */
+    uint8_t pct = v4Params.blankingPct;
+    blankingEndHR = (uint16_t)(commTimeHR + ((uint32_t)sectorPeriodHR * pct / 100));
 }
 
 bool HAL_Capture_IsRisingZc(void) { return currentRisingZc; }

@@ -109,31 +109,47 @@ def decode_ck_snapshot(data):
     # s['ilimActive'] = data[39] != 0  # overwritten by erpmTP high byte
     s['systemTick'] = struct.unpack_from('<I', data, 40)[0]
     s['uptime'] = struct.unpack_from('<I', data, 44)[0]
-    if len(data) >= 52:
-        s['zcLatencyPct'] = data[48]
-        s['zcBlankPct'] = data[49]
-        s['zcBypassCount'] = struct.unpack_from('<H', data, 50)[0]
-    else:
-        s['zcLatencyPct'] = 0
-        s['zcBlankPct'] = 0
-        s['zcBypassCount'] = 0
-    # V3 ZC diagnostics
+    # Slots 48-63 carry V4 capture-rate diagnostics (overlay over V3
+    # zcLatency/zcBlank/zcMode/etc. fields which V4 doesn't populate).
+    # 4 × uint32 — firmware upgraded from uint16 because ADC fires at
+    # 40 kHz and uint16 wraps every ~1.6 s.
+    # Slot 60 was adcAlreadySet, now adcSetRising (polarity split).
     if len(data) >= 64:
-        s['zcMode'] = data[52]
-        s['actualForcedComm'] = data[53]
-        s['zcTimeoutCount'] = struct.unpack_from('<H', data, 54)[0]
-        s['risingZcCount'] = struct.unpack_from('<H', data, 56)[0]
-        s['fallingZcCount'] = struct.unpack_from('<H', data, 58)[0]
-        s['risingTimeouts'] = struct.unpack_from('<H', data, 60)[0]
-        s['fallingTimeouts'] = struct.unpack_from('<H', data, 62)[0]
+        s['adcBlankReject']     = struct.unpack_from('<I', data, 48)[0]
+        s['adcStateMismatch']   = struct.unpack_from('<I', data, 52)[0]
+        s['adcCaptureSet']      = struct.unpack_from('<I', data, 56)[0]
+        s['adcSetRising']       = struct.unpack_from('<I', data, 60)[0]
     else:
-        s['zcMode'] = 0
-        s['actualForcedComm'] = 0
-        s['zcTimeoutCount'] = 0
-        s['risingZcCount'] = 0
-        s['fallingZcCount'] = 0
-        s['risingTimeouts'] = 0
-        s['fallingTimeouts'] = 0
+        s['adcBlankReject'] = 0
+        s['adcStateMismatch'] = 0
+        s['adcCaptureSet'] = 0
+        s['adcSetRising'] = 0
+    # OFF-mid falling ZC diagnostic (SCCP1 ISR at PWM peak)
+    if len(data) >= 72:
+        s['offMidCapture']  = struct.unpack_from('<I', data, 64)[0]
+        s['offMidMismatch'] = struct.unpack_from('<I', data, 68)[0]
+    else:
+        s['offMidCapture'] = 0
+        s['offMidMismatch'] = 0
+    # Derive the falling-ZC share.
+    s['adcSetFalling'] = max(0, s['adcCaptureSet'] - s['adcSetRising'])
+    # adcAlreadySet no longer shipped; left zeroed for legacy code.
+    s['adcAlreadySet'] = 0
+    # Derived: Commutate-sectors where capture was missing or filter-rejected.
+    # goodZc = sectorCount low 16 (total Commutates), icAccepted = diagCaptures.
+    # (Can't use icFalse/diagPiRuns — it only counts accepted captures.)
+    s['commutateNoCapture'] = max(0, s.get('goodZc', 0) - s.get('icAccepted', 0))
+    # Legacy V3 names kept zeroed for downstream code that still reads them.
+    s['zcLatencyPct'] = 0
+    s['zcBlankPct'] = 0
+    s['zcBypassCount'] = 0
+    s['zcMode'] = 0
+    s['actualForcedComm'] = 0
+    s['zcTimeoutCount'] = 0
+    s['risingZcCount'] = 0
+    s['fallingZcCount'] = 0
+    s['risingTimeouts'] = 0
+    s['fallingTimeouts'] = 0
     # V4 per-step 0..5 counters (88 bytes total)
     if len(data) >= 88:
         for i in range(6):
@@ -377,8 +393,16 @@ def main():
     print()
     ZC_MODES = ['ACQ', 'TRK', 'RCV']
     SYNC_MODES = ['.', 'S', 'O']  # OFF, SHADOW, OWNED
-    print(f"{'Time':>7s} {'State':>8s} {'ZcM':>3s} {'eRPM':>7s} {'Duty':>4s} {'Vbus':>6s} {'SP':>2s} {'eTP':>6s} {'Mrgn':>5s} {'SErr':>5s} {'ST_h':>5s} {'Cap':>5s} {'SM':>2s} {'SGd':>3s} {'SAcc':>5s} {'Corr':>5s} {'Lkd':>3s}")
-    print("-" * 120)
+    # V4 capture-rate diag columns:
+    #   Cap%  = diagCaptures / sectorCount (Commutate sectors with a cap).
+    #   Bnk%  = adcBlankReject  / total-ADC-fires
+    #   Mis%  = adcStateMismatch/ total-ADC-fires
+    #   R/F   = "rising/falling" capture split ratio, as % of total Set.
+    #           If R/F is ~50/50 the rising-vs-falling polarity hypothesis
+    #           fails and we look elsewhere. If 100/0 or 0/100, one polarity
+    #           class is wholly missing its ZC every commutation.
+    print(f"{'Time':>7s} {'State':>8s} {'eRPM':>7s} {'Duty':>4s} {'Vbus':>6s} {'SP':>2s} {'eTP':>6s} {'Cap%':>5s} {'Bnk%':>5s} {'Mis%':>5s} {'Set%':>5s} {'R/F%':>7s} {'Fires':>9s} {'OffOK':>7s} {'OffBd':>7s}")
+    print("-" * 112)
 
     rows = []
     buf = b''
@@ -447,7 +471,57 @@ def main():
                 else:
                     sp_str = '  '
                 etp = snap.get('erpmTP', 0)
-                print(f"{t:7.1f} {state_str:>8s} {zc_mode_str:>3s} {snap['eRpm']:7d} {snap['dutyPct']:3d}% {snap['vbusV']:5.1f}V {sp_str:>2s} {etp:6d} {snap.get('sched_margin_hr', snap.get('schedMarginHR',0)):5d} {serr:+5d} {sthat:5d} {capv:5d} {sm_str:>2s} {sgood:3d} {sacc:5d} {corr:+5d} {'Y' if locked else '.':>3s}{fault_str}")
+                # Capture acceptance ratio at the Commutate side:
+                # diagCaptures / sectorCount. icAccepted=diagCaptures,
+                # goodZc=sectorCount low 16 bits (total Commutates).
+                # NOT diagPiRuns — that increments on the SAME condition as
+                # diagCaptures (capValue != SENTINEL), so the ratio would
+                # always be 100%. sectorCount is bumped every Commutate
+                # regardless of capture outcome → honest denominator.
+                # 16-bit wraps at 1700 comm/s → 38s; ratio stays meaningful
+                # over a few-second window, absolute counts can drift.
+                _acc = snap.get('icAccepted', 0)
+                _sec = snap.get('goodZc', 0)
+                cap_pct = (100 * _acc // _sec) if _sec > 0 else 0
+                # ADC diagnostic counters are uint32. Show as % of total
+                # ADC fires for Bnk/Mis/Set (steady-state ratios). R/F shows
+                # rising-vs-falling capture split, as % of total Set.
+                bnk = snap.get('adcBlankReject', 0)
+                mis = snap.get('adcStateMismatch', 0)
+                cset = snap.get('adcCaptureSet', 0)
+                cset_r = snap.get('adcSetRising', 0)
+                cset_f = snap.get('adcSetFalling', 0)
+                # "Fires" here is an ADC-fire estimate. With Als dropped from
+                # telemetry the exact total isn't available; approximate as
+                # Bnk+Mis+Set. This understates by the Als count (ADC fires
+                # skipped between a Set and the Commutate consume) — real
+                # total is higher, but Bnk%/Mis%/Set% ratios are still valid
+                # relative to each other.
+                fires_approx = bnk + mis + cset
+                if fires_approx > 0:
+                    bnk_pct = 100 * bnk / fires_approx
+                    mis_pct = 100 * mis / fires_approx
+                    set_pct = 100 * cset / fires_approx
+                else:
+                    bnk_pct = mis_pct = set_pct = 0.0
+                if cset > 0:
+                    rising_pct = 100 * cset_r / cset
+                else:
+                    rising_pct = 0
+                falling_pct = 100 - rising_pct if cset > 0 else 0
+                rf_s = f"{rising_pct:2.0f}/{falling_pct:2.0f}"
+                # Format Fires compactly: 1234, 12.3k, 1.23M, 12.3M
+                if fires_approx >= 1_000_000:
+                    fires_s = f"{fires_approx/1_000_000:.2f}M"
+                elif fires_approx >= 10_000:
+                    fires_s = f"{fires_approx/1000:.1f}k"
+                else:
+                    fires_s = f"{fires_approx}"
+                offok = snap.get('offMidCapture', 0)
+                offbd = snap.get('offMidMismatch', 0)
+                offok_s = f"{offok/1000:.1f}k" if offok >= 10000 else f"{offok}"
+                offbd_s = f"{offbd/1000:.1f}k" if offbd >= 10000 else f"{offbd}"
+                print(f"{t:7.1f} {state_str:>8s} {snap['eRpm']:7d} {snap['dutyPct']:3d}% {snap['vbusV']:5.1f}V {sp_str:>2s} {etp:6d} {cap_pct:4d}% {bnk_pct:4.0f}% {mis_pct:4.0f}% {set_pct:4.0f}% {rf_s:>7s} {fires_s:>9s} {offok_s:>7s} {offbd_s:>7s}{fault_str}")
 
                 rows.append({
                     'time': round(t, 3),
@@ -567,6 +641,14 @@ def main():
                     'sync_cluster_count': snap.get('syncClusterCount', 0),
                     'sync_accepts': snap.get('syncAccepts', 0),
                     'sync_misses': snap.get('syncMisses', 0),
+                    # V4 capture-rate diag (uint32 raw counts).
+                    'adc_blank_reject':  snap.get('adcBlankReject', 0),
+                    'adc_state_mismatch': snap.get('adcStateMismatch', 0),
+                    'adc_capture_set':   snap.get('adcCaptureSet', 0),
+                    'adc_set_rising':    snap.get('adcSetRising', 0),
+                    'adc_set_falling':   snap.get('adcSetFalling', 0),
+                    'off_mid_capture':   snap.get('offMidCapture', 0),
+                    'off_mid_mismatch':  snap.get('offMidMismatch', 0),
                 })
 
             time.sleep(0.01)

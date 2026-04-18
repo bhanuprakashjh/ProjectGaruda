@@ -52,6 +52,7 @@ SRCS = main.c \
        motor/startup.c \
        motor/bemf_zc.c \
        motor/sector_pi.c \
+       motor/v4_params.c \
        gsp/gsp.c \
        gsp/gsp_commands.c \
        gsp/gsp_snapshot.c \

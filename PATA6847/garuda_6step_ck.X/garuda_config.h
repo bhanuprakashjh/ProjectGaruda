@@ -14,7 +14,7 @@
 
 /* ── Motor Profile Selection ──────────────────────────────────────── */
 #ifndef MOTOR_PROFILE
-#define MOTOR_PROFILE   2   /* 0=Hurst, 1=A2212, 2=2810 */
+#define MOTOR_PROFILE   1   /* 0=Hurst, 1=A2212, 2=2810 */
 #endif
 
 /* ── Clock ─────────────────────────────────────────────────────────── */
@@ -763,10 +763,18 @@
 #define V4_CAPTURE_ISR_PRIORITY 5       /* ZC edge capture — below sector */
 
 /* ZC detection method:
- * 0 = CCP edge capture + 3-read deglitch (works to ~100k eRPM)
- * 1 = PWM-midpoint sampling in ADC ISR (reaches 119k but late timestamp)
+ * 0 = CCP edge capture + 3-read deglitch. Tested 2026-04-16: same 49%
+ *     Cap% as Mode 1, but motor desynced at ~110k eRPM. The deglitch
+ *     state-check convention in CCP2/CCP5 ISRs (garuda_service.c) is
+ *     suspect — appears to be checking pre-edge state instead of
+ *     post-edge state, which would mean the only Sets that fire are on
+ *     comparator noise spikes rather than real ZCs.
+ * 1 = PWM-midpoint sampling in ADC ISR. Reaches 196k eRPM stably with
+ *     49% Cap% (rising sectors only — falling sectors past blanking
+ *     never see a stable comp state, ATA6847 has no hysteresis and
+ *     falling-sector BEMF hovers near neutral). PROVEN BASELINE.
  * 2 = Hybrid: ADC midpoint confirms ZC state, CCP provides accurate
- *     timestamp. Mask CCP after acceptance like AM32. Best of both. */
+ *     timestamp. Mask CCP after acceptance like AM32. Untested in V4. */
 #define FEATURE_V4_MIDPOINT_ZC  1
 
 #endif /* FEATURE_V4_SECTOR_PI */

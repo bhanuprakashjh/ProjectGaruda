@@ -116,7 +116,7 @@ void HAL_PWM_Init(void)
     PG1IOCONL = 0x3000;     /* Start with overrides ON, OVRDAT=00 (float: H off, L off) */
     PG1IOCONH = 0x000E;     /* PENL=1, PENH=1, PMOD=complementary, POLH=active-low */
     PG1EVTL = 0x0118;       /* UPDTRG=TrigA, PGTRGSEL=EOC, ADTR1EN1=enabled */
-    PG1EVTH = 0x0040;       /* ADTR2EN2=enabled (Trigger2 for Vbus/pot) */
+    PG1EVTH = 0x0040;       /* ADTR2EN1=enabled (Trigger2 from TRIGA for Vbus/pot) */
     PG1FPCIL = PG1FPCIH = 0x00;
     PG1CLPCIL = PG1CLPCIH = 0x00;
     PG1FFPCIL = PG1FFPCIH = 0x00;

@@ -68,6 +68,7 @@
       <itemPath>motor/startup.c</itemPath>
       <itemPath>motor/bemf_zc.c</itemPath>
       <itemPath>motor/sector_pi.c</itemPath>
+      <itemPath>motor/v4_params.c</itemPath>
       <itemPath>gsp/gsp.c</itemPath>
       <itemPath>gsp/gsp_commands.c</itemPath>
       <itemPath>gsp/gsp_snapshot.c</itemPath>

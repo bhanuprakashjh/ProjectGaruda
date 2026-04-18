@@ -31,6 +31,7 @@
 
 #if FEATURE_V4_SECTOR_PI
 #include "motor/sector_pi.h"
+#include "motor/v4_params.h"
 #include "hal/hal_com_timer.h"
 #include "hal/hal_capture.h"
 #else
@@ -199,6 +200,26 @@ extern volatile uint16_t v4_blankingEndHR;
 extern volatile uint16_t v4_timerPeriod;  /* from sector_pi.c */
 extern volatile bool     v4_spActive;     /* from sector_pi.c: SP mode flag */
 
+/* ── ADC midpoint ZC diagnostic counters (Mode 1) ─────────────── */
+/* Used to diagnose why capture rate sits at ~50% at high speed.
+ * Reset on motor start in SectorPI_Start().
+ * 32-bit — at 40kHz ADC rate, uint16 wraps every ~1.6s making
+ * multi-second tests unusable. */
+volatile uint32_t v4_adcBlankReject  = 0;  /* ADC fired pre-blanking-end */
+volatile uint32_t v4_adcStateMismatch = 0; /* past blanking, wrong GPIO  */
+volatile uint32_t v4_adcCaptureSet   = 0;  /* set v4_captureValid       */
+volatile uint32_t v4_adcAlreadySet   = 0;  /* skipped — already true    */
+/* Polarity split: sets that happened on rising-ZC sectors (0,2,4).
+ * Falling portion is (v4_adcCaptureSet - v4_adcSetRising).
+ * Uint32 data shows capture rate is a flat 49% across all speeds —
+ * structural, not speed-dependent. This counter tests the hypothesis
+ * that one polarity class (rising vs falling) misses every time. */
+volatile uint32_t v4_adcSetRising    = 0;
+
+/* SCCP1 off-mid falling ZC diagnostic (fires at PWM peak) */
+volatile uint32_t v4_offMidCapture   = 0;
+volatile uint32_t v4_offMidMismatch  = 0;
+
 #if FEATURE_V4_MIDPOINT_ZC >= 1
 /* (midpoint modes also need these) */
 #endif
@@ -218,33 +239,51 @@ void __attribute__((interrupt, auto_psv)) _ADCInterrupt(void)
     (void)ADCBUF0;  /* Must read to clear data-ready */
 
 #if FEATURE_V4_MIDPOINT_ZC == 1
-    /* Mode 1: Pure midpoint — ADC ISR owns ZC detection entirely.
-     * In SP mode MPER=0xFFFF destroys the ADC trigger cadence, so
-     * midpoint sampling is meaningless and must be skipped. The CCP
-     * ISRs take over as ZC source while v4_spActive is true. */
     if (!v4_spActive
-        && SectorPI_IsRunning() && SectorPI_GetPhase() == 3
-        && !v4_captureValid)
+        && SectorPI_IsRunning() && SectorPI_GetPhase() == 3)
     {
-        uint16_t nowHR = CCP4TMRL;
-        if ((int16_t)(nowHR - v4_blankingEndHR) >= 0)
+        if (v4_captureValid)
         {
-            uint8_t comp = ReadBEMFComp();
-            uint8_t expected = HAL_Capture_IsRisingZc() ? 1 : 0;
-            if (comp == expected)
+            v4_adcAlreadySet++;
+        }
+        else
+        {
+            uint16_t nowHR = CCP4TMRL;
+            if ((int16_t)(nowHR - v4_blankingEndHR) < 0)
             {
-                v4_lastCaptureHR = nowHR;
-                v4_captureValid = true;
+                v4_adcBlankReject++;
+            }
+            else
+            {
+                uint8_t comp = ReadBEMFComp();
+                uint8_t expected = HAL_Capture_IsRisingZc() ? 1 : 0;
+                if (comp != expected)
+                {
+                    v4_adcStateMismatch++;
+                }
+                else
+                {
+                    bool isRising = HAL_Capture_IsRisingZc();
+                    v4_adcCaptureSet++;
+                    if (isRising) v4_adcSetRising++;
+
+                    bool feedPi;
+                    switch (v4Params.piFeedPolarity)
+                    {
+                        case 1:  feedPi = isRising;   break;
+                        case 2:  feedPi = !isRising;  break;
+                        default: feedPi = true;       break;
+                    }
+                    if (feedPi)
+                    {
+                        v4_lastCaptureHR = nowHR;
+                        v4_captureValid = true;
+                    }
+                }
             }
         }
     }
 #elif FEATURE_V4_MIDPOINT_ZC == 2
-    /* Mode 2: Hybrid — midpoint confirms ZC state, CCP provides timestamp.
-     * Read comparator at PWM center. If post-ZC state detected, set
-     * confirmation flag. Next CCP edge that fires will be accepted as
-     * the real ZC with hardware-accurate timestamp.
-     * Like AM32 maskPhaseInterrupts but inverted: we GATE the CCP
-     * acceptance on midpoint confirmation instead of masking. */
     if (SectorPI_IsRunning() && SectorPI_GetPhase() == 3
         && !v4_captureValid && !v4_zcConfirmed)
     {
@@ -255,13 +294,36 @@ void __attribute__((interrupt, auto_psv)) _ADCInterrupt(void)
             uint8_t expected = HAL_Capture_IsRisingZc() ? 1 : 0;
             if (comp == expected)
             {
-                v4_zcConfirmed = true;  /* CCP ISR can now accept next edge */
+                v4_zcConfirmed = true;
             }
         }
     }
 #endif
 
     IFS5bits.ADCIF = 0;
+}
+
+/* ── SCCP1 ISR: falling ZC level check at PWM OFF-mid ────────────
+ * Fires at 40 kHz, phase-offset from ADC ISR by 12.5 µs (PWM peak).
+ * Independent timer — no PWM trigger chain involvement. */
+void __attribute__((interrupt, no_auto_psv)) _CCT1Interrupt(void)
+{
+    _CCT1IF = 0;
+#if FEATURE_V4_MIDPOINT_ZC == 1
+    if (!v4_spActive
+        && SectorPI_IsRunning() && SectorPI_GetPhase() == 3
+        && !HAL_Capture_IsRisingZc())
+    {
+        uint16_t nowHR = CCP4TMRL;
+        if ((int16_t)(nowHR - v4_blankingEndHR) >= 0)
+        {
+            if (ReadBEMFComp() == 1)
+                v4_offMidCapture++;
+            else
+                v4_offMidMismatch++;
+        }
+    }
+#endif
 }
 
 /* ── V4 Commutation ISR (SCCP3 sector timer period match) ─────── */
@@ -319,6 +381,7 @@ static inline uint8_t ReadBEMFComp(void)
 volatile uint16_t v4_blankingEndHR = 0;
 /* Expected ZC HR timestamp (center of corridor for SP CCP ISR) */
 volatile uint16_t v4_expectedZcHR = 0;
+/* (v4_adc* counters declared earlier — used by ADC ISR above) */
 
 void __attribute__((interrupt, no_auto_psv)) _CCP2Interrupt(void)
 {
@@ -351,14 +414,22 @@ void __attribute__((interrupt, no_auto_psv)) _CCP2Interrupt(void)
         uint16_t hr = (uint16_t)(ts + HAL_Capture_GetCcp2Offset());
         if ((int16_t)(hr - v4_blankingEndHR) >= 0)
         {
-            /* Speed-adaptive deglitch + AM32 mask.
-             * Low speed (<60k): 3 reads — reject noise, BEMF weak.
-             * High speed (>60k): 1 read — BEMF strong, minimize
-             * ISR time, avoid spanning a PWM edge. */
+            /* CCP2 catches FALLING comp edges, which on the inverted
+             * ATA6847 = real rising-ZC (BEMF crosses neutral going UP →
+             * comp 1→0). After a real rising-ZC the comp settles at 0.
+             * Deglitch confirms post-edge state by reading 0; if the
+             * edge was a noise spike that bounced back to 1, the check
+             * fails and we reject.
+             *
+             * Bug fix 2026-04-16: original code checked `==1` here,
+             * which rejected every real ZC and only accepted noise
+             * bounces. Mode 0 R/F=0/100 + 49% Cap% confirmed the
+             * inversion. With the corrected `==0` check Mode 0 should
+             * capture both polarities at high rate. */
             bool accept;
             if (v4_timerPeriod < 260) {
                 /* High speed: single read */
-                accept = (ReadBEMFComp() == 1);
+                accept = (ReadBEMFComp() == 0);
             } else {
                 /* Low speed: 3-read deglitch */
                 uint8_t r1 = ReadBEMFComp();
@@ -368,12 +439,15 @@ void __attribute__((interrupt, no_auto_psv)) _CCP2Interrupt(void)
                 Nop(); Nop(); Nop(); Nop(); Nop();
                 Nop(); Nop(); Nop(); Nop(); Nop();
                 uint8_t r3 = ReadBEMFComp();
-                accept = (r1 == 1 && r2 == 1 && r3 == 1);
+                accept = (r1 == 0 && r2 == 0 && r3 == 0);
             }
             if (accept)
             {
                 v4_lastCaptureHR = hr;
                 v4_captureValid = true;
+                /* Polarity diagnostic — CCP2 fires on rising-ZC sectors. */
+                v4_adcCaptureSet++;
+                v4_adcSetRising++;
                 _CCP2IE = 0;
                 _CCP5IE = 0;
             }
@@ -422,9 +496,14 @@ void __attribute__((interrupt, no_auto_psv)) _CCP5Interrupt(void)
         uint16_t hr = (uint16_t)(ts + HAL_Capture_GetCcp5Offset());
         if ((int16_t)(hr - v4_blankingEndHR) >= 0)
         {
+            /* CCP5 catches RISING comp edges, which on the inverted
+             * ATA6847 = real falling-ZC (BEMF crosses neutral going
+             * DOWN → comp 0→1). After a real falling-ZC the comp
+             * settles at 1. Deglitch confirms by reading 1.
+             * (See CCP2 comment for the inversion bug fix history.) */
             bool accept;
             if (v4_timerPeriod < 260) {
-                accept = (ReadBEMFComp() == 0);
+                accept = (ReadBEMFComp() == 1);
             } else {
                 uint8_t r1 = ReadBEMFComp();
                 Nop(); Nop(); Nop(); Nop(); Nop();
@@ -433,14 +512,23 @@ void __attribute__((interrupt, no_auto_psv)) _CCP5Interrupt(void)
                 Nop(); Nop(); Nop(); Nop(); Nop();
                 Nop(); Nop(); Nop(); Nop(); Nop();
                 uint8_t r3 = ReadBEMFComp();
-                accept = (r1 == 0 && r2 == 0 && r3 == 0);
+                accept = (r1 == 1 && r2 == 1 && r3 == 1);
             }
             if (accept)
             {
-                v4_lastCaptureHR = hr;
-                v4_captureValid = true;
-                _CCP2IE = 0;
-                _CCP5IE = 0;
+                /* EXPERIMENT 2026-04-16: Mode 0 with corrected deglitch
+                 * captured both polarities but PI desynced because rising
+                 * and falling have different relative capture timing.
+                 * Bench data showed sustained 200k+ eRPM peaks but no
+                 * stability. Disable falling-sector PI feeding by NOT
+                 * setting v4_captureValid here — falling captures still
+                 * count for diagnostics but don't drive the loop. PI sees
+                 * rising-only (like proven Mode 1) but with hardware-edge
+                 * precision instead of PWM-valley sample noise. */
+                v4_adcCaptureSet++;       /* diagnostic only */
+                /* v4_lastCaptureHR = hr;  // intentionally not set */
+                /* v4_captureValid = true; // intentionally not set */
+                /* _CCP2IE = 0; _CCP5IE = 0;  // keep ISRs running */
             }
         }
     }

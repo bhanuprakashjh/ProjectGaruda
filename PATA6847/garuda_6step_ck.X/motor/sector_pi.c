@@ -21,6 +21,7 @@
 #include "../hal/hal_capture.h"
 #include "../hal/port_config.h"
 #include "commutation.h"
+#include "v4_params.h"
 
 /* ── Sentinel for "no comparator edge this sector" ──────────────── */
 #define CAP_SENTINEL    0xFFFFU
@@ -104,6 +105,8 @@ volatile uint16_t diagCaptures;
 volatile uint16_t diagPiRuns;
 volatile uint16_t diagLastCapValue;
 volatile int16_t  diagDelta;
+/* Commutate ISR: capValue == SENTINEL (no valid capture this sector) */
+volatile uint32_t diagCommutateNoCapture;
 
 /* Corridor good-streak: PI only runs after 12 consecutive
  * sectors with a valid corridor capture. */
@@ -162,7 +165,7 @@ static void EnterCL(void)
      * T1 tick = 50µs = 78.125 SCCP ticks. */
     uint32_t hrPeriod = (uint32_t)rampStepPeriod * 625UL / 8UL;
     if (hrPeriod > 0xFFFF) hrPeriod = 0xFFFF;
-    if (hrPeriod < V4_MIN_PERIOD) hrPeriod = V4_MIN_PERIOD;
+    if (hrPeriod < v4Params.minPeriodHr) hrPeriod = v4Params.minPeriodHr;
 
     timerPeriod = (uint16_t)hrPeriod;
     integrator  = timerPeriod;
@@ -216,6 +219,11 @@ static void EnterCL(void)
 
 void SectorPI_Init(void)
 {
+    /* Load runtime tunables from compile-time defaults BEFORE the HAL
+     * inits run — HAL_Capture_SetBlanking and the PI loop both consume
+     * v4Params on first use. */
+    V4Params_InitDefaults();
+
     HAL_ComTimer_Init();   /* SCCP3 one-shot + SCCP4 HR (proven V3 pattern) */
     HAL_Capture_Init();
     running = false;
@@ -241,6 +249,27 @@ void SectorPI_Start(uint16_t vbusRaw)
     v4_spRequest = false;
     v4_spActive = false;
     HAL_PWM_SetSPFlag(false);
+
+    /* Reset capture-rate diagnostic counters (defined in garuda_service.c
+     * for the ADC ISR side, sector_pi.c for the Commutate side). Lets us
+     * read fresh ratios per run instead of accumulating across restarts. */
+    diagCaptures = 0;
+    diagPiRuns = 0;
+    diagCommutateNoCapture = 0;
+    extern volatile uint32_t v4_adcBlankReject;
+    extern volatile uint32_t v4_adcStateMismatch;
+    extern volatile uint32_t v4_adcCaptureSet;
+    extern volatile uint32_t v4_adcSetRising;
+    extern volatile uint32_t v4_adcAlreadySet;
+    v4_adcBlankReject = 0;
+    v4_adcStateMismatch = 0;
+    v4_adcCaptureSet = 0;
+    v4_adcSetRising = 0;
+    v4_adcAlreadySet = 0;
+    extern volatile uint32_t v4_offMidCapture;
+    extern volatile uint32_t v4_offMidMismatch;
+    v4_offMidCapture = 0;
+    v4_offMidMismatch = 0;
 
     /* Start alignment — Timer1 ISR drives via SectorPI_OlTick() */
     alignCounter = ALIGN_TIME_COUNTS;
@@ -379,7 +408,15 @@ void SectorPI_Commutate(void)
             capValue = elapsed;
             diagCaptures++;
         }
+        else
+        {
+            diagCommutateNoCapture++;  /* capture present but past filter */
+        }
         v4_captureValid = false;
+    }
+    else
+    {
+        diagCommutateNoCapture++;      /* no capture at all this sector */
     }
     lastCommHR = thisCommHR;
 
@@ -506,18 +543,26 @@ void SectorPI_Commutate(void)
          * have different timing semantics than midpoint-ADC. */
         if (!v4_spActive)
         {
-            uint16_t setValue = (uint16_t)(((uint32_t)V4_ADVANCE_PLUS_30_FP8
-                                            * timerPeriod) >> 8)
+            /* Snapshot runtime params once per cycle. They're written by
+             * the GSP set-param path on a low-priority code path; reading
+             * to locals here keeps the ISR consistent within a cycle even
+             * if the GUI changes a value mid-update. */
+            uint16_t advFp8     = v4Derived.advancePlus30Fp8;
+            uint8_t  kpShift    = v4Params.piKpShift;
+            uint8_t  kiShift    = v4Params.piKiShift;
+            uint16_t minPeriod  = v4Params.minPeriodHr;
+
+            uint16_t setValue = (uint16_t)(((uint32_t)advFp8 * timerPeriod) >> 8)
                                 + V4_RC_DELAY_HR;
             int32_t delta = (int32_t)capValue - (int32_t)setValue;
 
-            int32_t newInt = (int32_t)integrator + (delta >> V4_KI_SHIFT);
-            if (newInt < V4_MIN_PERIOD) newInt = V4_MIN_PERIOD;
+            int32_t newInt = (int32_t)integrator + (delta >> kiShift);
+            if (newInt < minPeriod) newInt = minPeriod;
             if (newInt > 0xFFFF) newInt = 0xFFFF;
             integrator = (uint16_t)newInt;
 
-            int32_t newPer = (int32_t)integrator + (delta >> V4_KP_SHIFT);
-            if (newPer < V4_MIN_PERIOD) newPer = V4_MIN_PERIOD;
+            int32_t newPer = (int32_t)integrator + (delta >> kpShift);
+            if (newPer < minPeriod) newPer = minPeriod;
             if (newPer > 0xFFFF) newPer = 0xFFFF;
             timerPeriod = (uint16_t)newPer;
             v4_timerPeriod = timerPeriod;  /* expose for CCP ISR */
@@ -707,6 +752,26 @@ void SectorPI_TelemGet(V4_TELEM_T *out)
         uint16_t erpmPeriod = actualStepPeriodHR ? actualStepPeriodHR : timerPeriod;
         out->erpmNow = (erpmPeriod > 0) ?
             (60UL * V4_TIMER_FREQ_HZ / (6UL * (uint32_t)erpmPeriod)) : 0;
+    }
+    /* Capture-rate diagnostics — pull from garuda_service.c (ADC ISR side)
+     * and the local Commutate counter. Lets the GUI/CSV diagnose where the
+     * 50% capture loss is happening. */
+    {
+        extern volatile uint32_t v4_adcBlankReject;
+        extern volatile uint32_t v4_adcStateMismatch;
+        extern volatile uint32_t v4_adcCaptureSet;
+        extern volatile uint32_t v4_adcSetRising;
+        extern volatile uint32_t v4_adcAlreadySet;
+        out->adcBlankReject     = v4_adcBlankReject;
+        out->adcStateMismatch   = v4_adcStateMismatch;
+        out->adcCaptureSet      = v4_adcCaptureSet;
+        out->adcSetRising       = v4_adcSetRising;
+        out->adcAlreadySet      = v4_adcAlreadySet;
+        out->commutateNoCapture = diagCommutateNoCapture;
+        extern volatile uint32_t v4_offMidCapture;
+        extern volatile uint32_t v4_offMidMismatch;
+        out->offMidCapture  = v4_offMidCapture;
+        out->offMidMismatch = v4_offMidMismatch;
     }
 }
 
