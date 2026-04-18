@@ -19,11 +19,14 @@
 
 #include "hal_ptg.h"
 
+/* Counter is defined unconditionally so telemetry code can read it
+ * without a flag gate. It stays at 0 when FEATURE_V5_PTG_ZC=0 because
+ * the ISR that increments it is also only compiled with the flag on. */
+volatile uint32_t v5_ptgFires = 0;
+
 #if FEATURE_V5_PTG_ZC
 
 #include <xc.h>
-
-volatile uint32_t v5_ptgFires = 0;
 
 /* ── PTG step-command opcodes (CMD<3:0> in upper nibble) ─────────── */
 #define PTG_OP_CTRL     (0x0u << 4)   /* 0x00 — PTGCTRL */

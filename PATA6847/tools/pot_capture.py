@@ -131,6 +131,13 @@ def decode_ck_snapshot(data):
     else:
         s['offMidCapture'] = 0
         s['offMidMismatch'] = 0
+    # V5.0 PTG: _PTG0Interrupt fire count.
+    # Expected: ~40 kHz × CL duration when FEATURE_V5_PTG_ZC=1.
+    # 0 when flag=0 (PTG never starts).
+    if len(data) >= 76:
+        s['ptgFires'] = struct.unpack_from('<I', data, 72)[0]
+    else:
+        s['ptgFires'] = 0
     # Derive the falling-ZC share.
     s['adcSetFalling'] = max(0, s['adcCaptureSet'] - s['adcSetRising'])
     # adcAlreadySet no longer shipped; left zeroed for legacy code.
@@ -401,8 +408,11 @@ def main():
     #           If R/F is ~50/50 the rising-vs-falling polarity hypothesis
     #           fails and we look elsewhere. If 100/0 or 0/100, one polarity
     #           class is wholly missing its ZC every commutation.
-    print(f"{'Time':>7s} {'State':>8s} {'eRPM':>7s} {'Duty':>4s} {'Vbus':>6s} {'SP':>2s} {'eTP':>6s} {'Cap%':>5s} {'Bnk%':>5s} {'Mis%':>5s} {'Set%':>5s} {'R/F%':>7s} {'Fires':>9s} {'OffOK':>7s} {'OffBd':>7s}")
-    print("-" * 112)
+    # V5.0 PTG column: raw _PTG0Interrupt fire count since motor start.
+    # With FEATURE_V5_PTG_ZC=1 expect ~40k/s at 40 kHz PWM.
+    # 0 otherwise. Low but nonzero indicates PTG starts but stalls.
+    print(f"{'Time':>7s} {'State':>8s} {'eRPM':>7s} {'Duty':>4s} {'Vbus':>6s} {'SP':>2s} {'eTP':>6s} {'Cap%':>5s} {'Bnk%':>5s} {'Mis%':>5s} {'Set%':>5s} {'R/F%':>7s} {'Fires':>9s} {'OffOK':>7s} {'OffBd':>7s} {'PTG':>8s}")
+    print("-" * 122)
 
     rows = []
     buf = b''
@@ -521,7 +531,14 @@ def main():
                 offbd = snap.get('offMidMismatch', 0)
                 offok_s = f"{offok/1000:.1f}k" if offok >= 10000 else f"{offok}"
                 offbd_s = f"{offbd/1000:.1f}k" if offbd >= 10000 else f"{offbd}"
-                print(f"{t:7.1f} {state_str:>8s} {snap['eRpm']:7d} {snap['dutyPct']:3d}% {snap['vbusV']:5.1f}V {sp_str:>2s} {etp:6d} {cap_pct:4d}% {bnk_pct:4.0f}% {mis_pct:4.0f}% {set_pct:4.0f}% {rf_s:>7s} {fires_s:>9s} {offok_s:>7s} {offbd_s:>7s}{fault_str}")
+                ptg = snap.get('ptgFires', 0)
+                if ptg >= 1_000_000:
+                    ptg_s = f"{ptg/1_000_000:.2f}M"
+                elif ptg >= 10_000:
+                    ptg_s = f"{ptg/1000:.1f}k"
+                else:
+                    ptg_s = f"{ptg}"
+                print(f"{t:7.1f} {state_str:>8s} {snap['eRpm']:7d} {snap['dutyPct']:3d}% {snap['vbusV']:5.1f}V {sp_str:>2s} {etp:6d} {cap_pct:4d}% {bnk_pct:4.0f}% {mis_pct:4.0f}% {set_pct:4.0f}% {rf_s:>7s} {fires_s:>9s} {offok_s:>7s} {offbd_s:>7s} {ptg_s:>8s}{fault_str}")
 
                 rows.append({
                     'time': round(t, 3),
@@ -649,6 +666,7 @@ def main():
                     'adc_set_falling':   snap.get('adcSetFalling', 0),
                     'off_mid_capture':   snap.get('offMidCapture', 0),
                     'off_mid_mismatch':  snap.get('offMidMismatch', 0),
+                    'ptg_fires':         snap.get('ptgFires', 0),
                 })
 
             time.sleep(0.01)

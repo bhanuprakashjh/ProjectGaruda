@@ -703,7 +703,8 @@ void GSP_TelemTick(void)
     V4_TELEM_T t;
     SectorPI_TelemGet(&t);
 
-    uint8_t snap[74];  /* 2-byte seq + 64-byte snapshot + 8-byte off-mid */
+    uint8_t snap[78];  /* 2-byte seq + 64-byte snapshot + 8-byte off-mid
+                        * + 4-byte V5 PTG fire counter */
     memset(snap, 0, sizeof(snap));
 
     /* Seq counter (2 bytes) */
@@ -797,6 +798,7 @@ void GSP_TelemTick(void)
     memcpy(&d[60], &t.adcSetRising,     4);
     memcpy(&d[64], &t.offMidCapture,    4);
     memcpy(&d[68], &t.offMidMismatch,   4);
+    memcpy(&d[72], &t.ptgFires,         4);  /* V5.0 PTG ISR fire count */
 
     GSP_SendResponse(GSP_CMD_TELEM_FRAME, snap, sizeof(snap));
 }

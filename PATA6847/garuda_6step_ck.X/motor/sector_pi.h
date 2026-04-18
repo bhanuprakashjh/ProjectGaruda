@@ -50,6 +50,7 @@ typedef struct {
     uint32_t commutateNoCapture;    /* Commutate found capValue == SENTINEL */
     uint32_t offMidCapture;         /* falling ZC confirmed at PWM OFF-mid */
     uint32_t offMidMismatch;        /* falling ZC wrong at PWM OFF-mid */
+    uint32_t ptgFires;              /* V5.0: _PTG0Interrupt fire count */
 } V4_TELEM_T;
 
 void     SectorPI_Init(void);

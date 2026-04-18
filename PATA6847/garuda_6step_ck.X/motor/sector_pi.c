@@ -776,6 +776,7 @@ void SectorPI_TelemGet(V4_TELEM_T *out)
         extern volatile uint32_t v4_offMidMismatch;
         out->offMidCapture  = v4_offMidCapture;
         out->offMidMismatch = v4_offMidMismatch;
+        out->ptgFires       = v5_ptgFires;  /* 0 when FEATURE_V5_PTG_ZC=0 */
     }
 }
 

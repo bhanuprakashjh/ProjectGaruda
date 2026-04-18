@@ -27,6 +27,12 @@
 extern "C" {
 #endif
 
+/** Raw fire counter — incremented unconditionally in _PTG0Interrupt.
+ *  First sanity check that PTG is running at all. Defined as a
+ *  regular variable even when FEATURE_V5_PTG_ZC=0 (stays at 0) so
+ *  the telemetry populator doesn't need to be flag-gated. */
+extern volatile uint32_t v5_ptgFires;
+
 #if FEATURE_V5_PTG_ZC
 
 /** Initialise PTG to a stopped, known-safe state. Idempotent. */
@@ -41,10 +47,6 @@ void     HAL_PTG_Stop(void);
 /** Update the trigger-to-sample delay (PTG ticks, ~10 ns each at default).
  *  Safe while running — the new value is read on the next step iteration. */
 void     HAL_PTG_SetDelay(uint16_t ptgTicks);
-
-/** Raw fire counter — incremented unconditionally in _PTG0Interrupt.
- *  First sanity check that PTG is running at all. */
-extern volatile uint32_t v5_ptgFires;
 
 #else  /* !FEATURE_V5_PTG_ZC — fold calls away at compile time */
 
