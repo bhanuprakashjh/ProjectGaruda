@@ -777,29 +777,36 @@
  *     timestamp. Mask CCP after acceptance like AM32. Untested in V4. */
 #define FEATURE_V4_MIDPOINT_ZC  1
 
-/* ── V5 Symmetric Sensing (incremental, gated off by default) ─────
- * V4 hits a wall because only rising sectors produce real captures:
- * the SCCP1 OFF-mid diagnostic runs at priority 2, below CCP at 5,
- * so it's starved during falling sectors and never samples them.
+/* ── V5 Symmetric Sensing (architecture gate, default off) ────────
+ * V4 hits a wall because only rising sectors produce real captures.
+ * V5 is the symmetric-sensing rewrite: both polarities feed the PI
+ * with matching signal quality.
  *
- * V5.0 first step — raise SCCP1 to priority 5, same level as CCP.
- * Same-level ISRs do not preempt each other but queue in order, so
- * SCCP1 fires reach the CPU in the gaps between CCP edges instead
- * of being blocked indefinitely. Expected: the pre-existing
- * offMidCapture/offMidMismatch counters start climbing during CL.
+ * FEATURE_V5_SYMMETRIC_SENSING=0 → byte-identical to V4 baseline.
+ * FEATURE_V5_SYMMETRIC_SENSING=1 → V5 code paths active.
  *
- * When FEATURE_V5_SYMMETRIC_SENSING=0: byte-identical to V4 baseline.
- * When =1: only SCCP1 priority changes; no control-path modifications.
+ * V5.0 attempt 1 (2026-04-18): SCCP1 priority 2 → 5. Hypothesis was
+ * that the OFF-mid diagnostic ISR was starved by CCP storm during
+ * falling sectors. Bench result: NO measurable improvement in
+ * offMidCapture / offMidMismatch counters between priority 2 and 5.
+ * The bottleneck isn't CPU budget — SCCP1 was already firing ~10 kHz
+ * at priority 2. The real issue is SCCP1's 24.96 µs clock aliasing
+ * against the commutation cadence such that fires never land in
+ * sector windows where currentRisingZc == false. Priority can't fix
+ * that. The V5_SCCP1_ISR_PRIORITY knob is kept for reference only.
  *
- * Per-sector accept logic, per-polarity PI bias, and promotion of
- * v4_captureValid land in later V5 steps after priority-inversion
- * is confirmed fixed on the bench. */
+ * V5.0 attempt 2 (active direction): PTG-based BEMF sampling. A
+ * core-independent state machine fires ADC/GPIO samples at
+ * programmable delays from the PWM trigger, one offset per sector
+ * polarity, with hardware-exact timing and zero CPU jitter. This
+ * is the right tool for per-sector sample timing — the sampling
+ * problem can't be solved in software polling. */
 #ifndef FEATURE_V5_SYMMETRIC_SENSING
 #define FEATURE_V5_SYMMETRIC_SENSING  0
 #endif
 
 #if FEATURE_V5_SYMMETRIC_SENSING
-#define V5_SCCP1_ISR_PRIORITY   5  /* tied with CCP — queued, not starved */
+#define V5_SCCP1_ISR_PRIORITY   5  /* archived: tied with CCP, no effect */
 #else
 #define V5_SCCP1_ISR_PRIORITY   2  /* V4 baseline: below ADC */
 #endif
