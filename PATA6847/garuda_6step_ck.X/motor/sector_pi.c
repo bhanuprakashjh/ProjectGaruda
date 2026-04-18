@@ -90,6 +90,12 @@ static volatile uint16_t   speedCounter;
 static volatile uint16_t   speedBase;
 static volatile uint16_t   measuredSpeed;
 
+/* CL settle counter — declared early so SectorPI_Start can reset it.
+ * MUST be reset on each motor start; otherwise it stays at CL_SETTLE_MS
+ * after the first run and the next CL entry skips the settle window. */
+#define CL_SETTLE_MS  500U
+static volatile uint16_t clSettleCounter = 0;
+
 /* ── Speed regulation (outer loop) ─────────────────────────────── */
 /* pot → targetSpeed, PI on (targetSpeed - measuredSpeed) → amplitude.
  * This is the AVR's __Speed_Control. Runs at 1ms in TimeTick.
@@ -238,8 +244,17 @@ void SectorPI_Init(void)
 
 void SectorPI_Start(uint16_t vbusRaw)
 {
-    if (running) return;
+    /* Defensive: if ShutOff was missed or running flag stuck, force a
+     * clean stop before re-arming. Otherwise this no-ops and the user's
+     * SW1 press is silently ignored. */
+    if (running) ShutOff();
     (void)vbusRaw;
+
+    /* Reset all carry-over static state so a previous run's residue
+     * (especially clSettleCounter, which would otherwise let the PI
+     * take pot input on the very first CL TimeTick) doesn't break the
+     * fresh start. */
+    clSettleCounter = 0;
 
     position = 0;
     running = true;
@@ -656,10 +671,8 @@ void SectorPI_Commutate(void)
 }
 
 /* ── Called from Timer1 at 1ms (divide by 20 in caller) ─────────── */
-static uint16_t clSettleCounter = 0;
-#define CL_SETTLE_MS  500U   /* Hold ramp duty + suppress PI for 500ms.
-                               * Lets motor stabilize at OL ramp speed
-                               * before PI starts adjusting timerPeriod. */
+/* clSettleCounter + CL_SETTLE_MS now declared at file top so they're
+ * visible to SectorPI_Start (which resets the counter). */
 
 void SectorPI_TimeTick(void)
 {

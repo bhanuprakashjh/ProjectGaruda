@@ -836,10 +836,12 @@
 #define FEATURE_V5_PTG_ZC  0
 #endif
 
-/* PTG ISR priority — above ADC(3), below Commutate(6), tied with CCP(5).
- * This ISR is short (GPIO read + counter increments). It can safely sit
- * at priority 5 or 6. Starting at 5 to match the CCP tier. */
-#define V5_PTG_ISR_PRIORITY  5
+/* PTG ISR priority — above ADC(3), tied with Timer1(4), below CCP(5).
+ * Started at 5 (tied with CCP) but bench showed peak speed dropped to
+ * ~62k from V4's 107k — the PTG-CCP same-level queue was slowing CCP
+ * servicing under high-speed comparator chatter. Priority 4 lets CCP
+ * preempt PTG so CCP processing isn't held up; PTG still preempts ADC. */
+#define V5_PTG_ISR_PRIORITY  4
 
 /* Default PTGT0LIM values. At FCY=100 MHz with PTGDIV=0, 1 tick = 10 ns.
  * LOOPTIME_TCY is in PWM counter ticks (5 ns each on this CK device —
