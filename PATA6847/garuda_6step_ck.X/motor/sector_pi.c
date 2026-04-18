@@ -506,15 +506,17 @@ void SectorPI_Commutate(void)
         const COMMUTATION_STEP_T *step = &commutationTable[position];
         v4_floatingPhase = step->floatingPhase;
 
-        /* V5.0 PTG: per-sector sample offset.
-         *  Rising sector → short delay, sample near PWM valley (HS on).
-         *  Falling sector → half-period delay, sample near PWM peak (LS on)
-         *                   where the virtual neutral collapses and the
-         *                   comparator signal for a falling ZC is strongest.
-         * No-op when FEATURE_V5_PTG_ZC=0 (HAL_PTG_SetDelay is static-inline
-         * empty). */
-        HAL_PTG_SetDelay((step->zcPolarity > 0) ? V5_PTG_VALLEY_DELAY
-                                                : V5_PTG_PEAK_DELAY);
+        /* V5.0 PTG: per-sector expected comp state (for shadow accept
+         * counting). PTGT0LIM reload temporarily disabled — bench test
+         * showed it destabilised CL entry. Keeping delay fixed at
+         * V5_PTG_VALLEY_DELAY from init; ISR samples only at valley. */
+#if FEATURE_V5_PTG_ZC
+        {
+            extern volatile uint8_t v5_ptgExpectedComp;
+            v5_ptgExpectedComp = (step->zcPolarity > 0) ? 0U : 1U;
+        }
+#endif
+        /* HAL_PTG_SetDelay call intentionally removed for this test. */
     }
 
     /* 6. Re-enable CCP ISRs */

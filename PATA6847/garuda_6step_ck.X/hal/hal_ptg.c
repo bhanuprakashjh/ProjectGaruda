@@ -31,15 +31,19 @@ volatile uint32_t v5_ptgFallingRej = 0;
 #if FEATURE_V5_PTG_ZC
 
 #include <xc.h>
-#include "hal_capture.h"
-#include "../motor/sector_pi.h"  /* for SectorPI_IsRunning / SectorPI_GetPhase */
+
+/* Per-sector expected post-ZC comp state, written by Commutate:
+ *   0 = rising sector (inverted comp drops to 0 after ZC)
+ *   1 = falling sector (inverted comp rises to 1 after ZC)
+ * Reading this instead of calling HAL_Capture_IsRisingZc() saves a
+ * function call in the hot ISR path. */
+volatile uint8_t v5_ptgExpectedComp = 0;
 
 /* The floating-phase GPIO-read logic lives in garuda_service.c as a
  * static inline. Replicate here so we can read BEMF from the PTG ISR
  * without exposing the static symbol. v4_floatingPhase itself is an
  * extern volatile global written in Commutate. */
 extern volatile uint8_t v4_floatingPhase;
-extern volatile bool    v4_spActive;
 
 static inline uint8_t ReadBemfCompLocal(void)
 {
@@ -121,32 +125,27 @@ void HAL_PTG_SetDelay(uint16_t ptgTicks)
 
 /* ── PTG0 ISR ─────────────────────────────────────────────────────── */
 /* Fires at (PWM valley + PTGT0LIM PTG ticks). PTGT0LIM is reloaded by
- * Commutate every sector: rising sectors use V5_PTG_VALLEY_DELAY (small
- * offset, sample at ON midpoint), falling sectors use V5_PTG_PEAK_DELAY
- * (sample at OFF midpoint) — different PWM phases for different polarity
- * physics.
+ * Commutate every sector so the sample offset varies by polarity.
  *
- * Accept logic (inverted ATA6847 comparator):
- *   rising sector  → post-ZC comp = 0 (BEMF has crossed upward)
- *   falling sector → post-ZC comp = 1 (BEMF has crossed downward)
+ * Step-2a body: minimal — count fires, read precomputed expected-comp,
+ * compare to GPIO. No function calls, no motor-state guards. The
+ * precomputed value (v5_ptgExpectedComp) is set in Commutate once per
+ * sector; reading it here is a single volatile load.
  *
- * Shadow only — does not set v4_captureValid. Once the counter ratio
- * confirms falling sectors genuinely yield accept>>reject, the next V5
- * step promotes this to a real capture source. */
+ * Step-2 earlier body had SectorPI_IsRunning / GetPhase / IsRisingZc
+ * function calls in the ISR, ~100 cycles per fire = 4% CPU at 40 kHz.
+ * Combined with the existing CCP/ADC/Commutate load that was enough to
+ * destabilise CL entry. Shadow counters still populate correctly since
+ * PTG only runs between EnterCL and ShutOff. */
 void __attribute__((interrupt, no_auto_psv)) _PTG0Interrupt(void)
 {
     _PTG0IF = 0;
     v5_ptgFires++;
 
-    /* Guard on motor state so idle runs and OL_RAMP don't pollute the
-     * counters. SP mode has its own CCP-based capture path. */
-    if (v4_spActive || !SectorPI_IsRunning() || SectorPI_GetPhase() != 3)
-        return;
+    uint8_t comp      = ReadBemfCompLocal();
+    uint8_t expected  = v5_ptgExpectedComp;   /* 0 for rising, 1 for falling */
 
-    uint8_t comp = ReadBemfCompLocal();
-    bool    rising = HAL_Capture_IsRisingZc();
-
-    if (rising) {
+    if (expected == 0) {
         if (comp == 0) v5_ptgRisingAcc++;
         else           v5_ptgRisingRej++;
     } else {
