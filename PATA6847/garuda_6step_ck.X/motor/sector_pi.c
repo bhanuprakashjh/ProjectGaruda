@@ -19,6 +19,7 @@
 #include "../hal/hal_pwm.h"
 #include "../hal/hal_com_timer.h"
 #include "../hal/hal_capture.h"
+#include "../hal/hal_ptg.h"
 #include "../hal/port_config.h"
 #include "commutation.h"
 #include "v4_params.h"
@@ -129,6 +130,7 @@ static inline uint16_t FixpMulU16(uint16_t a, uint16_t b)
 static void ShutOff(void)
 {
     HAL_Capture_Stop();
+    HAL_PTG_Stop();        /* V5.0 — no-op unless FEATURE_V5_PTG_ZC=1 */
     HAL_ComTimer_Cancel();
     /* Exit SP mode if active — restores MPER = LOOPTIME_TCY. Reset
      * BOTH v4_spRequest and v4_spActive so the next start doesn't
@@ -201,6 +203,7 @@ static void EnterCL(void)
     v4_captureValid = false;
 
     HAL_Capture_Start();
+    HAL_PTG_Start();       /* V5.0 — no-op unless FEATURE_V5_PTG_ZC=1 */
 
     /* Seed lastCommHR for PI elapsed calculation */
     lastCommHR = HAL_ComTimer_ReadTimer();
@@ -226,6 +229,7 @@ void SectorPI_Init(void)
 
     HAL_ComTimer_Init();   /* SCCP3 one-shot + SCCP4 HR (proven V3 pattern) */
     HAL_Capture_Init();
+    HAL_PTG_Init();        /* V5.0 — no-op unless FEATURE_V5_PTG_ZC=1 */
     running = false;
     phase = V4_OFF;
     statusEvents = 0;

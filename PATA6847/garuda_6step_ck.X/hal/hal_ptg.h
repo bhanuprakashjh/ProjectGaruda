@@ -1,42 +1,62 @@
 /**
  * @file hal_ptg.h
- * @brief PTG (Peripheral Trigger Generator) for edge-relative BEMF sampling.
+ * @brief V5.0 Peripheral Trigger Generator for per-sector BEMF sampling.
  *
- * The CLC D-FF samples BEMF at PG1TRIGA=0 (counter-relative). At certain
- * duty ratios, this position lands near switching edges → noise.
+ * The PTG is a core-independent state machine. We use it to fire an
+ * interrupt at a hardware-exact delay from each PWM trigger so the BEMF
+ * comparator GPIO can be sampled at an offset that software polling
+ * (SCCP1, ADC ISR) cannot reach. Zero CPU jitter.
  *
- * PTG fires an ISR at a FIXED DELAY after the switching edge, guaranteeing
- * a clean read regardless of duty ratio. This supplements the CLC path.
+ * Gate: FEATURE_V5_PTG_ZC. When 0, every function is a no-op and the
+ * PTG module stays off. When 1, HAL_PTG_Start runs the queue and
+ * _PTG0Interrupt fires at (valley + PTGT0LIM ticks) every PWM cycle.
  *
- * Chain: PG1TRIGB (at duty value) → PTG WAIT → Timer0 delay → PTG0 ISR
- *        → reads raw GPIO → stores ptgSample for FastPoll to consume.
+ * A prior V3-era attempt lived in this same file with wrong opcodes
+ * (confirmed against DS70005349 Table 24-1). It has been removed;
+ * the V3 PTG path was never proven on bench.
  */
 
 #ifndef HAL_PTG_H
 #define HAL_PTG_H
 
-#include <xc.h>
 #include "../garuda_config.h"
 
-#if FEATURE_PTG_ZC
+#include <stdint.h>
 
-/**
- * @brief Initialize PTG registers and step queue.
- * Does NOT start execution — call HAL_PTG_Start() when entering CL.
- */
-void HAL_PTG_Init(void);
+#ifdef __cplusplus
+extern "C" {
+#endif
 
-/**
- * @brief Start PTG step queue execution.
- * Call when entering closed-loop.
- */
-void HAL_PTG_Start(void);
+#if FEATURE_V5_PTG_ZC
 
-/**
- * @brief Stop PTG and disable interrupt.
- * Call on motor stop, recovery, or fault.
- */
-void HAL_PTG_Stop(void);
+/** Initialise PTG to a stopped, known-safe state. Idempotent. */
+void     HAL_PTG_Init(void);
 
-#endif /* FEATURE_PTG_ZC */
+/** Load the step queue and start the PTG state machine. */
+void     HAL_PTG_Start(void);
+
+/** Stop the PTG state machine. Register values are preserved. */
+void     HAL_PTG_Stop(void);
+
+/** Update the trigger-to-sample delay (PTG ticks, ~10 ns each at default).
+ *  Safe while running — the new value is read on the next step iteration. */
+void     HAL_PTG_SetDelay(uint16_t ptgTicks);
+
+/** Raw fire counter — incremented unconditionally in _PTG0Interrupt.
+ *  First sanity check that PTG is running at all. */
+extern volatile uint32_t v5_ptgFires;
+
+#else  /* !FEATURE_V5_PTG_ZC — fold calls away at compile time */
+
+static inline void HAL_PTG_Init(void)                { }
+static inline void HAL_PTG_Start(void)               { }
+static inline void HAL_PTG_Stop(void)                { }
+static inline void HAL_PTG_SetDelay(uint16_t t)      { (void)t; }
+
+#endif
+
+#ifdef __cplusplus
+}
+#endif
+
 #endif /* HAL_PTG_H */

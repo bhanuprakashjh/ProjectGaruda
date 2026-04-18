@@ -811,6 +811,51 @@
 #define V5_SCCP1_ISR_PRIORITY   2  /* V4 baseline: below ADC */
 #endif
 
+/* ── V5.0-PTG: Peripheral Trigger Generator BEMF sampling ────────
+ * Core-independent state machine triggers per-sector BEMF reads at
+ * hardware-exact offsets from the PWM valley event. This is the real
+ * V5.0 approach — the SCCP1 priority experiment is archived.
+ *
+ * PTG command queue (FEATURE_V5_PTG_ZC=1):
+ *   STEP0: PTGWHI | 0x1         wait for PWM trigger input
+ *   STEP1: PTGCTRL| 0x8         start PTGT0, wait for timeout
+ *   STEP2: PTGIRQ | 0x0         generate PTG0 interrupt (_PTG0Interrupt)
+ *   STEP3: PTGJMP | 0x0         loop back to STEP0
+ *
+ * PTG clock = FCY (100 MHz) / PTGDIV. PTGDIV=0 → 100 MHz, 10 ns/tick.
+ * PTGT0LIM sets the delay-from-PWM-trigger in PTG ticks.
+ *
+ * Per-sector sample offset (rewritten by Commutate ISR):
+ *   rising sector → PTGT0LIM = 0         (sample at valley, ~existing behavior)
+ *   falling sector → PTGT0LIM = MPER/2*N (sample at PWM peak / OFF-mid)
+ *
+ * When FEATURE_V5_PTG_ZC=0: byte-identical to V4 baseline.
+ * When =1: PTG init runs at motor start, ISR counts samples (shadow
+ *          only in V5.0-step1 — does NOT set v4_captureValid). */
+#ifndef FEATURE_V5_PTG_ZC
+#define FEATURE_V5_PTG_ZC  0
+#endif
+
+/* PTG ISR priority — above ADC(3), below Commutate(6), tied with CCP(5).
+ * This ISR is short (GPIO read + counter increments). It can safely sit
+ * at priority 5 or 6. Starting at 5 to match the CCP tier. */
+#define V5_PTG_ISR_PRIORITY  5
+
+/* Default PTGT0LIM values. At FCY=100 MHz with PTGDIV=0, 1 tick = 10 ns.
+ * LOOPTIME_TCY is in PWM counter ticks (5 ns each on this CK device —
+ * FOSC_PWM 400 MHz with internal /2 divider on the PWM counter).
+ *
+ *   Valley sample: PWM trigger itself fires at counter=0. A tiny delay
+ *     covers ATA6847 comparator propagation (~500 ns) and signal settle.
+ *   Peak sample:  Counter triangle 0 → MPER → 0 each PWM period.
+ *     Valley to peak = MPER/2 PWM-cycle time.
+ *     At 40 kHz, MPER=4999 → ~25 µs cycle → ~12.5 µs valley→peak.
+ *     12.5 µs = 1250 PTG ticks. MPER * 5 ns / 2 / 10 ns = MPER/4.
+ */
+#define V5_PTG_TICK_NS          10u
+#define V5_PTG_VALLEY_DELAY     60u        /* 600 ns settle after trigger */
+#define V5_PTG_PEAK_DELAY       ((uint16_t)(LOOPTIME_TCY / 4u))
+
 #endif /* FEATURE_V4_SECTOR_PI */
 
 #if !FEATURE_V4_SECTOR_PI
