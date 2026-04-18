@@ -85,7 +85,7 @@ void HAL_Capture_Init(void)
     CCP1CON1Lbits.TMRPS  = 0b10;       /* 1:4 → 25 MHz, 40 ns/tick */
     CCP1CON1Lbits.MOD    = 0b0000;     /* Auto-reload on period match */
     CCP1PRL = (FCY / 4 / PWMFREQUENCY_HZ) - 2;  /* 623 = 24.96 µs — deliberate drift vs PWM */
-    _CCT1IP = 2;                        /* Priority 2: below ADC(3) */
+    _CCT1IP = V5_SCCP1_ISR_PRIORITY;    /* V4 baseline 2; V5 bumps to 5 */
     _CCT1IF = 0;
     _CCT1IE = 0;                        /* Enabled at motor start */
     _CCP1IF = 0; _CCP1IE = 0;

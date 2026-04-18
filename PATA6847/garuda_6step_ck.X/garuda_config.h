@@ -777,6 +777,33 @@
  *     timestamp. Mask CCP after acceptance like AM32. Untested in V4. */
 #define FEATURE_V4_MIDPOINT_ZC  1
 
+/* ── V5 Symmetric Sensing (incremental, gated off by default) ─────
+ * V4 hits a wall because only rising sectors produce real captures:
+ * the SCCP1 OFF-mid diagnostic runs at priority 2, below CCP at 5,
+ * so it's starved during falling sectors and never samples them.
+ *
+ * V5.0 first step — raise SCCP1 to priority 5, same level as CCP.
+ * Same-level ISRs do not preempt each other but queue in order, so
+ * SCCP1 fires reach the CPU in the gaps between CCP edges instead
+ * of being blocked indefinitely. Expected: the pre-existing
+ * offMidCapture/offMidMismatch counters start climbing during CL.
+ *
+ * When FEATURE_V5_SYMMETRIC_SENSING=0: byte-identical to V4 baseline.
+ * When =1: only SCCP1 priority changes; no control-path modifications.
+ *
+ * Per-sector accept logic, per-polarity PI bias, and promotion of
+ * v4_captureValid land in later V5 steps after priority-inversion
+ * is confirmed fixed on the bench. */
+#ifndef FEATURE_V5_SYMMETRIC_SENSING
+#define FEATURE_V5_SYMMETRIC_SENSING  0
+#endif
+
+#if FEATURE_V5_SYMMETRIC_SENSING
+#define V5_SCCP1_ISR_PRIORITY   5  /* tied with CCP — queued, not starved */
+#else
+#define V5_SCCP1_ISR_PRIORITY   2  /* V4 baseline: below ADC */
+#endif
+
 #endif /* FEATURE_V4_SECTOR_PI */
 
 #if !FEATURE_V4_SECTOR_PI
