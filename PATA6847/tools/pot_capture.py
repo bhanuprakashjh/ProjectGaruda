@@ -152,6 +152,19 @@ def decode_ck_snapshot(data):
         s['ptgRisingRej']  = 0
         s['ptgFallingAcc'] = 0
         s['ptgFallingRej'] = 0
+    # V5.1 ADC post-ZC shadow counters. Per-sample (no v4_captureValid
+    # gate) so direct comparison with V5.0 PTG pR%/pF% — they should
+    # match if the ADC ISR sees the same valley signal PTG sees.
+    if len(data) >= 108:
+        s['postZcRisingAcc']  = struct.unpack_from('<I', data, 92)[0]
+        s['postZcRisingRej']  = struct.unpack_from('<I', data, 96)[0]
+        s['postZcFallingAcc'] = struct.unpack_from('<I', data, 100)[0]
+        s['postZcFallingRej'] = struct.unpack_from('<I', data, 104)[0]
+    else:
+        s['postZcRisingAcc']  = 0
+        s['postZcRisingRej']  = 0
+        s['postZcFallingAcc'] = 0
+        s['postZcFallingRej'] = 0
     # Derive the falling-ZC share.
     s['adcSetFalling'] = max(0, s['adcCaptureSet'] - s['adcSetRising'])
     # adcAlreadySet no longer shipped; left zeroed for legacy code.
@@ -422,13 +435,13 @@ def main():
     #           If R/F is ~50/50 the rising-vs-falling polarity hypothesis
     #           fails and we look elsewhere. If 100/0 or 0/100, one polarity
     #           class is wholly missing its ZC every commutation.
-    # V5.0 PTG columns.
-    #   PTG  — _PTG0Interrupt raw fire count since motor start (~40 kHz)
-    #   pR%  — rising-sector accept rate (acc / (acc+rej)). Baseline > 0.
-    #   pF%  — falling-sector accept rate. The new data point. Was ~0
-    #          in all V4 paths (ADC valley, SCCP1 polling). Target ≈50.
-    print(f"{'Time':>7s} {'State':>8s} {'eRPM':>7s} {'Duty':>4s} {'Vbus':>6s} {'SP':>2s} {'eTP':>6s} {'Cap%':>5s} {'Bnk%':>5s} {'Mis%':>5s} {'Set%':>5s} {'R/F%':>7s} {'Fires':>9s} {'OffOK':>7s} {'OffBd':>7s} {'PTG':>8s} {'pR%':>4s} {'pF%':>4s}")
-    print("-" * 132)
+    # V5.0 PTG columns: PTG/pR%/pF% (PTG ISR samples)
+    # V5.1 ADC columns: p2R%/p2F% (ADC ISR shadow with post-ZC convention)
+    # If V5.1 logic is correct, p2R% and p2F% should match the PTG-era
+    # pR%/pF% values (~67% each) since ADC and PTG sample at the same
+    # PWM valley moment.
+    print(f"{'Time':>7s} {'State':>8s} {'eRPM':>7s} {'Duty':>4s} {'Vbus':>6s} {'SP':>2s} {'eTP':>6s} {'Cap%':>5s} {'Bnk%':>5s} {'Mis%':>5s} {'Set%':>5s} {'R/F%':>7s} {'Fires':>9s} {'OffOK':>7s} {'OffBd':>7s} {'PTG':>8s} {'pR%':>4s} {'pF%':>4s} {'p2R%':>5s} {'p2F%':>5s}")
+    print("-" * 144)
 
     rows = []
     buf = b''
@@ -560,7 +573,14 @@ def main():
                 pf_rej = snap.get('ptgFallingRej', 0)
                 pr_pct = (100 * pr_acc / (pr_acc + pr_rej)) if (pr_acc + pr_rej) > 0 else 0
                 pf_pct = (100 * pf_acc / (pf_acc + pf_rej)) if (pf_acc + pf_rej) > 0 else 0
-                print(f"{t:7.1f} {state_str:>8s} {snap['eRpm']:7d} {snap['dutyPct']:3d}% {snap['vbusV']:5.1f}V {sp_str:>2s} {etp:6d} {cap_pct:4d}% {bnk_pct:4.0f}% {mis_pct:4.0f}% {set_pct:4.0f}% {rf_s:>7s} {fires_s:>9s} {offok_s:>7s} {offbd_s:>7s} {ptg_s:>8s} {pr_pct:3.0f}% {pf_pct:3.0f}%{fault_str}")
+                # V5.1 ADC post-ZC shadow rates
+                p2r_acc = snap.get('postZcRisingAcc', 0)
+                p2r_rej = snap.get('postZcRisingRej', 0)
+                p2f_acc = snap.get('postZcFallingAcc', 0)
+                p2f_rej = snap.get('postZcFallingRej', 0)
+                p2r_pct = (100 * p2r_acc / (p2r_acc + p2r_rej)) if (p2r_acc + p2r_rej) > 0 else 0
+                p2f_pct = (100 * p2f_acc / (p2f_acc + p2f_rej)) if (p2f_acc + p2f_rej) > 0 else 0
+                print(f"{t:7.1f} {state_str:>8s} {snap['eRpm']:7d} {snap['dutyPct']:3d}% {snap['vbusV']:5.1f}V {sp_str:>2s} {etp:6d} {cap_pct:4d}% {bnk_pct:4.0f}% {mis_pct:4.0f}% {set_pct:4.0f}% {rf_s:>7s} {fires_s:>9s} {offok_s:>7s} {offbd_s:>7s} {ptg_s:>8s} {pr_pct:3.0f}% {pf_pct:3.0f}% {p2r_pct:4.0f}% {p2f_pct:4.0f}%{fault_str}")
 
                 rows.append({
                     'time': round(t, 3),
@@ -693,6 +713,10 @@ def main():
                     'ptg_rising_rej':    snap.get('ptgRisingRej', 0),
                     'ptg_falling_acc':   snap.get('ptgFallingAcc', 0),
                     'ptg_falling_rej':   snap.get('ptgFallingRej', 0),
+                    'post_zc_rising_acc':  snap.get('postZcRisingAcc', 0),
+                    'post_zc_rising_rej':  snap.get('postZcRisingRej', 0),
+                    'post_zc_falling_acc': snap.get('postZcFallingAcc', 0),
+                    'post_zc_falling_rej': snap.get('postZcFallingRej', 0),
                 })
 
             time.sleep(0.01)

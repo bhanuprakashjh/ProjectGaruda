@@ -220,6 +220,20 @@ volatile uint32_t v4_adcSetRising    = 0;
 volatile uint32_t v4_offMidCapture   = 0;
 volatile uint32_t v4_offMidMismatch  = 0;
 
+/* V5.1 post-ZC shadow counters. Incremented in _ADCInterrupt every
+ * past-blanking sample (no v4_captureValid sticky gate, so per-sample
+ * rate matches what the PTG diagnostic measured). When
+ * FEATURE_V5_POST_ZC_ACCEPT=0 these stay at 0.
+ *   v5_postZcRisingAcc  — rising sector + comp == 0 (post-ZC for rising)
+ *   v5_postZcRisingRej  — rising sector + comp != 0
+ *   v5_postZcFallingAcc — falling sector + comp == 1 (post-ZC for falling)
+ *   v5_postZcFallingRej — falling sector + comp != 1
+ * Expected from PTG comparison: per-polarity Acc/(Acc+Rej) ≈ 67%. */
+volatile uint32_t v5_postZcRisingAcc  = 0;
+volatile uint32_t v5_postZcRisingRej  = 0;
+volatile uint32_t v5_postZcFallingAcc = 0;
+volatile uint32_t v5_postZcFallingRej = 0;
+
 #if FEATURE_V4_MIDPOINT_ZC >= 1
 /* (midpoint modes also need these) */
 #endif
@@ -256,14 +270,32 @@ void __attribute__((interrupt, auto_psv)) _ADCInterrupt(void)
             else
             {
                 uint8_t comp = ReadBEMFComp();
-                uint8_t expected = HAL_Capture_IsRisingZc() ? 1 : 0;
+                bool isRising = HAL_Capture_IsRisingZc();
+
+#if FEATURE_V5_POST_ZC_ACCEPT
+                /* V5.1 shadow: count what post-ZC accept logic would do.
+                 * Same comp read as the V4 path, evaluated once per ADC
+                 * fire (no v4_captureValid sticky gate so per-sample
+                 * rate matches the PTG diagnostic for direct comparison). */
+                {
+                    uint8_t expectedPostZc = isRising ? 0u : 1u;
+                    if (comp == expectedPostZc) {
+                        if (isRising) v5_postZcRisingAcc++;
+                        else          v5_postZcFallingAcc++;
+                    } else {
+                        if (isRising) v5_postZcRisingRej++;
+                        else          v5_postZcFallingRej++;
+                    }
+                }
+#endif
+
+                uint8_t expected = isRising ? 1 : 0;
                 if (comp != expected)
                 {
                     v4_adcStateMismatch++;
                 }
                 else
                 {
-                    bool isRising = HAL_Capture_IsRisingZc();
                     v4_adcCaptureSet++;
                     if (isRising) v4_adcSetRising++;
 

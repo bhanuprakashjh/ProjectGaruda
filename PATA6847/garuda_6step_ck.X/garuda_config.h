@@ -843,6 +843,41 @@
  * preempt PTG so CCP processing isn't held up; PTG still preempts ADC. */
 #define V5_PTG_ISR_PRIORITY  4
 
+/* ── V5.1 Symmetric ADC accept (post-ZC convention) ──────────────
+ * The V4 ADC ISR uses `expected = isRising ? 1 : 0` — this is the
+ * pre-ZC state for both polarities (rising sector pre-ZC has comp=1,
+ * falling sector pre-ZC has comp=0 on the inverted ATA6847 comp).
+ * V4 only ever accepts captures in rising sectors because the
+ * pre-ZC sample for falling sectors lands too late within the sector
+ * and gets rejected by the half-period filter in Commutate.
+ *
+ * V5.1 flips the convention to post-ZC sampling: accept when
+ *   rising  sector → comp == 0
+ *   falling sector → comp == 1
+ * The PTG diagnostic data showed both polarities have ~67% post-ZC
+ * accept rate at PWM valley sampling — strong, observable signal on
+ * both. With the convention flipped, the ADC ISR should accept on
+ * both polarities and feed the PI ~2× more captures, hopefully
+ * collapsing the 2× equilibrium offset (eTP ≈ eRpm/2) to truth.
+ *
+ * V5.1-step1 (FEATURE_V5_POST_ZC_ACCEPT=1, FEATURE_V5_POST_ZC_OWN=0):
+ *   Shadow only — V4 convention still drives v4_captureValid; new
+ *   counters report what post-ZC accept would do.
+ * V5.1-step2 (FEATURE_V5_POST_ZC_OWN=1):
+ *   Post-ZC accept actually drives v4_captureValid; PI sees both
+ *   polarities. Bench-validate PI stability before this. */
+#ifndef FEATURE_V5_POST_ZC_ACCEPT
+#define FEATURE_V5_POST_ZC_ACCEPT  0
+#endif
+
+#ifndef FEATURE_V5_POST_ZC_OWN
+#define FEATURE_V5_POST_ZC_OWN     0   /* requires FEATURE_V5_POST_ZC_ACCEPT */
+#endif
+
+#if FEATURE_V5_POST_ZC_OWN && !FEATURE_V5_POST_ZC_ACCEPT
+#error "FEATURE_V5_POST_ZC_OWN requires FEATURE_V5_POST_ZC_ACCEPT"
+#endif
+
 /* Default PTGT0LIM values. At FCY=100 MHz with PTGDIV=0, 1 tick = 10 ns.
  * LOOPTIME_TCY is in PWM counter ticks (5 ns each on this CK device —
  * FOSC_PWM 400 MHz with internal /2 divider on the PWM counter).

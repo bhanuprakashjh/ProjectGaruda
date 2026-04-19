@@ -289,6 +289,14 @@ void SectorPI_Start(uint16_t vbusRaw)
     extern volatile uint32_t v4_offMidMismatch;
     v4_offMidCapture = 0;
     v4_offMidMismatch = 0;
+    extern volatile uint32_t v5_postZcRisingAcc;
+    extern volatile uint32_t v5_postZcRisingRej;
+    extern volatile uint32_t v5_postZcFallingAcc;
+    extern volatile uint32_t v5_postZcFallingRej;
+    v5_postZcRisingAcc  = 0;
+    v5_postZcRisingRej  = 0;
+    v5_postZcFallingAcc = 0;
+    v5_postZcFallingRej = 0;
 
     /* Start alignment — Timer1 ISR drives via SectorPI_OlTick() */
     alignCounter = ALIGN_TIME_COUNTS;
@@ -806,6 +814,14 @@ void SectorPI_TelemGet(V4_TELEM_T *out)
         out->ptgRisingRej   = v5_ptgRisingRej;
         out->ptgFallingAcc  = v5_ptgFallingAcc;
         out->ptgFallingRej  = v5_ptgFallingRej;
+        extern volatile uint32_t v5_postZcRisingAcc;
+        extern volatile uint32_t v5_postZcRisingRej;
+        extern volatile uint32_t v5_postZcFallingAcc;
+        extern volatile uint32_t v5_postZcFallingRej;
+        out->postZcRisingAcc  = v5_postZcRisingAcc;   /* 0 when V5_POST_ZC=0 */
+        out->postZcRisingRej  = v5_postZcRisingRej;
+        out->postZcFallingAcc = v5_postZcFallingAcc;
+        out->postZcFallingRej = v5_postZcFallingRej;
     }
 }
 

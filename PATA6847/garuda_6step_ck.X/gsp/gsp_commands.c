@@ -703,9 +703,10 @@ void GSP_TelemTick(void)
     V4_TELEM_T t;
     SectorPI_TelemGet(&t);
 
-    uint8_t snap[94];  /* 2-byte seq + 64-byte snapshot + 8-byte off-mid
+    uint8_t snap[110]; /* 2-byte seq + 64-byte snapshot + 8-byte off-mid
                         * + 4-byte V5 PTG fire counter
-                        * + 16-byte V5 per-polarity accept/reject counters */
+                        * + 16-byte V5 PTG per-polarity counters
+                        * + 16-byte V5.1 ADC post-ZC shadow counters */
     memset(snap, 0, sizeof(snap));
 
     /* Seq counter (2 bytes) */
@@ -804,6 +805,12 @@ void GSP_TelemTick(void)
     memcpy(&d[80], &t.ptgRisingRej,     4);
     memcpy(&d[84], &t.ptgFallingAcc,    4);
     memcpy(&d[88], &t.ptgFallingRej,    4);
+
+    /* V5.1 ADC post-ZC shadow counters. */
+    memcpy(&d[92],  &t.postZcRisingAcc,  4);
+    memcpy(&d[96],  &t.postZcRisingRej,  4);
+    memcpy(&d[100], &t.postZcFallingAcc, 4);
+    memcpy(&d[104], &t.postZcFallingRej, 4);
 
     GSP_SendResponse(GSP_CMD_TELEM_FRAME, snap, sizeof(snap));
 }

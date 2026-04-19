@@ -55,6 +55,10 @@ typedef struct {
     uint32_t ptgRisingRej;
     uint32_t ptgFallingAcc;         /* V5.0: falling-sector samples post-ZC */
     uint32_t ptgFallingRej;
+    uint32_t postZcRisingAcc;       /* V5.1: ADC ISR post-ZC shadow counters */
+    uint32_t postZcRisingRej;
+    uint32_t postZcFallingAcc;
+    uint32_t postZcFallingRej;
 } V4_TELEM_T;
 
 void     SectorPI_Init(void);
