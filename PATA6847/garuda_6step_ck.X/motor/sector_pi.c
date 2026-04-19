@@ -96,10 +96,15 @@ static volatile uint16_t   measuredSpeed;
 #define CL_SETTLE_MS  500U
 static volatile uint16_t clSettleCounter = 0;
 
-/* V5.2 measurement-based period tracker. Defined unconditionally so the
- * telemetry populator works without flag gating; only updated when
- * FEATURE_V5_MEAS_PI=1. Value 0 means "not yet seeded". */
-volatile uint16_t v5_tMeasHR = 0;
+/* V5.2 measurement-based period tracker.
+ *   v5_tMeasHR       — raw halved measuredCommPeriod, written by Commutate ISR.
+ *                       Fast path: single write, no branches. Noisy.
+ *   v5_tMeasHRSmooth — spike-filtered + EMA smoothed, written by TimeTick
+ *                       (1 ms rate where cycles are cheap). Clean value
+ *                       shipped in telemetry and used by MEAS_PI_OWN.
+ * Both defined unconditionally so telemetry works with flag off. */
+volatile uint16_t v5_tMeasHR       = 0;
+volatile uint16_t v5_tMeasHRSmooth = 0;
 
 /* ── Speed regulation (outer loop) ─────────────────────────────── */
 /* pot → targetSpeed, PI on (targetSpeed - measuredSpeed) → amplitude.
@@ -303,8 +308,10 @@ void SectorPI_Start(uint16_t vbusRaw)
     v5_postZcFallingAcc = 0;
     v5_postZcFallingRej = 0;
     /* V5.2: reset measurement tracker to unseeded. It seeds on first
-     * valid commutation interval in Commutate. */
-    v5_tMeasHR = 0;
+     * valid commutation interval in Commutate. Smoothed companion is
+     * seeded from the raw value in TimeTick. */
+    v5_tMeasHR       = 0;
+    v5_tMeasHRSmooth = 0;
 
     /* Start alignment — Timer1 ISR drives via SectorPI_OlTick() */
     alignCounter = ALIGN_TIME_COUNTS;
@@ -425,19 +432,29 @@ void SectorPI_Commutate(void)
     {
         actualStepPeriodHR = measuredCommPeriod;
 #if FEATURE_V5_MEAS_PI
-        /* V5.2 measurement-based tracker. One-pole exponential smoother
-         * on the per-commutation interval — this IS the real rotor
-         * sector period, independent of any capture timing assumptions
-         * the set-point PI's setValue formula encodes.
-         * Seeds on first valid sample, then smooths toward truth. */
-        if (v5_tMeasHR < V4_MIN_PERIOD) {
-            v5_tMeasHR = measuredCommPeriod;     /* seed */
-        } else {
-            int32_t err = (int32_t)measuredCommPeriod - (int32_t)v5_tMeasHR;
-            int32_t nt  = (int32_t)v5_tMeasHR + (err >> V5_MEAS_PI_ALPHA_SHIFT);
-            if (nt < V4_MIN_PERIOD) nt = V4_MIN_PERIOD;
-            if (nt > 0xFFFF)        nt = 0xFFFF;
-            v5_tMeasHR = (uint16_t)nt;
+        /* V5.2 tracker: halve measuredCommPeriod (raw reads 2× real sector
+         * period, root cause unresolved). Minimal single write — any
+         * additional ISR cycles destabilize the V4 Commutate timing. */
+        v5_tMeasHR = (uint16_t)(measuredCommPeriod >> 1);
+        if (v5_tMeasHR < V4_MIN_PERIOD) v5_tMeasHR = V4_MIN_PERIOD;
+#endif
+#if FEATURE_V5_MEAS_PI_OWN
+        /* V5.2 ownership: drive timerPeriod off the SMOOTHED tracker
+         * (v5_tMeasHRSmooth, filtered in TimeTick) — never the noisy
+         * raw v5_tMeasHR. One volatile read + 2 writes, no math, no
+         * branches beyond the SP gate. The reactive scheduler and
+         * fallback both read timerPeriod later in this ISR, so the
+         * overwrite steers commutation off measurement truth. The
+         * set-point PI block below still runs but its timerPeriod
+         * writes get overwritten by this one. Pre-seed guard: if the
+         * smoother hasn't seeded yet (early CL entry, first few
+         * Commutates), skip the overwrite so the ramp-seeded value
+         * from EnterCL stays intact. */
+        if (!v4_spActive && v5_tMeasHRSmooth >= V4_MIN_PERIOD) {
+            uint16_t t = v5_tMeasHRSmooth;
+            timerPeriod    = t;
+            integrator     = t;
+            v4_timerPeriod = t;
         }
 #endif
     }
@@ -565,7 +582,14 @@ void SectorPI_Commutate(void)
 #if FEATURE_V5_PTG_ZC || FEATURE_V5_POST_ZC_ACCEPT
         {
             extern volatile uint8_t v5_ptgExpectedComp;
-            v5_ptgExpectedComp = (step->zcPolarity > 0) ? 0U : 1U;
+            /* Expected post-ZC comp state from position parity
+             * (even steps 0,2,4 = rising sectors → comp drops to 0;
+             *  odd  steps 1,3,5 = falling sectors → comp rises to 1).
+             * NOTE: this value is biased 2T:ε in wallclock due to the
+             * V4 scheduler's ASAP+fallback pairing — see V5.3 scheduler
+             * rewrite proposal. The flag itself is correct per-sector;
+             * the software state just isn't 1:1 with physical rotor. */
+            v5_ptgExpectedComp = (uint8_t)(position & 1u);
         }
 #endif
         /* HAL_PTG_SetDelay call intentionally removed for this test. */
@@ -725,6 +749,32 @@ void SectorPI_TimeTick(void)
             commandEnabled = true;
     }
 
+#if FEATURE_V5_MEAS_PI
+    /* V5.2: spike-filter + EMA over v5_tMeasHR at 1 kHz. The Commutate
+     * ISR writes raw halved period (noisy, occasional near-zero samples
+     * from back-to-back fires). Filtering here keeps the hot path
+     * minimal — TimeTick has microseconds of slack.
+     * Reject any sample less than half the current smoother (the
+     * back-to-back spike signature), and EMA-smooth the rest with
+     * α=1/4 (V5_MEAS_PI_ALPHA_SHIFT). MEAS_PI_OWN reads v5_tMeasHRSmooth. */
+    {
+        uint16_t sample = v5_tMeasHR;
+        if (sample >= V4_MIN_PERIOD) {
+            if (v5_tMeasHRSmooth < V4_MIN_PERIOD) {
+                v5_tMeasHRSmooth = sample;           /* seed */
+            } else if (sample >= (v5_tMeasHRSmooth >> 1)) {
+                int32_t err = (int32_t)sample - (int32_t)v5_tMeasHRSmooth;
+                int32_t nt  = (int32_t)v5_tMeasHRSmooth
+                              + (err >> V5_MEAS_PI_ALPHA_SHIFT);
+                if (nt < V4_MIN_PERIOD) nt = V4_MIN_PERIOD;
+                if (nt > 0xFFFF)        nt = 0xFFFF;
+                v5_tMeasHRSmooth = (uint16_t)nt;
+            }
+            /* else: spike below half of smoother — drop sample */
+        }
+    }
+#endif
+
     /* Speed measurement */
     speedBase++;
     if (speedBase >= SPEED_MEAS_WINDOW)
@@ -851,7 +901,7 @@ void SectorPI_TelemGet(V4_TELEM_T *out)
         out->postZcRisingRej  = v5_postZcRisingRej;
         out->postZcFallingAcc = v5_postZcFallingAcc;
         out->postZcFallingRej = v5_postZcFallingRej;
-        out->tMeasHR          = v5_tMeasHR;            /* 0 when V5_MEAS=0 */
+        out->tMeasHR          = v5_tMeasHRSmooth;      /* smoothed; 0 when V5_MEAS=0 */
     }
 }
 

@@ -173,6 +173,13 @@ def decode_ck_snapshot(data):
         s['tMeasHR'] = struct.unpack_from('<H', data, 108)[0]
     else:
         s['tMeasHR'] = 0
+    # Full 32-bit sectorCount (was low-16 at offset 24; full at 110).
+    # Host computes sectorsPerSec from delta vs systemTick for an
+    # independent sanity check against firmware eRpm.
+    if len(data) >= 114:
+        s['sectorCountFull'] = struct.unpack_from('<I', data, 110)[0]
+    else:
+        s['sectorCountFull'] = 0
     # Derive the falling-ZC share.
     s['adcSetFalling'] = max(0, s['adcCaptureSet'] - s['adcSetRising'])
     # adcAlreadySet no longer shipped; left zeroed for legacy code.
@@ -448,13 +455,18 @@ def main():
     # V5.2 column:      eTPm (measurement-PI eRPM estimate) — compare to
     #                   eRpm: if ratio 1.0, measurement tracker is correct
     #                   (V4 set-point PI sits at eRpm/2, the bug V5.2 fixes).
-    print(f"{'Time':>7s} {'State':>8s} {'eRPM':>7s} {'Duty':>4s} {'Vbus':>6s} {'SP':>2s} {'eTP':>6s} {'eTPm':>6s} {'Cap%':>5s} {'Bnk%':>5s} {'Mis%':>5s} {'Set%':>5s} {'R/F%':>7s} {'Fires':>9s} {'OffOK':>7s} {'OffBd':>7s} {'PTG':>8s} {'pR%':>4s} {'pF%':>4s} {'p2R%':>5s} {'p2F%':>5s}")
-    print("-" * 151)
+    # eRsc column:      host-derived eRpm from delta(sectorCount)/delta(systemTick) × 10.
+    #                   Independent of firmware eRpm formula and eTPm encoding —
+    #                   this is ground truth for Commutate rate.
+    print(f"{'Time':>7s} {'State':>8s} {'eRPM':>7s} {'eRsc':>6s} {'Duty':>4s} {'Vbus':>6s} {'SP':>2s} {'eTP':>6s} {'eTPm':>7s} {'Cap%':>5s} {'Bnk%':>5s} {'Mis%':>5s} {'Set%':>5s} {'R/F%':>7s} {'Fires':>9s} {'OffOK':>7s} {'OffBd':>7s} {'PTG':>8s} {'pR%':>4s} {'pF%':>4s} {'p2R%':>5s} {'p2F%':>5s}")
+    print("-" * 159)
 
     rows = []
     buf = b''
     t0 = time.time()
     sample_count = 0
+    prev_sector_count = None
+    prev_system_tick = None
 
     try:
         while (time.time() - t0) < args.duration:
@@ -591,8 +603,25 @@ def main():
                 # V5.2 measurement-PI eRPM equivalent
                 tMeas = snap.get('tMeasHR', 0)
                 etpm  = (15625000 // tMeas) if tMeas > 0 else 0
-                if etpm > 99999: etpm = 99999  # display clamp
-                print(f"{t:7.1f} {state_str:>8s} {snap['eRpm']:7d} {snap['dutyPct']:3d}% {snap['vbusV']:5.1f}V {sp_str:>2s} {etp:6d} {etpm:6d} {cap_pct:4d}% {bnk_pct:4.0f}% {mis_pct:4.0f}% {set_pct:4.0f}% {rf_s:>7s} {fires_s:>9s} {offok_s:>7s} {offbd_s:>7s} {ptg_s:>8s} {pr_pct:3.0f}% {pf_pct:3.0f}% {p2r_pct:4.0f}% {p2f_pct:4.0f}%{fault_str}")
+                if etpm > 999999: etpm = 999999  # display clamp (6 digits)
+                # Host-derived eRpm from sectorCount delta (independent of
+                # firmware eRpm formula). eRpm = sectors/sec × 10
+                # (= sectors/sec × 60/6 since 6 sectors per electrical rev).
+                sc_now = snap.get('sectorCountFull', 0)
+                st_now = snap.get('systemTick', 0)  # ms
+                if prev_sector_count is not None and prev_system_tick is not None:
+                    dsc = (sc_now - prev_sector_count) & 0xFFFFFFFF
+                    dst_ms = (st_now - prev_system_tick) & 0xFFFFFFFF
+                    if dst_ms > 0 and dsc < 0x80000000:
+                        ersc = int(dsc * 10000 / dst_ms)  # sectors/sec × 10
+                    else:
+                        ersc = 0
+                else:
+                    ersc = 0
+                prev_sector_count = sc_now
+                prev_system_tick = st_now
+                if ersc > 999999: ersc = 999999
+                print(f"{t:7.1f} {state_str:>8s} {snap['eRpm']:7d} {ersc:6d} {snap['dutyPct']:3d}% {snap['vbusV']:5.1f}V {sp_str:>2s} {etp:6d} {etpm:7d} {cap_pct:4d}% {bnk_pct:4.0f}% {mis_pct:4.0f}% {set_pct:4.0f}% {rf_s:>7s} {fires_s:>9s} {offok_s:>7s} {offbd_s:>7s} {ptg_s:>8s} {pr_pct:3.0f}% {pf_pct:3.0f}% {p2r_pct:4.0f}% {p2f_pct:4.0f}%{fault_str}")
 
                 rows.append({
                     'time': round(t, 3),

@@ -100,28 +100,21 @@ void HAL_PTG_Init(void)
 
 void HAL_PTG_Start(void)
 {
-    /* Full re-init on every motor start so post-desync restarts get a
-     * clean PTG state. The boot-time HAL_PTG_Init alone leaves residual
-     * register values from the previous run that can pin the state
-     * machine in odd places after a desync/restart cycle. */
+    /* Full re-init on every motor start for clean post-desync state. */
     HAL_PTG_Init();
 
-    /* Reset diagnostic counters so each run shows fresh ratios. */
-    v5_ptgFires      = 0;
-    v5_ptgRisingAcc  = 0;
-    v5_ptgRisingRej  = 0;
-    v5_ptgFallingAcc = 0;
-    v5_ptgFallingRej = 0;
+    v5_ptgFires        = 0;
+    v5_ptgRisingAcc    = 0;
+    v5_ptgRisingRej    = 0;
+    v5_ptgFallingAcc   = 0;
+    v5_ptgFallingRej   = 0;
     v5_ptgExpectedComp = 0;
 
-    /* DIAGNOSTIC step 2d: keep PTG hardware running but DO NOT enable
-     * the IRQ. This isolates the cost of PTG state machine activity
-     * from the cost of the ISR fire itself. If the motor reaches V4
-     * speeds (~107k) here, the ISR latency on ADC was the culprit; if
-     * it still desyncs at ~78k, the PTG hardware itself is the source
-     * (perhaps SFR-bus contention, or some PWM trigger interaction). */
+    /* Step 2 of PTG reopen: enable IRQ. ISR is minimal (v5_ptgFires++).
+     * At 40 kHz PWM valley rate, ISR fires 40k/sec. Priority 4 means
+     * Timer1 and CCP can preempt, so Commutate timing stays protected. */
     _PTG0IF = 0;
-    _PTG0IE = 0;                /* TEMPORARILY DISABLED for isolation */
+    _PTG0IE = 1;
     PTGCST  = 0x8000;           /* PTGEN = 1, PTGSTRT = 0 */
     PTGCSTbits.PTGSTRT = 1;     /* start queue execution */
 }
@@ -144,21 +137,30 @@ void HAL_PTG_SetDelay(uint16_t ptgTicks)
 /* ── PTG0 ISR ─────────────────────────────────────────────────────── */
 /* Fires at (PWM valley + PTGT0LIM PTG ticks).
  *
- * Step-2c body: bare minimum — count fires, exit. The earlier body that
- * read BEMF GPIO and tallied accept/reject was already proven (pR≈67,
- * pF≈67 in step 2b bench data) but cost enough CPU at high speed to
- * cap the motor at 77 kRPM vs V4's 107 kRPM. Shadow accept counters
- * (v5_ptgRising/FallingAcc/Rej) are kept defined so telemetry still
- * decodes; they just don't increment from this ISR anymore.
+ * Step-3 body: sample BEMF and classify per polarity.
+ *   expected == 0 → rising sector; comp should drop to 0 after ZC.
+ *   expected == 1 → falling sector; comp should rise to 1 after ZC.
+ *   comp == expected → accept (ZC has passed), else reject.
  *
- * To reintroduce per-polarity sampling later without the speed hit,
- * either (a) halve PTG fire rate via the step queue (WHI twice) or
- * (b) feed PTG samples into the PI directly so the work pays off in
- * better PI tracking, not just diagnostic counters. */
+ * The pR%/pF% columns on host show post-ZC ratio per polarity. If both
+ * climb toward 100% at steady CL, symmetric sensing works — the
+ * prerequisite for actually capturing falling-sector ZCs. */
 void __attribute__((interrupt, no_auto_psv)) _PTG0Interrupt(void)
 {
     _PTG0IF = 0;
     v5_ptgFires++;
+
+    uint8_t comp     = ReadBemfCompLocal();
+    uint8_t expected = v5_ptgExpectedComp;
+    if (expected == 0u) {
+        /* Rising sector */
+        if (comp == 0u) v5_ptgRisingAcc++;
+        else            v5_ptgRisingRej++;
+    } else {
+        /* Falling sector */
+        if (comp == 1u) v5_ptgFallingAcc++;
+        else            v5_ptgFallingRej++;
+    }
 }
 
 #endif /* FEATURE_V5_PTG_ZC */

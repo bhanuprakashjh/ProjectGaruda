@@ -833,7 +833,7 @@
  * When =1: PTG init runs at motor start, ISR counts samples (shadow
  *          only in V5.0-step1 — does NOT set v4_captureValid). */
 #ifndef FEATURE_V5_PTG_ZC
-#define FEATURE_V5_PTG_ZC  0
+#define FEATURE_V5_PTG_ZC  1
 #endif
 
 /* PTG ISR priority — above ADC(3), tied with Timer1(4), below CCP(5).
@@ -910,7 +910,7 @@
  * smooth more (slower response to speed changes); lower shifts
  * track tighter but are noisier. */
 #ifndef FEATURE_V5_MEAS_PI
-#define FEATURE_V5_MEAS_PI  0
+#define FEATURE_V5_MEAS_PI  1
 #endif
 
 #ifndef FEATURE_V5_MEAS_PI_OWN
