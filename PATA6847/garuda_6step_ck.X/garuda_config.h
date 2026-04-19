@@ -925,6 +925,42 @@
 #define V5_MEAS_PI_ALPHA_SHIFT  2    /* α = 1/4, matches V4 Ki shift */
 #endif
 
+/* ── V5.3 scheduler rewrite (AM32-style) ────────────────────────
+ * Root cause of everything V5.0/V5.1/V5.2 hit: the V4 set-point PI
+ * scheduler fires Commutates in PAIRS — one reactive (ASAP, because
+ * lastCaptureHR + delayHR is always slightly past) and one fallback
+ * (2T later). Over each 2T wallclock, it runs 2 Commutates and
+ * advances position by 2. Software state isn't 1:1 with the
+ * physical rotor sector, which breaks any per-sector reasoning
+ * (eTP=eRpm/2, PTG bucket skew, can't use captures on falling
+ * sectors).
+ *
+ * V5.3 architecture:
+ *   - One Commutate per physical sector (6 per elec rev).
+ *   - Commutate fires at lastCaptureHR + (T_sector/2 - advance).
+ *   - T_sector = thisCaptureHR - prevCaptureHR (capture-to-capture,
+ *     one sector apart — not 2x like V4's measuredCommPeriod).
+ *   - Both CCP2 (rising) and CCP5 (falling) feed captures. PTG
+ *     provides the back-up polarity discriminator.
+ *   - position advances once per Commutate, tracking physical
+ *     rotor sectors 1:1.
+ *   - No ASAP pair firing: scheduler guarantees target is always
+ *     at least N HR in the future before writing CCP3PRL.
+ *
+ * Flag-gated so V4 stays the fallback. V5_SCHEDULER=0 → V4 path
+ * (current working 109k baseline). V5_SCHEDULER=1 → V5.3 path. */
+#ifndef FEATURE_V5_SCHEDULER
+#define FEATURE_V5_SCHEDULER  0   /* WIP — motor runs chaotically, needs deeper
+                                   * rework. V4 scheduler (flag=0) is the proven
+                                   * 109k baseline. V5.3 implementation lives in
+                                   * sector_pi.c:CommutateV5_3 + garuda_service.c
+                                   * :V5_AcceptCapture — all gated by this flag. */
+#endif
+
+#if FEATURE_V5_SCHEDULER && !FEATURE_V4_SECTOR_PI
+#error "FEATURE_V5_SCHEDULER builds on top of V4 scaffolding — keep V4 flag on"
+#endif
+
 /* Default PTGT0LIM values. At FCY=100 MHz with PTGDIV=0, 1 tick = 10 ns.
  * LOOPTIME_TCY is in PWM counter ticks (5 ns each on this CK device —
  * FOSC_PWM 400 MHz with internal /2 divider on the PWM counter).

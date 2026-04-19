@@ -200,6 +200,94 @@ extern volatile uint16_t v4_blankingEndHR;
 extern volatile uint16_t v4_timerPeriod;  /* from sector_pi.c */
 extern volatile bool     v4_spActive;     /* from sector_pi.c: SP mode flag */
 
+#if FEATURE_V5_SCHEDULER
+/* V5.3 scheduler state (from sector_pi.c). CCP ISRs update these
+ * on ZC capture and schedule next Commutate. */
+extern volatile uint16_t sched_prevCaptureHR;
+extern volatile uint16_t sched_thisCaptureHR;
+extern volatile uint16_t sched_Tsector;
+extern volatile uint8_t  sched_captureSource;
+extern volatile uint32_t sched_diagRisingAcc;
+extern volatile uint32_t sched_diagFallingAcc;
+extern volatile uint32_t sched_diagScheduleLate;
+extern volatile uint32_t sched_diagScheduleOk;
+extern volatile uint32_t sched_diagImplausible;
+extern volatile bool     sched_firstCapture;
+#define V5_SCHED_FORWARD_MARGIN_HR  100u     /* min 64µs → >2 PWM cycles */
+
+/* Shared V5.3 capture accept helper — called from both CCP2 and CCP5
+ * ISRs after polarity/deglitch validation. Handles first-capture seed,
+ * dt plausibility, EMA update, and scheduling with forward margin. */
+static inline void V5_AcceptCapture(uint16_t hr, uint8_t source)
+{
+    if (sched_firstCapture) {
+        /* Bootstrap: use the ramp-seeded sched_Tsector for the first
+         * schedule. Skip dt computation (prev values are zero). */
+        sched_thisCaptureHR = hr;
+        sched_prevCaptureHR = hr;
+        sched_captureSource = source;
+        sched_firstCapture = false;
+    } else {
+        uint16_t dt = (uint16_t)(hr - sched_thisCaptureHR);
+        /* Plausibility: absolute noise floor only (100 HR = 64µs,
+         * above PWM switching settle). No upper bound from T — motor
+         * acceleration must be allowed (dt shrinking is legal).
+         * If dt > 4T we probably missed multiple sectors — reject and
+         * let fallback fire so we don't corrupt T upward. */
+        if (dt < 100u) {
+            sched_diagImplausible++;
+            return;        /* noise — no state update */
+        }
+        uint16_t hiLimit = (sched_Tsector < 0x4000u) ? (sched_Tsector << 2) : 0xFFFFu;
+        if (dt > hiLimit) {
+            sched_diagImplausible++;
+            return;        /* too slow — probably missed multiple sectors */
+        }
+        /* Accept — advance capture history, EMA T. If dt is much
+         * larger than T (1.5T-4T range) it may be a missed sector
+         * (dt = 2× real period); apply weaker EMA (α=1/8) so T doesn't
+         * balloon. Otherwise use α=1/4 for normal tracking. */
+        sched_prevCaptureHR = sched_thisCaptureHR;
+        sched_thisCaptureHR = hr;
+        sched_captureSource = source;
+        int32_t err = (int32_t)dt - (int32_t)sched_Tsector;
+        int32_t nt;
+        if (dt > (uint16_t)(sched_Tsector + (sched_Tsector >> 1))) {
+            nt = (int32_t)sched_Tsector + (err >> 3);   /* weak: might be 2×T */
+        } else {
+            nt = (int32_t)sched_Tsector + (err >> 2);   /* normal */
+        }
+        if (nt < 10)     nt = 10;
+        if (nt > 0xFFFF) nt = 0xFFFF;
+        sched_Tsector = (uint16_t)nt;
+    }
+    /* Compute target = hr + (T/2 - advance). */
+    uint16_t halfT = sched_Tsector >> 1;
+    uint16_t tal   = (sched_Tsector < 260u) ? 3u : 2u;
+    uint16_t advHR = (uint16_t)((sched_Tsector >> 3) * tal);
+    uint16_t delayHR = (halfT > advHR) ? (halfT - advHR) : V5_SCHED_FORWARD_MARGIN_HR;
+    uint16_t target = (uint16_t)(hr + delayHR);
+    /* Forward margin: max(100 HR, T/4). Never fire Commutate sooner
+     * than blanking-width after now — prevents chatter cascades. */
+    uint16_t minMargin = sched_Tsector >> 2;
+    if (minMargin < V5_SCHED_FORWARD_MARGIN_HR) minMargin = V5_SCHED_FORWARD_MARGIN_HR;
+    uint16_t nowHR = HAL_ComTimer_ReadTimer();
+    int16_t margin = (int16_t)(target - nowHR);
+    if (margin < (int16_t)minMargin) {
+        target = (uint16_t)(nowHR + minMargin);
+        sched_diagScheduleLate++;
+    } else {
+        sched_diagScheduleOk++;
+    }
+    HAL_ComTimer_ScheduleAbsolute(target);
+    v4_captureValid = true;
+    v4_lastCaptureHR = hr;
+    /* Disable CCP ISRs — next Commutate re-enables after reconfig. */
+    _CCP2IE = 0;
+    _CCP5IE = 0;
+}
+#endif
+
 /* ── ADC midpoint ZC diagnostic counters (Mode 1) ─────────────── */
 /* Used to diagnose why capture rate sits at ~50% at high speed.
  * Reset on motor start in SectorPI_Start().
@@ -428,6 +516,33 @@ void __attribute__((interrupt, no_auto_psv)) _CCP2Interrupt(void)
     bool got = false;
     while (CCP2STATLbits.ICBNE) { ts = CCP2BUFL; got = true; }
 
+#if FEATURE_V5_SCHEDULER
+    /* V5.3 path: validate rising-ZC capture, hand off to shared helper. */
+    if (got && HAL_Capture_IsRisingZc() && !v4_captureValid) {
+        uint16_t hr = (uint16_t)(ts + HAL_Capture_GetCcp2Offset());
+        if ((int16_t)(hr - v4_blankingEndHR) >= 0) {
+            /* Rising ZC → comp settles at 0. Deglitch. */
+            uint8_t r1 = ReadBEMFComp();
+            bool accept;
+            if (sched_Tsector < 260) {
+                accept = (r1 == 0);
+            } else {
+                Nop(); Nop(); Nop(); Nop(); Nop();
+                uint8_t r2 = ReadBEMFComp();
+                Nop(); Nop(); Nop(); Nop(); Nop();
+                uint8_t r3 = ReadBEMFComp();
+                accept = (r1 == 0 && r2 == 0 && r3 == 0);
+            }
+            if (accept) {
+                sched_diagRisingAcc++;
+                V5_AcceptCapture(hr, 0);
+            }
+        }
+    }
+    _CCP2IF = 0;
+    return;
+#endif
+
     /* SP mode: hardware comparator IC owns ZC. Dynamic blanking in the
      * commutation ISR physically rejects the pulse turn-off edge
      * (blanking extends past amp×T + settle). A single GPIO state read
@@ -511,6 +626,33 @@ void __attribute__((interrupt, no_auto_psv)) _CCP5Interrupt(void)
     uint16_t ts = 0;
     bool got = false;
     while (CCP5STATLbits.ICBNE) { ts = CCP5BUFL; got = true; }
+
+#if FEATURE_V5_SCHEDULER
+    /* V5.3 path: validate falling-ZC capture, hand off to shared helper. */
+    if (got && !HAL_Capture_IsRisingZc() && !v4_captureValid) {
+        uint16_t hr = (uint16_t)(ts + HAL_Capture_GetCcp5Offset());
+        if ((int16_t)(hr - v4_blankingEndHR) >= 0) {
+            /* Falling ZC → comp settles at 1. Deglitch. */
+            uint8_t r1 = ReadBEMFComp();
+            bool accept;
+            if (sched_Tsector < 260) {
+                accept = (r1 == 1);
+            } else {
+                Nop(); Nop(); Nop(); Nop(); Nop();
+                uint8_t r2 = ReadBEMFComp();
+                Nop(); Nop(); Nop(); Nop(); Nop();
+                uint8_t r3 = ReadBEMFComp();
+                accept = (r1 == 1 && r2 == 1 && r3 == 1);
+            }
+            if (accept) {
+                sched_diagFallingAcc++;
+                V5_AcceptCapture(hr, 1);
+            }
+        }
+    }
+    _CCP5IF = 0;
+    return;
+#endif
 
     /* SP mode: falling-ZC hardware capture. Dynamic blanking +
      * single GPIO read. Mirror of CCP2 path. */

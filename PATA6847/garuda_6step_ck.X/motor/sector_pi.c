@@ -106,6 +106,38 @@ static volatile uint16_t clSettleCounter = 0;
 volatile uint16_t v5_tMeasHR       = 0;
 volatile uint16_t v5_tMeasHRSmooth = 0;
 
+/* ── V5.3 scheduler state ───────────────────────────────────────
+ * Used only when FEATURE_V5_SCHEDULER=1. Defined unconditionally so
+ * telemetry and tooling can reference fields without flag gating.
+ *
+ * sched_prevCaptureHR / sched_thisCaptureHR:
+ *   Capture timestamps from the last two ZC events (either CCP2
+ *   rising or CCP5 falling). T_sector = this - prev. Unlike V4's
+ *   measuredCommPeriod (Commutate-to-Commutate, which reads 2×
+ *   because of ASAP pair firing), this is 1 physical sector.
+ *
+ * sched_Tsector:
+ *   Raw per-sector period in HR ticks. Updated on each new
+ *   capture. No EMA here — the scheduler uses this directly.
+ *
+ * sched_captureSource:
+ *   0 = last capture was from rising (CCP2)
+ *   1 = last capture was from falling (CCP5)
+ *   Used to sanity-check that captures alternate (rising-falling).
+ *
+ * sched_diag* counters:
+ *   Accepted captures per polarity, schedule misses, etc. */
+volatile uint16_t sched_prevCaptureHR   = 0;
+volatile uint16_t sched_thisCaptureHR   = 0;
+volatile uint16_t sched_Tsector         = 0;
+volatile uint8_t  sched_captureSource   = 0;
+volatile bool     sched_firstCapture    = true;   /* true after EnterCL */
+volatile uint32_t sched_diagRisingAcc   = 0;
+volatile uint32_t sched_diagFallingAcc  = 0;
+volatile uint32_t sched_diagImplausible = 0;    /* dt outside [T/2, 1.5T] */
+volatile uint32_t sched_diagScheduleLate = 0;   /* target was past */
+volatile uint32_t sched_diagScheduleOk  = 0;    /* target was future */
+
 /* ── Speed regulation (outer loop) ─────────────────────────────── */
 /* pot → targetSpeed, PI on (targetSpeed - measuredSpeed) → amplitude.
  * This is the AVR's __Speed_Control. Runs at 1ms in TimeTick.
@@ -223,6 +255,24 @@ static void EnterCL(void)
 
     /* Seed lastCommHR for PI elapsed calculation */
     lastCommHR = HAL_ComTimer_ReadTimer();
+
+#if FEATURE_V5_SCHEDULER
+    /* V5.3: seed scheduler state from ramp period. sched_Tsector is
+     * the per-physical-sector period (not 2× like V4's measured).
+     * First-capture flag tells CCP ISR to accept the first capture
+     * unconditionally and use the ramp-derived sched_Tsector for
+     * its initial schedule — avoids computing dt from stale seeds. */
+    sched_Tsector       = (uint16_t)hrPeriod;
+    sched_thisCaptureHR = 0;
+    sched_prevCaptureHR = 0;
+    sched_captureSource = 0;
+    sched_firstCapture  = true;
+    sched_diagRisingAcc    = 0;
+    sched_diagFallingAcc   = 0;
+    sched_diagImplausible  = 0;
+    sched_diagScheduleLate = 0;
+    sched_diagScheduleOk   = 0;
+#endif
 
     /* Schedule first CL commutation via one-shot SCCP3 */
     HAL_ComTimer_ScheduleAbsolute(lastCommHR + timerPeriod);
@@ -415,10 +465,103 @@ void SectorPI_OlTick(void)
     /* CL phase: CCP ISRs handle FIFO drain continuously */
 }
 
+/* ── V5.3 scheduler: one Commutate per physical sector ──────────
+ * Called from SCCP3 ISR dispatch when FEATURE_V5_SCHEDULER=1. This
+ * Commutate only advances PWM state — the scheduling of the NEXT
+ * Commutate happens in the CCP2/CCP5 ISR when a new ZC capture
+ * arrives. If no capture arrives, we fall back to a timer-based
+ * re-fire at (thisCommHR + sched_Tsector) so the motor doesn't
+ * stall.
+ *
+ * Position advances 1 per call, so Commutate rate = 6 per elec rev
+ * = physical sector rate. Software position tracks physical rotor.
+ *
+ * Gated entirely by FEATURE_V5_SCHEDULER so when off, this function
+ * doesn't exist in the binary.
+ *
+ * Diagnostics: sched_diag* counters, plus for backwards compat with
+ * existing telemetry we populate actualStepPeriodHR/timerPeriod/
+ * v4_timerPeriod from sched_Tsector so eTP reads match reality. */
+#if FEATURE_V5_SCHEDULER
+
+#define V5_SCHED_FORWARD_MARGIN_HR  10u    /* min forward margin on schedule */
+#define V5_SCHED_BLANKING_MIN_HR    10u    /* min blanking after commutation */
+
+static void CommutateV5_3(void)
+{
+    /* 1. Disable CCP ISRs during reconfiguration. */
+    _CCP2IE = 0;
+    _CCP5IE = 0;
+
+    uint16_t thisCommHR = HAL_ComTimer_ReadTimer();
+
+    /* 2. Advance position 1:1 with physical rotor. */
+    position++;
+    if (position > 5) position = 0;
+    HAL_PWM_SetCommutationStep(position);
+
+    /* 3. Configure CCP for NEW sector's floating phase and ZC polarity. */
+    const COMMUTATION_STEP_T *step = &commutationTable[position];
+    HAL_Capture_Configure(bemfRpPin[step->floatingPhase],
+                          step->zcPolarity > 0);
+
+    extern volatile uint8_t v4_floatingPhase;
+    v4_floatingPhase = step->floatingPhase;
+
+    /* 4. Flush FIFOs, clear flags, reset captureValid. */
+    while (CCP2STATLbits.ICBNE) (void)CCP2BUFL;
+    while (CCP5STATLbits.ICBNE) (void)CCP5BUFL;
+    _CCP2IF = 0;
+    _CCP5IF = 0;
+    v4_captureValid = false;
+
+    /* 5. Blanking: 25% of sector period (minimum safety floor). */
+    uint16_t blankHR = sched_Tsector >> 2;
+    if (blankHR < V5_SCHED_BLANKING_MIN_HR) blankHR = V5_SCHED_BLANKING_MIN_HR;
+    extern volatile uint16_t v4_blankingEndHR;
+    v4_blankingEndHR = (uint16_t)(thisCommHR + blankHR);
+
+    /* 6. PTG ISR expected comp state (same position-parity logic). */
+#if FEATURE_V5_PTG_ZC || FEATURE_V5_POST_ZC_ACCEPT
+    {
+        extern volatile uint8_t v5_ptgExpectedComp;
+        v5_ptgExpectedComp = (uint8_t)(position & 1u);
+    }
+#endif
+
+    /* 7. Fallback schedule: if no capture arrives, re-fire at
+     * thisCommHR + sched_Tsector so the motor keeps moving. The
+     * common case is CCP ISR re-schedules us at (capture + T/2 -
+     * advance) before this fires. */
+    HAL_ComTimer_ScheduleAbsolute((uint16_t)(thisCommHR + sched_Tsector));
+
+    /* 8. Re-enable CCP ISRs. */
+    _CCP2IE = 1;
+    _CCP5IE = 1;
+
+    /* 9. Expose to existing telemetry paths so eTP/eRpm read correct. */
+    actualStepPeriodHR = sched_Tsector;
+    timerPeriod        = sched_Tsector;
+    v4_timerPeriod     = sched_Tsector;
+    lastCommHR         = thisCommHR;
+
+    /* 10. Speed counting. */
+    speedCounter++;
+    sectorCount++;
+}
+#endif /* FEATURE_V5_SCHEDULER */
+
 /* ── Called from SCCP3 ISR (sector timer match) — CL only ───────── */
 void SectorPI_Commutate(void)
 {
     if (phase != V4_CLOSED_LOOP) return;
+
+#if FEATURE_V5_SCHEDULER
+    CommutateV5_3();
+    return;
+#endif
+
+    /* V4 path below — unchanged when FEATURE_V5_SCHEDULER=0. */
 
     /* 1. Disable CCP ISRs during critical section */
     _CCP2IE = 0;
