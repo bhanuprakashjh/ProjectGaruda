@@ -96,6 +96,11 @@ static volatile uint16_t   measuredSpeed;
 #define CL_SETTLE_MS  500U
 static volatile uint16_t clSettleCounter = 0;
 
+/* V5.2 measurement-based period tracker. Defined unconditionally so the
+ * telemetry populator works without flag gating; only updated when
+ * FEATURE_V5_MEAS_PI=1. Value 0 means "not yet seeded". */
+volatile uint16_t v5_tMeasHR = 0;
+
 /* ── Speed regulation (outer loop) ─────────────────────────────── */
 /* pot → targetSpeed, PI on (targetSpeed - measuredSpeed) → amplitude.
  * This is the AVR's __Speed_Control. Runs at 1ms in TimeTick.
@@ -297,6 +302,9 @@ void SectorPI_Start(uint16_t vbusRaw)
     v5_postZcRisingRej  = 0;
     v5_postZcFallingAcc = 0;
     v5_postZcFallingRej = 0;
+    /* V5.2: reset measurement tracker to unseeded. It seeds on first
+     * valid commutation interval in Commutate. */
+    v5_tMeasHR = 0;
 
     /* Start alignment — Timer1 ISR drives via SectorPI_OlTick() */
     alignCounter = ALIGN_TIME_COUNTS;
@@ -416,6 +424,22 @@ void SectorPI_Commutate(void)
     if (measuredCommPeriod >= V4_MIN_PERIOD)
     {
         actualStepPeriodHR = measuredCommPeriod;
+#if FEATURE_V5_MEAS_PI
+        /* V5.2 measurement-based tracker. One-pole exponential smoother
+         * on the per-commutation interval — this IS the real rotor
+         * sector period, independent of any capture timing assumptions
+         * the set-point PI's setValue formula encodes.
+         * Seeds on first valid sample, then smooths toward truth. */
+        if (v5_tMeasHR < V4_MIN_PERIOD) {
+            v5_tMeasHR = measuredCommPeriod;     /* seed */
+        } else {
+            int32_t err = (int32_t)measuredCommPeriod - (int32_t)v5_tMeasHR;
+            int32_t nt  = (int32_t)v5_tMeasHR + (err >> V5_MEAS_PI_ALPHA_SHIFT);
+            if (nt < V4_MIN_PERIOD) nt = V4_MIN_PERIOD;
+            if (nt > 0xFFFF)        nt = 0xFFFF;
+            v5_tMeasHR = (uint16_t)nt;
+        }
+#endif
     }
     uint16_t capValue = CAP_SENTINEL;
 
@@ -827,6 +851,7 @@ void SectorPI_TelemGet(V4_TELEM_T *out)
         out->postZcRisingRej  = v5_postZcRisingRej;
         out->postZcFallingAcc = v5_postZcFallingAcc;
         out->postZcFallingRej = v5_postZcFallingRej;
+        out->tMeasHR          = v5_tMeasHR;            /* 0 when V5_MEAS=0 */
     }
 }
 

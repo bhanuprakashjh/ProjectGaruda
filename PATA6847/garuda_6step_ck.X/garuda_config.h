@@ -878,6 +878,53 @@
 #error "FEATURE_V5_POST_ZC_OWN requires FEATURE_V5_POST_ZC_ACCEPT"
 #endif
 
+/* ── V5.2 Measurement-based PI ─────────────────────────────────
+ * V4's set-point PI converges to a wrong equilibrium (eTP ≈ eRpm/2)
+ * and collapses to its floor when capture timing semantics change
+ * (e.g., PTG sampling, hardware edge captures). Root cause: the
+ * setValue formula models a specific capture convention (first
+ * pre-ZC sample after blanking), so any sensor that delivers data
+ * with different statistics breaks the equilibrium search.
+ *
+ * V5.2 fix: replace `timerPeriod ← integrator + delta/4` with a
+ * simple exponential smoother on the measured commutation interval:
+ *   v5_tMeasHR += (actualStepPeriodHR - v5_tMeasHR) >> alpha_shift
+ *
+ * This tracks T_real directly and doesn't care about the capture
+ * sample moment. The reactive scheduler still uses capture
+ * timestamps for *when* to commutate; the period estimate becomes
+ * truly independent of what the ZC sensor delivers.
+ *
+ * V5.2-step1 (FEATURE_V5_MEAS_PI=1, FEATURE_V5_MEAS_PI_OWN=0):
+ *   Shadow only — v5_tMeasHR updates in parallel with the set-point
+ *   PI, exposed via telemetry (eTPm column). Compare eTPm to eRpm:
+ *   if eTPm tracks eRpm while eTP (set-point PI) shows half, the
+ *   measurement tracker is correct.
+ * V5.2-step2 (FEATURE_V5_MEAS_PI_OWN=1):
+ *   v5_tMeasHR actually drives timerPeriod. Set-point PI bypassed.
+ *   Reactive scheduling and everything downstream reads the new
+ *   value. With OWN=1 + PTG, we finally get symmetric captures on a
+ *   PI that tracks truth.
+ *
+ * Alpha shift 2 (= 1/4) mirrors V4's Ki choice. Higher shifts
+ * smooth more (slower response to speed changes); lower shifts
+ * track tighter but are noisier. */
+#ifndef FEATURE_V5_MEAS_PI
+#define FEATURE_V5_MEAS_PI  0
+#endif
+
+#ifndef FEATURE_V5_MEAS_PI_OWN
+#define FEATURE_V5_MEAS_PI_OWN  0   /* requires FEATURE_V5_MEAS_PI */
+#endif
+
+#if FEATURE_V5_MEAS_PI_OWN && !FEATURE_V5_MEAS_PI
+#error "FEATURE_V5_MEAS_PI_OWN requires FEATURE_V5_MEAS_PI"
+#endif
+
+#ifndef V5_MEAS_PI_ALPHA_SHIFT
+#define V5_MEAS_PI_ALPHA_SHIFT  2    /* α = 1/4, matches V4 Ki shift */
+#endif
+
 /* Default PTGT0LIM values. At FCY=100 MHz with PTGDIV=0, 1 tick = 10 ns.
  * LOOPTIME_TCY is in PWM counter ticks (5 ns each on this CK device —
  * FOSC_PWM 400 MHz with internal /2 divider on the PWM counter).

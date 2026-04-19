@@ -165,6 +165,14 @@ def decode_ck_snapshot(data):
         s['postZcRisingRej']  = 0
         s['postZcFallingAcc'] = 0
         s['postZcFallingRej'] = 0
+    # V5.2 measurement-based period tracker. 0 means flag off or unseeded.
+    # eTPm eRPM-equivalent = 15625000/tMeasHR. Compare to eRpm: if eTPm
+    # tracks eRpm (ratio 1.0), measurement PI works. V4 set-point PI
+    # sits at eTP ≈ eRpm/2 (wrong equilibrium).
+    if len(data) >= 110:
+        s['tMeasHR'] = struct.unpack_from('<H', data, 108)[0]
+    else:
+        s['tMeasHR'] = 0
     # Derive the falling-ZC share.
     s['adcSetFalling'] = max(0, s['adcCaptureSet'] - s['adcSetRising'])
     # adcAlreadySet no longer shipped; left zeroed for legacy code.
@@ -437,11 +445,11 @@ def main():
     #           class is wholly missing its ZC every commutation.
     # V5.0 PTG columns: PTG/pR%/pF% (PTG ISR samples)
     # V5.1 ADC columns: p2R%/p2F% (ADC ISR shadow with post-ZC convention)
-    # If V5.1 logic is correct, p2R% and p2F% should match the PTG-era
-    # pR%/pF% values (~67% each) since ADC and PTG sample at the same
-    # PWM valley moment.
-    print(f"{'Time':>7s} {'State':>8s} {'eRPM':>7s} {'Duty':>4s} {'Vbus':>6s} {'SP':>2s} {'eTP':>6s} {'Cap%':>5s} {'Bnk%':>5s} {'Mis%':>5s} {'Set%':>5s} {'R/F%':>7s} {'Fires':>9s} {'OffOK':>7s} {'OffBd':>7s} {'PTG':>8s} {'pR%':>4s} {'pF%':>4s} {'p2R%':>5s} {'p2F%':>5s}")
-    print("-" * 144)
+    # V5.2 column:      eTPm (measurement-PI eRPM estimate) — compare to
+    #                   eRpm: if ratio 1.0, measurement tracker is correct
+    #                   (V4 set-point PI sits at eRpm/2, the bug V5.2 fixes).
+    print(f"{'Time':>7s} {'State':>8s} {'eRPM':>7s} {'Duty':>4s} {'Vbus':>6s} {'SP':>2s} {'eTP':>6s} {'eTPm':>6s} {'Cap%':>5s} {'Bnk%':>5s} {'Mis%':>5s} {'Set%':>5s} {'R/F%':>7s} {'Fires':>9s} {'OffOK':>7s} {'OffBd':>7s} {'PTG':>8s} {'pR%':>4s} {'pF%':>4s} {'p2R%':>5s} {'p2F%':>5s}")
+    print("-" * 151)
 
     rows = []
     buf = b''
@@ -580,7 +588,11 @@ def main():
                 p2f_rej = snap.get('postZcFallingRej', 0)
                 p2r_pct = (100 * p2r_acc / (p2r_acc + p2r_rej)) if (p2r_acc + p2r_rej) > 0 else 0
                 p2f_pct = (100 * p2f_acc / (p2f_acc + p2f_rej)) if (p2f_acc + p2f_rej) > 0 else 0
-                print(f"{t:7.1f} {state_str:>8s} {snap['eRpm']:7d} {snap['dutyPct']:3d}% {snap['vbusV']:5.1f}V {sp_str:>2s} {etp:6d} {cap_pct:4d}% {bnk_pct:4.0f}% {mis_pct:4.0f}% {set_pct:4.0f}% {rf_s:>7s} {fires_s:>9s} {offok_s:>7s} {offbd_s:>7s} {ptg_s:>8s} {pr_pct:3.0f}% {pf_pct:3.0f}% {p2r_pct:4.0f}% {p2f_pct:4.0f}%{fault_str}")
+                # V5.2 measurement-PI eRPM equivalent
+                tMeas = snap.get('tMeasHR', 0)
+                etpm  = (15625000 // tMeas) if tMeas > 0 else 0
+                if etpm > 99999: etpm = 99999  # display clamp
+                print(f"{t:7.1f} {state_str:>8s} {snap['eRpm']:7d} {snap['dutyPct']:3d}% {snap['vbusV']:5.1f}V {sp_str:>2s} {etp:6d} {etpm:6d} {cap_pct:4d}% {bnk_pct:4.0f}% {mis_pct:4.0f}% {set_pct:4.0f}% {rf_s:>7s} {fires_s:>9s} {offok_s:>7s} {offbd_s:>7s} {ptg_s:>8s} {pr_pct:3.0f}% {pf_pct:3.0f}% {p2r_pct:4.0f}% {p2f_pct:4.0f}%{fault_str}")
 
                 rows.append({
                     'time': round(t, 3),
@@ -717,6 +729,7 @@ def main():
                     'post_zc_rising_rej':  snap.get('postZcRisingRej', 0),
                     'post_zc_falling_acc': snap.get('postZcFallingAcc', 0),
                     'post_zc_falling_rej': snap.get('postZcFallingRej', 0),
+                    't_meas_hr':           snap.get('tMeasHR', 0),
                 })
 
             time.sleep(0.01)

@@ -59,6 +59,7 @@ typedef struct {
     uint32_t postZcRisingRej;
     uint32_t postZcFallingAcc;
     uint32_t postZcFallingRej;
+    uint16_t tMeasHR;               /* V5.2: smoothed commutation interval */
 } V4_TELEM_T;
 
 void     SectorPI_Init(void);
