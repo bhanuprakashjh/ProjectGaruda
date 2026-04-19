@@ -28,16 +28,17 @@ volatile uint32_t v5_ptgRisingRej  = 0;
 volatile uint32_t v5_ptgFallingAcc = 0;
 volatile uint32_t v5_ptgFallingRej = 0;
 
-#if FEATURE_V5_PTG_ZC
-
-#include <xc.h>
-
 /* Per-sector expected post-ZC comp state, written by Commutate:
  *   0 = rising sector (inverted comp drops to 0 after ZC)
  *   1 = falling sector (inverted comp rises to 1 after ZC)
- * Reading this instead of calling HAL_Capture_IsRisingZc() saves a
- * function call in the hot ISR path. */
+ * Defined unconditionally — read by V5.0 PTG ISR and V5.1 ADC shadow.
+ * Reading this instead of HAL_Capture_IsRisingZc() sidesteps the
+ * stuck-true issue the function call exhibits in ISR contexts. */
 volatile uint8_t v5_ptgExpectedComp = 0;
+
+#if FEATURE_V5_PTG_ZC
+
+#include <xc.h>
 
 /* The floating-phase GPIO-read logic lives in garuda_service.c as a
  * static inline. Replicate here so we can read BEMF from the PTG ISR

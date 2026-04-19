@@ -274,17 +274,24 @@ void __attribute__((interrupt, auto_psv)) _ADCInterrupt(void)
 
 #if FEATURE_V5_POST_ZC_ACCEPT
                 /* V5.1 shadow: count what post-ZC accept logic would do.
-                 * Same comp read as the V4 path, evaluated once per ADC
-                 * fire (no v4_captureValid sticky gate so per-sample
-                 * rate matches the PTG diagnostic for direct comparison). */
+                 * Reads v5_ptgExpectedComp (written by Commutate) instead
+                 * of HAL_Capture_IsRisingZc() — the function call exhibits
+                 * a "stuck true" behavior in ISR context that the volatile
+                 * global bypasses. First run of this shadow with the
+                 * function call showed p2F=0% (impossible); this read
+                 * is what PTG ISR successfully used to get pR/pF ≈ 67/67.
+                 * No v4_captureValid sticky gate — per-sample rate matches
+                 * the PTG diagnostic for direct comparison. */
                 {
-                    uint8_t expectedPostZc = isRising ? 0u : 1u;
+                    extern volatile uint8_t v5_ptgExpectedComp;
+                    uint8_t expectedPostZc = v5_ptgExpectedComp;
+                    bool    sectorRising   = (expectedPostZc == 0u);
                     if (comp == expectedPostZc) {
-                        if (isRising) v5_postZcRisingAcc++;
-                        else          v5_postZcFallingAcc++;
+                        if (sectorRising) v5_postZcRisingAcc++;
+                        else              v5_postZcFallingAcc++;
                     } else {
-                        if (isRising) v5_postZcRisingRej++;
-                        else          v5_postZcFallingRej++;
+                        if (sectorRising) v5_postZcRisingRej++;
+                        else              v5_postZcFallingRej++;
                     }
                 }
 #endif

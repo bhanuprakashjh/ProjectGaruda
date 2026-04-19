@@ -529,11 +529,16 @@ void SectorPI_Commutate(void)
         const COMMUTATION_STEP_T *step = &commutationTable[position];
         v4_floatingPhase = step->floatingPhase;
 
-        /* V5.0 PTG: per-sector expected comp state (for shadow accept
-         * counting). PTGT0LIM reload temporarily disabled — bench test
-         * showed it destabilised CL entry. Keeping delay fixed at
-         * V5_PTG_VALLEY_DELAY from init; ISR samples only at valley. */
-#if FEATURE_V5_PTG_ZC
+        /* Per-sector expected post-ZC comp state, written here so any
+         * ISR that samples BEMF can decide accept/reject without
+         * going through HAL_Capture_IsRisingZc() (which gets stuck at
+         * true via a mechanism we still don't fully understand — see
+         * Apr 18 investigation notes). Used by:
+         *   V5.0 PTG diagnostic ISR (when FEATURE_V5_PTG_ZC=1)
+         *   V5.1 ADC post-ZC shadow (when FEATURE_V5_POST_ZC_ACCEPT=1)
+         * Variable name is v5_ptgExpectedComp for historical reasons;
+         * semantics are "comp state expected AFTER ZC in this sector". */
+#if FEATURE_V5_PTG_ZC || FEATURE_V5_POST_ZC_ACCEPT
         {
             extern volatile uint8_t v5_ptgExpectedComp;
             v5_ptgExpectedComp = (step->zcPolarity > 0) ? 0U : 1U;
