@@ -92,13 +92,13 @@ static const GSP_PARAMS_T profileDefaults[4] = {
     },
     [GSP_PROFILE_A2212] = {
         .rampTargetErpm     = 3000,
-        .rampAccelErpmPerS  = 300,
+        .rampAccelErpmPerS  = 3000,    /* Faster ramp for bench (200→3000 eRPM in ~1s) */
         .rampDutyPct        = 15,
         .clIdleDutyPct      = 12,
-        .timingAdvMaxDeg    = 15,
+        .timingAdvMaxDeg    = 22,    /* Bumped from 15 for >90k eRPM margin */
         .hwzcCrossoverErpm  = 1500,
-        .ocSwLimitMa        = 8000,
-        .ocFaultMa          = 18000,
+        .ocSwLimitMa        = 15000, /* Bumped from 8000 — avg bench current low */
+        .ocFaultMa          = 22000, /* Bumped from 18000 — leave headroom above CMP3 */
         .motorPolePairs     = 7,
         .alignDutyPct       = 8,
         .initialErpm        = 200,
@@ -107,8 +107,8 @@ static const GSP_PARAMS_T profileDefaults[4] = {
         .sineRampModPct     = 12,
         .zcDemagDutyThresh  = 40,
         .zcDemagBlankExtraPct = 18,
-        .ocLimitMa          = 12000,
-        .ocStartupMa        = 22000,
+        .ocLimitMa          = 18000, /* Bumped from 12000 — CMP3 tolerates commutation spikes */
+        .ocStartupMa        = 25000, /* Bumped slightly */
         .rampCurrentGateMa  = 5000,
         TUNING_DEFAULTS,
         /* FOC motor model: A2212 1400KV (7PP, 12V, low-Rs) */
@@ -131,44 +131,63 @@ static const GSP_PARAMS_T profileDefaults[4] = {
         .focFaultStallDeciRadS = 500,   /* 50.0 rad/s */
     },
     [GSP_PROFILE_5010] = {
-        .rampTargetErpm     = 2500,
-        .rampAccelErpmPerS  = 200,
-        .rampDutyPct        = 12,
-        .clIdleDutyPct      = 10,
-        .timingAdvMaxDeg    = 15,
-        .hwzcCrossoverErpm  = 1500,
-        .ocSwLimitMa        = 12000,
-        .ocFaultMa          = 20000,
+        /* === 2810 1350KV (7-8" FPV/cine drone motor, 24V bench) ===
+         * Motor data from PATA6847/CK board project (garuda_6step_ck.X,
+         * MOTOR_PROFILE=2). 12N14P, 7PP, 5-6S LiPo (18.5-25.2V), Rs~50mΩ,
+         * Ls~25µH. At 24V: no-load eRPM ceiling = 1350*24*7 = 226.8k.
+         * Target: 200k eRPM bench no-prop.
+         *
+         * Slot name is still GSP_PROFILE_5010 for EEPROM/profile-id
+         * compatibility; actual motor is 2810 here (AKESC's original
+         * 5010 data is in PATA comments/backup). */
+        .rampTargetErpm     = 3000,    /* Same as A2212; sine startup exits here */
+        .rampAccelErpmPerS  = 3000,    /* Bench no-prop can follow fast ramp */
+        .rampDutyPct        = 8,       /* At 24V, 8% * 24V / 0.050Ω = 38A stall.
+                                        * Motor should be moving early; 8% is ramp cap */
+        .clIdleDutyPct      = 6,       /* 24V * 6% / 0.050Ω = 29A stall.
+                                        * Bare motor needs minimal idle torque */
+        .timingAdvMaxDeg    = 25,      /* 2810 low-L (25µH) needs more advance than
+                                        * A2212 (30µH) at extreme eRPM. 25° close to
+                                        * max safe; PATA used level-3 = 22.5° */
+        .hwzcCrossoverErpm  = 1500,    /* Enable HWZC immediately after morph */
+        .ocSwLimitMa        = 18000,   /* Soft limit. Board shunt saturates ~22A */
+        .ocFaultMa          = 21000,   /* SW hard fault just below sensor saturation */
         .motorPolePairs     = 7,
-        .alignDutyPct       = 6,
-        .initialErpm        = 150,
-        .maxClosedLoopErpm  = 80000,
-        .sineAlignModPct    = 5,
-        .sineRampModPct     = 10,
-        .zcDemagDutyThresh  = 45,
-        .zcDemagBlankExtraPct = 16,
-        .ocLimitMa          = 15000,
-        .ocStartupMa        = 22000,
-        .rampCurrentGateMa  = 8000,
+        .alignDutyPct       = 3,       /* 24V * 3% / 0.050Ω = 14.4A stall.
+                                        * Half of A2212's 8% at 12V for similar current */
+        .initialErpm        = 150,     /* Slow start — 2810 needs gentle first steps */
+        .maxClosedLoopErpm  = 220000,  /* KV * Vbus * pp = 1350 * 24 * 7 = 226.8k.
+                                        * Target 200k, cap slightly above */
+        .sineAlignModPct    = 3,       /* Conservative align — low Rs means current */
+        .sineRampModPct     = 8,       /* 2810 at 24V picks up fast — keep mod low */
+        .zcDemagDutyThresh  = 40,      /* Same as A2212 — low L → more demag */
+        .zcDemagBlankExtraPct = 20,    /* Aggressive demag blanking (low L = long tail) */
+        .ocLimitMa          = 20000,   /* CMP3 chop. Slightly below sensor saturation
+                                        * (~22A). 2810 peaks at 30A+ commutation but
+                                        * hardware chop keeps average under control */
+        .ocStartupMa        = 22000,   /* Startup relaxed near sensor saturation */
+        .rampCurrentGateMa  = 10000,   /* Gate ramp accel if bus >10A during OL */
         TUNING_DEFAULTS,
-        /* FOC motor model: Flycat 5010-750KV (7PP, 14.8V) */
-        .focRsMilliOhm       = 80,     /* 0.080 Ω */
-        .focLsMicroH          = 30,     /* 30 µH */
-        .focKeUvSRad          = 1050,   /* 0.001050 V·s/rad */
-        .focVbusNomCentiV     = 1480,   /* 14.8V */
+        /* FOC motor model: 2810 1350KV (7PP, 24V) */
+        .focRsMilliOhm       = 50,     /* 0.050 Ω (avg of 43-61mΩ mfg spread) */
+        .focLsMicroH          = 25,     /* 25 µH */
+        .focKeUvSRad          = 527,    /* 1350 KV → Ke = 60/(2π * 1350 * √3) V·s/rad
+                                         * = 5.27e-4 V·s/rad → 527 in µV·s/rad */
+        .focVbusNomCentiV     = 2400,   /* 24V nominal */
         .focMaxCurrentCentiA  = 3000,   /* 30.0A */
-        .focMaxElecRadS       = 8500,
-        .focKpDqMilli         = 190,    /* 0.19 */
-        .focKiDq              = 503,
-        .focObsLpfAlphaMilli  = 200,    /* 0.20 */
-        .focAlignIqCentiA     = 300,    /* 3.0A */
-        .focRampIqCentiA      = 300,    /* 3.0A */
-        .focAlignTimeMs       = 750,
-        .focIqRampTimeMs      = 500,
-        .focRampRateRps2      = 100,
-        .focHandoffRadS       = 1000,
-        .focFaultOcCentiA     = 3500,   /* 35.0A */
-        .focFaultStallDeciRadS = 500,   /* 50.0 rad/s */
+        .focMaxElecRadS       = 15000,  /* 200k eRPM target = 200000/60*2π = ~20944
+                                         * rad/s; 15000 gives margin for CL */
+        .focKpDqMilli         = 120,
+        .focKiDq              = 400,
+        .focObsLpfAlphaMilli  = 200,
+        .focAlignIqCentiA     = 200,    /* 2.0A */
+        .focRampIqCentiA      = 200,    /* 2.0A */
+        .focAlignTimeMs       = 500,
+        .focIqRampTimeMs      = 300,
+        .focRampRateRps2      = 300,
+        .focHandoffRadS       = 800,
+        .focFaultOcCentiA     = 3500,
+        .focFaultStallDeciRadS = 500,
     },
     [GSP_PROFILE_5055] = {
         .rampTargetErpm     = 2000,

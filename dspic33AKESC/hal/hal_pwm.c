@@ -235,26 +235,34 @@ void InitPWMGenerator1(void)
     PG1EVTbits.ADTR2EN1 = 0;
     PG1EVTbits.ADTR1OFS = 0;
 
-    /* Fault PCI — external overcurrent via PCI8 pin (RB11/RP28) */
+    /* Fault PCI — external overcurrent via PCI8 pin (RB11/RP28).
+     *
+     * LEB-gated acceptance: the FPCI input is only accepted when LEB is LOW
+     * (AQSS=010, AQPS=1). During the LEB window after each PWM edge (see
+     * PGxLEB below), the board's U25B analog comparator ringing / FET
+     * switching transients are ignored. After LEB expires, FPCI is fully
+     * active and latches (ACP=3) on any real overcurrent. This suppresses
+     * the BOARD_PCI trips we see on 2810 @ 24V where commutation transients
+     * peak above U25B's fixed HW threshold for ~1µs after each edge. */
 #ifdef ENABLE_PWM_FAULT_PCI
     PG1FPCI     = 0x0000;
     PG1FPCIbits.TSYNCDIS = 0;
-    PG1FPCIbits.TERM = 1;
-    PG1FPCIbits.AQPS = 0;
-    PG1FPCIbits.AQSS = 0;
+    PG1FPCIbits.TERM = 1;           /* Auto-terminate when qualifier goes false */
+    PG1FPCIbits.AQPS = 1;           /* Inverted: accept when LEB LOW (post-blanking) */
+    PG1FPCIbits.AQSS = 0b010;       /* LEB active as acceptance qualifier */
     PG1FPCIbits.PSYNC = 0;
-    PG1FPCIbits.PPS = 1;           /* Inverted polarity */
-    PG1FPCIbits.PSS = 0b01000;     /* RPn input (PCI8R) */
+    PG1FPCIbits.PPS = 1;            /* Inverted polarity */
+    PG1FPCIbits.PSS = 0b01000;      /* RPn input (PCI8R = board U25B) */
     PG1FPCIbits.BPEN = 0;
     PG1FPCIbits.BPSEL = 0;
     PG1FPCIbits.TERMPS = 0;
-    PG1FPCIbits.ACP = 3;           /* Latched */
+    PG1FPCIbits.ACP = 3;            /* Latched */
     PG1FPCIbits.LATMOD = 0;
     PG1FPCIbits.TQPS = 0;
     PG1FPCIbits.TQSS = 0;
 #if FEATURE_HW_OVERCURRENT && OC_PROTECT_MODE == 1
-    PG1FPCIbits.PSS = 0b11101;     /* CMP3 (replaces RPn/PCI8R) */
-    PG1FPCIbits.PPS = 0;           /* Non-inverted */
+    PG1FPCIbits.PSS = 0b11101;      /* CMP3 (replaces RPn/PCI8R) */
+    PG1FPCIbits.PPS = 0;            /* Non-inverted */
 #endif
 #else
     /* FOC mode: FPCI truly disabled via acceptance qualifier gating.
@@ -287,7 +295,10 @@ void InitPWMGenerator1(void)
 #endif
     PG1FFPCI    = 0x0000;
     PG1SPCI     = 0x0000;
-#if FEATURE_HW_OVERCURRENT && (OC_PROTECT_MODE == 0 || OC_PROTECT_MODE == 2) && OC_CLPCI_ENABLE
+    /* LEB counter — drives the FPCI qualifier above (and CLPCI if enabled).
+     * Runs on every H/L edge, so any CMP3 / board-U25B transient in the
+     * first OC_LEB_COUNTS PWM clocks after a switch edge is ignored. */
+#if FEATURE_HW_OVERCURRENT
     PG1LEB      = 0x0000;
     PG1LEBbits.PHR = 1;           /* Blank on rising edge of PWMxH */
     PG1LEBbits.PHF = 1;           /* Blank on falling edge of PWMxH */
@@ -369,14 +380,15 @@ void InitPWMGenerator2(void)
     PG2EVTbits.ADTR1OFS = 0;
 
 #ifdef ENABLE_PWM_FAULT_PCI
+    /* LEB-gated FPCI acceptance — see PG1 comment */
     PG2FPCI     = 0x0000;
     PG2FPCIbits.TSYNCDIS = 0;
     PG2FPCIbits.TERM = 1;
-    PG2FPCIbits.AQPS = 0;
-    PG2FPCIbits.AQSS = 0;
+    PG2FPCIbits.AQPS = 1;           /* Inverted: accept when LEB LOW */
+    PG2FPCIbits.AQSS = 0b010;       /* LEB as acceptance qualifier */
     PG2FPCIbits.PSYNC = 0;
     PG2FPCIbits.PPS = 1;
-    PG2FPCIbits.PSS = 0b01000;     /* RPn input (PCI8R) */
+    PG2FPCIbits.PSS = 0b01000;      /* RPn input (PCI8R = board U25B) */
     PG2FPCIbits.BPEN = 0;
     PG2FPCIbits.BPSEL = 0;
     PG2FPCIbits.TERMPS = 0;
@@ -385,8 +397,8 @@ void InitPWMGenerator2(void)
     PG2FPCIbits.TQPS = 0;
     PG2FPCIbits.TQSS = 0;
 #if FEATURE_HW_OVERCURRENT && OC_PROTECT_MODE == 1
-    PG2FPCIbits.PSS = 0b11101;     /* CMP3 (replaces RPn/PCI8R) */
-    PG2FPCIbits.PPS = 0;           /* Non-inverted */
+    PG2FPCIbits.PSS = 0b11101;      /* CMP3 (replaces RPn/PCI8R) */
+    PG2FPCIbits.PPS = 0;            /* Non-inverted */
 #endif
 #else
     /* FOC: FPCI disabled via LEB qualifier gating (see PG1 comment) */
@@ -411,7 +423,8 @@ void InitPWMGenerator2(void)
 #endif
     PG2FFPCI    = 0x0000;
     PG2SPCI     = 0x0000;
-#if FEATURE_HW_OVERCURRENT && (OC_PROTECT_MODE == 0 || OC_PROTECT_MODE == 2) && OC_CLPCI_ENABLE
+    /* LEB counter — see PG1 comment. Required for FPCI qualifier. */
+#if FEATURE_HW_OVERCURRENT
     PG2LEB      = 0x0000;
     PG2LEBbits.PHR = 1;
     PG2LEBbits.PHF = 1;
@@ -492,14 +505,15 @@ void InitPWMGenerator3(void)
     PG3EVTbits.ADTR1OFS = 0;
 
 #ifdef ENABLE_PWM_FAULT_PCI
+    /* LEB-gated FPCI acceptance — see PG1 comment */
     PG3FPCI     = 0x0000;
     PG3FPCIbits.TSYNCDIS = 0;
     PG3FPCIbits.TERM = 1;
-    PG3FPCIbits.AQPS = 0;
-    PG3FPCIbits.AQSS = 0;
+    PG3FPCIbits.AQPS = 1;           /* Inverted: accept when LEB LOW */
+    PG3FPCIbits.AQSS = 0b010;       /* LEB as acceptance qualifier */
     PG3FPCIbits.PSYNC = 0;
     PG3FPCIbits.PPS = 1;
-    PG3FPCIbits.PSS = 0b01000;     /* RPn input (PCI8R) */
+    PG3FPCIbits.PSS = 0b01000;      /* RPn input (PCI8R = board U25B) */
     PG3FPCIbits.BPEN = 0;
     PG3FPCIbits.BPSEL = 0;
     PG3FPCIbits.TERMPS = 0;
@@ -508,8 +522,8 @@ void InitPWMGenerator3(void)
     PG3FPCIbits.TQPS = 0;
     PG3FPCIbits.TQSS = 0;
 #if FEATURE_HW_OVERCURRENT && OC_PROTECT_MODE == 1
-    PG3FPCIbits.PSS = 0b11101;     /* CMP3 (replaces RPn/PCI8R) */
-    PG3FPCIbits.PPS = 0;           /* Non-inverted */
+    PG3FPCIbits.PSS = 0b11101;      /* CMP3 (replaces RPn/PCI8R) */
+    PG3FPCIbits.PPS = 0;            /* Non-inverted */
 #endif
 #else
     /* FOC: FPCI disabled via LEB qualifier gating (see PG1 comment) */
@@ -534,7 +548,8 @@ void InitPWMGenerator3(void)
 #endif
     PG3FFPCI    = 0x0000;
     PG3SPCI     = 0x0000;
-#if FEATURE_HW_OVERCURRENT && (OC_PROTECT_MODE == 0 || OC_PROTECT_MODE == 2) && OC_CLPCI_ENABLE
+    /* LEB counter — see PG1 comment. Required for FPCI qualifier. */
+#if FEATURE_HW_OVERCURRENT
     PG3LEB      = 0x0000;
     PG3LEBbits.PHR = 1;
     PG3LEBbits.PHF = 1;
@@ -557,14 +572,42 @@ void InitPWMGenerator3(void)
     PG3TRIGC    = 0x0000;
 }
 
+/* Precomputed full-word PGxIOCON patterns for 6-step commutation.
+ *
+ * Preserves init-time bits PENH=1 (bit19) and PENL=1 (bit18) → 0x000C0000.
+ * Lower 16 bits select the override mode:
+ *   OVRENH  = bit13
+ *   OVRENL  = bit12
+ *   OVRDAT  = bits[11:10]  (bit11 = H data, bit10 = L data)
+ *
+ * Atomic 32-bit SFR write = 1 instruction cycle (10 ns).
+ * Replaces 2-3 read-modify-write bit-field ops (~30 ns each) with a single
+ * store, cutting inter-phase skew from ~90 ns to ~30 ns across all three PGs.
+ * The reduced skew is what prevents 24 V · (di/dt) transient spikes from
+ * crossing the 22 A board fault threshold during a sector transition.
+ */
+#define PG_IOCON_KEEP        0x000C0000U  /* PENH=1, PENL=1 */
+#define PG_IOCON_PWM_ACTIVE  (PG_IOCON_KEEP | 0x00000000U)          /* ENH=0 ENL=0 */
+#define PG_IOCON_LOW         (PG_IOCON_KEEP | 0x00003400U)          /* ENH=1 ENL=1 OVRDAT=01 (H=LOW, L=HIGH sink) */
+#define PG_IOCON_FLOAT       (PG_IOCON_KEEP | 0x00003000U)          /* ENH=1 ENL=1 OVRDAT=00 (both LOW, high-Z) */
+
+static inline uint32_t pgIoconWord(uint8_t mode)
+{
+    switch (mode)
+    {
+        case PHASE_PWM_ACTIVE: return PG_IOCON_PWM_ACTIVE;
+        case PHASE_LOW:        return PG_IOCON_LOW;
+        case PHASE_FLOAT:      return PG_IOCON_FLOAT;
+        default:               return PG_IOCON_FLOAT;
+    }
+}
+
 /**
  * @brief Apply a 6-step commutation pattern to PWM override registers.
  *
- * For each phase:
- *   PHASE_PWM_ACTIVE: H-side from PWM generator (OVRENH=0), L-side complementary (OVRENL=0)
- *   PHASE_LOW:        H-side overridden LOW (OVRENH=1,OVRDAT<1>=0),
- *                     L-side overridden HIGH (OVRENL=1,OVRDAT<0>=1) to sink current
- *   PHASE_FLOAT:      Both overridden LOW (OVRENH=1,OVRENL=1,OVRDAT=0) — high-Z
+ * Writes PG1/PG2/PG3 IOCON atomically (single 32-bit SFR store each) to
+ * minimise the window of intermediate invalid phase configurations during
+ * sector changes. See PG_IOCON_* macros for the encoding.
  *
  * @param step Commutation step index 0-5
  */
@@ -572,62 +615,9 @@ void HAL_PWM_SetCommutationStep(uint8_t step)
 {
     const COMMUTATION_STEP_T *s = &commutationTable[step];
 
-    /* Phase A — PG1 */
-    switch (s->phaseA)
-    {
-        case PHASE_PWM_ACTIVE:
-            PG1IOCONbits.OVRENH = 0;
-            PG1IOCONbits.OVRENL = 0;
-            break;
-        case PHASE_LOW:
-            PG1IOCONbits.OVRDAT = 0b01;    /* H=LOW, L=HIGH (sink) */
-            PG1IOCONbits.OVRENH = 1;
-            PG1IOCONbits.OVRENL = 1;
-            break;
-        case PHASE_FLOAT:
-            PG1IOCONbits.OVRDAT = 0b00;
-            PG1IOCONbits.OVRENH = 1;
-            PG1IOCONbits.OVRENL = 1;
-            break;
-    }
-
-    /* Phase B — PG2 */
-    switch (s->phaseB)
-    {
-        case PHASE_PWM_ACTIVE:
-            PG2IOCONbits.OVRENH = 0;
-            PG2IOCONbits.OVRENL = 0;
-            break;
-        case PHASE_LOW:
-            PG2IOCONbits.OVRDAT = 0b01;
-            PG2IOCONbits.OVRENH = 1;
-            PG2IOCONbits.OVRENL = 1;
-            break;
-        case PHASE_FLOAT:
-            PG2IOCONbits.OVRDAT = 0b00;
-            PG2IOCONbits.OVRENH = 1;
-            PG2IOCONbits.OVRENL = 1;
-            break;
-    }
-
-    /* Phase C — PG3 */
-    switch (s->phaseC)
-    {
-        case PHASE_PWM_ACTIVE:
-            PG3IOCONbits.OVRENH = 0;
-            PG3IOCONbits.OVRENL = 0;
-            break;
-        case PHASE_LOW:
-            PG3IOCONbits.OVRDAT = 0b01;
-            PG3IOCONbits.OVRENH = 1;
-            PG3IOCONbits.OVRENL = 1;
-            break;
-        case PHASE_FLOAT:
-            PG3IOCONbits.OVRDAT = 0b00;
-            PG3IOCONbits.OVRENH = 1;
-            PG3IOCONbits.OVRENL = 1;
-            break;
-    }
+    PG1IOCON = pgIoconWord(s->phaseA);
+    PG2IOCON = pgIoconWord(s->phaseB);
+    PG3IOCON = pgIoconWord(s->phaseC);
 }
 
 /**

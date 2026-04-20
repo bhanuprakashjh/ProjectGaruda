@@ -80,12 +80,19 @@ void InitializeADCs(void)
      * for non-PWM trigger sources. TRG1SRC=14 (SCCP3 Trigger out).
      * Comparator disabled initially (CMPMOD=0). */
 
-    /* AD1CH5: Phase B high-speed (RB8 = AD1AN11) */
+    /* AD1CH5/AD2CH1 sample at 1 MHz via SCCP3 (free-running). Phantom-ZC
+     * rejection is done in SOFTWARE inside HWZC_OnZcDetected(): any ZC
+     * interrupt that fires while the active phase's PWMxH output is LOW
+     * (i.e. during OFF-time) is treated as switching noise and dropped.
+     * This keeps worst-case detection latency at ~1 µs while filtering
+     * out the 76 %-of-cycle OFF-time samples at high duty / 24 V where
+     * the floating-phase voltage is dominated by freewheel-diode
+     * conduction and switching ringing, not clean BEMF. */
     AD1CH5CONbits.PINSEL = 11;
     AD1CH5CONbits.SAMC = HWZC_SAMC;
     AD1CH5CONbits.LEFT = 0;
     AD1CH5CONbits.DIFF = 0;
-    AD1CH5CONbits.TRG1SRC = 14;  /* SCCP3 Trigger out */
+    AD1CH5CONbits.TRG1SRC = 14;  /* SCCP3 Trigger out (1 MHz free-running) */
     AD1CH5CONbits.TRG2SRC = 2;   /* Immediate re-trigger for oversampling repeats */
     AD1CH5CONbits.MODE = 0b11;   /* Oversampling mode */
     AD1CH5CONbits.ACCNUM = 0b00; /* 4 samples, result right-shifted by 2 bits */
@@ -94,19 +101,64 @@ void InitializeADCs(void)
     AD1CH5CMPLO = 0;
     AD1CH5CMPHI = 0;
 
-    /* AD2CH1: Phase A/C high-speed (initial: RB9 = AD2AN10) */
     AD2CH1CONbits.PINSEL = 10;
     AD2CH1CONbits.SAMC = HWZC_SAMC;
     AD2CH1CONbits.LEFT = 0;
     AD2CH1CONbits.DIFF = 0;
-    AD2CH1CONbits.TRG1SRC = 14;  /* SCCP3 Trigger out */
-    AD2CH1CONbits.TRG2SRC = 2;   /* Immediate re-trigger for oversampling repeats */
-    AD2CH1CONbits.MODE = 0b11;   /* Oversampling mode */
-    AD2CH1CONbits.ACCNUM = 0b00; /* 4 samples, result right-shifted by 2 bits */
-    AD2CH1CONbits.ACCBRST = 1;   /* Non-interruptible burst (prevent 24kHz split) */
-    AD2CH1CONbits.CMPMOD = 0;    /* Comparator disabled initially */
+    AD2CH1CONbits.TRG1SRC = 14;  /* SCCP3 Trigger out (1 MHz free-running) */
+    AD2CH1CONbits.TRG2SRC = 2;
+    AD2CH1CONbits.MODE = 0b11;
+    AD2CH1CONbits.ACCNUM = 0b00;
+    AD2CH1CONbits.ACCBRST = 1;
+    AD2CH1CONbits.CMPMOD = 0;
     AD2CH1CMPLO = 0;
     AD2CH1CMPHI = 0;
+#endif
+
+#if !FEATURE_FOC && !FEATURE_FOC_V2 && !FEATURE_FOC_V3
+    /* 6-step Phase-current monitor channels — diagnostic peak tracking.
+     *
+     * AD1CH3 samples OA1OUT (phase A low-side shunt amp) at 1 MHz via
+     * SCCP3. AD2CH2 samples OA2OUT (phase B shunt amp). Both op-amp pins
+     * (RA2 = AD1AN0, RB0 = AD2AN1) are otherwise unused in 6-step mode
+     * (those ADC channels get repurposed for BEMF voltage sensing at CH0).
+     *
+     * The 24 kHz ADC ISR reads AD1CH3DATA / AD2CH2DATA every tick and
+     * tracks running max/min — the hardware is always converting at
+     * 1 MHz, so the data register holds the most recent 1 µs-window
+     * sample. We can't see 100 ns Qrr spikes at 42 µs polling cadence,
+     * but sustained ON-time currents and multi-µs commutation transients
+     * will register. Purpose: empirically confirm whether peak phase
+     * current crosses the U25B 22 A trip threshold at high eRPM.
+     *
+     * Shunt = 3 mΩ, op-amp gain = 24.95 default, VREF = 1.65 V bias.
+     * Scale: ~93 ADC counts / amp, bias ~2048. 22 A → ~4094 / 2.
+     */
+    /* Trigger on PG1TRIGA (24 kHz, mid-ON valley) instead of SCCP3 (1 MHz).
+     * Reason: AD2CH1 (HWZC Phase A/C high-speed) runs 4-sample oversample
+     * bursts at 1 MHz which fully occupy the AD2 core. A second 1 MHz
+     * channel on AD2 never gets scheduled — Ib read-out starves to 0. At
+     * 24 kHz PG1TRIGA we sample once per PWM cycle, interleaved with the
+     * HWZC burst, and both conversions complete. Trade-off: we only see
+     * the mid-ON current, not 100 ns Qrr spikes during the commutation
+     * dead-time — but that's sufficient to validate the sustained-ON
+     * operating current (the "real" ~20 A we've inferred from 50 Hz
+     * telemetry). */
+    AD1CH3CONbits.PINSEL = 0;       /* OA1OUT = RA2 = AD1AN0 (Ia) */
+    AD1CH3CONbits.SAMC = 3;
+    AD1CH3CONbits.LEFT = 0;
+    AD1CH3CONbits.DIFF = 0;
+    AD1CH3CONbits.TRG1SRC = 4;      /* PG1TRIGA (24 kHz mid-ON valley) */
+    AD1CH3CONbits.MODE = 0;         /* Single sample, one per trigger */
+    AD1CH3CONbits.CMPMOD = 0;
+
+    AD2CH2CONbits.PINSEL = 1;       /* OA2OUT = RB0 = AD2AN1 (Ib) */
+    AD2CH2CONbits.SAMC = 3;
+    AD2CH2CONbits.LEFT = 0;
+    AD2CH2CONbits.DIFF = 0;
+    AD2CH2CONbits.TRG1SRC = 4;      /* PG1TRIGA (24 kHz mid-ON valley) */
+    AD2CH2CONbits.MODE = 0;
+    AD2CH2CONbits.CMPMOD = 0;
 #endif
 
     /* Turn on ADC Core 1 */
@@ -204,6 +256,26 @@ void HAL_ADC_ConfigComparator(uint8_t adcCore, uint16_t threshold, bool risingZc
         AD2CH1CONbits.CMPMOD = risingZc ? 0b011 : 0b100;
         AD2CH1CMPLO = threshold;
     }
+}
+
+/**
+ * @brief Live CMPLO refresh — updates threshold without touching CMPMOD.
+ * Single SFR write, atomic. Safe to call from the 24 kHz ADC ISR while
+ * the comparator is armed; the new value takes effect on the next
+ * ADC conversion (comparator re-evaluates at SCCP3 trigger rate).
+ *
+ * Use this to track Vbus/duty changes mid-sector. HAL_ADC_ConfigComparator
+ * is still used per-commutation to set CMPMOD for the new sector polarity.
+ *
+ * @param adcCore  1=AD1CH5, 2=AD2CH1
+ * @param threshold  New CMPLO value (deadband already applied by caller)
+ */
+void HAL_ADC_UpdateComparatorThreshold(uint8_t adcCore, uint16_t threshold)
+{
+    if (adcCore == 1)
+        AD1CH5CMPLO = threshold;
+    else
+        AD2CH1CMPLO = threshold;
 }
 
 /**

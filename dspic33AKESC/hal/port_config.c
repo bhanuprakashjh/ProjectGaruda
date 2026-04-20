@@ -67,7 +67,7 @@ void MapGPIOHWFunction(void)
 {
 #if FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3
     /* ================================================================
-     * Phase Current Sensing via OA1/OA2 (Internal Op-Amps)
+     * Phase Current Sensing via OA1/OA2 (Internal Op-Amps) — FOC modes
      * OA1IN+ : RA4  (DIM:013), OA1IN- : RA3  (DIM:015)
      * OA1OUT : RA2  (DIM:017) → AD1AN0 (Ia)
      * OA2IN+ : RB2  (DIM:021), OA2IN- : RB1  (DIM:023)
@@ -81,6 +81,17 @@ void MapGPIOHWFunction(void)
     ANSELBbits.ANSELB1 = 1; TRISBbits.TRISB1 = 1;   /* OA2IN- */
     ANSELBbits.ANSELB0 = 1; TRISBbits.TRISB0 = 1;   /* OA2OUT (TRIS=1: disable digital output, let OA drive) */
 #else
+    /* 6-step diagnostic phase-current monitor: reuse same OA1/OA2 pins.
+     * CMP1/CMP2 share RA4/RB2 but are init'd with DACEN=0 (disabled), so
+     * the comparators don't claim the pins — safe to drive as OA inputs. */
+    ANSELAbits.ANSELA4 = 1; TRISAbits.TRISA4 = 1;   /* OA1IN+ */
+    ANSELAbits.ANSELA3 = 1; TRISAbits.TRISA3 = 1;   /* OA1IN- */
+    ANSELAbits.ANSELA2 = 1; TRISAbits.TRISA2 = 1;   /* OA1OUT */
+    ANSELBbits.ANSELB2 = 1; TRISBbits.TRISB2 = 1;   /* OA2IN+ */
+    ANSELBbits.ANSELB1 = 1; TRISBbits.TRISB1 = 1;   /* OA2IN- */
+    ANSELBbits.ANSELB0 = 1; TRISBbits.TRISB0 = 1;   /* OA2OUT */
+
+    /* Original 6-step block (phase voltage feedback) continues below. */
     /* ================================================================
      * Phase Voltage Feedback (MCLV-48V-300W via EV68M17A DIM)
      * M1_VA : DIM:009 - RB9  (AD2AN10)
@@ -181,11 +192,11 @@ void MapGPIOHWFunction(void)
 #endif
 }
 
-#if FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3
 /**
  * @brief Initialize OA1/OA2 internal op-amps for phase current sensing.
  * External gain resistors on MCLV-48V-300W provide gain.
  * OA1OUT (RA2) → AD1AN0 (Ia), OA2OUT (RB0) → AD2AN1 (Ib).
+ * Used by FOC (primary current feedback) and 6-step (diagnostic monitor).
  * Adapted from reference OpampConfig() lines 235-283.
  */
 void HAL_OA12_Init(void)
@@ -205,7 +216,6 @@ void HAL_OA12_Init(void)
     AMP1CON1bits.AMPEN = 1;    /* Enable OA1 — begins settling (~10us) */
     AMP2CON1bits.AMPEN = 1;    /* Enable OA2 */
 }
-#endif
 
 #if FEATURE_HW_OVERCURRENT
 /**

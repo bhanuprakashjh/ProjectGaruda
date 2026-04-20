@@ -26,6 +26,9 @@ void HWZC_OnZcDetected(volatile GARUDA_DATA_T *pData);
 void HWZC_OnBlankingExpired(volatile GARUDA_DATA_T *pData);
 void HWZC_OnCommDeadline(volatile GARUDA_DATA_T *pData);
 void HWZC_OnTimeout(volatile GARUDA_DATA_T *pData);
+#if HWZC_USE_SW_COMPARE
+void HWZC_OnSoftwareSample(volatile GARUDA_DATA_T *pData);
+#endif
 
 #ifdef __cplusplus
 }

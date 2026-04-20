@@ -138,6 +138,7 @@ void BEMF_ZC_Init(volatile GARUDA_DATA_T *pData, uint16_t initialStepPeriod)
     pData->zcDiag.deadbandHoldTotal = 0;
     pData->zcDiag.blankTransitionTotal = 0;
     pData->zcDiag.wrongEdgeTotal = 0;
+    pData->zcDiag.intervalRejectTotal = 0;
     pData->zcDiag.lastFloatAdc = 0;
     pData->zcDiag.lastZcThreshold = 0;
     pData->zcDiag.lastStateNow = 0;
@@ -507,14 +508,35 @@ bool BEMF_ZC_Poll(volatile GARUDA_DATA_T *pData, uint16_t now)
                 {
                     uint16_t effectiveInterval = pData->timing.zcInterval;
 
+                    /* Plausibility gate: reject intervals that imply the motor
+                     * more-than-doubled speed in one commutation. Without this,
+                     * a single phantom ZC (from PWM ringing, diode recovery,
+                     * or tight deadband crossing) shrinks stepPeriod, the next
+                     * commDeadline fires early, the rotor falls behind, more
+                     * phantom ZCs arrive, and the scheduler cascades into a
+                     * high-"eRPM" lock while the rotor is stalled.
+                     *
+                     * Physical motors rarely double speed between two
+                     * successive BEMF ZCs. 0.5× stepPeriod is a safe floor
+                     * that still lets real acceleration (≤40%/step) through. */
+                    uint16_t minInterval = pData->timing.stepPeriod >> 1;
+                    if (effectiveInterval < minInterval)
+                    {
+                        pData->zcDiag.intervalRejectTotal++;
+                        /* keep stepPeriod unchanged; commDeadline will be
+                         * computed below off the held period */
+                    }
+                    else
+                    {
 #if ZC_ADAPTIVE_PERIOD
-                    /* Phase 2B: IIR smoothing */
-                    pData->timing.stepPeriod = (uint16_t)(
-                        ((uint32_t)pData->timing.stepPeriod * 3 + effectiveInterval) >> 2);
+                        /* Phase 2B: IIR smoothing */
+                        pData->timing.stepPeriod = (uint16_t)(
+                            ((uint32_t)pData->timing.stepPeriod * 3 + effectiveInterval) >> 2);
 #else
-                    /* Phase 2A: direct assignment */
-                    pData->timing.stepPeriod = effectiveInterval;
+                        /* Phase 2A: direct assignment */
+                        pData->timing.stepPeriod = effectiveInterval;
 #endif
+                    }
                 }
                 /* spacing > 1: keep current stepPeriod unchanged */
 

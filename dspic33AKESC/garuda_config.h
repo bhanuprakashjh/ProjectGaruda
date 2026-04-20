@@ -15,26 +15,26 @@ extern "C" {
 #endif
 
 /* Feature Flags (0=disabled, 1=enabled) */
-#define FEATURE_BEMF_CLOSED_LOOP 0  /* Phase 2: BEMF ZC detection (0=Phase 1 open-loop only) */
+#define FEATURE_BEMF_CLOSED_LOOP 1  /* Phase 2: BEMF ZC detection (0=Phase 1 open-loop only) */
 #define FEATURE_VBUS_FAULT       1  /* Phase A4: Bus voltage OV/UV fault enforcement */
-#define FEATURE_DESYNC_RECOVERY  0  /* Phase B2: Controlled restart-on-desync (ESC_RECOVERY) */
-#define FEATURE_DUTY_SLEW        0  /* Phase B1: Asymmetric duty slew rate limiter */
-#define FEATURE_TIMING_ADVANCE   0  /* Phase B3: Linear timing advance by RPM (0-15 deg linear by speed) */
-#define FEATURE_DYNAMIC_BLANKING 0  /* Phase C1: Speed+duty-aware blanking (extra blank at high duty/demag) */
-#define FEATURE_VBUS_SAG_LIMIT   0  /* Phase C2: Bus voltage sag power limiting (reduce duty on Vbus dip) */
-#define FEATURE_BEMF_INTEGRATION 0  /* Phase E: Shadow integration estimator (shadow-only, no control) */
-#define FEATURE_SINE_STARTUP     0  /* Sine ramp + waveform morph transition.
+#define FEATURE_DESYNC_RECOVERY  1  /* Phase B2: Controlled restart-on-desync (ESC_RECOVERY) */
+#define FEATURE_DUTY_SLEW        1  /* Phase B1: Asymmetric duty slew rate limiter */
+#define FEATURE_TIMING_ADVANCE   1  /* Phase B3: Linear timing advance by RPM (0-15 deg linear by speed) */
+#define FEATURE_DYNAMIC_BLANKING 1  /* Phase C1: Speed+duty-aware blanking (extra blank at high duty/demag) */
+#define FEATURE_VBUS_SAG_LIMIT   1  /* Phase C2: Bus voltage sag power limiting (reduce duty on Vbus dip) */
+#define FEATURE_BEMF_INTEGRATION 1  /* Phase E: Shadow integration estimator (shadow-only, no control) */
+#define FEATURE_SINE_STARTUP     1  /* Sine ramp + waveform morph transition.
                                      * Global: replaces coast gap for ALL motor
                                      * profiles. Per-motor tuning via existing
                                      * per-profile defines (SINE_*_MODULATION_PCT,
                                      * SINE_PHASE_OFFSET_DEG, etc). */
-#define FEATURE_ADC_CMP_ZC       0  /* Phase F: ADC comparator-based high-speed ZC */
+#define FEATURE_ADC_CMP_ZC       1  /* Phase F: ADC comparator-based high-speed ZC */
 #define FEATURE_HW_OVERCURRENT  1  /* Phase G: Hardware overcurrent protection via CMP3+OA3 */
 
 /* FOC (Field-Oriented Control) — compile-time alternative to 6-step */
 #define FEATURE_FOC              0  /* Phase I: OLD FOC v1 (reference, deprecated) */
 #define FEATURE_FOC_V2           0  /* Phase I v2: closed-loop current control + MXLEMMING */
-#define FEATURE_FOC_V3           1  /* Phase J: FOC v3 — SMO observer + OL ramp startup */
+#define FEATURE_FOC_V3           0  /* Phase J: FOC v3 — SMO observer + OL ramp startup */
 #define FEATURE_SMO              0  /* 0=PLL only, 1=PLL+SMO parallel (v1 only) */
 #define FEATURE_MXLEMMING        0  /* 0=PLL chain, 1=MXLEMMING flux observer (v1 only) */
 #define FEATURE_LEARN_MODULES    0  /* master: ring buffer + quality + health */
@@ -89,7 +89,17 @@ extern "C" {
 #endif
 
 /* PWM Configuration */
-#define PWMFREQUENCY_HZ            24000       /* PWM switching frequency */
+#define PWMFREQUENCY_HZ            40000       /* PWM switching frequency
+                                                 * Bumped 24 kHz → 40 kHz (2026-04-20):
+                                                 * - Current ripple shrinks ~40 %
+                                                 * - Mistimed-commutation current buildup
+                                                 *   per cycle drops ~40 % (29 V × L × 6.25 µs
+                                                 *   = 3.6 A/cyc vs 6 A/cyc at 24 kHz)
+                                                 * - Board 5.5 kHz RC filter gives better
+                                                 *   attenuation of PWM ripple in the HWZC
+                                                 *   comparator → ~40 % fewer phantom ZCs.
+                                                 * Costs: ~40 % higher FET switching losses,
+                                                 * MIN_DUTY climbs 2.4 % → 4 %. */
 
 /*──────────────────────────────────────────────────────────────────────────
  * Motor Profile Selection
@@ -142,24 +152,27 @@ extern "C" {
                                             * for ZC detection under prop load. 15% provides more
                                             * torque to reach higher handoff speed. */
 #define INITIAL_ERPM               200     /* Very slow start: 50ms per step — prop can follow */
-#define RAMP_TARGET_ERPM          3000     /* Increased from 2000: A2212 BEMF at 2000 eRPM is only
-                                            * ~1.7% of Vbus (floatAdcMax=42 vs threshold=14).
-                                            * 3000 eRPM gives ~2.5% Vbus = ~63 ADC, improving
-                                            * ZC margin from 1.5:1 to ~2.3:1 on weak phases. */
+#define RAMP_TARGET_ERPM          3000     /* Reverted: BEMF at 1500 eRPM is too weak for
+                                            * reliable ZC on A2212 (margin 1.3:1). 3000 gives
+                                            * ~2.3:1 margin per original config comment. */
 #define MAX_CLOSED_LOOP_ERPM    120000     /* 1400KV * 12V * 7pp */
-#define RAMP_ACCEL_ERPM_PER_S      300     /* Gentle ramp — each step must physically complete */
+#define RAMP_ACCEL_ERPM_PER_S     3000     /* 1 s OL ramp — 868b2ff milestone config.
+                                            * Tried 1500 (2 s) and 750 (4 s) — both worse
+                                            * because they widen the window where HWZC IIR
+                                            * can phantom-cascade before reaching a stable
+                                            * operating point. 1 s is the known-working
+                                            * value that reached 118 k / 120 k eRPM. */
 #define SINE_ALIGN_MODULATION_PCT    4     /* Limit alignment current */
 #define SINE_RAMP_MODULATION_PCT    12     /* Increased from 8%: more voltage to push prop through
                                             * sine ramp to 3000 eRPM. 10A supply CC limits current. */
 #define ZC_DEMAG_DUTY_THRESH        40     /* Low-L = more demag */
 #define ZC_DEMAG_BLANK_EXTRA_PERCENT 18    /* Aggressive demag blanking */
-#define HWZC_CROSSOVER_ERPM       1500     /* Reverted: SW ZC can't lock at 2000 eRPM on A2212.
-                                            * Partial-lock morph exit needs HWZC to take over
-                                            * immediately in CL. 1500 < RAMP_TARGET ensures
-                                            * HWZC activates as soon as zcSynced is set. */
-#define CL_IDLE_DUTY_PERCENT        12     /* Min CL duty at pot=0. Restored from 8 now that
-                                            * CLPCI is disabled (OC_CLPCI_ENABLE=0). 12% keeps
-                                            * BEMF above ZC threshold under prop load at idle. */
+#define HWZC_CROSSOVER_ERPM       1500     /* Reverted — 868b2ff milestone value.
+                                            * Raising to 3000 moved HWZC activation to end
+                                            * of ramp but SW ZC hadn't established a clean
+                                            * lock yet, seed was wrong. Stick with 1500. */
+#define CL_IDLE_DUTY_PERCENT        12     /* Restored to 868b2ff baseline. HWZC is more
+                                            * robust at low BEMF, so 12% works even no-prop. */
 #define SINE_PHASE_OFFSET_DEG       60     /* Sine-to-trap offset (unused when sine disabled) */
 #define OC_LIMIT_MA              12000     /* CMP3 CLPCI chopping (12A) */
 #define OC_STARTUP_MA            22000     /* High: let 10A supply CC be the limiter, not CMP3 */
@@ -177,65 +190,64 @@ extern "C" {
                                             * Protection via software ADC + board FPCI instead. */
 
 #elif MOTOR_PROFILE == 2
-/* === 5010 750KV (heavy-lift drone motor) ===
- * 14 poles (12N14P), 2S-6S (tuned for 4S = 14.8V), ~0.1 ohm, ~30-50 uH
- * 750 KV => ~11100 RPM @ 14.8V no-load = 77700 eRPM
- * Typical prop: 14x4.7 or 14x5.5, frame: 450-850mm multirotor
+/* === 2810 1350KV (7-8" FPV/cine drone motor) ===
+ * 12N14P, 14 poles (7PP), 5-6S LiPo (18.5-25.2V), Rs~50mΩ, Ls~25µH.
+ * At 24V: no-load max eRPM = 1350 × 24 × 7 = 226,800 eRPM.
+ * Bench target: 200k eRPM no-prop.
  *
- * NOTE: Phase resistance (~80-120 mΩ) and inductance (~20-50 µH) are
- * estimates from RCTimer 5010 series data. Measure with milliohm meter
- * and LCR meter for exact values, then retune OC thresholds.
+ * Motor data ported from PATA6847/CK board (garuda_6step_ck.X MOTOR_PROFILE=2).
+ * GEPRC EM2810 / T-Motor F100 / BrotherHobby Avenger 2810 range.
  *
- * At 4S, BEMF per eRPM is ~2x the A2212 at 12V (higher Vbus * lower KV
- * partially cancel, but 14.8V/750KV has better BEMF/Vbus ratio than
- * 12V/1400KV). ZC detection should be easier. */
+ * At 24V supply, peak commutation currents can exceed 30A. Board shunt
+ * saturates at ~22A. HW CMP3 is the primary protection. Expect occasional
+ * BOARD_PCI at extreme duty — tune down if too aggressive. */
 #define MOTOR_POLE_PAIRS             7
-#define DEADTIME_NS                500     /* Low-L motor, same as A2212 */
-#define ALIGN_DUTY_PERCENT           6     /* 14.8V*6%/0.1Ω = 8.9A stall — safe with 30A ESC.
-                                            * Lower than A2212 (8%) because higher Vbus. */
-#define RAMP_DUTY_PERCENT           12     /* 14.8V*12% = 1.78V applied. At 0.1Ω, stall ~18A.
-                                            * 14" prop has much more inertia than 8" — needs
-                                            * adequate torque but not excessive current. */
-#define INITIAL_ERPM               150     /* Very slow start: 14" prop has high inertia.
-                                            * 67ms per step — prop can follow without skipping. */
-#define RAMP_TARGET_ERPM          2500     /* 750KV at 14.8V: BEMF/Vbus ratio is ~2x A2212.
-                                            * 2500 eRPM gives ~3.3% Vbus BEMF — good ZC margin.
-                                            * Lower than A2212 (3000) because better BEMF/Vbus. */
-#define MAX_CLOSED_LOOP_ERPM     80000     /* 750KV * 14.8V * 7pp ≈ 77700, rounded up */
-#define RAMP_ACCEL_ERPM_PER_S      200     /* Slower than A2212 (300): 14" prop takes longer
-                                            * to accelerate. Each forced step must physically
-                                            * complete before the next commutation. */
-#define SINE_ALIGN_MODULATION_PCT    5     /* Slightly more than A2212 (4%): heavier rotor
-                                            * needs a bit more torque to align. */
-#define SINE_RAMP_MODULATION_PCT    10     /* More conservative than A2212 (12%): higher Vbus
-                                            * means less modulation needed for same torque.
-                                            * 14.8V*10% = 1.48V effective >> 12V*12% = 1.44V. */
-#define ZC_DEMAG_DUTY_THRESH        45     /* Slightly higher than A2212 (40): estimated
-                                            * inductance (~30-50 µH) may be higher. */
-#define ZC_DEMAG_BLANK_EXTRA_PERCENT 16    /* Between A2212 (18) and Hurst (12) */
-#define HWZC_CROSSOVER_ERPM       1500     /* Same strategy as A2212: enable HWZC immediately
-                                            * after morph exit. 1500 < RAMP_TARGET. */
-#define CL_IDLE_DUTY_PERCENT        10     /* Min CL duty at pot=0. Higher Vbus and better
-                                            * BEMF ratio than A2212 → 10% should maintain
-                                            * ZC-capable speed under 14" prop load. */
-#define SINE_PHASE_OFFSET_DEG       60     /* Same as other profiles — tune if needed */
-#define OC_LIMIT_MA              15000     /* CMP3 CLPCI chopping (15A). Board shunt+OA3
-                                            * (3mΩ, 25x) saturates ADC at ~22A. Set chopping
-                                            * well below saturation for headroom. */
-#define OC_STARTUP_MA            22000     /* High: let supply CC be the limiter during startup */
-#define OC_FAULT_MA              20000     /* Software hard fault (20A). Limited by ADC range:
-                                            * OA3 output clips at ~3300mV = ~22A. 20A gives
-                                            * margin before ADC saturation hides real current. */
-#define OC_SW_LIMIT_MA           12000     /* Software soft limit (12A). Reduces duty early to
-                                            * avoid hitting CMP3 threshold. 5010 at 4S with 14"
-                                            * prop typically draws 10-15A at moderate throttle. */
-#define RAMP_CURRENT_GATE_MA      8000     /* Hold ramp accel when ibus > 8A. 14" prop draws
-                                            * significant current during acceleration. At 14.8V
-                                            * and 12% duty, 0.1Ω gives ~18A stall. 8A gate
-                                            * prevents overdrive while allowing strong ramp. */
+#define DEADTIME_NS                500     /* Low-L motor, same as A2212.
+                                            * 2026-04-20: tried 1000 ns to rule out Qrr
+                                            * at 24 V; MIN_DUTY = 2*DEADTIME_COUNTS forced
+                                            * startup duty to ~9.6% → instant 46 A stall
+                                            * trip during ALIGN/MORPH. Dead-time can't be
+                                            * raised without redesigning MIN_DUTY clamp. */
+#define ALIGN_DUTY_PERCENT           3     /* 24V * 3% / 0.050Ω = 14.4A stall.
+                                            * Half of A2212 (8% at 12V) for same current */
+#define RAMP_DUTY_PERCENT            8     /* 24V * 8% / 0.050Ω = 38A stall (briefly).
+                                            * Motor spins up quickly so stall current is
+                                            * momentary; bench CC limit protects */
+#define INITIAL_ERPM               150     /* Slow first step — 2810 low-L picks up fast */
+#define RAMP_TARGET_ERPM          3000     /* Same as A2212 — sine startup works well here */
+#define MAX_CLOSED_LOOP_ERPM     70000     /* Lowered 220k → 70k (2026-04-20).
+                                            * Theoretical no-load is 226.8k but the MCLV
+                                            * board U25B trips at ~22 A di/dt, limiting
+                                            * bench no-load to ~55 k. This value is also
+                                            * the upper anchor of the timing-advance
+                                            * interpolation — with 220k, advance at 55 k
+                                            * was only 5° (vs the 22° MAX_DEG target) and
+                                            * the SW-comparator ADC sampler added another
+                                            * ~13° of detection latency, for a net of
+                                            * ~-8° of effective advance. 70k anchor gives
+                                            * ~17° advance at 55 k, offsetting the SW
+                                            * latency. If the motor ever exceeds 70 k the
+                                            * advance clamps at 22° (fine). */
+#define RAMP_ACCEL_ERPM_PER_S     3000     /* 1 s OL ramp. Reverted 2s → 1s (2026-04-20):
+                                            * see A2212 profile comment for the HWZC-IIR-
+                                            * collapse bug that 2s exposed. */
+#define SINE_ALIGN_MODULATION_PCT    3     /* Conservative — low Rs → current rises fast */
+#define SINE_RAMP_MODULATION_PCT     8     /* Low because 2810 at 24V has strong BEMF */
+#define ZC_DEMAG_DUTY_THRESH        40     /* Same as A2212 */
+#define ZC_DEMAG_BLANK_EXTRA_PERCENT 20    /* More aggressive than A2212 (18).
+                                            * Low L = longer demag tail under switching */
+#define HWZC_CROSSOVER_ERPM       1500     /* Enable HWZC at morph handoff (same as A2212) */
+#define CL_IDLE_DUTY_PERCENT         6     /* Bare 2810 needs minimal idle torque.
+                                            * 24V * 6% / 0.050Ω = 29A if stalled at idle;
+                                            * in practice motor free-spins fast at 6% */
+#define SINE_PHASE_OFFSET_DEG       60     /* Same as other profiles */
+#define OC_LIMIT_MA              20000     /* CMP3 chop. Board shunt saturates ~22A */
+#define OC_STARTUP_MA            22000     /* Near sensor saturation — relaxed during startup */
+#define OC_FAULT_MA              21000     /* SW hard fault just below saturation */
+#define OC_SW_LIMIT_MA           18000     /* SW soft limit (duty reduction starts) */
+#define RAMP_CURRENT_GATE_MA     10000     /* Hold ramp accel if ibus >10A during OL */
 #define FEATURE_PRESYNC_RAMP       0       /* Standard forced OL_RAMP */
-#define OC_CLPCI_ENABLE            0       /* CLPCI disabled: same OA3 ringing issue as A2212.
-                                            * Protection via software ADC + board FPCI. */
+#define OC_CLPCI_ENABLE            0       /* CLPCI disabled: same OA3 ringing issue as A2212 */
 
 #elif MOTOR_PROFILE == 3
 /* === 5055 ~580KV (colleague's motor — ADJUST KV AS NEEDED) ===
@@ -320,7 +332,12 @@ extern "C" {
 /* Timing Advance (Phase B3) */
 #if FEATURE_TIMING_ADVANCE
 #define TIMING_ADVANCE_MIN_DEG      0       /* Degrees advance at low speed */
-#define TIMING_ADVANCE_MAX_DEG      15      /* Degrees advance at max speed */
+#define TIMING_ADVANCE_MAX_DEG      22      /* Degrees advance at TIMING_ADVANCE_MAX_ERPM
+                                             * (interpolated linearly from MIN_DEG at
+                                             * RAMP_TARGET_ERPM). Capped at 25° by static
+                                             * assert to prevent desync. The interpolation
+                                             * anchor eRPM is the motor profile's
+                                             * MAX_CLOSED_LOOP_ERPM — see the note there. */
 #endif
 
 /* Dynamic Blanking (Phase C1) — motor-specific params in motor profile above */
@@ -380,11 +397,34 @@ extern "C" {
 
 /* ADC Comparator ZC (Phase F) — crossover eRPM in motor profile above */
 #if FEATURE_ADC_CMP_ZC
-#define HWZC_BLANKING_PERCENT    5   /* Blanking as % of step period (after commutation) */
+#define HWZC_USE_SW_COMPARE      0   /* 0 = ADC digital comparator @ 1 MHz (HW path).
+                                      * 1 = software compare on mid-ON ADC sample (SW path).
+                                      *
+                                      * SW mode: the 24 kHz ADC ISR reads the floating phase
+                                      * at PG1TRIGA (mid-ON valley, no PWM ripple visible
+                                      * through the board's 5.5 kHz RC filter), compares
+                                      * against zcThreshold in C, and schedules commutation
+                                      * through the same BLANKING/WATCHING/COMM_PENDING
+                                      * state machine. Eliminates the 40–60k/s phantom-ZC
+                                      * rate seen on the HW path at 24 V (ripple crosses
+                                      * the threshold twice per PWM cycle). Trade-off: ZC
+                                      * detection resolution is 42 µs (one PWM period) vs
+                                      * 1 µs on the HW path. At 55 k eRPM that's ~13° of
+                                      * electrical angle, absorbed by TIMING_ADVANCE. */
+#define HWZC_BLANKING_PERCENT    8   /* Blanking as % of step period (after commutation).
+                                      * Bumped from 5 to 8 for more noise rejection margin
+                                      * at high eRPM (100k+ sector period = 100µs, so 8% =
+                                      * 8µs blanking — covers longer demag tail on A2212). */
 #define HWZC_HYSTERESIS_ERPM   500   /* Hysteresis band for crossover (prevents oscillation) */
 #define HWZC_SYNC_THRESHOLD      6   /* Consecutive HW ZCs to declare sync */
 #define HWZC_MISS_LIMIT          3   /* Missed HW ZCs before fallback to software ZC (low for debug) */
 #define HWZC_CMP_DEADBAND        4   /* ADC counts deadband for comparator sanity check */
+#define HWZC_IIR_FREEZE_ZC_COUNT  3  /* Freeze stepPeriodHR IIR until goodZcCount reaches this.
+                                      * Protects against phantom-driven IIR collapse during the
+                                      * fragile first ~1ms after morph→CL handoff, where a single
+                                      * mistimed ZC used to pull stepPeriodHR to floor and stall
+                                      * the motor. Seeded stepPeriodHR drives commDelay until the
+                                      * motor locks in and the adaptive IIR takes over. */
 #define HWZC_MIN_INTERVAL_PCT   70   /* Reject ZC if interval < this % of stepPeriodHR.
                                       * Noise floor: commDelay + blanking = 30-55% of step,
                                       * so noise intervals are always < 55%. 70% rejects all
@@ -420,9 +460,11 @@ extern "C" {
 /* CMP3 settings */
 #define OC_CMP_HYSTERESIS       0b11  /* 45mV hysteresis (max, for noise immunity) */
 #define OC_CMP_FILTER_EN        1     /* 1=enable CMP3 digital filter, 0=disable */
-#define OC_LEB_BLANKING_NS      500   /* Leading-edge blanking (ns) — suppresses PWM
-                                       * switching noise on current sense. 500ns = 200 clocks
-                                       * @ 400MHz. Must exceed FET rise time + ringing. */
+#define OC_LEB_BLANKING_NS     1000   /* Leading-edge blanking (ns). Applied to BOTH the
+                                       * board U25B FPCI input (RPn) AND our CMP3 CLPCI.
+                                       * Blanks the switching transient (FET rise + ringing
+                                       * + deadtime body-diode transient). 2810 @ 24V has
+                                       * ~1µs ringing tail. 1000ns = 400 clocks @ 400MHz. */
 
 #endif /* FEATURE_HW_OVERCURRENT */
 

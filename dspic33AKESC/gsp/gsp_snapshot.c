@@ -166,6 +166,39 @@ void GSP_CaptureSnapshot(GSP_SNAPSHOT_T *dst)
     /* 32-bit counters: double-read */
     dst->hwzcTotalZcCount   = ReadU32Consistent(&src->hwzc.totalZcCount);
     dst->hwzcTotalMissCount = ReadU32Consistent(&src->hwzc.totalMissCount);
+    dst->hwzcNoiseReject    = ReadU32Consistent(&src->hwzc.noiseRejectCount);
+#endif
+
+#if !FEATURE_FOC && !FEATURE_FOC_V2 && !FEATURE_FOC_V3
+    /* Phase-current monitor (16-bit fields are atomic on dsPIC33AK).
+     * Read the window max/min, then reset them in one block so the ADC ISR
+     * starts a fresh window. Small race here: if the ADC ISR fires between
+     * the read and the reset, we lose at most one sample per phase — OK
+     * for diagnostic purposes. */
+    dst->iaRaw = src->phaseCurrent.iaRaw;
+    dst->ibRaw = src->phaseCurrent.ibRaw;
+    dst->iaMax = src->phaseCurrent.iaMax;
+    dst->iaMin = src->phaseCurrent.iaMin;
+    dst->ibMax = src->phaseCurrent.ibMax;
+    dst->ibMin = src->phaseCurrent.ibMin;
+    dst->ibusWinMax = src->phaseCurrent.ibusWinMax;
+    dst->ibusWinMin = src->phaseCurrent.ibusWinMin;
+    src->phaseCurrent.iaMax = 0;
+    src->phaseCurrent.iaMin = 0xFFFF;
+    src->phaseCurrent.ibMax = 0;
+    src->phaseCurrent.ibMin = 0xFFFF;
+    src->phaseCurrent.ibusWinMax = 0;
+    src->phaseCurrent.ibusWinMin = 0xFFFF;
+    /* Frozen-at-fault snapshot — static after fault, so no reset. */
+    dst->iaAtFault    = src->phaseCurrent.iaAtFault;
+    dst->ibAtFault    = src->phaseCurrent.ibAtFault;
+    dst->iaMaxAtFault = src->phaseCurrent.iaMaxAtFault;
+    dst->iaMinAtFault = src->phaseCurrent.iaMinAtFault;
+    dst->ibMaxAtFault = src->phaseCurrent.ibMaxAtFault;
+    dst->ibMinAtFault = src->phaseCurrent.ibMinAtFault;
+    dst->ibusAtFault    = src->phaseCurrent.ibusAtFault;
+    dst->ibusMaxAtFault = src->phaseCurrent.ibusMaxAtFault;
+    dst->ibusMinAtFault = src->phaseCurrent.ibusMinAtFault;
 #endif
 }
 

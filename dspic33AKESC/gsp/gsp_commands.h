@@ -185,9 +185,42 @@ typedef struct __attribute__((packed)) {
     uint16_t handoffCtr;      /* Handoff dwell counter (ticks) */
     uint8_t  smoObservable;   /* Observer health flag (0/1) */
     uint8_t  pad3;
+
+    /* HWZC phantom-ZC rejection diagnostics (4B) */
+    uint32_t hwzcNoiseReject; /* Cumulative ZCs rejected (off-time / interval-min gate) */
+
+    /* 6-step phase-current monitor (24B) — raw ADC counts, bias ~2048,
+     * ~93 counts/A. iaMin/ibMin are 0xFFFF until the first sample.
+     *
+     * Window fields (iaMax/iaMin/ibMax/ibMin) are reset atomically on each
+     * snapshot read, so each telemetry row shows the peaks in the most
+     * recent ~20 ms window.
+     *
+     * The ...AtFault fields are frozen at the first BOARD_PCI transition
+     * of each CL run — they hold the pre-trip 20 ms window envelope so we
+     * can see what the phase currents actually did right before the board
+     * latched the fault. */
+    uint16_t iaRaw;
+    uint16_t ibRaw;
+    uint16_t iaMax;           /* max in last window (reset each snapshot) */
+    uint16_t iaMin;
+    uint16_t ibMax;
+    uint16_t ibMin;
+    uint16_t iaAtFault;       /* Ia sample at moment of first BOARD_PCI */
+    uint16_t ibAtFault;
+    uint16_t iaMaxAtFault;    /* 20 ms-window Ia max captured at fault */
+    uint16_t iaMinAtFault;
+    uint16_t ibMaxAtFault;
+    uint16_t ibMinAtFault;
+    /* Bus-current (OA3/M1_IBUS) windowed + at-fault tracking (10B) */
+    uint16_t ibusWinMax;
+    uint16_t ibusWinMin;
+    uint16_t ibusAtFault;
+    uint16_t ibusMaxAtFault;
+    uint16_t ibusMinAtFault;
 } GSP_SNAPSHOT_T;
 
-_Static_assert(sizeof(GSP_SNAPSHOT_T) == 170, "GSP_SNAPSHOT_T wire size mismatch");
+_Static_assert(sizeof(GSP_SNAPSHOT_T) == 208, "GSP_SNAPSHOT_T wire size mismatch");
 
 /* GSP_RX_STATUS_T — 12 bytes, returned by GET_RX_STATUS */
 typedef struct __attribute__((packed)) {

@@ -130,6 +130,9 @@ typedef struct
     /* Blanking-aware transition tracking */
     uint16_t blankTransitionTotal;  /* Correct-polarity edges detected during blanking */
     uint16_t wrongEdgeTotal;        /* Transitions opposite to expected polarity */
+    /* Plausibility-gate rejects: zcInterval too short relative to stepPeriod
+     * (phantom ZC before motor could physically reach next sector). */
+    uint16_t intervalRejectTotal;
     /* Last-sample snapshot */
     uint16_t lastFloatAdc;
     uint16_t lastZcThreshold;
@@ -234,6 +237,15 @@ typedef struct {
                                      * interval spans 2× timeout periods, not
                                      * real motor periods). */
     bool         fallbackPending; /* Set by HWZC_Disable, cleared by ADC ISR re-seed */
+    bool         firstZcAfterEnable; /* True on first ZC after HWZC_Enable — bypass
+                                      * plausibility gate + skip IIR update. The gate is
+                                      * bypassed because the seeded lastZcStamp is a
+                                      * guess (morph rotor position is unpredictable),
+                                      * so the first interval measured is effectively
+                                      * random and would false-reject the first real ZC.
+                                      * Using the first ZC only to re-anchor lastZcStamp
+                                      * guarantees the SECOND ZC gives a clean full-step
+                                      * interval that can feed the IIR safely. */
     bool         dbgLatchDisable;  /* Debug: after first HW ZC failure, block re-enable permanently */
     uint32_t     noiseRejectCount; /* ZC events rejected by interval filter (diagnostic) */
     uint8_t      rejectsThisStep; /* Noise rejects since last commutation (diagnostic) */
@@ -565,6 +577,45 @@ typedef struct
 
 #if FEATURE_ADC_CMP_ZC
     HWZC_STATE_T hwzc;
+#endif
+
+#if !FEATURE_FOC && !FEATURE_FOC_V2 && !FEATURE_FOC_V3
+    /* 6-step diagnostic phase-current monitor (AD1CH3=Ia, AD2CH2=Ib via
+     * PG1TRIGA @ 24 kHz). Scale ~93 counts/A, bias ~2048 (0 A).
+     *
+     * iaMax/iaMin/ibMax/ibMin are RESET each telemetry snapshot by
+     * gsp_snapshot.c — so each row reflects the 20 ms window peaks,
+     * not a lifetime latched value. This lets us observe the current
+     * envelope evolve vs time.
+     *
+     * iaAtFault/ibAtFault/iaMaxAtFault/iaMinAtFault/ibMaxAtFault/
+     * ibMinAtFault are FROZEN when BOARD_PCI latches — they survive
+     * fault-clear so we can see what the last 20 ms window looked like
+     * at the moment of trip. */
+    struct {
+        uint16_t iaRaw;         /* Latest Ia sample */
+        uint16_t ibRaw;         /* Latest Ib sample */
+        uint16_t iaMax;         /* Max Ia since last snapshot read */
+        uint16_t iaMin;         /* Min Ia since last snapshot read (0xFFFF = no samples) */
+        uint16_t ibMax;
+        uint16_t ibMin;
+        /* Bus current windowed peak tracking (mirrors phase, separate from
+         * the lifetime ibusMax in the HW_OVERCURRENT block). */
+        uint16_t ibusWinMax;
+        uint16_t ibusWinMin;
+        /* Frozen-at-fault snapshot — captured once when fault transitions
+         * non-BOARD_PCI → BOARD_PCI, kept until next CL entry. */
+        uint16_t iaAtFault;
+        uint16_t ibAtFault;
+        uint16_t iaMaxAtFault;
+        uint16_t iaMinAtFault;
+        uint16_t ibMaxAtFault;
+        uint16_t ibMinAtFault;
+        uint16_t ibusAtFault;
+        uint16_t ibusMaxAtFault;
+        uint16_t ibusMinAtFault;
+        uint8_t  faultCaptured; /* 1 once we've latched an at-fault snapshot; 0 = no fault yet */
+    } phaseCurrent;
 #endif
 
 #if FEATURE_HW_OVERCURRENT

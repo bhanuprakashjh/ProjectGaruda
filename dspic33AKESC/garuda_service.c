@@ -322,6 +322,29 @@ void GARUDA_ServiceInit(void)
     garudaData.desyncRestartAttempts = 0;
     garudaData.recoveryCounter = 0;
 
+#if !FEATURE_FOC && !FEATURE_FOC_V2 && !FEATURE_FOC_V3
+    /* Phase-current monitor — start with empty max/min. iaMin initialized
+     * to 0xFFFF so the first real sample wins the "less than" comparison. */
+    garudaData.phaseCurrent.iaRaw = 0;
+    garudaData.phaseCurrent.ibRaw = 0;
+    garudaData.phaseCurrent.iaMax = 0;
+    garudaData.phaseCurrent.iaMin = 0xFFFF;
+    garudaData.phaseCurrent.ibMax = 0;
+    garudaData.phaseCurrent.ibMin = 0xFFFF;
+    garudaData.phaseCurrent.ibusWinMax = 0;
+    garudaData.phaseCurrent.ibusWinMin = 0xFFFF;
+    garudaData.phaseCurrent.iaAtFault = 0;
+    garudaData.phaseCurrent.ibAtFault = 0;
+    garudaData.phaseCurrent.iaMaxAtFault = 0;
+    garudaData.phaseCurrent.iaMinAtFault = 0;
+    garudaData.phaseCurrent.ibMaxAtFault = 0;
+    garudaData.phaseCurrent.ibMinAtFault = 0;
+    garudaData.phaseCurrent.ibusAtFault = 0;
+    garudaData.phaseCurrent.ibusMaxAtFault = 0;
+    garudaData.phaseCurrent.ibusMinAtFault = 0;
+    garudaData.phaseCurrent.faultCaptured = 0;
+#endif
+
 #if FEATURE_FOC
     /* FOC algorithm state */
     pi_init(&s_pid_d,   KP_DQ,  KI_DQ,  -CLAMP_VDQ,       CLAMP_VDQ);
@@ -618,6 +641,33 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
             zcThreshSmooth = rawThresh;  /* Non-CL: instant tracking */
             garudaData.bemf.zcThreshold = rawThresh;
         }
+
+#if FEATURE_ADC_CMP_ZC
+        /* Live CMPLO refresh while HWZC is actively watching for a crossing.
+         * Without this, CMPLO is only written at OnCommutation, so it stays
+         * stale for up to one sector period (~91 µs at 100k eRPM, much longer
+         * at low speed). Updating every 24 kHz tick tracks Vbus sag and duty
+         * ramp mid-sector, which matters under load / during pot slew.
+         *
+         * Safety:
+         *   - Gated on HWZC_WATCHING — during BLANKING/COMM_PENDING the
+         *     comparator IE is disabled anyway.
+         *   - CMPLO write is atomic (single 32-bit SFR).
+         *   - CMPMOD is left untouched (set per-commutation in OnCommutation).
+         *   - Deadband applied per-polarity, matching OnCommutation semantics.
+         */
+        if (garudaData.hwzc.enabled
+            && garudaData.hwzc.phase == HWZC_WATCHING)
+        {
+            int8_t pol = commutationTable[garudaData.currentStep].zcPolarity;
+            uint16_t t = garudaData.bemf.zcThreshold;
+            if (pol > 0)
+                t = (t + HWZC_CMP_DEADBAND < 4095) ? t + HWZC_CMP_DEADBAND : 4095;
+            else
+                t = (t > HWZC_CMP_DEADBAND) ? t - HWZC_CMP_DEADBAND : 0;
+            HAL_ADC_UpdateComparatorThreshold(garudaData.hwzc.activeCore, t);
+        }
+#endif
     }
 #else
     garudaData.bemf.zcThreshold = garudaData.vbusRaw >> 1;
@@ -645,6 +695,144 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
         }
     }
     adcIsrTick++;
+
+#if FEATURE_ADC_CMP_ZC && HWZC_USE_SW_COMPARE
+    /* Software HWZC path: run the ZC compare on the just-captured mid-ON
+     * sample. Mid-ON sampling (PG1TRIGA valley) avoids the ~48 kHz phantom
+     * rate the HW digital comparator sees on this board (5.5 kHz RC filter
+     * can't smooth 24 kHz PWM → ripple crosses threshold every cycle). */
+    HWZC_OnSoftwareSample(&garudaData);
+#endif
+
+#if !FEATURE_FOC && !FEATURE_FOC_V2 && !FEATURE_FOC_V3
+    /* Phase-current peak tracking (diagnostic). AD1CH3 / AD2CH2 convert at
+     * 24 kHz (PG1TRIGA, mid-ON valley). max/min are the per-sample window
+     * peaks; they're reset after each GSP snapshot read (see gsp_snapshot.c).
+     * So each telemetry row shows the peaks in the most recent ~20 ms.
+     *
+     * On CL entry: clear the "frozen-at-fault" snapshot so a new CL run
+     * gets a fresh fault capture when/if it trips. */
+    {
+        if (entryState == ESC_CLOSED_LOOP && prevAdcState != ESC_CLOSED_LOOP) {
+            garudaData.phaseCurrent.faultCaptured = 0;
+            garudaData.phaseCurrent.iaAtFault = 0;
+            garudaData.phaseCurrent.ibAtFault = 0;
+            garudaData.phaseCurrent.iaMaxAtFault = 0;
+            garudaData.phaseCurrent.iaMinAtFault = 0;
+            garudaData.phaseCurrent.ibMaxAtFault = 0;
+            garudaData.phaseCurrent.ibMinAtFault = 0;
+            garudaData.phaseCurrent.ibusAtFault = 0;
+            garudaData.phaseCurrent.ibusMaxAtFault = 0;
+            garudaData.phaseCurrent.ibusMinAtFault = 0;
+        }
+        uint16_t ia = ADCBUF_IA_MON;
+        uint16_t ib = ADCBUF_IB_MON;
+        garudaData.phaseCurrent.iaRaw = ia;
+        garudaData.phaseCurrent.ibRaw = ib;
+        if (ia > garudaData.phaseCurrent.iaMax) garudaData.phaseCurrent.iaMax = ia;
+        if (ia < garudaData.phaseCurrent.iaMin) garudaData.phaseCurrent.iaMin = ia;
+        if (ib > garudaData.phaseCurrent.ibMax) garudaData.phaseCurrent.ibMax = ib;
+        if (ib < garudaData.phaseCurrent.ibMin) garudaData.phaseCurrent.ibMin = ib;
+
+        /* Bus-current window tracking — uses the existing garudaData.ibusRaw
+         * which is captured later in this ISR, but at this point still holds
+         * the PREVIOUS ISR's value (which is fine for window-aggregating). */
+#if FEATURE_HW_OVERCURRENT
+        uint16_t ibus = garudaData.ibusRaw;
+        if (ibus > garudaData.phaseCurrent.ibusWinMax) garudaData.phaseCurrent.ibusWinMax = ibus;
+        if (ibus < garudaData.phaseCurrent.ibusWinMin) garudaData.phaseCurrent.ibusWinMin = ibus;
+#endif
+
+        /* Freeze a snapshot on the first BOARD_PCI transition of this run.
+         * faultCaptured is cleared at CL entry, set once here, so we keep
+         * the VERY FIRST fault's currents (not any later re-trip). */
+        if (!garudaData.phaseCurrent.faultCaptured
+            && garudaData.faultCode == FAULT_BOARD_PCI)
+        {
+            garudaData.phaseCurrent.iaAtFault    = ia;
+            garudaData.phaseCurrent.ibAtFault    = ib;
+            garudaData.phaseCurrent.iaMaxAtFault = garudaData.phaseCurrent.iaMax;
+            garudaData.phaseCurrent.iaMinAtFault = garudaData.phaseCurrent.iaMin;
+            garudaData.phaseCurrent.ibMaxAtFault = garudaData.phaseCurrent.ibMax;
+            garudaData.phaseCurrent.ibMinAtFault = garudaData.phaseCurrent.ibMin;
+#if FEATURE_HW_OVERCURRENT
+            garudaData.phaseCurrent.ibusAtFault    = garudaData.ibusRaw;
+            garudaData.phaseCurrent.ibusMaxAtFault = garudaData.phaseCurrent.ibusWinMax;
+            garudaData.phaseCurrent.ibusMinAtFault = garudaData.phaseCurrent.ibusWinMin;
+#endif
+            garudaData.phaseCurrent.faultCaptured = 1;
+        }
+
+#if FEATURE_BURST_SCOPE
+        /* Stream 6-step diagnostic channels into burst scope ring (24 kHz).
+         *
+         * Reuses the FOC-oriented SCOPE_SAMPLE_T fields:
+         *   ia  = Phase A current (OA1 → AD1CH3) in mA     [accurate]
+         *   ib  = Phase B current (OA2 → AD2CH2) in mA     [broken on this
+         *         MCLV+EV68M17A combo — reads ~0; kept as sanity channel]
+         *   id  = Bus current (OA3/M1_IBUS_FILT) in mA     [REPURPOSED
+         *         for 6-step; what U25B actually trips on]
+         *   vd  = Vbus in centivolts (raw/10, approx)
+         *   vq  = zcThreshold raw
+         *   theta = currentStep (sector 0-5)
+         *   omega = eRPM / 10 (fits int16 up to 327 kRPM)
+         *   mod_index = dutyPct × 100 (0-10000)
+         *   flags:  bit0=HWZC enabled, bit1=fault
+         *   state:  garudaData.state
+         *
+         * Scale (shared with phase-current monitor): ~93 ADC counts/A, bias 2048.
+         * mA = (raw - 2048) × 1000 / 93. Clamped to int16 range.
+         */
+        {
+            SCOPE_SAMPLE_T ss;
+            int32_t ma;
+
+            ma = ((int32_t)garudaData.phaseCurrent.iaRaw - 2048) * 1000 / 93;
+            if (ma > 32767)  ma = 32767;
+            if (ma < -32768) ma = -32768;
+            ss.ia = (int16_t)ma;
+
+            ma = ((int32_t)garudaData.phaseCurrent.ibRaw - 2048) * 1000 / 93;
+            if (ma > 32767)  ma = 32767;
+            if (ma < -32768) ma = -32768;
+            ss.ib = (int16_t)ma;
+
+#if FEATURE_HW_OVERCURRENT
+            ma = ((int32_t)garudaData.ibusRaw - 2048) * 1000 / 93;
+            if (ma > 32767)  ma = 32767;
+            if (ma < -32768) ma = -32768;
+            ss.id = (int16_t)ma;
+#else
+            ss.id = 0;
+#endif
+            ss.iq       = 0;
+            ss.vd       = (int16_t)(garudaData.vbusRaw);      /* raw ADC */
+            ss.vq       = (int16_t)(garudaData.bemf.zcThreshold);
+            ss.theta    = (int16_t)(garudaData.currentStep);
+            ss.obs_x1   = (int16_t)(garudaData.bemf.bemfRaw);
+            ss.obs_x2   = 0;
+            {
+                uint32_t erpm_hr = (garudaData.hwzc.enabled && garudaData.hwzc.stepPeriodHR)
+                                 ? HWZC_TICKS_TO_ERPM(garudaData.hwzc.stepPeriodHR)
+                                 : 0;
+                int32_t eRPMscaled = (int32_t)(erpm_hr / 10);
+                if (eRPMscaled > 32767) eRPMscaled = 32767;
+                ss.omega = (int16_t)eRPMscaled;
+            }
+            {
+                uint32_t dutyPctX100 = (garudaData.duty * 10000U) / LOOPTIME_TCY;
+                if (dutyPctX100 > 32767) dutyPctX100 = 32767;
+                ss.mod_index = (int16_t)dutyPctX100;
+            }
+            ss.flags  = (garudaData.hwzc.enabled ? 0x01 : 0x00)
+                      | ((garudaData.state == ESC_FAULT) ? 0x02 : 0x00);
+            ss.state  = (uint8_t)garudaData.state;
+            ss.tick_lsb = (uint16_t)(garudaData.systemTick & 0xFFFF);
+            Scope_WriteSample(&ss);
+        }
+#endif /* FEATURE_BURST_SCOPE */
+    }
+#endif
 #else
 #if !FEATURE_FOC && !FEATURE_FOC_V2 && !FEATURE_FOC_V3
     garudaData.bemf.bemfRaw = phaseB_val;

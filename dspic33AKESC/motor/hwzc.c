@@ -49,6 +49,7 @@ void HWZC_Init(volatile GARUDA_DATA_T *pData)
     pData->hwzc.goodZcCount = 0;
     pData->hwzc.missCount = 0;
     pData->hwzc.fallbackPending = false;
+    pData->hwzc.firstZcAfterEnable = false;
     pData->hwzc.dbgLatchDisable = false;
     pData->hwzc.stepsSinceLastHwZc = 0;
     pData->hwzc.totalZcCount = 0;
@@ -87,6 +88,7 @@ void HWZC_Enable(volatile GARUDA_DATA_T *pData)
     pData->hwzc.missCount = 0;
     pData->hwzc.noiseRejectCount = 0;
     pData->hwzc.stepsSinceLastHwZc = 1;  /* First step: IIR valid with seeded lastZcStamp */
+    pData->hwzc.firstZcAfterEnable = true; /* Bypass plausibility gate + IIR on 1st ZC */
 
     /* Seed stepPeriodHR from software ZC step period */
     pData->hwzc.dbgEnableStepPeriod = pData->timing.stepPeriod;
@@ -190,11 +192,16 @@ void HWZC_OnCommutation(volatile GARUDA_DATA_T *pData)
  */
 void HWZC_OnBlankingExpired(volatile GARUDA_DATA_T *pData)
 {
+#if !HWZC_USE_SW_COMPARE
     uint8_t core = pData->hwzc.activeCore;
 
     /* Clear any stale comparator events, then enable interrupt */
     HAL_ADC_ClearComparatorFlag(core);
     HAL_ADC_EnableComparatorIE(core);
+#else
+    /* SW compare mode: leave the HW digital comparator IE disabled.
+     * ZC detection runs in the 24 kHz ADC ISR via HWZC_OnSoftwareSample(). */
+#endif
 
     /* Timeout = 2x step period (same as software ZC) */
     uint32_t timeoutTicks = pData->hwzc.stepPeriodHR * 2;
@@ -212,16 +219,85 @@ void HWZC_OnBlankingExpired(volatile GARUDA_DATA_T *pData)
  */
 void HWZC_OnZcDetected(volatile GARUDA_DATA_T *pData)
 {
+    /* Off-time gate (PWMxH-LOW rejection) was REMOVED (2026-04-20).
+     *
+     * The gate added up to ~42 µs of detection latency (one full PWM cycle
+     * at 24 kHz) when a real ZC happened to cross the threshold during
+     * PWM OFF-time. At 118 k eRPM (sector = 85 µs) that's ~50 % of a
+     * sector — the 22° TIMING_ADVANCE_MAX_DEG couldn't compensate it, and
+     * the motor topped out around 88 k instead of the 118 k milestone
+     * recorded at commit 868b2ff.
+     *
+     * The plausibility gate below (reject interval < 70 % of stepPeriodHR)
+     * is sufficient alone for phantom rejection — it was what the 118 k
+     * run used, and phantoms whose spacing happens to land above 70 % of
+     * the expected sector are rare enough that the IIR absorbs them.
+     */
     uint32_t zcStamp = HAL_SCCP2_ReadTimestamp();
+
+    /* First ZC after HWZC_Enable: bypass plausibility gate AND skip IIR.
+     * The seeded lastZcStamp is a half-step guess based on where morph exit
+     * happened to fall in the rotor cycle. The first measured interval is
+     * therefore rotor-position-dependent and not representative — it can be
+     * anywhere from 10% to 190% of a real step period. Accepting it blindly
+     * risks (a) false reject by plausibility gate → timeout cascade → HWZC
+     * disable → stall, or (b) IIR getting dragged off stepPeriodHR. Just
+     * anchor lastZcStamp; the SECOND ZC gives a clean, full-step interval. */
+    if (pData->hwzc.firstZcAfterEnable)
+    {
+        pData->hwzc.firstZcAfterEnable = false;
+        HAL_SCCP1_Stop();
+        pData->hwzc.lastZcStamp = zcStamp;
+        pData->hwzc.stepsSinceLastHwZc = 0;
+        if (pData->hwzc.goodZcCount < 0xFFFE)
+            pData->hwzc.goodZcCount++;
+        pData->hwzc.missCount = 0;
+        pData->hwzc.totalZcCount++;
+
+        /* Schedule commDelay using seeded stepPeriodHR (same logic below) */
+        uint32_t commDelay;
+#if FEATURE_TIMING_ADVANCE
+        {
+            uint32_t eRPM = HWZC_TICKS_TO_ERPM(pData->hwzc.stepPeriodHR);
+            uint16_t advDeg;
+            if (eRPM <= RT_RAMP_TARGET_ERPM)
+                advDeg = TIMING_ADVANCE_MIN_DEG;
+            else if (eRPM >= RT_MAX_CLOSED_LOOP_ERPM)
+                advDeg = RT_TIMING_ADV_MAX_DEG;
+            else
+            {
+                uint32_t range = RT_MAX_CLOSED_LOOP_ERPM - RT_RAMP_TARGET_ERPM;
+                uint32_t pos = eRPM - RT_RAMP_TARGET_ERPM;
+                advDeg = TIMING_ADVANCE_MIN_DEG +
+                    (uint16_t)((uint32_t)(RT_TIMING_ADV_MAX_DEG - TIMING_ADVANCE_MIN_DEG)
+                               * pos / range);
+            }
+            commDelay = pData->hwzc.stepPeriodHR * (30 - advDeg) / 60;
+            pData->hwzc.dbgAdvanceDeg = advDeg;
+        }
+#else
+        commDelay = pData->hwzc.stepPeriodHR / 2;
+#endif
+        if (commDelay < 10) commDelay = 10;
+        pData->hwzc.phase = HWZC_COMM_PENDING;
+        HAL_SCCP1_StartOneShot(commDelay);
+        return;
+    }
 
     /* Noise rejection: motor inertia prevents >50% speed change per step.
      * Any shorter interval is PWM switching noise, not a real BEMF crossing.
-     * Check BEFORE cancelling timeout — noise must not eat the timeout. */
+     * Check BEFORE cancelling timeout — noise must not eat the timeout.
+     *
+     * Hard floor: RT_HWZC_MIN_STEP_TICKS corresponds to RT_MAX_CLOSED_LOOP_ERPM.
+     * Any interval below that is physically impossible (motor can't spin faster
+     * than max). Using this as the floor prevents IIR collapse runaway: without
+     * it, as stepPeriodHR drops, the 70% gate drops with it, accepting shorter
+     * and shorter phantoms and pulling IIR to the MIN_STEP floor. */
     uint32_t interval = zcStamp - pData->hwzc.lastZcStamp;
     uint32_t minInterval = pData->hwzc.stepPeriodHR
                            * HWZC_MIN_INTERVAL_PCT / 100;
-    if (minInterval < RT_HWZC_NOISE_FLOOR_TICKS)
-        minInterval = RT_HWZC_NOISE_FLOOR_TICKS;
+    if (minInterval < RT_HWZC_MIN_STEP_TICKS)
+        minInterval = RT_HWZC_MIN_STEP_TICKS;
 
     if (interval < minInterval)
     {
@@ -238,10 +314,16 @@ void HWZC_OnZcDetected(volatile GARUDA_DATA_T *pData)
     HAL_SCCP1_Stop();
 
     /* Update stepPeriodHR with seqlock (Rule 13).
-     * Guard: only update IIR when this ZC follows exactly one commutation
+     * Guard 1: only update IIR when this ZC follows exactly one commutation
      * (consecutive detection). Multi-step intervals include timeout periods,
-     * not real motor periods — they contaminate the estimator. */
-    if (pData->hwzc.stepsSinceLastHwZc == 1)
+     * not real motor periods — they contaminate the estimator.
+     * Guard 2: freeze IIR for the first N ZCs after HWZC_Enable. A single
+     * phantom or mistimed ZC during morph handoff used to pull stepPeriodHR
+     * rapidly toward floor (observed in ~50% of morph attempts). Holding the
+     * seeded stepPeriodHR for a few cycles lets the motor lock in at the
+     * morph-exit rate before the IIR starts adapting. */
+    if (pData->hwzc.stepsSinceLastHwZc == 1
+        && pData->hwzc.goodZcCount >= HWZC_IIR_FREEZE_ZC_COUNT)
     {
         pData->hwzc.writeSeq++;  /* odd = write in progress */
         uint32_t newPeriod = (3 * pData->hwzc.stepPeriodHR + interval) / 4;
@@ -261,7 +343,13 @@ void HWZC_OnZcDetected(volatile GARUDA_DATA_T *pData)
     pData->hwzc.totalZcCount++;
 
     /* Calculate commutation delay: half step period (30 degrees).
-     * With timing advance, the delay is reduced proportionally. */
+     * With timing advance, the delay is reduced proportionally.
+     *
+     * Uses stepPeriodHR (IIR-filtered, gain 0.25). Tried using the fresh
+     * `interval` directly (2026-04-20) — made trip eRPM worse (55k→45k)
+     * because interval-to-interval noise (phantom-reject-induced jitter)
+     * fed directly into commDelay. The IIR is doing real filtering work.
+     */
     uint32_t commDelay;
 #if FEATURE_TIMING_ADVANCE
     {
@@ -360,5 +448,147 @@ void HWZC_OnTimeout(volatile GARUDA_DATA_T *pData)
 
     HWZC_OnCommutation(pData);
 }
+
+#if HWZC_USE_SW_COMPARE
+/**
+ * @brief Software ZC detection on a mid-ON ADC sample.
+ * Called from the 24 kHz ADC ISR after bemfRaw is populated. Replaces the
+ * 1 MHz hardware digital comparator path — mid-ON sampling avoids the
+ * 48 kHz phantom-crossing issue where PWM ripple through the board's
+ * 5.5 kHz RC filter constantly crosses the threshold.
+ *
+ * Runs the exact same accept logic as HWZC_OnZcDetected (plausibility gate,
+ * IIR update, commDelay scheduling) minus the HW comparator re-arm. State
+ * machine (BLANKING → WATCHING → COMM_PENDING) is identical.
+ *
+ * No-op unless enabled && phase == HWZC_WATCHING && sample is valid.
+ */
+void HWZC_OnSoftwareSample(volatile GARUDA_DATA_T *pData)
+{
+    if (!pData->hwzc.enabled) return;
+    if (pData->hwzc.phase != HWZC_WATCHING) return;
+    if (!pData->bemf.bemfSampleValid) return;   /* AD2 pin-mux settling */
+
+    uint8_t step = pData->currentStep;
+    int8_t  pol = commutationTable[step].zcPolarity;
+    bool    risingZc = (pol > 0);
+
+    /* Apply deadband/hysteresis matching the HW comparator path */
+    uint16_t thresh = pData->bemf.zcThreshold;
+    if (risingZc)
+        thresh = (thresh + HWZC_CMP_DEADBAND < 4095) ? thresh + HWZC_CMP_DEADBAND : 4095;
+    else
+        thresh = (thresh > HWZC_CMP_DEADBAND) ? thresh - HWZC_CMP_DEADBAND : 0;
+
+    uint16_t bemfRaw = pData->bemf.bemfRaw;
+    bool crossed = risingZc ? (bemfRaw > thresh) : (bemfRaw < thresh);
+    if (!crossed) return;
+
+    uint32_t zcStamp = HAL_SCCP2_ReadTimestamp();
+
+    /* First ZC after HWZC_Enable: bypass plausibility gate + skip IIR.
+     * See HWZC_OnZcDetected for rationale. */
+    if (pData->hwzc.firstZcAfterEnable) {
+        pData->hwzc.firstZcAfterEnable = false;
+        HAL_SCCP1_Stop();
+        pData->hwzc.lastZcStamp = zcStamp;
+        pData->hwzc.stepsSinceLastHwZc = 0;
+        if (pData->hwzc.goodZcCount < 0xFFFE)
+            pData->hwzc.goodZcCount++;
+        pData->hwzc.missCount = 0;
+        pData->hwzc.totalZcCount++;
+
+        uint32_t commDelay;
+#if FEATURE_TIMING_ADVANCE
+        {
+            uint32_t eRPM = HWZC_TICKS_TO_ERPM(pData->hwzc.stepPeriodHR);
+            uint16_t advDeg;
+            if (eRPM <= RT_RAMP_TARGET_ERPM)
+                advDeg = TIMING_ADVANCE_MIN_DEG;
+            else if (eRPM >= RT_MAX_CLOSED_LOOP_ERPM)
+                advDeg = RT_TIMING_ADV_MAX_DEG;
+            else {
+                uint32_t range = RT_MAX_CLOSED_LOOP_ERPM - RT_RAMP_TARGET_ERPM;
+                uint32_t pos   = eRPM - RT_RAMP_TARGET_ERPM;
+                advDeg = TIMING_ADVANCE_MIN_DEG +
+                    (uint16_t)((uint32_t)(RT_TIMING_ADV_MAX_DEG - TIMING_ADVANCE_MIN_DEG)
+                               * pos / range);
+            }
+            commDelay = pData->hwzc.stepPeriodHR * (30 - advDeg) / 60;
+            pData->hwzc.dbgAdvanceDeg = advDeg;
+        }
+#else
+        commDelay = pData->hwzc.stepPeriodHR / 2;
+#endif
+        if (commDelay < 10) commDelay = 10;
+        pData->hwzc.phase = HWZC_COMM_PENDING;
+        HAL_SCCP1_StartOneShot(commDelay);
+        return;
+    }
+
+    /* Plausibility gate: reject intervals shorter than 70% of stepPeriodHR,
+     * with RT_HWZC_MIN_STEP_TICKS as hard floor (physical max eRPM). */
+    uint32_t interval = zcStamp - pData->hwzc.lastZcStamp;
+    uint32_t minInterval = pData->hwzc.stepPeriodHR
+                           * HWZC_MIN_INTERVAL_PCT / 100;
+    if (minInterval < RT_HWZC_MIN_STEP_TICKS)
+        minInterval = RT_HWZC_MIN_STEP_TICKS;
+
+    if (interval < minInterval) {
+        pData->hwzc.noiseRejectCount++;
+        pData->hwzc.rejectsThisStep++;
+        return;  /* stay in WATCHING; timeout still armed */
+    }
+
+    /* Cancel timeout */
+    HAL_SCCP1_Stop();
+
+    /* Update IIR: see HWZC_OnZcDetected for the freeze-first-N rationale. */
+    if (pData->hwzc.stepsSinceLastHwZc == 1
+        && pData->hwzc.goodZcCount >= HWZC_IIR_FREEZE_ZC_COUNT) {
+        pData->hwzc.writeSeq++;
+        uint32_t newPeriod = (3 * pData->hwzc.stepPeriodHR + interval) / 4;
+        if (newPeriod < RT_HWZC_MIN_STEP_TICKS)
+            newPeriod = RT_HWZC_MIN_STEP_TICKS;
+        pData->hwzc.stepPeriodHR = newPeriod;
+        pData->hwzc.writeSeq++;
+    }
+    pData->hwzc.stepsSinceLastHwZc = 0;
+    pData->hwzc.lastZcStamp = zcStamp;
+
+    if (pData->hwzc.goodZcCount < 0xFFFE)
+        pData->hwzc.goodZcCount++;
+    pData->hwzc.missCount = 0;
+    pData->hwzc.totalZcCount++;
+
+    /* Schedule commutation (same advance/delay math as HW path) */
+    uint32_t commDelay;
+#if FEATURE_TIMING_ADVANCE
+    {
+        uint32_t eRPM = HWZC_TICKS_TO_ERPM(pData->hwzc.stepPeriodHR);
+        uint16_t advDeg;
+        if (eRPM <= RT_RAMP_TARGET_ERPM)
+            advDeg = TIMING_ADVANCE_MIN_DEG;
+        else if (eRPM >= RT_MAX_CLOSED_LOOP_ERPM)
+            advDeg = RT_TIMING_ADV_MAX_DEG;
+        else {
+            uint32_t range = RT_MAX_CLOSED_LOOP_ERPM - RT_RAMP_TARGET_ERPM;
+            uint32_t pos   = eRPM - RT_RAMP_TARGET_ERPM;
+            advDeg = TIMING_ADVANCE_MIN_DEG +
+                (uint16_t)((uint32_t)(RT_TIMING_ADV_MAX_DEG - TIMING_ADVANCE_MIN_DEG)
+                           * pos / range);
+        }
+        commDelay = pData->hwzc.stepPeriodHR * (30 - advDeg) / 60;
+        pData->hwzc.dbgAdvanceDeg = advDeg;
+    }
+#else
+    commDelay = pData->hwzc.stepPeriodHR / 2;
+#endif
+    if (commDelay < 10) commDelay = 10;
+
+    pData->hwzc.phase = HWZC_COMM_PENDING;
+    HAL_SCCP1_StartOneShot(commDelay);
+}
+#endif /* HWZC_USE_SW_COMPARE */
 
 #endif /* FEATURE_ADC_CMP_ZC */

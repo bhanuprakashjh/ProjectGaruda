@@ -141,9 +141,8 @@ static void ButtonGroupInitialize(void)
  */
 void HAL_InitPeripherals(void)
 {
-#if FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3
-    HAL_OA12_Init();                /* OA1/OA2 for phase current sense (FOC/V2/V3) */
-#endif
+    HAL_OA12_Init();                /* OA1/OA2 for phase current sense
+                                     * (FOC: primary feedback; 6-step: diagnostic monitor) */
 #if FEATURE_HW_OVERCURRENT
     HAL_OA3_Init();                 /* 1. Op-amp on (~10us settling) */
     InitializeCMPs();               /* 2. CMP3 + DAC3 threshold configured */

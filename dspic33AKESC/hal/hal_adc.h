@@ -47,6 +47,14 @@ extern "C" {
 #define ADCBUF_IBUS         (uint16_t)AD1CH2DATA
 #endif
 
+#if !FEATURE_FOC && !FEATURE_FOC_V2 && !FEATURE_FOC_V3
+/* 6-step diagnostic phase-current monitors (AD1CH3 = Ia, AD2CH2 = Ib).
+ * 1 MHz SCCP3 sampling, read every 24 kHz ADC ISR to track peak phase
+ * currents for empirical validation of the U25B / 22 A trip hypothesis. */
+#define ADCBUF_IA_MON       (uint16_t)AD1CH3DATA
+#define ADCBUF_IB_MON       (uint16_t)AD2CH2DATA
+#endif
+
 /* Phase B completion (AD1CH0) is the ADC interrupt source */
 #define GARUDA_EnableADCInterrupt()     _AD1CH0IE = 1
 #define GARUDA_DisableADCInterrupt()    _AD1CH0IE = 0
@@ -75,6 +83,11 @@ void HAL_ADC_EnableComparatorIE(uint8_t adcCore);
 void HAL_ADC_DisableComparatorIE(uint8_t adcCore);
 void HAL_ADC_ClearComparatorFlag(uint8_t adcCore);
 void HAL_ADC_SetHighSpeedPinsel(uint8_t pinsel);
+/* Live CMPLO update (no CMPMOD change) — safe to call from ADC ISR
+ * while the comparator is armed. Atomic SFR write. Takes effect on
+ * the next ADC conversion (~1 µs at SCCP3 1 MHz, or ~4 µs at 4×
+ * oversample). */
+void HAL_ADC_UpdateComparatorThreshold(uint8_t adcCore, uint16_t threshold);
 #endif
 
 #ifdef __cplusplus
