@@ -112,7 +112,7 @@ extern "C" {
  * All motor-dependent parameters are grouped here for easy swapping.
  * Board-specific and feature-tuning parameters are below.
  *──────────────────────────────────────────────────────────────────────────*/
-#define MOTOR_PROFILE  1
+#define MOTOR_PROFILE  2
 
 #if MOTOR_PROFILE == 0
 /* === Hurst DMB2424B10002 (long Hurst, MCLV-48V-300W bench motor) ===
@@ -228,12 +228,13 @@ extern "C" {
  * saturates at ~22A. HW CMP3 is the primary protection. Expect occasional
  * BOARD_PCI at extreme duty — tune down if too aggressive. */
 #define MOTOR_POLE_PAIRS             7
-#define DEADTIME_NS                500     /* Low-L motor, same as A2212.
-                                            * 2026-04-20: tried 1000 ns to rule out Qrr
-                                            * at 24 V; MIN_DUTY = 2*DEADTIME_COUNTS forced
-                                            * startup duty to ~9.6% → instant 46 A stall
-                                            * trip during ALIGN/MORPH. Dead-time can't be
-                                            * raised without redesigning MIN_DUTY clamp. */
+#define DEADTIME_NS                300     /* 300 ns (2026-04-21) — match A2212 sweet
+                                            * spot. Cuts commutation kickback ~55% on
+                                            * A2212 bench. At 24V/2810 the commutation
+                                            * energy ½LI² is even higher per event →
+                                            * kickback reduction potentially decisive for
+                                            * the 22A BOARD_PCI trip threshold that held
+                                            * 2810 top speed at 78k eRPM on 500 ns. */
 #define ALIGN_DUTY_PERCENT           3     /* 24V * 3% / 0.050Ω = 14.4A stall.
                                             * Half of A2212 (8% at 12V) for same current */
 #define RAMP_DUTY_PERCENT            8     /* 24V * 8% / 0.050Ω = 38A stall (briefly).
