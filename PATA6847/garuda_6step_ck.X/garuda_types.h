@@ -462,6 +462,23 @@ typedef struct {
     int16_t  ibRaw;             /* Phase B current (AN4, OA3, signed) */
     int16_t  ibusRaw;           /* DC bus current  (AN0, OA1, signed) */
 
+    /* Rolling-window peak tracking (reset each snapshot read).
+     * ADC ISR at 20 kHz writes; snapshot read resets. Window ≈ 20 ms
+     * at 50 Hz telemetry. Tracks signed peaks (+max/-min) separately
+     * so we can see direction of the current transient.
+     *
+     * At-fault freeze: when a BOARD_* fault transitions, the rolling
+     * state is copied into the atFault* fields and held until the next
+     * non-fault state. Used to diagnose exact trip peaks post-hoc. */
+    int16_t  iaPkMax,  iaPkMin;
+    int16_t  ibPkMax,  ibPkMin;
+    int16_t  ibusPkMax, ibusPkMin;
+    int16_t  iaAtFaultMax,  iaAtFaultMin;
+    int16_t  ibAtFaultMax,  ibAtFaultMin;
+    int16_t  ibusAtFaultMax, ibusAtFaultMin;
+    int16_t  iaAtFaultInst, ibAtFaultInst, ibusAtFaultInst;
+    uint8_t  faultSnapshotValid;  /* 1 after BOARD fault, cleared on restart */
+
     /* Sub-structures */
     BEMF_STATE_T   bemf;
     TIMING_STATE_T timing;

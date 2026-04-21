@@ -37,6 +37,35 @@ void GSP_CaptureSnapshot(GSP_CK_SNAPSHOT_T *dst)
     dst->ibusRaw     = src->ibusRaw;
     dst->duty        = (uint16_t)src->duty;
 
+    /* Phase-current peaks: copy rolling window, reset src so next
+     * window starts fresh. Signed max/min are tracked separately so
+     * the GUI can distinguish positive vs negative direction transients.
+     *
+     * At-fault fields preserved — cleared on motor restart, not on
+     * snapshot read. Until then any repeated snapshot will show the
+     * same trip values so the operator can read them after the event. */
+    dst->iaPkMax    = src->iaPkMax;
+    dst->iaPkMin    = src->iaPkMin;
+    dst->ibPkMax    = src->ibPkMax;
+    dst->ibPkMin    = src->ibPkMin;
+    dst->ibusPkMax  = src->ibusPkMax;
+    dst->ibusPkMin  = src->ibusPkMin;
+    dst->iaAtFaultMax   = src->iaAtFaultMax;
+    dst->iaAtFaultMin   = src->iaAtFaultMin;
+    dst->ibAtFaultMax   = src->ibAtFaultMax;
+    dst->ibAtFaultMin   = src->ibAtFaultMin;
+    dst->ibusAtFaultMax = src->ibusAtFaultMax;
+    dst->ibusAtFaultMin = src->ibusAtFaultMin;
+    dst->iaAtFaultInst   = src->iaAtFaultInst;
+    dst->ibAtFaultInst   = src->ibAtFaultInst;
+    dst->ibusAtFaultInst = src->ibusAtFaultInst;
+    dst->faultSnapshotValid = src->faultSnapshotValid;
+    dst->_padPeaks = 0;
+    /* Reset rolling peaks for next 20 ms window */
+    src->iaPkMax   = src->iaPkMin   = src->iaRaw;
+    src->ibPkMax   = src->ibPkMin   = src->ibRaw;
+    src->ibusPkMax = src->ibusPkMin = src->ibusRaw;
+
     /* Speed/timing */
     dst->stepPeriod   = src->timing.stepPeriod;
     dst->goodZcCount  = src->timing.goodZcCount;

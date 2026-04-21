@@ -67,6 +67,31 @@ volatile uint16_t gV4PotRaw = 0;
 volatile uint16_t gV4VbusRaw = 0;
 volatile int16_t  gV4IaRaw = 0;
 volatile int16_t  gV4IbRaw = 0;
+
+/* Phase-current peak tracking (rolling window, reset on snapshot read).
+ * ADC ISR updates max/min every 20 kHz. Same scale as gV4IaRaw. */
+volatile int16_t  gV4IaPkMax   = 0, gV4IaPkMin   = 0;
+volatile int16_t  gV4IbPkMax   = 0, gV4IbPkMin   = 0;
+volatile int16_t  gV4IbusPkMax = 0, gV4IbusPkMin = 0;
+
+/* At-fault frozen snapshot — populated when V4 enters FAULT, preserved
+ * until motor restart. Captures exact peaks at the moment of trip. */
+volatile int16_t  gV4IaAtFaultMax = 0, gV4IaAtFaultMin = 0;
+volatile int16_t  gV4IbAtFaultMax = 0, gV4IbAtFaultMin = 0;
+volatile int16_t  gV4IbusAtFaultMax = 0, gV4IbusAtFaultMin = 0;
+volatile int16_t  gV4IaAtFaultInst = 0, gV4IbAtFaultInst = 0, gV4IbusAtFaultInst = 0;
+volatile uint8_t  gV4FaultSnapshotValid = 0;
+
+static inline void V4FreezeAtFaultPeaks(void)
+{
+    gV4IaAtFaultMax   = gV4IaPkMax;   gV4IaAtFaultMin   = gV4IaPkMin;
+    gV4IbAtFaultMax   = gV4IbPkMax;   gV4IbAtFaultMin   = gV4IbPkMin;
+    gV4IbusAtFaultMax = gV4IbusPkMax; gV4IbusAtFaultMin = gV4IbusPkMin;
+    gV4IaAtFaultInst   = gV4IaRaw;
+    gV4IbAtFaultInst   = gV4IbRaw;
+    gV4IbusAtFaultInst = 0;  /* ibus ≈ max(|ia|,|ib|) computed host-side */
+    gV4FaultSnapshotValid = 1;
+}
 static volatile uint8_t  gV4TickDiv = 0;
 volatile uint32_t gV4SystemTick = 0;
 
@@ -339,6 +364,15 @@ void __attribute__((interrupt, auto_psv)) _ADCInterrupt(void)
     gV4IaRaw   = (int16_t)ADCBUF1;
     gV4IbRaw   = (int16_t)ADCBUF4;
     (void)ADCBUF0;  /* Must read to clear data-ready */
+
+    /* Phase-current peak tracking (rolling window reset each snapshot).
+     * Ia/Ib peaks tracked here directly; ibus peak computed host-side
+     * from |Ia|/|Ib| extrema (ibus ≈ max(|ia|,|ib|) for symmetric 6-step
+     * in all non-C-PWM sectors). Avoids pulling sector state into ISR. */
+    if (gV4IaRaw > gV4IaPkMax) gV4IaPkMax = gV4IaRaw;
+    if (gV4IaRaw < gV4IaPkMin) gV4IaPkMin = gV4IaRaw;
+    if (gV4IbRaw > gV4IbPkMax) gV4IbPkMax = gV4IbRaw;
+    if (gV4IbRaw < gV4IbPkMin) gV4IbPkMin = gV4IbRaw;
 
 #if FEATURE_V4_MIDPOINT_ZC == 1
     if (!v4_spActive
@@ -824,9 +858,27 @@ static uint32_t MapThrottleToDuty(uint16_t potRaw)
 
 /* ── Fault Handling ───────────────────────────────────────────────── */
 
+/* Freeze rolling-window peaks into at-fault snapshot. Call at fault
+ * entry — captures the peak current state right before PWM was killed.
+ * Safe to call from ISR (no SPI, just struct writes). */
+static inline void FreezeAtFaultPeaks(void)
+{
+    gData.iaAtFaultMax   = gData.iaPkMax;
+    gData.iaAtFaultMin   = gData.iaPkMin;
+    gData.ibAtFaultMax   = gData.ibPkMax;
+    gData.ibAtFaultMin   = gData.ibPkMin;
+    gData.ibusAtFaultMax = gData.ibusPkMax;
+    gData.ibusAtFaultMin = gData.ibusPkMin;
+    gData.iaAtFaultInst   = gData.iaRaw;
+    gData.ibAtFaultInst   = gData.ibRaw;
+    gData.ibusAtFaultInst = gData.ibusRaw;
+    gData.faultSnapshotValid = 1;
+}
+
 /* ISR-safe fault entry — just kills PWM and sets state, no SPI */
 static void EnterFaultISR(FAULT_CODE_T code)
 {
+    FreezeAtFaultPeaks();
     gData.state = ESC_FAULT;
     gData.faultCode = code;
     HAL_PWM_DisableOutputs();
@@ -845,6 +897,7 @@ static void EnterFaultISR(FAULT_CODE_T code)
 /* Full fault entry — safe to call from main loop only */
 static void EnterFault(FAULT_CODE_T code)
 {
+    FreezeAtFaultPeaks();
     gData.state = ESC_FAULT;
     gData.faultCode = code;
     HAL_PWM_DisableOutputs();
@@ -1592,22 +1645,30 @@ void __attribute__((interrupt, auto_psv)) _ADCInterrupt(void)
     gData.ibRaw = (int16_t)ADCBUF4;    /* AN4: Phase B (IS2) */
 
     /* Compute IBus from the active PWM phase per commutation step. */
+    int16_t ibusSigned;
     {
-        int16_t ibus;
         switch (gData.currentStep)
         {
             case 0: case 5:  /* Phase A is PWM → Ia = IBus */
-                ibus = gData.iaRaw;
+                ibusSigned = gData.iaRaw;
                 break;
             case 3: case 4:  /* Phase B is PWM → Ib = IBus */
-                ibus = gData.ibRaw;
+                ibusSigned = gData.ibRaw;
                 break;
             default:         /* Steps 1,2: Phase C is PWM → Ic = -(Ia+Ib) */
-                ibus = -(gData.iaRaw + gData.ibRaw);
+                ibusSigned = -(gData.iaRaw + gData.ibRaw);
                 break;
         }
-        gData.ibusRaw = ibus < 0 ? -ibus : ibus;
+        gData.ibusRaw = ibusSigned < 0 ? -ibusSigned : ibusSigned;
     }
+
+    /* Rolling-window peak tracking (reset each snapshot read) */
+    if (gData.iaRaw    > gData.iaPkMax)    gData.iaPkMax    = gData.iaRaw;
+    if (gData.iaRaw    < gData.iaPkMin)    gData.iaPkMin    = gData.iaRaw;
+    if (gData.ibRaw    > gData.ibPkMax)    gData.ibPkMax    = gData.ibRaw;
+    if (gData.ibRaw    < gData.ibPkMin)    gData.ibPkMin    = gData.ibRaw;
+    if (ibusSigned     > gData.ibusPkMax)  gData.ibusPkMax  = ibusSigned;
+    if (ibusSigned     < gData.ibusPkMin)  gData.ibusPkMin  = ibusSigned;
 
     /* BEMF zero-crossing detection */
     if (gData.state == ESC_OL_RAMP || gData.state == ESC_CLOSED_LOOP)

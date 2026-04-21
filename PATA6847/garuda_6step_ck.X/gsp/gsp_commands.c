@@ -703,12 +703,13 @@ void GSP_TelemTick(void)
     V4_TELEM_T t;
     SectorPI_TelemGet(&t);
 
-    uint8_t snap[116]; /* 2-byte seq + 64-byte snapshot + 8-byte off-mid
+    uint8_t snap[148]; /* 2-byte seq + 64-byte snapshot + 8-byte off-mid
                         * + 4-byte V5 PTG fire counter
                         * + 16-byte V5 PTG per-polarity counters
                         * + 16-byte V5.1 ADC post-ZC shadow counters
                         * + 2-byte V5.2 measurement-PI tracker (tMeasHR)
-                        * + 4-byte sectorCount (full 32-bit, for rate diag) */
+                        * + 4-byte sectorCount (full 32-bit, for rate diag)
+                        * + 32-byte phase-current peak block (2026-04-21) */
     memset(snap, 0, sizeof(snap));
 
     /* Seq counter (2 bytes) */
@@ -819,6 +820,47 @@ void GSP_TelemTick(void)
 
     /* Full 32-bit sectorCount for host-side rate computation. */
     memcpy(&d[110], &t.sectorCount, 4);
+
+    /* Phase-current peaks (2026-04-21) — validate kickback theory on CK.
+     * Rolling window reset on snapshot read; at-fault fields preserved
+     * across snapshots until motor restart (valid==1). */
+    extern volatile int16_t gV4IaPkMax, gV4IaPkMin;
+    extern volatile int16_t gV4IbPkMax, gV4IbPkMin;
+    extern volatile int16_t gV4IaAtFaultMax, gV4IaAtFaultMin;
+    extern volatile int16_t gV4IbAtFaultMax, gV4IbAtFaultMin;
+    extern volatile int16_t gV4IaAtFaultInst, gV4IbAtFaultInst;
+    extern volatile uint8_t gV4FaultSnapshotValid;
+    extern volatile int16_t gV4IaRaw, gV4IbRaw;
+
+    /* Reconstruct ibus peaks host-side from Ia/Ib extrema. We emit
+     * zero for ibus fields; host can compute |ibus|pk ≈ max(|ia|,|ib|)
+     * which is a lower bound (exact for steps 0,5,3,4; underestimate by
+     * up to √3 for steps 1,2 where C is PWM). Good enough to compare
+     * against AKESC datasets. */
+    int16_t ibusZero = 0;
+
+    memcpy(&d[114], &gV4IaPkMax,   2);
+    memcpy(&d[116], &gV4IaPkMin,   2);
+    memcpy(&d[118], &gV4IbPkMax,   2);
+    memcpy(&d[120], &gV4IbPkMin,   2);
+    memcpy(&d[122], &ibusZero,     2);
+    memcpy(&d[124], &ibusZero,     2);
+    memcpy(&d[126], &gV4IaAtFaultMax,   2);
+    memcpy(&d[128], &gV4IaAtFaultMin,   2);
+    memcpy(&d[130], &gV4IbAtFaultMax,   2);
+    memcpy(&d[132], &gV4IbAtFaultMin,   2);
+    memcpy(&d[134], &ibusZero,          2);
+    memcpy(&d[136], &ibusZero,          2);
+    memcpy(&d[138], &gV4IaAtFaultInst,   2);
+    memcpy(&d[140], &gV4IbAtFaultInst,   2);
+    memcpy(&d[142], &ibusZero,           2);
+    d[144] = gV4FaultSnapshotValid;
+    d[145] = 0;  /* pad */
+
+    /* Reset rolling peaks for next 20 ms window. Seed with current
+     * instantaneous sample so the window doesn't start at stale extrema. */
+    gV4IaPkMax = gV4IaPkMin = gV4IaRaw;
+    gV4IbPkMax = gV4IbPkMin = gV4IbRaw;
 
     GSP_SendResponse(GSP_CMD_TELEM_FRAME, snap, sizeof(snap));
 }

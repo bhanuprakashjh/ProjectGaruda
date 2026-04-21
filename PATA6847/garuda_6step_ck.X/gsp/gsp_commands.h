@@ -265,6 +265,20 @@ typedef struct __attribute__((packed)) {
     int16_t  dmaLastCorrectionHR;     /* most recent (refined - poll) HR delta */
     int16_t  dmaMinCorrectionHR;      /* min (most negative) correction seen */
     int16_t  dmaMaxCorrectionHR;      /* max (most positive) correction seen */
+
+    /* Phase-current peak tracking (added 2026-04-21 for kickback validation).
+     * Rolling window peaks reset on snapshot read. At-fault fields frozen
+     * when any BOARD_* fault transitions; remain until motor restart.
+     * All in raw ADC units — same scale as iaRaw/ibRaw. */
+    int16_t  iaPkMax,   iaPkMin;
+    int16_t  ibPkMax,   ibPkMin;
+    int16_t  ibusPkMax, ibusPkMin;
+    int16_t  iaAtFaultMax,   iaAtFaultMin;
+    int16_t  ibAtFaultMax,   ibAtFaultMin;
+    int16_t  ibusAtFaultMax, ibusAtFaultMin;
+    int16_t  iaAtFaultInst, ibAtFaultInst, ibusAtFaultInst;
+    uint8_t  faultSnapshotValid;
+    uint8_t  _padPeaks;               /* align to 2 bytes */
 } GSP_CK_SNAPSHOT_T;
 
 /* XC16 doesn't support _Static_assert. Verify size at compile time:

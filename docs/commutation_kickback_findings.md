@@ -96,15 +96,106 @@ A2212/12V lives near the top (BEMF/Vbus ≈ 0.98 at top speed) on a bench supply
 - **PWM frequency 24 → 40 kHz**: lowers the phantom-crossing window and lets us push higher eRPM without the off-time gate latency bottleneck.
 - **Deadtime 500 → 300 ns** (both A2212 and 2810 profiles). See above.
 
+## Physics Validation on CK Board (2026-04-21)
+
+Ported the same phase-current peak-tracking instrumentation (rolling
+window max/min on Ia and Ib, 20 kHz sample rate, 50 Hz telemetry) to the
+CK board (EV43F54A + dsPIC33CK256MP503 + ATA6847) running V4 sector-PI.
+Ran 2810 on 24 V bare, swept the pot from idle to 99 % duty.
+
+### CK scaling
+
+3 mΩ shunt × 16× op-amp gain × signed 12-bit fractional ADC on 3.3 V
+reference → approximately **1000 ADC counts per 1 A phase current**.
+
+### Cross-board comparison — same motor (2810), same Vbus (24 V)
+
+| eRPM      | Board              | Duty  | Ia pk   | Ib pk   | Notes                         |
+|-----------|--------------------|-------|---------|---------|-------------------------------|
+| 78,412    | AKESC (MCLV)       | 34 %  | 15 A    | n/a     | **BOARD_PCI trip fired**      |
+| 82,000    | CK (EV43F54A) V4   | 36 %  | **23 A**| 24 A    | runs clean, no trip           |
+| 103,000   | CK V4              | 46 %  | 26 A    | 25 A    | clean, peak during accel      |
+| 145,000   | CK V4              | 67 %  | 23 A    | 24 A    | clean                         |
+| 170,000   | CK V4              | 83 %  | 26 A    | 25 A    | clean                         |
+| **196,000**| **CK V4**         | **99%**| **22 A**| **22 A** | steady state, 30+ s sustained |
+
+Brief acceleration transients hit ADC saturation (±32,752 counts ≈ 34 A+)
+in a few places during the ramp — the motor survives because the ATA6847
+VDS monitor trips only at short-circuit levels, not at MCLV's 22 A
+comparator threshold.
+
+### What the data shows
+
+**1. Kickback model was right for the A2212 case.** 500 → 300 ns
+deadtime on AKESC cut Ibus peak by 55 % at the near-BEMF-match regime
+where commutation kickback dominates the phase-current envelope.
+That is not disputed by the CK data.
+
+**2. The 22 A trip on 2810/24V was never about commutation quality.**
+CK V4 sees higher Ia/Ib peaks than AKESC, yet runs clean. The motor
+naturally demands ~22-26 A peak phase current at 24 V across the full
+80k-196k eRPM range — that's the drive current needed to accelerate
+against the physics gap between BEMF and Vbus.
+
+**3. Board hardware, not firmware, was the limit.** MCLV-48V-300W has
+a fast-acting U25B bus-current comparator at ~22 A that trips on
+instantaneous peaks. EV43F54A relies on ATA6847 VDS monitoring, which
+only fires at short-circuit levels. Same motor, same firmware topology
+would behave the same on MCLV — it would just trip around 78 k eRPM
+when acceleration demands crossed the board threshold.
+
+**4. V4 sector-PI is not doing anything magical for peak current
+reduction.** The commutation scheme is well-designed (PI on phase
+error, hardware-captured ZCs, per-step ownership from the very first
+commutation), but the peak current in acceleration mode is set by
+(V_drive − BEMF) / R_phase, not by the commutation scheme.
+
+### Decision: kickback vs drive-current taxonomy
+
+Given the AKESC A2212 result and the CK 2810 result, the model that
+fits the evidence:
+
+**Peak phase current at any operating point** has two components:
+
+    Ipk  ≈  I_drive  +  I_kickback
+         ≈  (V_applied − BEMF) / R   +   sqrt(2·E_L·f_PWM / (V_applied − BEMF))
+
+The first term is the drive current needed to push torque into the
+motor. The second is the per-commutation kickback proportional to
+stored inductive energy ½L·I² and switching frequency.
+
+Regime A — **near BEMF-match (Vapplied ≈ BEMF)**:
+  I_drive → 0, kickback dominates.
+  Levers: deadtime, synchronous rectification, snubbers, gate drive.
+  Validated on A2212/12V, 500 → 300 ns deadtime = -55 % Ibus pk.
+
+Regime B — **far from match (Vapplied >> BEMF, accelerating)**:
+  I_drive dominates, kickback is a small fraction.
+  Levers: active current-limit PID, torque ramp shaping, board
+  tolerance, or accept that peak = physics draw.
+  Validated on 2810/24V bare: CK pushes to 196 k eRPM at same ~22 A
+  Ia peaks that tripped AKESC at 78 k.
+
+Regime C — **loaded motor at equilibrium**:
+  Prop drag clamps eRPM below the runaway regime, I_drive stabilizes
+  at prop load, kickback is a small fraction. Both boards safe.
+  Not yet tested with prop on 2810/24V but predicted.
+
 ## Not Done Yet (Next Phase)
 
-- **V4 sector-PI synchronizer on PATA (CK) board**, at 200k eRPM target. The 3-step interpolation approach predicts commutation timing from a PI-smoothed `stepPeriodHR` instead of firing per-ZC. Running the same phase-current instrumentation there and comparing Ia/Ibus peaks against this A2212 dataset is the direct physics validation:
-  - If at 200k bare on CK+SMO the Ibus pk is still small (<10 A), the BEMF-match/kickback model holds generically.
-  - If CK+SMO shows a similar 22 A regime at some intermediate speed, there's another mechanism we haven't accounted for.
-- **Prop test on 2810/24V** — the prop should clamp eRPM below the runaway regime and avoid the 22 A trip entirely without any firmware change. Expected equilibrium: 50-60k eRPM at ~10-15 A steady bus.
-- **Software current limit PID** as a backup for situations where a prop can't clamp fast enough (transients).
-- **VESC-style FIR+integrator BEMF detector** for startup robustness. dsPIC33AK already does 4-sample oversampling at 1 MHz on the HWZC channel (equivalent to a short moving-average FIR) — would need to extend to a wider FIR with PWM-synchronized sampling to materially change startup behavior.
-- **Commutation overlap** — firmware-only lever to smooth the current transition at each commutation. Stacks additively with deadtime reduction per literature. Not yet tested.
+- **Prop test on 2810/24V** — predicted: motor reaches mechanical
+  equilibrium around 50-60 k eRPM drawing 10-15 A bus, no trip.
+- **AKESC board with higher-current topology** — if we want to run
+  2810/24V bare on AKESC-class hardware, either change the board
+  (replace U25B comparator threshold) or wrap the firmware in an
+  active Ibus-limit PID that caps duty when Ibus pk approaches 18 A.
+  This would sacrifice some top-end but make the board survivable.
+- **VESC-style FIR+integrator BEMF detector** for startup robustness
+  (orthogonal to the kickback question — addresses the post-morph
+  phantom-ZC-collapse regime we fought on AKESC A2212 startup).
+- **Commutation overlap** — untested firmware-only lever from the
+  kickback-mitigation list. Stacks with deadtime reduction per
+  literature.
 
 ## References
 
