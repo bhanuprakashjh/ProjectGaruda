@@ -123,6 +123,22 @@ export interface CkSnapshot {
   fallingZcCount: number;
   risingTimeouts: number;
   fallingTimeouts: number;
+
+  /* ── V4 Sector PI fields ──────────────────────────────────────
+   * Live in the same byte slots as V3 fields above (the firmware
+   * remaps the snapshot layout). Decoded with the proper widths /
+   * sign so the GUI can show them correctly when V4 is detected. */
+  diagDelta: number;          /* int16 — PI loop error (capValue - setValue) */
+  diagLastCapValue: number;   /* uint16 — most recent capValue sample */
+  diagCaptures: number;       /* uint16 — Commutate sectors with valid capture */
+  diagPiRuns: number;         /* uint16 — Commutate sectors that ran PI math */
+  v4SpBits: number;           /* uint8 — bit0=spActive, bit1=spRequest */
+  v4ErpmTp: number;           /* uint16 — eRPM derived from actualStepPeriodHR */
+  /* ADC capture-rate diagnostics (uint32 in firmware, occupy slots 48-63) */
+  adcBlankReject: number;     /* uint32 */
+  adcStateMismatch: number;   /* uint32 */
+  adcCaptureSet: number;      /* uint32 — total successful captures (both polarities) */
+  adcSetRising: number;       /* uint32 — subset on rising sectors; falling = total - rising */
 }
 
 export const CK_ZC_MODES = ['ACQ', 'TRK', 'RCV'] as const;
@@ -135,6 +151,7 @@ export const CK_PROFILE_COUNT = 3;
 
 /* ── CK Board Parameter Groups ──────────────────────────────── */
 export const CK_PARAM_GROUPS: Record<number, { name: string; color: string }> = {
+  // V3 (legacy CK params 0xC0-0xE5)
   0: { name: 'Motor Identity', color: '#3b82f6' },
   1: { name: 'Startup & Ramp', color: '#f59e0b' },
   2: { name: 'Closed-Loop', color: '#10b981' },
@@ -143,6 +160,10 @@ export const CK_PARAM_GROUPS: Record<number, { name: string; color: string }> = 
   5: { name: 'ZC Detection', color: '#06b6d4' },
   6: { name: 'Voltage Protection', color: '#f97316' },
   7: { name: 'Recovery', color: '#64748b' },
+  // V4 sector-PI runtime tunables (params 0xF0-0xFF)
+  8: { name: 'V4 PI Loop', color: '#ec4899' },     // pink — change-while-running
+  9: { name: 'V4 Capture',  color: '#14b8a6' },    // teal
+  10:{ name: 'V4 Limits',   color: '#f59e0b' },    // amber
 };
 
 export const CK_PARAM_NAMES: Record<number, { display: string; variable: string }> = {
@@ -192,6 +213,15 @@ export const CK_PARAM_NAMES: Record<number, { display: string; variable: string 
   // Group 7: Recovery
   0xE4: { display: 'Max Restart Attempts', variable: 'desyncRestartMax' },
   0xE5: { display: 'Recovery Time', variable: 'recoveryTimeMs' },
+  // V4 Group 8: PI Loop tuning (HOT — change while running)
+  0xF0: { display: 'Phase Advance', variable: 'phaseAdvanceDegX10' },
+  0xF1: { display: 'PI Kp Shift',   variable: 'piKpShift' },
+  0xF2: { display: 'PI Ki Shift',   variable: 'piKiShift' },
+  // V4 Group 9: Capture / blanking
+  0xF3: { display: 'Blanking %',    variable: 'blankingPct' },
+  0xF5: { display: 'PI Feed Polarity', variable: 'piFeedPolarity' },
+  // V4 Group 10: Limits
+  0xF4: { display: 'Min Period',    variable: 'minPeriodHr' },
 };
 
 export const CK_PARAM_UNITS: Record<number, string> = {
@@ -206,6 +236,36 @@ export const CK_PARAM_UNITS: Record<number, string> = {
   0xDD: 'reads', 0xDE: 'reads', 0xDF: '\u00D7', 0xE0: 'steps', 0xE1: 'steps',
   0xE2: 'ADC', 0xE3: 'ADC',
   0xE4: 'count', 0xE5: 'ms',
+  // V4 params
+  0xF0: '\u00D70.1\u00B0',  // ×0.1° (e.g. 100 = 10.0°)
+  0xF1: 'shift', 0xF2: 'shift',
+  0xF3: '%',
+  0xF5: '0=both/1=rise/2=fall',
+  0xF4: 'HR ticks',
+};
+
+/** Optional display scaling for params whose raw integer value is a fixed-
+ * point representation. Returned object describes how to render & edit:
+ *   scale: divide raw by this for display (e.g., scale=10 → 100 raw shows as 10.0)
+ *   decimals: digits after decimal point in display
+ *   suffix: short unit shown right of the number (overrides CK_PARAM_UNITS for these)
+ *   options: for enum-style params, raw value → human label
+ * If a param ID isn't in this table the GUI falls back to showing the raw int. */
+export interface ParamFormat {
+  scale?: number;
+  decimals?: number;
+  suffix?: string;
+  options?: Record<number, string>;
+}
+
+export const CK_PARAM_FORMAT: Record<number, ParamFormat> = {
+  // V3 raw-x10 % (existing convention)
+  0xC5: { scale: 10, decimals: 1, suffix: '%' },    // alignDutyPctX10
+  0xC9: { scale: 10, decimals: 1, suffix: '%' },    // rampDutyPctX10
+  // V4 phase advance ×0.1°
+  0xF0: { scale: 10, decimals: 1, suffix: '\u00B0' },
+  // V4 PI feed polarity — enum
+  0xF5: { options: { 0: 'Both', 1: 'Rising only', 2: 'Falling only' } },
 };
 
 export const CK_PARAM_TOOLTIPS: Record<number, string> = {
@@ -247,6 +307,13 @@ export const CK_PARAM_TOOLTIPS: Record<number, string> = {
   0xE3: 'Undervoltage fault threshold (raw ADC, 16-bit scaled). ~1211 counts/V.',
   0xE4: 'Maximum restart attempts after desync before permanent fault.',
   0xE5: 'Recovery dwell time between desync and restart.',
+  // V4 sector-PI tunables (HOT — change while running)
+  0xF0: 'Phase advance angle in 0.1\u00B0 units (100 = 10.0\u00B0). Affects setValue formula and so torque/current trade-off and peak RPM. Default 100.',
+  0xF1: 'PI proportional gain shift: Kp = 1/2^N. Lower N = larger Kp = faster response. Default 2 (Kp=1/4).',
+  0xF2: 'PI integral gain shift: Ki = 1/2^N. Lower N = larger Ki = faster equilibrium. Default 4 (Ki=1/16).',
+  0xF3: 'Sector blanking as % of sector period. Demag noise lives in the first ~30-35%. Default 40.',
+  0xF5: 'Which polarity feeds the PI loop. 0=both (mixed — only stable when one polarity dominates by accident). 1=rising-only (proven 196k baseline, default). 2=falling-only (worked with prop in run-1). Captures of the non-fed polarity still count for R/F% diagnostic. Try 1 or 2 for stability, 0 once polarity-offset compensation is implemented.',
+  0xF4: 'PI timerPeriod floor in HR ticks (640ns each). Speed ceiling guard. Lower = higher max RPM. Default 10.',
 };
 
 /* Current scaling: raw signed ADC (fractional 12-bit) to milliamps.
@@ -458,6 +525,13 @@ export interface GspRxStatus {
 /** Helper: check if FOC feature is enabled in feature flags */
 export function isFocEnabled(featureFlags: number): boolean {
   return (featureFlags & (1 << FEATURE_BIT_FOC)) !== 0;
+}
+
+/** Helper: check if firmware is V4 sector-PI (CK board only).
+ * Firmware sets bit 31 (0x80000000) of featureFlags when
+ * FEATURE_V4_SECTOR_PI is enabled. */
+export function isV4Firmware(featureFlags: number): boolean {
+  return (featureFlags & 0x80000000) !== 0;
 }
 
 /** Helper: check if burst scope is enabled */

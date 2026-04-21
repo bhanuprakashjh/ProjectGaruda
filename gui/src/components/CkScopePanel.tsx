@@ -30,7 +30,7 @@ interface CkChannel {
   unit: string;
   color: string;
   extract: (s: CkSnapshot, pp: number) => number;
-  panel: 'speed' | 'current' | 'zc';
+  panel: 'speed' | 'current' | 'zc' | 'v4pi';
 }
 
 const CHANNELS: CkChannel[] = [
@@ -88,6 +88,39 @@ const CHANNELS: CkChannel[] = [
       score -= Math.min(10, alt * 50);
       return Math.max(0, Math.round(score));
     }},
+
+  /* ── V4 Sector-PI channels ────────────────────────────────────
+   * All sourced from V4-specific snapshot fields decoded in
+   * decode.ts. Visible in the GUI even on V3 firmware (will read
+   * 0) — but the V4-only preset and the V4 Sector PI panel make
+   * them obvious where they belong. */
+  { key: 'v4Delta', label: 'PI Delta', unit: 'HR', color: '#ef4444', panel: 'v4pi',
+    extract: (s) => s.diagDelta },
+  { key: 'v4LastCap', label: 'Last CapValue', unit: 'HR', color: '#a78bfa', panel: 'v4pi',
+    extract: (s) => s.diagLastCapValue },
+  { key: 'v4TimerPeriod', label: 'timerPeriod', unit: 'HR', color: '#22d3ee', panel: 'v4pi',
+    extract: (s) => s.stepPeriodHR },
+  { key: 'v4ErpmTp', label: 'eRPM (actual)', unit: '', color: '#3b82f6', panel: 'v4pi',
+    extract: (s) => s.v4ErpmTp },
+  { key: 'v4CapPct', label: 'Cap%', unit: '%', color: '#22c55e', panel: 'v4pi',
+    extract: (s) => s.goodZcCount > 0 ? Math.round(100 * s.diagCaptures / s.goodZcCount) : 0 },
+  { key: 'v4SetPct', label: 'Set% (of ADC fires)', unit: '%', color: '#84cc16', panel: 'v4pi',
+    extract: (s) => {
+      const total = s.adcBlankReject + s.adcStateMismatch + s.adcCaptureSet;
+      return total > 0 ? +(100 * s.adcCaptureSet / total).toFixed(1) : 0;
+    }},
+  { key: 'v4MisPct', label: 'Mis% (of ADC fires)', unit: '%', color: '#f97316', panel: 'v4pi',
+    extract: (s) => {
+      const total = s.adcBlankReject + s.adcStateMismatch + s.adcCaptureSet;
+      return total > 0 ? +(100 * s.adcStateMismatch / total).toFixed(1) : 0;
+    }},
+  { key: 'v4BnkPct', label: 'Bnk% (of ADC fires)', unit: '%', color: '#94a3b8', panel: 'v4pi',
+    extract: (s) => {
+      const total = s.adcBlankReject + s.adcStateMismatch + s.adcCaptureSet;
+      return total > 0 ? +(100 * s.adcBlankReject / total).toFixed(1) : 0;
+    }},
+  { key: 'v4RisingPct', label: 'Rising % (of Sets)', unit: '%', color: '#3b82f6', panel: 'v4pi',
+    extract: (s) => s.adcCaptureSet > 0 ? +(100 * s.adcSetRising / s.adcCaptureSet).toFixed(1) : 0 },
 ];
 
 /* ── Presets ──────────────────────────────────────────────────────── */
@@ -128,6 +161,16 @@ const PRESETS: Record<string, Preset> = {
     label: 'Full Diagnostic',
     channels: ['erpm', 'duty', 'ia', 'ib', 'ibus', 'vbus', 'missed', 'forced', 'zcHealth'],
     description: 'Everything — all 3 panels active',
+  },
+  v4Pi: {
+    label: 'V4 PI Loop',
+    channels: ['v4Delta', 'v4LastCap', 'v4TimerPeriod', 'v4ErpmTp'],
+    description: 'V4 sector PI internals — delta should hover near 0; cap/period track each other',
+  },
+  v4Capture: {
+    label: 'V4 Capture Mix',
+    channels: ['v4CapPct', 'v4SetPct', 'v4MisPct', 'v4BnkPct', 'v4RisingPct'],
+    description: 'V4 ADC-fire distribution — Cap% from Commutate side, Set/Mis/Bnk from ADC side, Rising% shows which polarity dominates Sets',
   },
 };
 
@@ -180,11 +223,12 @@ export function CkScopePanel() {
     [active]
   );
 
-  const panels = ['speed', 'current', 'zc'] as const;
+  const panels = ['speed', 'current', 'zc', 'v4pi'] as const;
   const panelLabels: Record<string, string> = {
     speed: 'Speed & Control',
     current: 'Currents & Voltage',
     zc: 'ZC Diagnostics',
+    v4pi: 'V4 Sector PI',
   };
 
   const data = useMemo(() => {
@@ -309,7 +353,7 @@ export function CkScopePanel() {
                         <XAxis dataKey="t" tick={{ fontSize: 9, fill: 'var(--text-muted)' }}
                           tickFormatter={(v: number) => `${v.toFixed(1)}s`} />
                         <YAxis tick={{ fontSize: 9, fill: 'var(--text-muted)' }} width={50} />
-                        {panel === 'zc' && (
+                        {(panel === 'zc' || panel === 'v4pi') && (
                           <ReferenceLine y={0} stroke="var(--border)" strokeDasharray="3 3" />
                         )}
                         <Tooltip

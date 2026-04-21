@@ -128,6 +128,21 @@ export function decodeCkSnapshot(data: Uint8Array): CkSnapshot {
     fallingZcCount: hasV3 ? v.getUint16(58, true) : 0,
     risingTimeouts: hasV3 ? v.getUint16(60, true) : 0,
     fallingTimeouts: hasV3 ? v.getUint16(62, true) : 0,
+
+    /* V4 sector-PI fields. The firmware writes the snapshot in V4
+     * layout when FEATURE_V4_SECTOR_PI is on; we decode them here
+     * regardless of the V3 bit interpretations above so the GUI can
+     * pick which view to render based on the V4 marker bit. */
+    diagLastCapValue: v.getUint16(28, true),
+    diagDelta:        v.getInt16(30, true),     /* SIGNED PI error */
+    diagCaptures:     v.getUint16(32, true),
+    diagPiRuns:       v.getUint16(34, true),
+    v4SpBits:         v.getUint8(37),
+    v4ErpmTp:         v.getUint16(38, true),
+    adcBlankReject:   hasV3 ? v.getUint32(48, true) : 0,
+    adcStateMismatch: hasV3 ? v.getUint32(52, true) : 0,
+    adcCaptureSet:    hasV3 ? v.getUint32(56, true) : 0,
+    adcSetRising:     hasV3 ? v.getUint32(60, true) : 0,
   };
 }
 

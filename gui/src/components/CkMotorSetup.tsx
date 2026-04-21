@@ -4,6 +4,7 @@ import { serial } from './ConnectionBar';
 import { buildPacket, CMD } from '../protocol/gsp';
 import {
   CK_PARAM_GROUPS, CK_PARAM_NAMES, CK_PARAM_UNITS, CK_PARAM_TOOLTIPS,
+  CK_PARAM_FORMAT,
   CK_PROFILE_NAMES, CK_PROFILE_COUNT, CK_VBUS_SCALE,
 } from '../protocol/types';
 
@@ -283,6 +284,7 @@ export function CkMotorSetup() {
                         tooltip={tooltip}
                         min={desc?.min ?? 0}
                         max={desc?.max ?? 65535}
+                        format={CK_PARAM_FORMAT[id]}
                         onChange={setParam}
                       />
                     );
@@ -297,21 +299,61 @@ export function CkMotorSetup() {
   );
 }
 
-/* Inline param row with number input */
-function ParamRow({ id, name, value, unit, tooltip, min, max, onChange }: {
+/* Inline param row with number input.
+ * If `format` is supplied, the row renders human-readable values:
+ *   - scale=10 → display value/10 with given decimals + suffix (e.g. 100 → "10.0°")
+ *   - options={0:"A",1:"B"} → enum dropdown showing labels, sending raw int
+ * Without `format`, behaves as a plain integer input. */
+function ParamRow({ id, name, value, unit, tooltip, min, max, format, onChange }: {
   id: number; name: string; value: number; unit: string; tooltip?: string;
-  min: number; max: number; onChange: (id: number, value: number) => void;
+  min: number; max: number;
+  format?: import('../protocol/types').ParamFormat;
+  onChange: (id: number, value: number) => void;
 }) {
+  const scale = format?.scale ?? 1;
+  const decimals = format?.decimals ?? 0;
+  const suffix = format?.suffix ?? unit;
+  const options = format?.options;
+
+  /* Editing buffer carries the *displayed* string (already scaled). */
   const [editing, setEditing] = useState(false);
-  const [editVal, setEditVal] = useState(String(value));
+  const [editVal, setEditVal] = useState(() => (value / scale).toFixed(decimals));
 
   const commit = () => {
-    const num = parseInt(editVal, 10);
-    if (!isNaN(num) && num >= min && num <= max) {
-      onChange(id, num);
+    const parsed = parseFloat(editVal);
+    if (!isNaN(parsed)) {
+      const raw = Math.round(parsed * scale);
+      if (raw >= min && raw <= max) onChange(id, raw);
     }
     setEditing(false);
   };
+
+  /* Enum-style param: dropdown */
+  if (options) {
+    return (
+      <div style={{
+        display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+        padding: '3px 0', fontSize: 11,
+      }} title={tooltip}>
+        <span style={{ color: 'var(--text-secondary)', flex: 1 }}>{name}</span>
+        <select
+          value={value}
+          onChange={e => onChange(id, parseInt(e.target.value, 10))}
+          style={{
+            ...inputStyle, width: 120, textAlign: 'left' as const, paddingLeft: 6,
+          }}
+        >
+          {Object.entries(options).map(([raw, label]) => (
+            <option key={raw} value={raw}>{label}</option>
+          ))}
+        </select>
+        <span style={{ width: 50 }} />
+      </div>
+    );
+  }
+
+  /* Numeric input — scaled if format.scale is given */
+  const displayValue = (value / scale).toFixed(decimals);
 
   return (
     <div style={{
@@ -323,25 +365,26 @@ function ParamRow({ id, name, value, unit, tooltip, min, max, onChange }: {
         <input
           type="number" autoFocus
           value={editVal}
+          step={scale === 1 ? 1 : (1 / scale).toFixed(decimals)}
           onChange={e => setEditVal(e.target.value)}
           onBlur={commit}
           onKeyDown={e => { if (e.key === 'Enter') commit(); if (e.key === 'Escape') setEditing(false); }}
           style={{ ...inputStyle, width: 70 }}
-          min={min} max={max}
+          min={min / scale} max={max / scale}
         />
       ) : (
         <span
-          onClick={() => { setEditVal(String(value)); setEditing(true); }}
+          onClick={() => { setEditVal(displayValue); setEditing(true); }}
           style={{
             fontFamily: 'var(--font-mono)', color: 'var(--text-primary)',
             cursor: 'pointer', padding: '2px 4px', borderRadius: 2,
             background: 'rgba(255,255,255,0.03)',
           }}
         >
-          {value}
+          {displayValue}
         </span>
       )}
-      <span style={{ color: 'var(--text-muted)', marginLeft: 4, fontSize: 10, width: 50 }}>{unit}</span>
+      <span style={{ color: 'var(--text-muted)', marginLeft: 4, fontSize: 10, width: 50 }}>{suffix}</span>
     </div>
   );
 }
