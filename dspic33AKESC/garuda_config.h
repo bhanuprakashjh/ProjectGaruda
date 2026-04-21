@@ -23,11 +23,12 @@ extern "C" {
 #define FEATURE_DYNAMIC_BLANKING 1  /* Phase C1: Speed+duty-aware blanking (extra blank at high duty/demag) */
 #define FEATURE_VBUS_SAG_LIMIT   1  /* Phase C2: Bus voltage sag power limiting (reduce duty on Vbus dip) */
 #define FEATURE_BEMF_INTEGRATION 1  /* Phase E: Shadow integration estimator (shadow-only, no control) */
-#define FEATURE_SINE_STARTUP     1  /* Sine ramp + waveform morph transition.
-                                     * Global: replaces coast gap for ALL motor
-                                     * profiles. Per-motor tuning via existing
-                                     * per-profile defines (SINE_*_MODULATION_PCT,
-                                     * SINE_PHASE_OFFSET_DEG, etc). */
+#define FEATURE_SINE_STARTUP     0  /* Disabled (2026-04-20) — using straight forced
+                                     * commutation for prop-start debug. When 0, ALIGN
+                                     * applies ALIGN_DUTY_PERCENT directly; OL_RAMP
+                                     * advances steps at increasing rate with RAMP_DUTY_CAP.
+                                     * Much easier to reason about current and timing
+                                     * than sine modulation. */
 #define FEATURE_ADC_CMP_ZC       1  /* Phase F: ADC comparator-based high-speed ZC */
 #define FEATURE_HW_OVERCURRENT  1  /* Phase G: Hardware overcurrent protection via CMP3+OA3 */
 
@@ -145,34 +146,59 @@ extern "C" {
  * 14 poles, 12V, 0.065 ohm, ~30 uH
  * 1400 KV => ~16800 RPM @ 12V, 117600 eRPM */
 #define MOTOR_POLE_PAIRS             7
-#define DEADTIME_NS                500     /* Less distortion on low-L motor */
-#define ALIGN_DUTY_PERCENT           8     /* 12V*8%/0.065=14.8A stall (supply CC limits) */
-#define RAMP_DUTY_PERCENT           15     /* Increased from 10%: 10% duty at 2000 eRPM gives
-                                            * only 42 ADC BEMF max (phases A/C ≈ 20) — too weak
-                                            * for ZC detection under prop load. 15% provides more
-                                            * torque to reach higher handoff speed. */
-#define INITIAL_ERPM               200     /* Very slow start: 50ms per step — prop can follow */
-#define RAMP_TARGET_ERPM          3000     /* Reverted: BEMF at 1500 eRPM is too weak for
-                                            * reliable ZC on A2212 (margin 1.3:1). 3000 gives
-                                            * ~2.3:1 margin per original config comment. */
+#define DEADTIME_NS                300     /* Sweet spot (2026-04-21). 500 → 300 ns cut
+                                            * Ibus commutation kickback ~55% at top throttle
+                                            * (12 A pk → 5 A pk on A2212/12V bare), +4% eRPM
+                                            * (103k → 108k). 200 ns tested and marginal:
+                                            * Ibus pk flat, top eRPM +1% only, but ALIGN
+                                            * current rose 20% (early shoot-through signature).
+                                            * 300 ns is the bottom of useful deadtime range
+                                            * on this PWM + FET combo. */
+#define ALIGN_DUTY_PERCENT          12     /* Was 8 (bare-motor). Prop load needs more torque
+                                            * to hold alignment — 8% let the rotor walk under
+                                            * cogging+prop inertia. 12V*12%/0.065=22A stall peak
+                                            * (supply CC limits to 10A). */
+#define RAMP_DUTY_PERCENT           22     /* Was 15 (bare-motor). Prop stall torque on 8x4.5
+                                            * needs ~20-25% duty to break away and accelerate
+                                            * through OL ramp. Bare motor will draw more current
+                                            * but the 10A supply CC still protects. */
+#define INITIAL_ERPM               100     /* Very slow start: 100ms per step — prop can follow */
+#define RAMP_TARGET_ERPM          2000     /* Lowered from 3000 for prop start. Prop mass
+                                            * + inertia cannot accelerate to 3000 eRPM in the
+                                            * OL window. 2000 eRPM is still above the 1500
+                                            * HWZC crossover (need sufficient BEMF margin) and
+                                            * comfortably above the SW ZC floor. */
 #define MAX_CLOSED_LOOP_ERPM    120000     /* 1400KV * 12V * 7pp */
-#define RAMP_ACCEL_ERPM_PER_S     3000     /* 1 s OL ramp — 868b2ff milestone config.
-                                            * Tried 1500 (2 s) and 750 (4 s) — both worse
-                                            * because they widen the window where HWZC IIR
-                                            * can phantom-cascade before reaching a stable
-                                            * operating point. 1 s is the known-working
-                                            * value that reached 118 k / 120 k eRPM. */
-#define SINE_ALIGN_MODULATION_PCT    4     /* Limit alignment current */
-#define SINE_RAMP_MODULATION_PCT    12     /* Increased from 8%: more voltage to push prop through
-                                            * sine ramp to 3000 eRPM. 10A supply CC limits current. */
+#define RAMP_ACCEL_ERPM_PER_S      400     /* 4.75 s OL ramp — prop needs long dwell.
+                                            * Bare-motor was 3000 (1 s ramp); dropped to 1000
+                                            * didn't help because prop inertia at 8x4.5 is
+                                            * ~6× higher than bare rotor. 400 eRPM/s gives
+                                            * the rotor enough time per step to physically
+                                            * accelerate the prop and produce real BEMF by
+                                            * the time CL entry happens. */
+#define SINE_ALIGN_MODULATION_PCT   10     /* Was 4 (bare-motor). Prop requires stronger
+                                            * align current to actually hold the rotor in
+                                            * position against static friction. */
+#define SINE_RAMP_MODULATION_PCT    25     /* Was 12. Prop load + 0.065Ω A2212 + 12V: at
+                                            * 12% modulation the peak phase-phase voltage is
+                                            * ~2.9 V, current clamped at 10 A supply CC, but
+                                            * the 10 A is short transient peaks — average
+                                            * torque is not enough to accelerate the prop
+                                            * through the sine ramp. 25% gives ~6 V peak
+                                            * phase-phase — enough average torque even with
+                                            * supply clamping. */
 #define ZC_DEMAG_DUTY_THRESH        40     /* Low-L = more demag */
 #define ZC_DEMAG_BLANK_EXTRA_PERCENT 18    /* Aggressive demag blanking */
 #define HWZC_CROSSOVER_ERPM       1500     /* Reverted — 868b2ff milestone value.
                                             * Raising to 3000 moved HWZC activation to end
                                             * of ramp but SW ZC hadn't established a clean
                                             * lock yet, seed was wrong. Stick with 1500. */
-#define CL_IDLE_DUTY_PERCENT        12     /* Restored to 868b2ff baseline. HWZC is more
-                                            * robust at low BEMF, so 12% works even no-prop. */
+#define CL_IDLE_DUTY_PERCENT        18     /* Was 12 (bare-motor). Prop load requires higher
+                                            * idle duty to maintain rotation after morph exit —
+                                            * 12% was only breaking the motor into CL then the
+                                            * prop inertia stalled it, causing HWZC to lock onto
+                                            * PWM noise at floor. 18% keeps the motor spinning
+                                            * with an 8x4.5 prop at no-load on bench. */
 #define SINE_PHASE_OFFSET_DEG       60     /* Sine-to-trap offset (unused when sine disabled) */
 #define OC_LIMIT_MA              12000     /* CMP3 CLPCI chopping (12A) */
 #define OC_STARTUP_MA            22000     /* High: let 10A supply CC be the limiter, not CMP3 */
