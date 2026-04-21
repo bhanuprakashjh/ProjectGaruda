@@ -738,7 +738,14 @@ void SectorPI_Commutate(void)
         /* HAL_PTG_SetDelay call intentionally removed for this test. */
     }
 
-    /* 6. Re-enable CCP ISRs */
+    /* 6. Re-enable CCP ISRs (always).
+     *
+     * Phase C attempt (2026-04-21) gated this on v4_spActive —
+     * tripped at ~100k eRPM even with Phase A inline drain in place.
+     * The CCP ISR preemption (pri 4 preempts ADC ISR pri 3, fires
+     * on every edge, not batched to PWM center) is load-bearing in
+     * a way inline drain can't replicate. Reverted; CCP ISRs stay
+     * always-on. */
     _CCP2IE = 1;
     _CCP5IE = 1;
 

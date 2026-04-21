@@ -115,7 +115,15 @@ void HAL_PWM_Init(void)
     PG1STAT = 0x00;
     PG1IOCONL = 0x3000;     /* Start with overrides ON, OVRDAT=00 (float: H off, L off) */
     PG1IOCONH = 0x000E;     /* PENL=1, PENH=1, PMOD=complementary, POLH=active-low */
-    PG1EVTL = 0x0118;       /* UPDTRG=TrigA, PGTRGSEL=EOC, ADTR1EN1=enabled */
+    PG1EVTL = 0x0118;       /* UPDTRG=TrigA, PGTRGSEL=EOC, ADTR1EN1=enabled.
+                             * ADTR1PS=0b00011 (1:4 postscaler) → ADC ISR at
+                             * 20 kHz. Tried 0x0108 (40 kHz, 1:2 postscaler):
+                             * mid-range was noticeably smoother but top-end
+                             * hit VDS trips below 196k baseline. Root cause
+                             * not fully isolated (CPU budget seemed adequate
+                             * after killing diagnostic ISRs, but trips
+                             * persisted). Reverted to 20 kHz as the known-
+                             * good baseline. */
     PG1EVTH = 0x0040;       /* ADTR2EN1=enabled (Trigger2 from TRIGA for Vbus/pot) */
     PG1FPCIL = PG1FPCIH = 0x00;
     PG1CLPCIL = PG1CLPCIH = 0x00;

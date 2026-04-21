@@ -833,7 +833,14 @@
  * When =1: PTG init runs at motor start, ISR counts samples (shadow
  *          only in V5.0-step1 — does NOT set v4_captureValid). */
 #ifndef FEATURE_V5_PTG_ZC
-#define FEATURE_V5_PTG_ZC  1
+#define FEATURE_V5_PTG_ZC  0   /* Phase D attempt (2026-04-21) — disabled
+                                * again now that Phase A/B are in place.
+                                * Previous disable broke at 107k; this
+                                * time ADC ISR has inline FIFO drain +
+                                * deglitch (Phase A) and SCCP1 is off
+                                * (Phase B). Test whether PTG's role was
+                                * just jitter dithering that the other
+                                * ISRs now cover. */
 #endif
 
 /* PTG ISR priority — above ADC(3), tied with Timer1(4), below CCP(5).

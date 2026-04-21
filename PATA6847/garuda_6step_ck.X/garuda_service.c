@@ -375,6 +375,23 @@ void __attribute__((interrupt, auto_psv)) _ADCInterrupt(void)
     if (gV4IbRaw < gV4IbPkMin) gV4IbPkMin = gV4IbRaw;
 
 #if FEATURE_V4_MIDPOINT_ZC == 1
+    /* Tried a rising-only gate here (2026-04-21) plus 30% blanking and
+     * ISR disables — bundled experiment regressed top-end from 196k to
+     * 107k. Reverted everything to pre-experiment state.
+     *
+     * Phase A hardening (2026-04-21): make the comparator-read operation
+     * self-sufficient. Today the ADC ISR's detection quality depends on
+     * side effects from SCCP1/CCP2/CCP5/PTG ISRs that we can't isolate.
+     * Before touching those ISRs we need the ADC ISR to be robust on
+     * its own. Two defenses:
+     *   1. Drain CCP2/5 FIFO + clear flags (defensive — CCP peripheral
+     *      state isn't supposed to affect GPIO reads, but if it does,
+     *      this eliminates it)
+     *   2. 3-read deglitch on the comparator GPIO (rejects momentary
+     *      bounce / switching glitches on the ATA6847 output line)
+     * If 196k still reached with these added, the ADC ISR is authoritative
+     * and Phase B/C can safely disable the diagnostic ISRs.
+     */
     if (!v4_spActive
         && SectorPI_IsRunning() && SectorPI_GetPhase() == 3)
     {
@@ -391,7 +408,22 @@ void __attribute__((interrupt, auto_psv)) _ADCInterrupt(void)
             }
             else
             {
-                uint8_t comp = ReadBEMFComp();
+                /* 3-read deglitch: reject single-sample GPIO bounce /
+                 * comparator chatter near threshold. Majority vote of
+                 * 3 reads with short gaps (~400 ns total).
+                 *
+                 * Earlier also had inline FIFO drain (Phase A) — removed
+                 * once the janitor/reader model was understood: CCP ISR
+                 * drains FIFO within µs of each edge, so by the time the
+                 * ADC ISR fires at PWM mid-ON the FIFO is already empty.
+                 * The inline drain was redundant with CCP ISR's work. */
+                uint8_t r1 = ReadBEMFComp();
+                Nop(); Nop(); Nop(); Nop();
+                uint8_t r2 = ReadBEMFComp();
+                Nop(); Nop(); Nop(); Nop();
+                uint8_t r3 = ReadBEMFComp();
+                uint8_t comp = ((uint8_t)(r1 + r2 + r3) >= 2u) ? 1u : 0u;
+
                 bool isRising = HAL_Capture_IsRisingZc();
 
 #if FEATURE_V5_POST_ZC_ACCEPT

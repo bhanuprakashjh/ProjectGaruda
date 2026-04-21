@@ -99,13 +99,25 @@ void HAL_Capture_Start(void)
     (void)CCP5BUFL; (void)CCP5BUFL; (void)CCP5BUFL; (void)CCP5BUFL;
     v4_captureValid = false;
     _CCP2IF = 0; _CCP5IF = 0;
-    _CCP2IE = 1; _CCP5IE = 1;   /* ISR drains FIFO continuously */
+    _CCP2IE = 1; _CCP5IE = 1;   /* ISR drains FIFO continuously.
+                                 * Phase C tried disabling these in
+                                 * non-SP — regressed to ~100k trip.
+                                 * Inline drain at PWM center isn't
+                                 * equivalent to edge-triggered preempt. */
 
     /* Seed SCCP1 counter at half-period so it fires at PWM peak.
-     * ADC fires at valley (counter=0); we want SCCP1 12.5 µs later. */
+     * ADC fires at valley (counter=0); we want SCCP1 12.5 µs later.
+     *
+     * Phase B (2026-04-21): SCCP1 ISR disabled. Previously disabling
+     * caused trips at 107k vs 196k baseline because its side effects
+     * (ReadBEMFComp polls + ISR jitter) were load-bearing. Phase A
+     * moved those side effects into the ADC ISR (FIFO drain + 3-read
+     * deglitch on the GPIO) so they're now explicit. SCCP1 should be
+     * safe to kill — pure CPU waste at this point.
+     * Recovers ~120 ms/sec of CPU at 40 kHz ADC ISR rate. */
     CCP1TMRL = CCP1PRL / 2;
     _CCT1IF = 0;
-    _CCT1IE = 1;
+    _CCT1IE = 0;                /* Phase B: was 1 — SCCP1 ISR disabled */
 }
 
 void HAL_Capture_Stop(void)
