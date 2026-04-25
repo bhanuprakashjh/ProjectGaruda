@@ -257,8 +257,9 @@
 /** Bench current cap — user specified 10 A supply limit. */
 #define MOTOR_MAX_CURRENT_A     10.0f
 /** No-load max eRPM at 24V = 1350 × 24 × 7 / 60 × 2π = 23750 rad/s.
- *  150k eRPM = 66% of theoretical — conservative CL ceiling. */
-#define MOTOR_MAX_ELEC_RAD_S    15700.0f    /* ~150k eRPM */
+ *  Used as PLL speed clamp.  Set just above theoretical to avoid
+ *  artificial clipping while still catching runaway. */
+#define MOTOR_MAX_ELEC_RAD_S    25000.0f    /* ~239k eRPM */
 #define MOTOR_FLUX_LINKAGE      0.000583f
 
 /* D/Q Current Loop PI — recomputed 2026-04-23 from corrected Rs/Ls.

@@ -27,6 +27,17 @@
 #include "garuda_calc_params.h"
 #include "garuda_types.h"
 #include "garuda_service.h"
+/* Pulled in so the build hash recompiles when any tuning param/header
+ * changes (Make tracks header deps via .d files).  Without these,
+ * edits to an1078_params.h or motor.h leave gsp_commands.o stale and
+ * the hash sticks.  NOTE: .c-only changes in an1078_motor.c still
+ * won't bump the hash without a clean rebuild — accept that limitation
+ * since most tuning happens in .h files. */
+#if FEATURE_FOC_AN1078
+#include "foc/an1078_params.h"
+#include "foc/an1078_motor.h"
+#include "foc/an1078_smc.h"
+#endif
 #if FEATURE_EEPROM_V2
 #include "hal/eeprom.h"
 #endif
@@ -100,13 +111,32 @@ static void HandleGetInfo(const uint8_t *payload, uint8_t payloadLen)
     (void)payload;
     (void)payloadLen;
 
-    /* Build hash: djb2 of __DATE__ " " __TIME__.  Changes every recompile
-     * so the host can verify which binary is actually flashed. */
+    /* Build hash: djb2 of __DATE__ " " __TIME__, then folded with key
+     * tuning constants that change between iterations.  Without the
+     * fold, incremental Make leaves gsp_commands.o stale when only
+     * an1078_params.h changes — host sees an unchanged hash even
+     * though firmware behavior changed.  Folding the live numeric
+     * values in guarantees the hash differs when behavior differs. */
     static const char buildStamp[] = __DATE__ " " __TIME__;
     uint32_t buildHash = 5381u;
     for (const char *p = buildStamp; *p; p++) {
         buildHash = ((buildHash << 5) + buildHash) ^ (uint32_t)(uint8_t)*p;
     }
+#if FEATURE_FOC_AN1078
+    /* Fold key tunables — any edit to these reshapes the hash. */
+    buildHash ^= (uint32_t)(AN_FS_HZ);
+    buildHash ^= (uint32_t)(AN_NOMINAL_SPEED_RPM_MECH * 10.0f);
+    buildHash ^= (uint32_t)(AN_OL_RAMP_RATE_RPS2);
+    buildHash ^= (uint32_t)(AN_CL_VELREF_SLEW_RPS2);
+    buildHash ^= (uint32_t)(AN_SMC_THETA_OFFSET_BASE * 1.0e6f);
+    buildHash ^= (uint32_t)(AN_SMC_THETA_OFFSET_K   * 1.0e8f);
+    buildHash ^= (uint32_t)(AN_SMC_KSLIDE * 1.0e3f);
+    buildHash ^= (uint32_t)(AN_SMC_KSLF_MAX * 1.0e4f);
+    buildHash ^= (uint32_t)(AN_OVER_CURRENT_LIMIT * 1.0e3f);
+    buildHash ^= (uint32_t)(AN_KP_SPD * 1.0e6f);
+    buildHash ^= (uint32_t)(AN_KI_SPD * 1.0e6f);
+#endif
+    buildHash ^= (uint32_t)PWMFREQUENCY_HZ;
 
     GSP_INFO_T info;
     memset(&info, 0, sizeof(info));

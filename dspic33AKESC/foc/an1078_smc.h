@@ -17,6 +17,7 @@ extern "C" {
 #endif
 
 #include <stdint.h>
+#include "foc_types.h"   /* PLL_t */
 
 /* ── SMC observer state (mirrors AN1078 SMC struct) ─────────── */
 typedef struct {
@@ -62,6 +63,22 @@ typedef struct {
     float PrevTheta;     /* θ at previous tick                  [rad] */
     float AccumTheta;    /* Σ Δθ over AccumThetaCnt ticks       [rad] */
     uint16_t AccumThetaCnt;  /* tick counter for averaging */
+
+    /* Angle PLL (AN1292-style upgrade on top of AN1078 SMC).
+     *
+     * AN1078 feeds atan2(BEMF) directly into Park.  Per-tick atan2
+     * noise → angle wobble → at high speed the wobble becomes a big
+     * fraction of one electrical cycle → Id/Iq oscillation → trip.
+     *
+     * The PLL tracks the BEMF angle smoothly via cross-product
+     * discriminator + PI loop filter.  Park transform reads PLL θ
+     * (with -π/2 BEMF→rotor offset + AN_SMC_THETA_OFFSET applied),
+     * speed PI reads PLL ω.  Expected to push the resolution-limited
+     * observer ceiling from ~17° per tick (3.4× PWM rate) up to
+     * voltage-limited regime.
+     *
+     * Reuses the existing pll_estimator.c block (already used by v2/v3). */
+    PLL_t pll;
 } AN_SMC_T;
 
 /* ── Initialization ────────────────────────────────────────── */

@@ -76,6 +76,7 @@ typedef struct {
     float velRef_rad_s;         /* speed reference in CL (rad/s electrical) */
     float vqRef;                /* PI Vq output target [V] */
     float vdRef;                /* PI Vd output target [V] */
+    float id_ref_fw;            /* Field-weakening Id setpoint (≤0) */
     float targetSpeed_rad_s;    /* commanded speed (from throttle) */
     float speedRefRamp;         /* per-update speed change limit */
     int16_t speedRampCount;     /* counts ticks until next speed-PI update */

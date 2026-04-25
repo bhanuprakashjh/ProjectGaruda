@@ -91,17 +91,33 @@ extern "C" {
 #endif
 
 /* PWM Configuration */
-#define PWMFREQUENCY_HZ            40000       /* PWM switching frequency
-                                                 * Bumped 24 kHz → 40 kHz (2026-04-20):
-                                                 * - Current ripple shrinks ~40 %
-                                                 * - Mistimed-commutation current buildup
-                                                 *   per cycle drops ~40 % (29 V × L × 6.25 µs
-                                                 *   = 3.6 A/cyc vs 6 A/cyc at 24 kHz)
-                                                 * - Board 5.5 kHz RC filter gives better
-                                                 *   attenuation of PWM ripple in the HWZC
-                                                 *   comparator → ~40 % fewer phantom ZCs.
-                                                 * Costs: ~40 % higher FET switching losses,
-                                                 * MIN_DUTY climbs 2.4 % → 4 %. */
+#define PWMFREQUENCY_HZ            60000       /* PWM switching frequency
+                                                 * 24→40 kHz (2026-04-20): ripple/HWZC.
+                                                 * 40→48 kHz (2026-04-25): SMC observer
+                                                 *   per-tick angle resolution.
+                                                 * 48→60 kHz (2026-04-25): targeting 200k
+                                                 *   eRPM ceiling.  After angle PLL was
+                                                 *   added (see an1078_smc.c) the
+                                                 *   per-tick wobble was solved at the
+                                                 *   ALGORITHM level — 60 kHz hardware
+                                                 *   bump is no longer strictly required.
+                                                 *
+                                                 * ⚠ 60 kHz IS PUSHING THIS HARDWARE ⚠
+                                                 *   - FET switching losses ~50 % above
+                                                 *     40 kHz baseline.  Sustained full
+                                                 *     throttle → measurable heat rise
+                                                 *     on the inverter.
+                                                 *   - MCLV-48V-300W board rated 300 W
+                                                 *     continuous; 60 kHz erodes margin.
+                                                 *   - For production, fall back to
+                                                 *     48 kHz: PLL + FW still reach
+                                                 *     ~195 k eRPM at 48 kHz, well past
+                                                 *     the 6-step 196k benchmark target.
+                                                 *
+                                                 * If thermal issues appear, revert this
+                                                 * AND `AN_FS_HZ` in an1078_params.h to
+                                                 * 48000 (must move together — they
+                                                 * derive F/G plant constants). */
 
 /*──────────────────────────────────────────────────────────────────────────
  * Motor Profile Selection

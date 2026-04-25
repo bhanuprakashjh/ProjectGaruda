@@ -36,13 +36,18 @@ extern "C" {
 
 /* ── Loop timing ────────────────────────────────────────────────── */
 
-#define AN_FS_HZ                    24000.0f
+/** ADC ISR runs at PWM rate.  PWMFREQUENCY_HZ in garuda_config.h is
+ *  60 kHz (bumped 48→60 on 2026-04-25 chasing 196k eRPM benchmark).
+ *  AN_FS_HZ MUST match — F_PLANT/G_PLANT/KSLF_SCALE all derive from
+ *  AN_TS, and a mismatch causes the SMC current model to be wrong
+ *  by FS_real/FS_assumed.  Previous 24000 was stale → G_PLANT 67%
+ *  over-aggressive → observer destabilized at ~85k eRPM. */
+#define AN_FS_HZ                    60000.0f
 #define AN_TS                       (1.0f / AN_FS_HZ)
 
 /** Speed loop / observer averaging period in fast-loop ticks.
- *  AN1078: SPEEDLOOPFREQ = 1000 Hz, IRP_PERCALC = 50 µs / 1 ms = 20 ticks
- *  at 20 kHz.  At our 24 kHz: 24 ticks → also 1 kHz speed loop. */
-#define AN_IRP_PERCALC              24
+ *  AN1078: SPEEDLOOPFREQ = 1000 Hz.  At 60 kHz: 60 ticks → 1 kHz. */
+#define AN_IRP_PERCALC              60
 
 /** Theta-error transition pacing: AN1078 uses TRANSITION_STEPS = IRP_PERCALC/4. */
 #define AN_TRANSITION_STEPS         (AN_IRP_PERCALC / 4)
@@ -81,8 +86,15 @@ extern "C" {
 #define AN_END_SPEED_ELEC_RS        \
     (AN_END_SPEED_RPM_MECH * (float)AN_NOPOLESPAIRS * 6.28318530718f / 60.0f)
 
-/** Nominal motor speed (mech RPM). */
-#define AN_NOMINAL_SPEED_RPM_MECH   2000.0f
+/** Nominal motor speed (mech RPM) — full-throttle target speed.
+ *  CL throttle range maps 0→full to AN_END_SPEED → AN_NOMINAL_SPEED.
+ *
+ *  Theoretical no-load max at 24V: Vbus×0.95/√3/λ ≈ 22500 rad/s elec
+ *  (~215k eRPM, 30700 RPM mech).  PLL-upgraded observer (2026-04-25)
+ *  tracks cleanly to at least 176k eRPM — the throttle map ceiling is
+ *  the actual limit now, not the observer.  Push to 30000 RPM mech
+ *  (215k eRPM) to let throttle command up to motor's electrical max. */
+#define AN_NOMINAL_SPEED_RPM_MECH   30000.0f     /* = 215k eRPM */
 
 /** Maximum mechanical RPM. */
 #define AN_MAX_SPEED_RPM_MECH       3500.0f
@@ -103,10 +115,19 @@ extern "C" {
  *  Total: 400 ms = 9600 ticks at 24 kHz. */
 #define AN_LOCK_TIME                9600
 
-/** Open-loop ramp acceleration in electrical rad/s².
- *  AN1078 effective ramp rate works out to ~375 rad/s² for Hurst.
- *  2810 has 4× lower torque-per-amp → use ~500 rad/s² with higher Iq. */
-#define AN_OL_RAMP_RATE_RPS2        500.0f
+/** Open-loop ramp acceleration in electrical rad/s².  Used ONLY for
+ *  the OL startup ramp (0→AN_END_SPEED).  Slower is safer — gives
+ *  cogging detents time to clear, lets observer settle before handoff.
+ *  2000 rad/s² → OL ramp completes in ~180 ms.  With prop: increase
+ *  AN_Q_CURRENT_REF_OPENLOOP and keep this slow. */
+#define AN_OL_RAMP_RATE_RPS2        2000.0f
+
+/** Closed-loop velRef slew rate (rad/s²).  Used to slew the speed
+ *  setpoint toward throttle target — sets throttle response feel.
+ *  Independent of OL ramp so high-throttle response is snappy without
+ *  destabilizing OL→CL handoff.  12000 rad/s² → full sweep
+ *  (366→22000 rad/s) in ~1.8 s. */
+#define AN_CL_VELREF_SLEW_RPS2      12000.0f
 
 /** Open-loop q-current reference (A peak).
  *  Need to overpower 2810's cogging detents (~15-20 mN·m peak).
@@ -132,8 +153,12 @@ extern "C" {
  *  200 ms = 4800 ticks at 24 kHz. */
 #define AN_IQ_SOFT_START_TICKS      4800U
 
-/** Bus over-current trip threshold (A peak). */
-#define AN_OVER_CURRENT_LIMIT       9.0f
+/** Speed PI Iq-output saturation (A peak).  Iq commanded by speed PI
+ *  is clamped to ±this.  Bumped 9→12 to give the speed loop headroom
+ *  alongside aggressive field weakening at high speed (Id can reach
+ *  −12A; total |I|=√(Id²+Iq²) up to ~17A which is within MCLV-48V-300W
+ *  inverter rating). */
+#define AN_OVER_CURRENT_LIMIT       12.0f
 
 /** Speed reference ramp limit: AN1078 = Q15(0.00003) per IRP_PERCALC tick.
  *  In their RPM-Q15 form that's tiny.  We treat as rad/s electrical per tick. */
@@ -171,6 +196,11 @@ extern "C" {
  *
  * For 2810 use modest values; we'll tune from bench. */
 
+/* Speed PI: original conservative values.  Tracking speed comes from
+ * AN_CL_VELREF_SLEW_RPS2 slewing velRef in fast — PI doesn't need
+ * high gain to feel snappy.  High PI gain causes overshoot at
+ * OL→CL handoff: motor 5k→70k in 40 ms with no-load, which would
+ * stall under prop load. */
 #define AN_KP_SPD                   0.006f
 #define AN_KI_SPD                   0.10f
 
@@ -192,37 +222,63 @@ extern "C" {
  *
  *  Empirical: keep Z in linear range relative to actual V swings.
  *  Steady-state V is ~0.5V — set Kslide ~5x bigger to allow fast
- *  correction without saturating.  Tune later. */
+ *  correction without saturating.  Bumping above this breaks
+ *  low-speed handoff (Z dominates over weak BEMF, observer can't lock). */
 #define AN_SMC_KSLIDE               2.5f
 
 /** Maximum linear-region current error (A).  Below this, Z = K·err/MaxErr;
- *  above, Z saturates at ±K.  Bigger boundary keeps Z in linear region
+ *  above, Z saturates at ±K.  Bigger boundary keeps Z in linear range
  *  for 4A-class operating currents on low-impedance motors. */
 #define AN_SMC_MAX_LINEAR_ERR       1.0f
 
-/** Constant phase shift applied to atan2 output (radians).
+/** Phase shift applied to atan2 output (radians).
  *
- * Calibration sequence on 2810 at 366 rad/s elec:
- *   90°  → Id=3.8, Iq=3.9 (bias 44°)
- *   134° → Id=11.3, Iq=6.3 (bias 60° — wrong direction)
- *   46°  → Id=1.4, Iq=4.1 (bias 19°)
- *   30°  → Id=0.72, Iq=4.4 (bias 9°)
+ * theta_offset = AN_SMC_THETA_OFFSET_BASE + AN_SMC_THETA_OFFSET_K × ω
  *
- * Slope ≈ 0.6° bias-reduction per degree of offset reduction.
- * Try 20° (0.349 rad) — should give bias ≈ 3°. */
-#define AN_SMC_THETA_OFFSET         0.349f         /* 20° */
+ * BASE: calibrated at 366 rad/s → 20° (0.349 rad).
+ * K:    speed coefficient.  At higher speeds the SMC's LPF phase
+ *       relationship to fundamental shifts; observer angle drifts.
+ *       Tune K so Id stays near zero across the operating range.
+ *
+ * Tuning: run motor at low and high speed, read Id at each:
+ *   - Low speed (366 rad/s):  set BASE so Id ≈ 0 there
+ *   - Medium speed (~5000 rad/s): observe Id; if positive, K negative
+ *     (subtract more from offset at higher ω); if negative, K positive
+ *   - K_initial = 0 (constant offset).  Step in -1e-5 increments.
+ *
+ * AN1078 reference uses BASE=π/2, K=0.  Our 2810 needed BASE=20°.
+ * K=0 worked clean up to ~80k eRPM, then observer started losing it. */
+#define AN_SMC_THETA_OFFSET_BASE    0.349f         /* 20° at zero speed */
+#define AN_SMC_THETA_OFFSET_K       1.0e-4f        /* rad per (rad/s elec) — post FS_HZ fix: observer leads 29° at 115k with K=1.5e-4 → trim */
+
+/* Backwards-compat alias for code that hardcodes a single constant. */
+#define AN_SMC_THETA_OFFSET         AN_SMC_THETA_OFFSET_BASE
 
 /** BEMF LPF coefficient scale factor (per |ω| in rad/s electrical).
- *  Cutoff frequency = Kslf × fs / 2π.  At ω=366 rad/s and Ts=1/24000,
- *  Kslf = 0.0153 → cutoff 58 Hz = exactly the electrical fundamental.
- *  Bump the scale so cutoff stays well above fundamental even at low
- *  speeds.  3x larger gives 174 Hz cutoff at 366 rad/s. */
-#define AN_SMC_KSLF_SCALE           (3.0f * AN_TS)
+ *
+ * AN1078 default: AN_TS (1·Ts).  Earlier 3·Ts gave better low-speed
+ * bootstrap on 2810 but Kslf saturated at high speed (Kslf=1 means
+ * LPF passes Z directly, observer breaks down past ~8000 rad/s elec).
+ *
+ * Use 1·Ts (AN1078 default) — Kslf saturates only above 24000 rad/s
+ * elec (~230k eRPM at 7PP).  Low-speed bootstrap relies on
+ * AN_SMC_KSLF_MIN floor instead. */
+#define AN_SMC_KSLF_SCALE           AN_TS
 
-/** Minimum Kslf — independent of end-speed.  Set to a value that gives
- *  reasonable LPF bandwidth (~50 Hz) for noise reduction at zero speed,
- *  not tied to AN_END_SPEED.  At fs=24kHz, α=0.05 → cutoff 191 Hz. */
+/** Minimum Kslf — bootstrap floor at low speeds.  0.05 gives cutoff
+ *  191 Hz, enough headroom for our 366 rad/s end-speed (58 Hz fund). */
 #define AN_SMC_KSLF_MIN             0.05f
+
+/** Maximum Kslf — cap below 1.0 so LPF retains filtering action even
+ *  at very high speeds.  Each tick: y += Kslf·(x - y).  Kslf=0.5 →
+ *  saturation at ω = 0.5 / Ts·SCALE = 12000 rad/s (114k eRPM at 7PP).
+ *  Above that, the LPF cutoff stops scaling with speed and observer
+ *  phase response degrades.
+ *
+ *  Bumped to 0.85 → saturation at ~204k eRPM, gives headroom for
+ *  full-speed runs.  Above 0.85 LPF approaches passthrough; observer
+ *  noise rejection collapses, so don't push higher. */
+#define AN_SMC_KSLF_MAX             0.85f
 
 /* ── Theta_error bleed (CL transition) ───────────────────────────
  *

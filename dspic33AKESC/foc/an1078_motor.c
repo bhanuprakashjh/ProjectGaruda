@@ -201,6 +201,7 @@ static void an_reset_parameters(AN_Motor_T *m)
     m->runMotor = false;
     /* Speed reference 0 */
     m->velRef_rad_s = 0.0f;
+    m->id_ref_fw   = 0.0f;
     /* Restart in open loop */
     m->openLoop = true;
     /* Mode change pending (for DoControl init block) */
@@ -328,38 +329,95 @@ static void an_do_control(AN_Motor_T *m, float dt)
             m->vd = an_pi_run(&m->pi_d, id_ref, m->id_meas, dt);
         }
     } else {
-        /* CLOSED LOOP — bring-up phase: SPEED PI DISABLED.
+        /* CLOSED LOOP — proper speed PI with observer feedback.
          *
-         * The SMC observer has ~6° angle bias on this 2810 motor.  PI
-         * fights the bias indefinitely, integrating Vd to extreme
-         * values until current explodes.  Throttle-driven speed PI
-         * makes it worse: user pushes pot → PI commands more Iq →
-         * motor accelerates past Kslf reference speed → observer angle
-         * drifts further → PI struggles harder → fault.
+         * Speed control:
+         *   throttle → setpoint (rad/s)
+         *   speed PI: ref=setpoint, meas=observer.OmegaFltred → iq_ref
+         *   iq_ref clamped at ±AN_OVER_CURRENT_LIMIT
          *
-         * For now: lock iq_ref at AN_Q_CURRENT_REF_OPENLOOP.  Throttle
-         * has no effect.  Motor runs at constant speed in CL with
-         * observer-driven commutation.  Once observer is replaced (TI
-         * ESMO PLL), restore proper speed control.
-         *
-         * Also tighten Vd clamp so PI cannot wind up beyond reasonable
-         * voltage.  Real Vd at steady state should be ≤ ~0.5V; clamp
-         * at ±2V kills runaway integrator. */
+         * Current PI inner loop runs at AN_TS rate (24kHz).
+         * Speed PI on top: also runs every tick (same dt, same kp/ki
+         * tuning gives same closed-loop behavior). */
 
-        if (m->changeMode) {
-            m->changeMode = false;
+        /* Throttle-mapped speed setpoint */
+        float speed_target;
+        if (m->throttle <= AN_THROTTLE_DEADBAND) {
+            speed_target = AN_END_SPEED_ELEC_RS;
+        } else {
+            float frac = (float)(m->throttle - AN_THROTTLE_DEADBAND)
+                       / (4095.0f - (float)AN_THROTTLE_DEADBAND);
+            speed_target = AN_END_SPEED_ELEC_RS
+                         + frac * (AN_NOMINAL_SPEED_ELEC_RS - AN_END_SPEED_ELEC_RS);
         }
 
-        float iq_ref = AN_Q_CURRENT_REF_OPENLOOP;
-        float id_ref = 0.0f;
+        /* Slew velRef toward target — uses CL-specific rate, faster
+         * than OL ramp so throttle feels snappy without destabilizing
+         * the OL→CL handoff. */
+        {
+            float diff = speed_target - m->velRef_rad_s;
+            float max_step = AN_CL_VELREF_SLEW_RPS2 * AN_TS;
+            if (diff >  max_step) m->velRef_rad_s += max_step;
+            else if (diff < -max_step) m->velRef_rad_s -= max_step;
+            else m->velRef_rad_s = speed_target;
+        }
+        /* Keep startupRamp synced for SMC LPF (used in OL bootstrap path
+         * AND as the fallback Kslf source in step 4b). */
+        m->startupRamp = m->velRef_rad_s;
 
-        /* Tight Vd clamp prevents observer-bias-induced PI windup */
-        m->pi_d.outMax =  2.0f;
-        m->pi_d.outMin = -2.0f;
+        /* First-tick CL init: preload speed PI with the OL Iq to be
+         * bumpless. */
+        if (m->changeMode) {
+            m->changeMode = false;
+            an_pi_preload(&m->pi_spd, AN_Q_CURRENT_REF_OPENLOOP);
+        }
+
+        /* Speed PI → Iq ref.  Feedback from observer's REAL Omega. */
+        float iq_ref = an_pi_run(&m->pi_spd,
+                                 m->velRef_rad_s,
+                                 m->smc.OmegaFltred,
+                                 dt);
+        m->vqRef = iq_ref;
+
+        float vmax = m->vbus * AN_INV_SQRT3 * AN_MAX_VOLTAGE_VECTOR_FRAC;
+
+        /* ── Field weakening ─────────────────────────────────────
+         *
+         * At ~180k eRPM on this motor, |V| saturates at vmax.  Speed
+         * PI keeps demanding more Iq but voltage limiter clamps Vq →
+         * speed stops increasing → no path to motor's electrical max.
+         *
+         * Push Id negative: in rotor frame Vq = R·Iq + ω·L·Id + ω·λ,
+         * so Id<0 reduces required Vq, freeing voltage headroom for
+         * higher speed.  Field is "weakened" (rotor flux partially
+         * cancelled by stator d-axis MMF).
+         *
+         * Simple integrator: when last tick's |V| exceeded threshold,
+         * accumulate id_ref_fw negative.  Decay back to zero when |V|
+         * is comfortably below threshold.  Clamped to ID_FW_MAX_NEG. */
+        {
+            const float FW_TRIGGER = 0.91f;   /* engage earlier — avoid saturation */
+            const float FW_KP_INT  = 400.0f;  /* faster integration (200→400) */
+            const float FW_DECAY   = 0.9995f; /* per tick → ~50ms recovery */
+            const float ID_FW_MAX_NEG = -12.0f; /* limit FW current draw */
+
+            float v_last = sqrtf(m->vd * m->vd + m->vq * m->vq);
+            float mod_now = (vmax > 0.001f) ? v_last / vmax : 0.0f;
+
+            if (mod_now > FW_TRIGGER) {
+                m->id_ref_fw -= FW_KP_INT * (mod_now - FW_TRIGGER) * dt;
+                if (m->id_ref_fw < ID_FW_MAX_NEG) m->id_ref_fw = ID_FW_MAX_NEG;
+            } else {
+                m->id_ref_fw *= FW_DECAY;
+                if (m->id_ref_fw > -0.005f) m->id_ref_fw = 0.0f;
+            }
+        }
+        float id_ref = m->id_ref_fw;
+
+        m->pi_d.outMax =  vmax;
+        m->pi_d.outMin = -vmax;
         m->vd = an_pi_run(&m->pi_d, id_ref, m->id_meas, dt);
 
-        /* Symmetric Vq clamp on remaining headroom */
-        float vmax = m->vbus * AN_INV_SQRT3 * AN_MAX_VOLTAGE_VECTOR_FRAC;
         float vd_sq = m->vd * m->vd;
         float vmax_sq = vmax * vmax;
         float vq_lim_sq = vmax_sq - vd_sq;
@@ -367,8 +425,6 @@ static void an_do_control(AN_Motor_T *m, float dt)
         m->pi_q.outMax =  vq_lim;
         m->pi_q.outMin = -vq_lim;
         m->vq = an_pi_run(&m->pi_q, iq_ref, m->iq_meas, dt);
-
-        m->vqRef = iq_ref;  /* keep field updated for telemetry */
     }
 }
 
@@ -514,27 +570,27 @@ void AN_MotorFastTick(AN_Motor_T *m,
     m->smc.Vbeta  = m->v_beta;
     AN_SMC_Position_Estimation(&m->smc);
 
-    /* ── 4b. Bootstrap SMC LPF — apply ALWAYS in CL too ──
+    /* ── 4b. SMC LPF tuning — pin Kslf to commanded speed (startupRamp).
      *
-     * SMC LPF cutoff (Kslf) is speed-adaptive, computed from the
-     * observer's OWN OmegaFltred.  In OL we know the speed (startupRamp).
-     * In CL the observer's natively-computed OmegaFltred from delta-
-     * theta has noise/drift (~10% on this low-Ke motor) → Kslf jitters
-     * → BEMF extraction quality drops → angle drifts → PI commutation
-     * walks off → fault.
+     * startupRamp tracks velRef (the slewed speed setpoint from
+     * throttle).  Using it for Kslf gives a stable, predictable LPF
+     * cutoff that scales with intended operating speed.
      *
-     * Use startupRamp as a stable speed reference for Kslf in BOTH OL
-     * and CL.  This decouples observer LPF stability from observer's
-     * own speed estimate.  A separate speed-PI feedback path can use
-     * startupRamp or smc.OmegaFltred (TBD). */
+     * Why not use observer's own OmegaFltred for Kslf?  Tested — caused
+     * positive feedback at high speed: motor accelerates → observer
+     * reports higher → Kslf grows → LPF lets through more BEMF →
+     * observer angle improves → motor accelerates more → no control.
+     *
+     * OmegaFltred is also overridden in OL (bootstrap), but in CL we
+     * leave the observer's native value alone for telemetry/PI
+     * feedback. */
+    if (m->openLoop) {
+        m->smc.OmegaFltred = m->startupRamp;   /* OL bootstrap */
+    }
     {
-        float speed_for_kslf = (m->openLoop)
-                             ? m->startupRamp
-                             : m->startupRamp;  /* same value in CL: no throttle yet */
-        m->smc.OmegaFltred = speed_for_kslf;
-        float k = speed_for_kslf * m->smc.KslfScale;
-        if (k < m->smc.KslfMin) k = m->smc.KslfMin;
-        if (k > 1.0f)           k = 1.0f;
+        float k = m->startupRamp * m->smc.KslfScale;
+        if (k < m->smc.KslfMin)      k = m->smc.KslfMin;
+        if (k > AN_SMC_KSLF_MAX)     k = AN_SMC_KSLF_MAX;
         m->smc.Kslf      = k;
         m->smc.KslfFinal = k;
     }

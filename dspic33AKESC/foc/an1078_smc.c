@@ -23,6 +23,8 @@
 
 #include "an1078_smc.h"
 #include "an1078_params.h"
+#include "pll_estimator.h"
+#include "../garuda_foc_params.h"   /* PLL_ANGLE_OFFSET */
 #include <math.h>
 
 /* 2π for angle wrap (avoid relying on M_TWOPI portability). */
@@ -79,6 +81,8 @@ void AN_SMCReset(AN_SMC_T *s)
 
     s->Kslf      = s->KslfMin;
     s->KslfFinal = s->KslfMin;
+
+    pll_reset(&s->pll);
 }
 
 /* ── Helpers (file-local) ─────────────────────────────────── */
@@ -173,12 +177,34 @@ void AN_SMC_Position_Estimation(AN_SMC_T *s)
     CalcEstI(s);
     CalcBEMF(s);
 
-    /* Atan2 — libm, single precision. */
-    s->Theta = atan2f(-s->EalphaFinal, s->EbetaFinal) + s->ThetaOffset;
-    s->Theta = an_wrap_2pi(s->Theta);
+    /* ── Angle PLL (AN1292-style) ─────────────────────────────────
+     *
+     * Replaces AN1078's raw atan2(BEMF) with a phase-locked loop on
+     * (EalphaFinal, EbetaFinal).  PLL tracks the BEMF angle smoothly
+     * via cross-product discriminator + PI loop filter.  Per-tick
+     * atan2 noise that previously caused angle wobble at high speed
+     * is rejected by the PLL's loop-filter bandwidth (~21 Hz at
+     * |E|=0.2V, ~1 kHz at |E|=10V — self-adapting because the
+     * discriminator amplitude scales with |E|).
+     *
+     * pll.theta_est tracks the BEMF vector angle θ_E.  PMSM convention:
+     * BEMF leads rotor by π/2.  Subtract PLL_ANGLE_OFFSET to get rotor
+     * angle, then add the empirical AN_SMC_THETA_OFFSET (BASE + K·ω)
+     * which compensates LPF group delay in (Eα,Eβ).
+     *
+     * pll.omega_est is a clean instantaneous speed (no IRP averaging
+     * latency) — feeds OmegaFltred for speed PI and Kslf scaling. */
+    pll_update(&s->pll, s->EalphaFinal, s->EbetaFinal, AN_TS);
 
-    /* ── Speed estimation: AN1078 accumulates Δθ over IRP_PERCALC
-     *    ticks and converts to rad/s.  Mirrors smcpos.c:111-136. */
+    {
+        float dyn_offset = AN_SMC_THETA_OFFSET_BASE
+                         + AN_SMC_THETA_OFFSET_K * an_abs(s->pll.omega_est);
+        s->Theta = s->pll.theta_est - PLL_ANGLE_OFFSET + dyn_offset;
+        s->Theta = an_wrap_2pi(s->Theta);
+    }
+
+    /* Keep ΔTheta accumulator running for telemetry / IRP-averaged
+     * Omega field, but the live speed feedback comes from PLL. */
     {
         float dth = an_wrap_delta(s->Theta - s->PrevTheta);
         s->AccumTheta += dth;
@@ -186,25 +212,25 @@ void AN_SMC_Position_Estimation(AN_SMC_T *s)
     }
     s->AccumThetaCnt++;
     if (s->AccumThetaCnt >= AN_IRP_PERCALC) {
-        /* ω_elec [rad/s] = ΣΔθ / (N × Ts) */
         s->Omega = s->AccumTheta / ((float)AN_IRP_PERCALC * AN_TS);
         s->AccumTheta = 0.0f;
         s->AccumThetaCnt = 0;
     }
 
-    /* OmegaFltred is the speed used by the speed-PI AND for adapting
-     * the LPF cutoff.  AN1078 uses a single-pole IIR with FiltOmCoef.
-     * In float we use a simple α = Kslf-style LPF (same effect). */
-    s->OmegaFltred += 0.05f * (s->Omega - s->OmegaFltred);
+    /* OmegaFltred = PLL output directly.  PLL already provides smooth
+     * speed estimate; no additional LPF needed.  Used by Kslf scaling
+     * and (in motor.c) by the speed PI when CL is active. */
+    s->OmegaFltred = s->pll.omega_est;
 
     /* ── Speed-adaptive LPF coefficient.
-     *    Kslf = |OmegaFltred| × KslfScale, floored at KslfMin.
-     *    AN1078 also caps at 0.7 implicitly; we cap at 1.0 for safety. */
+     *    Kslf = |OmegaFltred| × KslfScale, floored at KslfMin, capped
+     *    at AN_SMC_KSLF_MAX so LPF doesn't degenerate to passthrough
+     *    (Kslf=1 means y[n] = x[n] = no filtering — observer breaks). */
     {
         float o = an_abs(s->OmegaFltred);
         float k = o * s->KslfScale;
-        if (k < s->KslfMin) k = s->KslfMin;
-        if (k > 1.0f)       k = 1.0f;
+        if (k < s->KslfMin)      k = s->KslfMin;
+        if (k > AN_SMC_KSLF_MAX) k = AN_SMC_KSLF_MAX;
         s->Kslf      = k;
         s->KslfFinal = k;
     }
