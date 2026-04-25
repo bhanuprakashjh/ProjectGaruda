@@ -74,7 +74,7 @@ static uint32_t BuildFeatureFlags(void)
     if (FEATURE_RX_PWM)          f |= (1UL << 20);
     if (FEATURE_RX_DSHOT)        f |= (1UL << 21);
     if (FEATURE_RX_AUTO)         f |= (1UL << 22);
-    if (FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3) f |= (1UL << 23);
+    if (FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3 || FEATURE_FOC_AN1078) f |= (1UL << 23);
     if (FEATURE_BURST_SCOPE)         f |= (1UL << 24);
     return f;
 }
@@ -100,6 +100,14 @@ static void HandleGetInfo(const uint8_t *payload, uint8_t payloadLen)
     (void)payload;
     (void)payloadLen;
 
+    /* Build hash: djb2 of __DATE__ " " __TIME__.  Changes every recompile
+     * so the host can verify which binary is actually flashed. */
+    static const char buildStamp[] = __DATE__ " " __TIME__;
+    uint32_t buildHash = 5381u;
+    for (const char *p = buildStamp; *p; p++) {
+        buildHash = ((buildHash << 5) + buildHash) ^ (uint32_t)(uint8_t)*p;
+    }
+
     GSP_INFO_T info;
     memset(&info, 0, sizeof(info));
 
@@ -113,6 +121,7 @@ static void HandleGetInfo(const uint8_t *payload, uint8_t payloadLen)
     info.featureFlags    = BuildFeatureFlags();
     info.pwmFrequency    = PWMFREQUENCY_HZ;
     info.maxErpm         = gspParams.maxClosedLoopErpm;
+    info.buildHash       = buildHash;
 
     GSP_SendResponse(GSP_CMD_GET_INFO, (const uint8_t *)&info, sizeof(info));
 }

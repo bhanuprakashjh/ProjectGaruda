@@ -372,9 +372,27 @@ def main():
     # Get info
     resp = send_cmd(ser, GSP_CMD_GET_INFO)
     if resp and resp[0] == GSP_CMD_GET_INFO and len(resp[1]) >= 14:
-        flags = struct.unpack_from("<I", resp[1], 8)[0]
+        proto_ver = resp[1][0]
+        fw_maj    = resp[1][1]
+        fw_min    = resp[1][2]
+        fw_pat    = resp[1][3]
+        flags     = struct.unpack_from("<I", resp[1], 8)[0]
         is_foc = bool(flags & (1 << 23))
-        print(f"  Mode: {'FOC V2' if is_foc else '6-step'}")
+
+        # FOC variant from feature flags bits 23 + others.
+        # Logger can't directly tell V2/V3/AN1078 apart from flags alone
+        # — they all set bit 23.  Use buildHash + fw version as primary
+        # build identifier instead.
+        print(f"  GSP proto v{proto_ver}  FW v{fw_maj}.{fw_min}.{fw_pat}")
+
+        # buildHash (V3+ protocol, bytes 20-23 of GSP_INFO_T)
+        if proto_ver >= 3 and len(resp[1]) >= 24:
+            build_hash = struct.unpack_from("<I", resp[1], 20)[0]
+            print(f"  Build hash: 0x{build_hash:08X}")
+        else:
+            print(f"  Build hash: (unsupported, proto v{proto_ver} < 3)")
+
+        print(f"  Mode: {'FOC' if is_foc else '6-step'}")
         print(f"  Feature flags: 0x{flags:08X}")
     else:
         is_foc = False

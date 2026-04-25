@@ -24,6 +24,9 @@
         <itemPath>../foc/foc_v3_types.h</itemPath>
         <itemPath>../foc/foc_v3_smo.h</itemPath>
         <itemPath>../foc/foc_v3_control.h</itemPath>
+        <itemPath>../foc/an1078_params.h</itemPath>
+        <itemPath>../foc/an1078_smc.h</itemPath>
+        <itemPath>../foc/an1078_motor.h</itemPath>
       </logicalFolder>
       <logicalFolder name="gsp" displayName="gsp" projectFiles="true">
         <itemPath>../gsp/gsp.h</itemPath>
@@ -107,6 +110,8 @@
         <itemPath>../foc/foc_v2_detect.c</itemPath>
         <itemPath>../foc/foc_v3_smo.c</itemPath>
         <itemPath>../foc/foc_v3_control.c</itemPath>
+        <itemPath>../foc/an1078_smc.c</itemPath>
+        <itemPath>../foc/an1078_motor.c</itemPath>
       </logicalFolder>
       <logicalFolder name="gsp" displayName="gsp" projectFiles="true">
         <itemPath>../gsp/gsp.c</itemPath>
@@ -1480,6 +1485,8 @@
                   value="${memories.instruction.ram.ranges}"/>
         <property key="memories.programmemory" value="true"/>
         <property key="memories.programmemory.ranges" value="800000-81ffff"/>
+        <property key="programmerToGoFilePath"
+                  value="/media/bhanu1234/Development/ProjectGaruda/dspic33AKESC/dspic33AKESC.X/debug/default/dspic33AKESC_ptg"/>
         <property key="programoptions.donoteraseauxmem" value="false"/>
         <property key="programoptions.eraseb4program" value="true"/>
         <property key="programoptions.pgmentry.voltage" value="low"/>

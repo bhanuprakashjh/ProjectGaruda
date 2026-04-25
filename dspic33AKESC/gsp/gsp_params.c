@@ -168,25 +168,46 @@ static const GSP_PARAMS_T profileDefaults[4] = {
         .ocStartupMa        = 22000,   /* Startup relaxed near sensor saturation */
         .rampCurrentGateMa  = 10000,   /* Gate ramp accel if bus >10A during OL */
         TUNING_DEFAULTS,
-        /* FOC motor model: 2810 1350KV (7PP, 24V) */
-        .focRsMilliOhm       = 50,     /* 0.050 Ω (avg of 43-61mΩ mfg spread) */
-        .focLsMicroH          = 25,     /* 25 µH */
-        .focKeUvSRad          = 527,    /* 1350 KV → Ke = 60/(2π * 1350 * √3) V·s/rad
-                                         * = 5.27e-4 V·s/rad → 527 in µV·s/rad */
+        /* FOC motor model: 2810 1350KV (7PP, 24V) — PRODRONE bench
+         * 2026-04-23: corrected phase-to-neutral values. The EEPROM
+         * defaults are the actual runtime source (the .h #defines aren't
+         * read at runtime — BuildFocMotorParams pulls from gspParams).
+         * Old values (Rs=50, Ls=25) were phase-phase misapplied. */
+        .focRsMilliOhm       = 22,     /* 22 mΩ (= 43 mΩ phase-phase / 2) */
+        .focLsMicroH          = 10,     /* 10 µH (= ~15-20 µH phase-phase / 2) */
+        .focKeUvSRad          = 583,    /* 0.000583 V·s/rad = 60/(√3×2π×1350×7) */
         .focVbusNomCentiV     = 2400,   /* 24V nominal */
-        .focMaxCurrentCentiA  = 3000,   /* 30.0A */
-        .focMaxElecRadS       = 15000,  /* 200k eRPM target = 200000/60*2π = ~20944
-                                         * rad/s; 15000 gives margin for CL */
-        .focKpDqMilli         = 120,
-        .focKiDq              = 400,
-        .focObsLpfAlphaMilli  = 200,
-        .focAlignIqCentiA     = 200,    /* 2.0A */
-        .focRampIqCentiA      = 200,    /* 2.0A */
-        .focAlignTimeMs       = 500,
-        .focIqRampTimeMs      = 300,
-        .focRampRateRps2      = 300,
-        .focHandoffRadS       = 800,
-        .focFaultOcCentiA     = 3500,
+        .focMaxCurrentCentiA  = 500,    /* 5.0A speed-PI clamp.
+                                         * Was 3A (safety during open-loop
+                                         * observer debugging). With BEMF
+                                         * correction restored, Iq_ref
+                                         * shouldn't saturate the speed PI
+                                         * under normal operation. */
+        .focMaxElecRadS       = 10000,  /* ~96k eRPM mech. With BEMF angle
+                                         * correction re-enabled the observer
+                                         * should track cleanly past 5k rad/s.
+                                         * If oscillation returns: lower this. */
+        .focKpDqMilli         = 63,     /* Kp = 2π × 1000 × 10 µH = 0.063 */
+        .focKiDq              = 138,    /* Ki = 2π × 1000 × 0.022 = 138 */
+        .focObsLpfAlphaMilli  = 350,    /* 0.35 (matches A2212, high-speed drone) */
+        .focAlignIqCentiA     = 500,    /* 5.0A align — firm rotor lock. */
+        .focRampIqCentiA      = 600,    /* 6.0A ramp torque. Kt=0.00612 N·m/A
+                                         * → 36 mN·m. Plenty for a 2810 no-prop. */
+        .focAlignTimeMs       = 1000,   /* 1 full second for rotor to settle
+                                         * mechanically at theta=0 before ramp. */
+        .focIqRampTimeMs      = 500,
+        .focRampRateRps2      = 80,     /* Very slow ramp — rotor MUST be able
+                                         * to follow. 80 rad/s² reaches 400 rad/s
+                                         * handoff in 5 seconds. Bench: OK. */
+        .focHandoffRadS       = 400,    /* Lower handoff. BEMF at 400 rad/s =
+                                         * 0.23V (marginal SNR but acceptable
+                                         * with SMO's LPF filtering). */
+        .focFaultOcCentiA     = 1500,   /* 15A SW fault — V3 V/f startup pulls
+                                         * 10A+ transients via Rs=22mΩ, need
+                                         * headroom above those. Bench supply
+                                         * at 10A will still CC-limit the real
+                                         * draw; this just keeps firmware from
+                                         * over-protective trips. */
         .focFaultStallDeciRadS = 500,
     },
     [GSP_PROFILE_5055] = {

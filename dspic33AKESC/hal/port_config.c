@@ -65,7 +65,7 @@ void SetupGPIOPorts(void)
  */
 void MapGPIOHWFunction(void)
 {
-#if FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3
+#if FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3 || FEATURE_FOC_AN1078
     /* ================================================================
      * Phase Current Sensing via OA1/OA2 (Internal Op-Amps) — FOC modes
      * OA1IN+ : RA4  (DIM:013), OA1IN- : RA3  (DIM:015)

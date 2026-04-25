@@ -65,6 +65,12 @@
 /* CL holdoff: after CL entry, hold initial Iq while PLL/SMO stabilize */
 #define CL_HOLDOFF_SLOW_TICKS 20U
 
+/* AN1078-style post-handoff theta-error bleed rate.
+ * AN1078 pmsm.c bleeds 0.05° every TRANSITION_STEPS ticks
+ * (= IRP_PERCALC/4 = 5 ticks at 20kHz fast loop) → 175°/s ≈ 3 rad/s.
+ * A 90° capture clears in ~0.5 s — fast but smooth. */
+#define CL_THETA_BLEED_RAD_S  3.0f
+
 /* Re-arm: throttle=0 for 1s in slow loop ticks */
 #define REARM_TIMEOUT_TICKS 1000U
 
@@ -103,6 +109,7 @@ static void reset_startup(V3_State_t *st)
     st->v_alpha_applied = 0.0f;
     st->v_beta_applied  = 0.0f;
     st->theta_delay_comp = 0.0f;
+    st->theta_error     = 0.0f;
     st->oc_debounce_ctr = 0;
     st->observer_bad_ctr = 0;
     st->phantom_ctr = 0;
@@ -153,33 +160,38 @@ void foc_v3_init(V3_State_t *st, const FOC_MotorParams_t *params)
     st->handoff_residual_max = SMO_RESIDUAL_MAX_HANDOFF;
     st->handoff_bemf_min     = SMO_BEMF_MIN_HANDOFF;
 
-    /* Build SMO configuration struct from motor params */
-    SMO_Config_t smo_cfg = {
-        .Rs         = params->Rs,
-        .Ls         = params->Ls,
-        .lambda_pm  = params->lambda_pm,
-        .vbus_nom   = params->vbus_nom_v,
-        .dt         = DT_FAST,
+    /* Build SMO configuration struct from motor params.
+     * AN1078 float port: fixed Kslide, speed-proportional Kslf floored
+     * at end-speed, constant angle offset.  See garuda_foc_params.h
+     * SMO_* block. */
+    {
+        float end_speed = (params->handoff_rad_s > SMO_END_SPEED_ELEC_RS)
+                        ? params->handoff_rad_s : SMO_END_SPEED_ELEC_RS;
 
-        /* Sliding gain tuning */
-        .k_base        = SMO_K_BASE,
-        .k_bemf_scale  = SMO_K_BEMF_SCALE,
-        .k_max         = params->vbus_nom_v,
-        .k_adapt_alpha = SMO_K_ADAPT_ALPHA,
-        .phi           = SMO_SIGMOID_PHI,
+        SMO_Config_t smo_cfg = {
+            .Rs         = params->Rs,
+            .Ls         = params->Ls,
+            .lambda_pm  = params->lambda_pm,
+            .vbus_nom   = params->vbus_nom_v,
+            .dt         = DT_FAST,
 
-        /* LPF tuning */
-        .alpha_base = SMO_LPF_ALPHA,
-        .omega_ref  = (params->handoff_rad_s > 100.0f)
-                    ? params->handoff_rad_s : 100.0f,
-        .alpha_min  = SMO_ALPHA_MIN,
-        .alpha_max  = SMO_ALPHA_MAX,
+            /* Sliding controller */
+            .Kslide       = params->vbus_nom_v * 0.85f,   /* AN1078 Q15(0.85) */
+            .MaxSMCError  = SMO_MAX_SMC_ERROR,
 
-        /* Health thresholds */
-        .conf_min     = SMO_CONF_MIN,
-        .residual_max = SMO_RESIDUAL_MAX,
-    };
-    v3_smo_init(&st->smo, &smo_cfg);
+            /* BEMF LPF */
+            .theta_filter_cnst = SMO_THETA_FILTER_CNST,
+            .kslf_min          = end_speed * SMO_THETA_FILTER_CNST,
+
+            /* Angle offset */
+            .theta_offset = SMO_THETA_OFFSET,
+
+            /* Health thresholds */
+            .conf_min     = SMO_CONF_MIN,
+            .residual_max = SMO_RESIDUAL_MAX,
+        };
+        v3_smo_init(&st->smo, &smo_cfg);
+    }
 
     /* Initialize PLL (speed-adaptive BW from runtime tunables) */
     v3_smo_pll_init(&st->pll,
@@ -204,6 +216,36 @@ void foc_v3_start(V3_State_t *st)
         foc_pi_preload(&st->pid_d, 0.0f);
         foc_pi_preload(&st->pid_q, 0.0f);
         foc_pi_preload(&st->pid_spd, 0.0f);
+
+        /* Hardcoded I/f startup overrides (2026-04-23).
+         * EEPROM values were inconsistent across sessions and caused
+         * startup to fail. These are conservative values for PRODRONE 2810
+         * (1350KV, 7PP, ~22mΩ, ~10µH) at 24V no-prop.
+         *
+         * Fast-loop runs at 24 kHz → 1 ms = 24 ticks.
+         *
+         * Strategy: VERY slow concurrent Iq + omega ramp. Rotor stays
+         * pinned to d-axis by align_iq while Iq grows to pull it forward.
+         * omega ramps from zero so rotor never faces a step-speed kick.
+         * 6-second total startup is fine for bench. */
+        st->use_vf_startup  = 0;              /* force I/f mode */
+        /* PORTED FROM v2 PROFILE 2 (proven on this 2810 + AK board).
+         * v2 architecture: ALIGN uses Id (not Iq), then IF_RAMP smoothly
+         * crossfades Id→Iq while ramping omega.  Handoff at 1000 rad/s
+         * because BEMF = λ×ω = 0.583mV/rad·s × 1000 = 0.58V — that's
+         * the floor where the observer can actually see signal above
+         * the dt_comp noise.  Below ~500 rad/s BEMF is buried.
+         *
+         * Iq=3A → 18 mN·m, plenty for no-prop on this rotor.  Iq=8A
+         * we tried earlier was overkill and made no difference because
+         * the rotor was slipping the OL angle anyway. */
+        st->align_iq        = 2.0f;           /* v2 STARTUP_ALIGN_IQ_A */
+        st->ramp_iq         = 3.0f;           /* v2 STARTUP_RAMP_IQ_A */
+        st->align_ticks     = 4800;           /* 200 ms — v2 STARTUP_ALIGN_TICKS */
+        st->iq_ramp_ticks   = 4800;           /* 200 ms d→q crossfade */
+        st->ramp_rate       = 800.0f;         /* rad/s² — v2 STARTUP_RAMP_RATE_RPS2 */
+        st->handoff_rad_s   = 1000.0f;        /* rad/s — v2 STARTUP_HANDOFF_RAD_S */
+
         st->mode = V3_ALIGN;
     }
 }
@@ -364,15 +406,30 @@ void foc_v3_fast_tick(V3_State_t *st,
         if (st->use_vf_startup) {
             iq_ref = 0.0f;
             id_ref = 0.0f;
+            /* V/f: ramp speed immediately (voltage already rotates field). */
+            st->omega_ol += st->ramp_rate * DT_FAST;
+            if (st->omega_ol > st->handoff_rad_s)
+                st->omega_ol = st->handoff_rad_s;
         } else {
-            iq_ref = st->ramp_iq;
-            id_ref = 0.0f;
-        }
+            /* v2-style smooth d→q crossfade.  ALIGN locked rotor at
+             * d-axis with Id=align_iq.  Linearly fade Id down and Iq up
+             * over iq_ramp_ticks so the current vector rotates from 0°
+             * to 90° smoothly — rotor follows the rotating current
+             * vector.  After crossfade, Id=0, Iq=ramp_iq. */
+            if (st->ramp_ctr < st->iq_ramp_ticks) {
+                float frac = (float)st->ramp_ctr / (float)st->iq_ramp_ticks;
+                iq_ref = st->ramp_iq  * frac;
+                id_ref = st->align_iq * (1.0f - frac);
+            } else {
+                iq_ref = st->ramp_iq;
+                id_ref = 0.0f;
+            }
 
-        /* Speed ramp — cap at handoff speed */
-        st->omega_ol += st->ramp_rate * DT_FAST;
-        if (st->omega_ol > st->handoff_rad_s)
-            st->omega_ol = st->handoff_rad_s;
+            /* omega_ol ramps from tick 0 — rotor pulled along by Iq */
+            st->omega_ol += st->ramp_rate * DT_FAST;
+            if (st->omega_ol > st->handoff_rad_s)
+                st->omega_ol = st->handoff_rad_s;
+        }
 
         /* Advance forced angle */
         st->theta_ol += st->omega_ol * DT_FAST;
@@ -411,28 +468,37 @@ void foc_v3_fast_tick(V3_State_t *st,
             }
 
             if (st->handoff_ctr >= HANDOFF_DWELL_TICKS) {
-                /* Transition to closed loop */
+                /* AN1078 handoff (faithful port of pmsm.c:734).
+                 *
+                 * Capture the angle gap, then leave PI integrators
+                 * COMPLETELY ALONE.  The current PI was already running
+                 * during OL with theta_drive = theta_ol, so its vd/vq
+                 * outputs are valid for that frame.  In CL we'll
+                 * commutate at smc.Theta + theta_error; on the very
+                 * first CL tick that equals theta_ol exactly — no
+                 * discontinuity in the commutation angle — so the PI
+                 * continues seamlessly.  Each subsequent tick bleeds
+                 * theta_error toward zero, smoothly migrating the
+                 * commutation reference from OL to observer.
+                 *
+                 * Do NOT preload pid_d/pid_q (would inject a step).
+                 * Do NOT seed st->theta separately (pll wasn't driving). */
+                float terr = st->theta_ol - st->smo.theta_est;
+                if (terr >  FOC_PI_F) terr -= FOC_TWO_PI;
+                if (terr < -FOC_PI_F) terr += FOC_TWO_PI;
+                st->theta_error = terr;
+
+                /* Speed PI: preload with measured Iq so the speed loop
+                 * starts from the actual operating point, no step. */
+                float iq_actual = st->iq_meas > 0.0f ? st->iq_meas : 0.0f;
+                foc_pi_preload(&st->pid_spd, iq_actual);
+                st->iq_ref = iq_actual;
+
+                st->omega = st->omega_ol;
+
                 st->mode = V3_CLOSED_LOOP;
                 st->cl_active = true;
                 st->blend_ctr = 0;
-
-                /* Seed PLL with OL speed */
-                st->pll.omega_est = st->omega_ol;
-                st->pll.theta_est = st->smo.theta_est;
-
-                /* Seed commutation angle */
-                st->theta = st->smo.theta_est;
-                st->omega = st->omega_ol;
-
-                /* Preload PIs for smooth transition */
-                if (st->use_vf_startup) {
-                    float vq_ss = VF_BOOST_V + st->Ke * st->omega_ol
-                                + st->Rs * 0.3f;
-                    foc_pi_preload(&st->pid_q, vq_ss);
-                    foc_pi_preload(&st->pid_d, 0.0f);
-                }
-                foc_pi_preload(&st->pid_spd, 0.3f);
-                st->iq_ref = 0.3f;
             }
         }
 
@@ -441,43 +507,35 @@ void foc_v3_fast_tick(V3_State_t *st,
     }
 
     case V3_CLOSED_LOOP: {
-        /* PLL angle commutation with dynamic phase delay compensation.
-         * Uses v3_smo_phase_delay() instead of replicating LPF calculation. */
-        float omega_pll_raw = st->pll.omega_est;
-        if (omega_pll_raw < 0.0f) omega_pll_raw = 0.0f;
+        /* AN1078 closed-loop commutation (faithful port of pmsm.c:616).
+         *
+         *   thetaElectrical = smc.Theta + Theta_error
+         *
+         * On the first CL tick Theta_error = (theta_ol − smc.Theta)
+         * captured at handoff, so commutation == theta_ol exactly
+         * (continuous with OL).  Each tick we bleed Theta_error toward
+         * zero; commutation smoothly migrates to smc.Theta. */
+        {
+            float step = CL_THETA_BLEED_RAD_S * DT_FAST;
+            if (st->theta_error >  step) st->theta_error -= step;
+            else if (st->theta_error < -step) st->theta_error += step;
+            else st->theta_error = 0.0f;
+        }
 
-        float omega_filt = st->omega;
-        if (omega_filt < 0.0f) omega_filt = 0.0f;
-
-        /* Phase compensation from SMO LPF delay model (arctan-exact) */
-        float phase_comp = v3_smo_phase_delay(&st->smo, omega_filt);
-        st->theta_delay_comp = phase_comp;
-
-        /* PLL angle + phase compensation for commutation */
-        float theta_raw = st->pll.theta_est + phase_comp;
-        theta_raw = foc_angle_wrap(theta_raw);
-
-        /* Rate limiter — clamp per-tick angle change */
-        float dtheta = theta_raw - st->theta;
-        if (dtheta >  FOC_PI_F) dtheta -= FOC_TWO_PI;
-        if (dtheta < -FOC_PI_F) dtheta += FOC_TWO_PI;
-
-        if (dtheta >  0.5f) dtheta =  0.5f;
-        if (dtheta < -0.5f) dtheta = -0.5f;
-
-        st->theta += dtheta;
-        st->theta = foc_angle_wrap(st->theta);
-        theta_drive = st->theta;
+        theta_drive = st->smo.theta_est + st->theta_error;
+        theta_drive = foc_angle_wrap(theta_drive);
+        st->theta = theta_drive;
+        st->theta_delay_comp = 0.0f;
 
         iq_ref = st->iq_ref;
         id_ref = 0.0f;
 
-        /* LP-filter PLL speed for speed PI feedback */
+        /* Speed for telemetry + speed PI feedback: SMO's own delta-θ
+         * estimate (smo.omega_est).  AN1078 uses this directly. */
         {
-            float spd_frac = omega_filt / 1000.0f;
-            if (spd_frac > 1.0f) spd_frac = 1.0f;
-            float omega_alpha = 0.010f + spd_frac * 0.006f;
-            st->omega += omega_alpha * (omega_pll_raw - st->omega);
+            float omega_smo = st->smo.omega_est;
+            if (omega_smo < 0.0f) omega_smo = 0.0f;
+            st->omega += 0.05f * (omega_smo - st->omega);
         }
 
         st->sub_state = 4;
@@ -519,23 +577,29 @@ void foc_v3_fast_tick(V3_State_t *st,
             }
 
             if (st->handoff_ctr >= REENTRY_DWELL_TICKS) {
-                /* Re-enter CL (fast re-lock — SMO/PLL already warm) */
-                st->mode = V3_CLOSED_LOOP;
-                st->cl_active = true;
-                st->blend_ctr = 0;
-
-                st->pll.omega_est = st->omega_ol;
-                st->pll.theta_est = st->smo.theta_est;
-
-                st->theta = st->smo.theta_est;
-                st->omega = st->omega_ol;
+                /* AN1078-style: capture theta_error, bleed during CL.
+                 * VF_ASSIST drives forced angle; it doesn't run the
+                 * d/q PI integrators (vd=0, vq=V/f), so we DO need to
+                 * preload PI for current control. */
+                float terr = st->theta_ol - st->smo.theta_est;
+                if (terr >  FOC_PI_F) terr -= FOC_TWO_PI;
+                if (terr < -FOC_PI_F) terr += FOC_TWO_PI;
+                st->theta_error = terr;
 
                 float vq_ss = VF_BOOST_V + st->Ke * st->omega_ol
                             + st->Rs * 0.3f;
                 foc_pi_preload(&st->pid_q, vq_ss);
                 foc_pi_preload(&st->pid_d, 0.0f);
-                foc_pi_preload(&st->pid_spd, 0.3f);
-                st->iq_ref = 0.3f;
+
+                float iq_actual = st->iq_meas > 0.0f ? st->iq_meas : 0.0f;
+                foc_pi_preload(&st->pid_spd, iq_actual);
+                st->iq_ref = iq_actual;
+
+                st->omega = st->omega_ol;
+
+                st->mode = V3_CLOSED_LOOP;
+                st->cl_active = true;
+                st->blend_ctr = 0;
             }
         } else {
             st->handoff_ctr = 0;
@@ -787,6 +851,7 @@ slow_loop:
                     st->handoff_ctr = 0;
                     st->cl_active = false;
                     st->observer_bad_ctr = 0;
+                    st->theta_error = 0.0f;
                     return;
                 }
             } else {
@@ -804,6 +869,7 @@ slow_loop:
             st->theta_ol = st->theta;
             st->handoff_ctr = 0;
             st->cl_active = false;
+            st->theta_error = 0.0f;
             /* PI controllers will be re-preloaded on CL re-entry */
             return;
         }
