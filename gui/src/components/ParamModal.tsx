@@ -179,6 +179,13 @@ export function ParamModal() {
                       const tooltip = PARAM_TOOLTIPS[id];
                       const isHovered = hoveredParam === id;
                       const wasSaved = pendingSaves.has(id);
+                      /* AN1078 SMO live-tune IDs (group 11, 0x90-0x93) are settable
+                       * while motor is in CL — firmware reads gspParams every PWM
+                       * tick.  Override the global isIdle gate for them so the user
+                       * can dial in observer alignment from this editor while motor
+                       * is spinning. */
+                      const isAn1078Live = id >= 0x90 && id <= 0x93;
+                      const editable = isIdle || isAn1078Live;
 
                       return (
                         <div key={id} style={{
@@ -212,12 +219,12 @@ export function ParamModal() {
                             </div>
                             <input type="number" value={displayVal}
                               min={pv.descriptor.min} max={pv.descriptor.max}
-                              disabled={!isIdle}
+                              disabled={!editable}
                               style={{
                                 width: 80, textAlign: 'right', padding: '4px 8px',
                                 borderRadius: 'var(--radius-sm)',
-                                border: `1px solid ${isHovered ? groupColor : 'var(--border)'}`,
-                                background: isIdle ? 'var(--bg-input)' : 'var(--bg-secondary)',
+                                border: `1px solid ${isHovered ? groupColor : (isAn1078Live && !isIdle ? 'var(--accent-cyan)' : 'var(--border)')}`,
+                                background: editable ? 'var(--bg-input)' : 'var(--bg-secondary)',
                                 color: 'var(--text-primary)', fontSize: 13,
                                 fontFamily: 'var(--font-mono)',
                                 transition: 'border-color 0.15s',

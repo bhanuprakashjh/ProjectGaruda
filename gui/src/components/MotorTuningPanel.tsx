@@ -255,13 +255,41 @@ export function MotorTuningPanel() {
 
   const [showHeader, setShowHeader] = useState(false);
   const [paramSource, setParamSource] = useState<'smo' | 'calculator' | 'autotune'>('smo');
-  /* AN1078 SMO live-tune state (matches gsp_params.h IDs 0x90-0x93) */
-  const [smoThetaBaseDegX10, setSmoThetaBaseDegX10] = useState(200);
-  const [smoThetaKE7,        setSmoThetaKE7]        = useState(1000);
-  const [smoKslideMv,        setSmoKslideMv]        = useState(2500);
-  const [smoIdFwMaxDecia,    setSmoIdFwMaxDecia]    = useState(120);
+  /* AN1078 SMO live-tune state (matches gsp_params.h IDs 0x90-0x93).
+   * Initial values read from the store (populated by GET_PARAM_LIST at
+   * connect, and refreshed on every SET_PARAM echo).  This keeps the
+   * sliders in sync with whatever the firmware actually has after
+   * navigating away and back, instead of resetting to a hardcoded
+   * default that may differ from what was pushed. */
+  const storeThetaBase = params.get(0x90)?.value;
+  const storeThetaK    = params.get(0x91)?.value;
+  const storeKslide    = params.get(0x92)?.value;
+  const storeIdFwMax   = params.get(0x93)?.value;
+  const [smoThetaBaseDegX10, setSmoThetaBaseDegX10] = useState(storeThetaBase ?? 200);
+  const [smoThetaKE7,        setSmoThetaKE7]        = useState(storeThetaK    ?? 1000);
+  const [smoKslideMv,        setSmoKslideMv]        = useState(storeKslide    ?? 2500);
+  const [smoIdFwMaxDecia,    setSmoIdFwMaxDecia]    = useState(storeIdFwMax   ?? 120);
   const [smoStatus,          setSmoStatus]          = useState<string>('');
   const [showTuneGuide,      setShowTuneGuide]      = useState(false);
+
+  /* Resync sliders when the store gets a fresh value.  Triggered:
+   *  - On connect, when GET_PARAM_LIST populates the store
+   *  - After every SET_PARAM, when the firmware echo updates the store
+   *  - When user reads a param via GET_PARAM
+   * Without this, slider state is local and "forgets" the pushed value
+   * after tab navigation. */
+  useEffect(() => {
+    if (storeThetaBase !== undefined) setSmoThetaBaseDegX10(storeThetaBase);
+  }, [storeThetaBase]);
+  useEffect(() => {
+    if (storeThetaK !== undefined) setSmoThetaKE7(storeThetaK);
+  }, [storeThetaK]);
+  useEffect(() => {
+    if (storeKslide !== undefined) setSmoKslideMv(storeKslide);
+  }, [storeKslide]);
+  useEffect(() => {
+    if (storeIdFwMax !== undefined) setSmoIdFwMaxDecia(storeIdFwMax);
+  }, [storeIdFwMax]);
 
   // Auto-tune state
   const [detectStatus, setDetectStatus] = useState<DetectStatus>('idle');
