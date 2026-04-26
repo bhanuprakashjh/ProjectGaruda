@@ -218,15 +218,17 @@ weakening with deeper |Id| (current-limited by hardware) or higher Vbus.
 /* Speed envelope */
 #define AN_END_SPEED_RPM_MECH       500.0f    /* OL→CL handoff @ 366 rad/s */
 #define AN_NOMINAL_SPEED_RPM_MECH   30000.0f  /* throttle ceiling = 215k eRPM */
-#define AN_OL_RAMP_RATE_RPS2        2000.0f   /* slow OL ramp (cogging) */
+#define AN_OL_RAMP_RATE_RPS2        1000.0f   /* slow OL ramp — prop friendly */
 #define AN_CL_VELREF_SLEW_RPS2      12000.0f  /* fast CL throttle response */
+#define AN_Q_CURRENT_REF_OPENLOOP   8.0f      /* OL torque — overcomes prop inertia */
 #define AN_OVER_CURRENT_LIMIT       12.0f     /* matches FW |I| range */
 
 /* Field weakening (in motor.c, not params.h) */
 const float FW_TRIGGER     = 0.91f;
 const float FW_KP_INT      = 400.0f;
-const float FW_DECAY       = 0.9995f;
+const float FW_DECAY       = 0.995f;          /* fast decay — avoid stuck FW */
 const float ID_FW_MAX_NEG  = -12.0f;
+const float FW_IQ_GATE     = 1.0f;            /* only engage when Iq_ref > this */
 
 /* Hardware */
 #define PWMFREQUENCY_HZ   60000   /* PUSHING IT — see comment in garuda_config.h */
@@ -246,15 +248,101 @@ This is documented in `garuda_config.h:PWMFREQUENCY_HZ` but worth restating:
   48 kHz — past the 196k 6-step benchmark target, with comfortable thermal
   margin.
 
-### Startup with prop load is untested
+### Startup with prop load — tuning + a critical bug found
 
-This work was bench, no-load only. With propeller:
-- `AN_OL_RAMP_RATE_RPS2 = 2000` (180 ms OL ramp) is fine
-- `AN_Q_CURRENT_REF_OPENLOOP = 4 A` may be too low to overcome prop inertia.
-  Bump to 6-8 A for prop testing.
+After the 200k no-load milestone, prop-load startup uncovered a **PI integrator
+windup bug** that wasn't visible in no-load runs.
+
+#### Tuning changes for prop startup
+
+Two parameters needed for prop-load startup (light-load tested 2026-04-25):
+
+| Param | No-load | **Prop** | Reason |
+|-------|---------|----------|--------|
+| `AN_Q_CURRENT_REF_OPENLOOP` | 4 A (24 mNm) | **8 A (49 mNm)** | overcome prop inertia during OL ramp |
+| `AN_OL_RAMP_RATE_RPS2` | 2000 rad/s² (180 ms) | **1000 rad/s² (366 ms)** | slower ramp lets prop accelerate without slipping the synth angle |
+
+The CL slew rate (`AN_CL_VELREF_SLEW_RPS2 = 12000 rad/s²`) and PI gains stay
+the same — separating OL ramp from CL slew (split made earlier in the session)
+means we can have a slow OL and snappy CL independently.
+
+#### The PI windup bug (subtle but lethal)
+
+**Symptom**: BOARD_PCI fault about 3 seconds into CL operation. Trace shows:
+- ALIGN phase: `Vq` railed at +13.16 V (max)
+- OL ramp: `Vq` still railed
+- CL handoff: motor at 10k eRPM (overshot the 3500 eRPM target)
+- 3.30 s onward: `Vd = -13.27 V` steady, `Vq = 0` forced, motor coasting at 36k
+- 5.74 s: BOARD_PCI fires after 2+ seconds of railed voltage
+
+**Root cause chain**:
+1. ALIGN phase commands `Iq_ref = 8 A` to lock rotor at θ=0. Rotor under prop load
+   doesn't snap to θ=0 instantly — current doesn't flow as quickly as PI demands.
+2. q-PI integrator winds up rapidly toward +13 V (its `outMax` clamp = `vmax`).
+3. OL ramp begins. Rotor starts rotating, BEMF appears, but the q-PI integrator
+   doesn't unwind because the inner-loop current error doesn't drive it down
+   fast enough.
+4. CL handoff inherits the wound-up integrator. Vq is still ~13 V.
+5. With Vq railed, the speed PI sees measured speed >> velRef (because high Vq
+   accelerated the rotor during OL). Speed PI demands negative Iq.
+6. Field weakening sees mod=0.95 and starts pumping `id_ref_fw` negative.
+7. d-PI tries to drive Id to FW setpoint, rails Vd at `-vmax` = -13.27 V.
+8. Critical: `vq_lim² = vmax² - vd² < 0` → **`vq_lim = 0`** → q-PI output
+   forced to zero. No torque current can flow. Motor stuck coasting.
+9. After 2+ seconds of zero-current operation with railed voltages, eventually
+   a transient triggers BOARD_PCI.
+
+**The fix** (in `an1078_motor.c`, at OL→CL transition):
+
+```c
+if (m->changeMode) {
+    m->changeMode = false;
+    an_pi_preload(&m->pi_spd, AN_Q_CURRENT_REF_OPENLOOP);  /* keep bumpless */
+    m->pi_d.integrator = 0.0f;   /* clear stale OL/ALIGN windup */
+    m->pi_q.integrator = 0.0f;
+    m->id_ref_fw       = 0.0f;
+}
+```
+
+Plus **gate field weakening on `iq_ref > 1 A`** so it never engages during
+deceleration, coasting, or stale-integrator startup:
+
+```c
+if (mod_now > FW_TRIGGER && iq_ref > FW_IQ_GATE) {
+    /* accumulate negative id_ref_fw */
+} else {
+    m->id_ref_fw *= FW_DECAY;  /* decay 10× faster: 0.995 not 0.9995 */
+}
+```
+
+**Lesson**: outer-loop bumpless transfer (`speed PI preload`) is well known.
+Inner-loop integrator reset at the same handoff point is just as important
+when the outer-loop produces large transient errors that can saturate an
+inherited integrator.
+
+#### Verified after fix (2026-04-25, build 0x66834FD9)
+
+- 44 s run, **0 faults**, motor reached 206k eRPM peak
+- ALIGN: `Vq = 0.86 V` healthy (not railed)
+- OL ramp: `Vq = 0.86 V` stable, `Iq = 7-8 A` flows cleanly
+- OL→CL handoff: bumpless, motor at 3700 eRPM with no overshoot
+- CL settling at 3500 eRPM (low throttle): perfect, Iq drops to ~0.5 A
+
+#### Other prop-load gotchas worth knowing
+
+- **Bench supply current limit (UNDERVOLT)**: the 10 A bench supply collapses
+  (Vbus 24 V → 9 V in microseconds) when the motor pulls a large inrush
+  during throttle bumps. Not a firmware bug — the supply is current-limiting.
+  Mitigations: slow `AN_CL_VELREF_SLEW_RPS2` for prop testing (e.g. 4000
+  instead of 12000), or use a small LiPo as supply.
+- **Regen pump-up during decel**: dropping throttle at high speed regens
+  energy into Vbus, which rose to 38 V in one trace. No OV clamp on this
+  hardware, so subsequent acceleration after regen pulled supply down to
+  UNDERVOLT range. Add overvoltage clamp (chop into shunt or back off
+  throttle PI) for production.
 - Watch for OL→CL handoff stalls — the BEMF gate (`HANDOFF_DWELL_TICKS = 2400`,
   i.e. 40 ms at 60 kHz) may need extension if observer is slow to lock under
-  load.
+  heavier prop load.
 
 ### FW currents flow even at no-load
 

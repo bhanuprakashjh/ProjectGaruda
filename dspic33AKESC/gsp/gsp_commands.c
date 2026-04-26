@@ -133,6 +133,7 @@ static void HandleGetInfo(const uint8_t *payload, uint8_t payloadLen)
     buildHash ^= (uint32_t)(AN_SMC_KSLIDE * 1.0e3f);
     buildHash ^= (uint32_t)(AN_SMC_KSLF_MAX * 1.0e4f);
     buildHash ^= (uint32_t)(AN_OVER_CURRENT_LIMIT * 1.0e3f);
+    buildHash ^= (uint32_t)(AN_Q_CURRENT_REF_OPENLOOP * 1.0e3f);
     buildHash ^= (uint32_t)(AN_KP_SPD * 1.0e6f);
     buildHash ^= (uint32_t)(AN_KI_SPD * 1.0e6f);
 #endif

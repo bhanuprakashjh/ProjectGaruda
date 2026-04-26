@@ -116,11 +116,11 @@ extern "C" {
 #define AN_LOCK_TIME                9600
 
 /** Open-loop ramp acceleration in electrical rad/s².  Used ONLY for
- *  the OL startup ramp (0→AN_END_SPEED).  Slower is safer — gives
- *  cogging detents time to clear, lets observer settle before handoff.
- *  2000 rad/s² → OL ramp completes in ~180 ms.  With prop: increase
- *  AN_Q_CURRENT_REF_OPENLOOP and keep this slow. */
-#define AN_OL_RAMP_RATE_RPS2        2000.0f
+ *  the OL startup ramp (0→AN_END_SPEED = 366 rad/s).  Slower is safer
+ *  with load — prop inertia needs time to come up to speed.  At
+ *  1000 rad/s² OL ramp completes in ~366 ms — gentle but BEMF-gate
+ *  still fires before any handoff timeout. */
+#define AN_OL_RAMP_RATE_RPS2        1000.0f
 
 /** Closed-loop velRef slew rate (rad/s²).  Used to slew the speed
  *  setpoint toward throttle target — sets throttle response feel.
@@ -130,10 +130,12 @@ extern "C" {
 #define AN_CL_VELREF_SLEW_RPS2      12000.0f
 
 /** Open-loop q-current reference (A peak).
- *  Need to overpower 2810's cogging detents (~15-20 mN·m peak).
- *  4 A × Kt(0.0061) = 24 mN·m — comfortably above cogging.
- *  Voltage: 4 A × 22 mΩ = 88 mV (4% of Vbus).  Very safe. */
-#define AN_Q_CURRENT_REF_OPENLOOP   4.0f
+ *  Must overcome cogging (~15-20 mN·m) AND prop inertia at startup.
+ *  No-load: 4 A is plenty (24 mN·m).
+ *  With prop: need more — 8 A × Kt(0.0061) = 49 mN·m.  Headroom for
+ *  cogging plus rotor + prop spin-up to OL end speed.
+ *  Voltage drop: 8 A × 22 mΩ = 176 mV (<1% of Vbus) — still safe. */
+#define AN_Q_CURRENT_REF_OPENLOOP   8.0f
 
 /** PWM warmup phase (ticks).  When motor first starts, hold Vd=Vq=0
  *  (50% duty everywhere = zero net motor voltage) for this many ticks

@@ -366,10 +366,24 @@ static void an_do_control(AN_Motor_T *m, float dt)
         m->startupRamp = m->velRef_rad_s;
 
         /* First-tick CL init: preload speed PI with the OL Iq to be
-         * bumpless. */
+         * bumpless, AND reset the current PIs and FW integrator.
+         *
+         * Why reset pi_d/pi_q: during ALIGN+OL the q-PI integrator can
+         * wind up significantly (rotor at θ=0 may not accept the
+         * commanded Iq, integrator pumps Vq toward the rail).  At CL
+         * handoff this stale integrator drives Vq strongly → Vd then
+         * rails to compensate → vq_lim drops to zero → motor stuck in
+         * rail state until BOARD_PCI fires (observed 2026-04-25 with
+         * AN_Q_CURRENT_REF_OPENLOOP=8A and prop load).
+         *
+         * Why reset id_ref_fw: stale FW from any prior CL session must
+         * not leak into a fresh start. */
         if (m->changeMode) {
             m->changeMode = false;
             an_pi_preload(&m->pi_spd, AN_Q_CURRENT_REF_OPENLOOP);
+            m->pi_d.integrator = 0.0f;
+            m->pi_q.integrator = 0.0f;
+            m->id_ref_fw       = 0.0f;
         }
 
         /* Speed PI → Iq ref.  Feedback from observer's REAL Omega. */
@@ -396,15 +410,22 @@ static void an_do_control(AN_Motor_T *m, float dt)
          * accumulate id_ref_fw negative.  Decay back to zero when |V|
          * is comfortably below threshold.  Clamped to ID_FW_MAX_NEG. */
         {
-            const float FW_TRIGGER = 0.91f;   /* engage earlier — avoid saturation */
-            const float FW_KP_INT  = 400.0f;  /* faster integration (200→400) */
-            const float FW_DECAY   = 0.9995f; /* per tick → ~50ms recovery */
-            const float ID_FW_MAX_NEG = -12.0f; /* limit FW current draw */
+            const float FW_TRIGGER = 0.91f;   /* engage just below clamp */
+            const float FW_KP_INT  = 400.0f;  /* A/s per (mod-thresh) unit */
+            const float FW_DECAY   = 0.995f;  /* faster decay (was 0.9995) */
+            const float ID_FW_MAX_NEG = -12.0f;
+            /* Gate: FW only when motor is actively accelerating forward
+             * (iq_ref > some threshold).  Without this, FW pumps in
+             * negative Id during stale-integrator startup or coasting,
+             * which causes runaway: high Vd → vq_lim collapses → motor
+             * stuck in rail (observed 2026-04-25).  Only engage when
+             * the speed PI is genuinely demanding forward torque. */
+            const float FW_IQ_GATE = 1.0f;
 
             float v_last = sqrtf(m->vd * m->vd + m->vq * m->vq);
             float mod_now = (vmax > 0.001f) ? v_last / vmax : 0.0f;
 
-            if (mod_now > FW_TRIGGER) {
+            if (mod_now > FW_TRIGGER && iq_ref > FW_IQ_GATE) {
                 m->id_ref_fw -= FW_KP_INT * (mod_now - FW_TRIGGER) * dt;
                 if (m->id_ref_fw < ID_FW_MAX_NEG) m->id_ref_fw = ID_FW_MAX_NEG;
             } else {
