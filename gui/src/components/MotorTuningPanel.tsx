@@ -130,19 +130,89 @@ function InputRow({ label, value, unit, onChange, tooltip, min, max, step, disab
   );
 }
 
-function ResultRow({ label, value, unit, color, highlight }: {
+/** Row used in the SMO live-tune card.  Edit the value, then click Push
+ *  to send a SET_PARAM with the corresponding ID.  Param takes effect
+ *  within one PWM tick on the firmware side. */
+function SmoParamRow({ label, value, unit, onChange, onPush, tooltip,
+                      min, max, step, disabled }: {
+  label: string; value: number; unit: string;
+  onChange: (v: number) => void;
+  onPush: () => void;
+  tooltip?: string; min?: number; max?: number; step?: number; disabled?: boolean;
+}) {
+  return (
+    <div style={{
+      padding: '8px 10px', borderRadius: 'var(--radius-sm)',
+      border: '1px solid var(--border-light)', background: 'var(--bg-secondary)',
+      opacity: disabled ? 0.5 : 1,
+    }}>
+      <div style={{ fontSize: 12, fontWeight: 600, color: 'var(--text-primary)', marginBottom: 2 }}>
+        {label}
+      </div>
+      {tooltip && (
+        <div style={{ fontSize: 10, color: 'var(--text-muted)', whiteSpace: 'pre-line', marginBottom: 6 }}>
+          {tooltip}
+        </div>
+      )}
+      <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+        <input
+          type="number" value={value} min={min} max={max} step={step ?? 1}
+          disabled={disabled}
+          onChange={e => onChange(parseInt(e.target.value || '0', 10))}
+          style={{
+            flex: 1, padding: '6px 8px', borderRadius: 'var(--radius-sm)',
+            border: '1px solid var(--border)', background: 'var(--bg-input)',
+            color: 'var(--text-primary)', fontFamily: 'var(--font-mono)', fontSize: 13,
+            textAlign: 'right',
+          }}
+        />
+        <span style={{ fontSize: 11, color: 'var(--text-muted)', minWidth: 36 }}>{unit}</span>
+        <button
+          disabled={disabled}
+          onClick={onPush}
+          style={{
+            padding: '6px 12px', borderRadius: 'var(--radius-sm)', border: 'none',
+            background: disabled ? 'var(--bg-input)' : 'var(--accent-blue)',
+            color: disabled ? 'var(--text-muted)' : '#fff',
+            fontSize: 11, fontWeight: 700,
+            cursor: disabled ? 'not-allowed' : 'pointer',
+          }}
+        >
+          Push to ESC
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ResultRow({ label, value, unit, color, highlight, deprecated, deprecatedReason }: {
   label: string; value: string; unit: string; color?: string; highlight?: boolean;
+  /** When set, row is rendered greyed out with strikethrough and a reason tooltip.
+   *  Used to flag computed values that AN1078 doesn't actually consume. */
+  deprecated?: boolean; deprecatedReason?: string;
 }) {
   return (
     <div style={{
       display: 'flex', alignItems: 'center', justifyContent: 'space-between',
       padding: '5px 0', borderBottom: '1px solid var(--border-light)',
       background: highlight ? 'rgba(59,130,246,0.05)' : 'transparent',
+      opacity: deprecated ? 0.45 : 1,
     }}>
-      <span style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{label}</span>
+      <span style={{
+        fontSize: 12, color: 'var(--text-secondary)',
+        textDecoration: deprecated ? 'line-through' : 'none',
+      }} title={deprecatedReason ?? ''}>
+        {label}
+        {deprecated && (
+          <span style={{ marginLeft: 6, fontSize: 10, color: 'var(--accent-yellow)' }}>
+            (not used by AN1078)
+          </span>
+        )}
+      </span>
       <span style={{
         fontSize: 13, fontWeight: 600, fontFamily: 'var(--font-mono)',
         color: color ?? 'var(--text-primary)',
+        textDecoration: deprecated ? 'line-through' : 'none',
       }}>
         {value} <span style={{ fontSize: 10, color: 'var(--text-muted)', fontWeight: 400 }}>{unit}</span>
       </span>
@@ -184,7 +254,14 @@ export function MotorTuningPanel() {
   });
 
   const [showHeader, setShowHeader] = useState(false);
-  const [paramSource, setParamSource] = useState<'calculator' | 'autotune'>('calculator');
+  const [paramSource, setParamSource] = useState<'smo' | 'calculator' | 'autotune'>('smo');
+  /* AN1078 SMO live-tune state (matches gsp_params.h IDs 0x90-0x93) */
+  const [smoThetaBaseDegX10, setSmoThetaBaseDegX10] = useState(200);
+  const [smoThetaKE7,        setSmoThetaKE7]        = useState(1000);
+  const [smoKslideMv,        setSmoKslideMv]        = useState(2500);
+  const [smoIdFwMaxDecia,    setSmoIdFwMaxDecia]    = useState(120);
+  const [smoStatus,          setSmoStatus]          = useState<string>('');
+  const [showTuneGuide,      setShowTuneGuide]      = useState(false);
 
   // Auto-tune state
   const [detectStatus, setDetectStatus] = useState<DetectStatus>('idle');
@@ -415,14 +492,158 @@ export function MotorTuningPanel() {
       {/* Parameter Source Tabs */}
       {focMode && (
         <div style={{ display: 'flex', gap: 8 }}>
+          <button style={tabBtn(paramSource === 'smo')}
+            onClick={() => setParamSource('smo')}>
+            AN1078 SMO Tune
+          </button>
           <button style={tabBtn(paramSource === 'calculator')}
             onClick={() => setParamSource('calculator')}>
-            Calculator
+            FOC Calculator (ref)
           </button>
           <button style={tabBtn(paramSource === 'autotune')}
             onClick={() => setParamSource('autotune')}>
-            Auto-Tune
+            Auto-Detect
           </button>
+        </div>
+      )}
+
+      {/* AN1078 SMO Live Tuning Panel */}
+      {paramSource === 'smo' && focMode && (
+        <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
+          {/* Live tunables */}
+          <div style={cardStyle}>
+            <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 12 }}>
+              <div style={sectionTitle}>AN1078 SMO Live Tunables</div>
+              <button onClick={() => setShowTuneGuide(!showTuneGuide)} style={{
+                padding: '4px 10px', borderRadius: 'var(--radius-sm)',
+                border: '1px solid var(--accent-blue)', background: 'transparent',
+                color: 'var(--accent-blue)', fontSize: 11, fontWeight: 600, cursor: 'pointer',
+              }}>
+                {showTuneGuide ? 'Hide' : 'Show'} Tuning Guide
+              </button>
+            </div>
+            <div style={{ fontSize: 11, color: 'var(--text-muted)', marginBottom: 12, lineHeight: 1.5 }}>
+              These four params take effect <strong>immediately</strong> while motor is in CL —
+              no recompile, no flash, no motor stop. Watch <code>focVd</code> in the Scope tab
+              (preset "AN1078 SMO Tune") to see alignment in real time.
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+              <SmoParamRow
+                label="Theta Offset BASE"
+                value={smoThetaBaseDegX10} unit="°×10"
+                onChange={setSmoThetaBaseDegX10}
+                onPush={async () => {
+                  await setParam(0x90, smoThetaBaseDegX10);
+                  setSmoStatus(`BASE → ${(smoThetaBaseDegX10/10).toFixed(1)}° pushed`);
+                }}
+                tooltip={`Compensates BEMF→rotor offset at low speed.
+Watch focVd: 0=aligned, -V=lags, +V=leads.
+Range 0-3600 (= 0°-360°). 200 = 20° (good for 2810).`}
+                min={0} max={3600} step={5}
+                disabled={!connected} />
+              <SmoParamRow
+                label="Theta Offset K (speed slope)"
+                value={smoThetaKE7} unit="×1e7"
+                onChange={setSmoThetaKE7}
+                onPush={async () => {
+                  await setParam(0x91, smoThetaKE7);
+                  setSmoStatus(`K → ${(smoThetaKE7 * 1e-7).toExponential(2)} rad/(rad/s)`);
+                }}
+                tooltip={`Compensates LPF lag at high speed.
+1000 = 1.0e-4 rad/(rad/s elec).
+Tune AFTER BASE. K=0 if PLL already gives clean angle.`}
+                min={0} max={1000} step={10}
+                disabled={!connected} />
+              <SmoParamRow
+                label="Kslide (sliding gain)"
+                value={smoKslideMv} unit="mV"
+                onChange={setSmoKslideMv}
+                onPush={async () => {
+                  await setParam(0x92, smoKslideMv);
+                  setSmoStatus(`Kslide → ${(smoKslideMv/1000).toFixed(1)} V`);
+                }}
+                tooltip={`SMC sliding signal magnitude.
+Low-Rs motors (2810): 2000-3000 mV.
+High-Rs motors (Hurst): 6000-20000 mV.
+Too high → buries weak BEMF, observer loses lock.`}
+                min={100} max={30000} step={100}
+                disabled={!connected} />
+              <SmoParamRow
+                label="Field Weakening max |Id|"
+                value={smoIdFwMaxDecia} unit="dA"
+                onChange={setSmoIdFwMaxDecia}
+                onPush={async () => {
+                  await setParam(0x93, smoIdFwMaxDecia);
+                  setSmoStatus(`FW max → ${(smoIdFwMaxDecia/10).toFixed(1)} A negative Id`);
+                }}
+                tooltip={`Field-weakening current cap.
+0 = FW disabled (motor caps at voltage limit ~180k eRPM on 2810).
+120 = 12A (allows ~210k eRPM on 2810 at 24V).`}
+                min={0} max={200} step={5}
+                disabled={!connected} />
+            </div>
+
+            {smoStatus && (
+              <div style={{
+                marginTop: 12, padding: '8px 12px',
+                background: 'rgba(34,197,94,0.1)', borderRadius: 'var(--radius-sm)',
+                color: 'var(--accent-green)', fontSize: 12, fontWeight: 500,
+              }}>
+                ✓ {smoStatus}
+              </div>
+            )}
+
+            <div style={{
+              marginTop: 12, padding: '8px 12px',
+              background: 'rgba(234,179,8,0.05)', borderRadius: 'var(--radius-sm)',
+              fontSize: 11, color: 'var(--text-muted)', lineHeight: 1.5,
+            }}>
+              <strong>Note:</strong> values are RAM-only (lost on reboot). Once dialed,
+              copy them to the per-profile defaults in <code>gsp_params.c</code> and
+              recompile to bake them in. SAVE_CONFIG persists everything else but not
+              these four (V3 EEPROM schema doesn't carry them; V4 schema bump pending).
+            </div>
+          </div>
+
+          {/* Inline tuning guide */}
+          {showTuneGuide && (
+            <div style={cardStyle}>
+              <div style={sectionTitle}>SMO Tuning Procedure</div>
+              <ol style={{ fontSize: 12, color: 'var(--text-secondary)', lineHeight: 1.7, paddingLeft: 20 }}>
+                <li>
+                  <strong>Verify observer tracks.</strong> Open Scope → preset
+                  "AN1078 Angle Health". Spin motor low CL (10-30k eRPM). Drive Theta
+                  and Observer Theta should rotate at same rate. If observer is stuck
+                  or rotating wrong direction, lower <strong>Kslide</strong> (low-Rs
+                  motors need 2-3 V; the AN1078 default 0.85·Vbus is too aggressive).
+                </li>
+                <li>
+                  <strong>Tune <code>BASE</code> at low speed.</strong> Switch Scope
+                  preset to "AN1078 SMO Tune". Hold motor at ~10× the OL handoff
+                  speed. Read focVd average. Negative → observer lags → INCREASE
+                  BASE. Positive → leads → DECREASE BASE. Step 10-20 units (1-2°).
+                  Goal: focVd within ±0.5 V.
+                </li>
+                <li>
+                  <strong>Tune <code>K</code> at high speed.</strong> Push motor to
+                  half of max throttle. Read focVd again. Negative → INCREASE K
+                  (step +100 = +1e-5). Positive → DECREASE K. Goal: focVd stays
+                  within ±1.5 V across the whole speed range.
+                </li>
+                <li>
+                  <strong>Field weakening.</strong> Push throttle to max. focModIndex
+                  hits 0.95 and speed plateaus → set FW max in 10 dA (1 A) increments.
+                  Stop when speed stops growing OR when motor heats up. Set 0 to
+                  disable.
+                </li>
+                <li>
+                  <strong>Bake in.</strong> Once values feel right, edit
+                  <code>gspParams.c</code> per-profile defaults and recompile.
+                </li>
+              </ol>
+            </div>
+          )}
         </div>
       )}
 
@@ -637,6 +858,20 @@ export function MotorTuningPanel() {
       {/* Calculator Panel (existing functionality) */}
       {paramSource === 'calculator' && (
         <>
+          {/* Notice: this view is for V2/V3 reference + sanity-check math.
+           * AN1078 live-tuning is on the SMO tab. */}
+          <div style={{
+            background: 'rgba(234,179,8,0.05)', border: '1px solid rgba(234,179,8,0.2)',
+            borderRadius: 'var(--radius)', padding: '10px 16px',
+            color: 'var(--text-secondary)', fontSize: 12, lineHeight: 1.5,
+          }}>
+            <strong style={{ color: 'var(--accent-yellow)' }}>Reference only.</strong>
+            {' '}This calculator computes V2/V3-style FOC values.  AN1078 only
+            uses the motor params (Rs/Ls/λ) and current-PI gains; rows that AN1078
+            doesn't consume (Max OL Speed, PLL Kp/Ki) are greyed out.  For live
+            tuning, switch to the <strong>AN1078 SMO Tune</strong> tab.  For adding
+            a brand-new motor, see <code>docs/an1078_add_new_motor.md</code>.
+          </div>
           <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
             {/* Input parameters */}
             <div style={cardStyle}>
@@ -687,7 +922,9 @@ export function MotorTuningPanel() {
               <ResultRow label="Max Elec Speed" value={calc.maxOmegaElec.toFixed(0)} unit="rad/s" />
               <ResultRow label="Max Mech RPM" value={calc.maxRpmMech.toFixed(0)} unit="RPM" color="var(--accent-yellow)" highlight />
               <ResultRow label="Handoff Speed" value={calc.handoffRadS.toFixed(0)} unit="rad/s" />
-              <ResultRow label="Max OL Speed (85%)" value={calc.maxOlRadS.toFixed(0)} unit="rad/s" />
+              <ResultRow label="Max OL Speed (85%)" value={calc.maxOlRadS.toFixed(0)} unit="rad/s"
+                deprecated
+                deprecatedReason="AN1078 ramps OL only to AN_END_SPEED (=AN_END_SPEED_RPM_MECH * polepairs * 2π/60), not 85% of max. This 85% rule is V2/V3-era." />
 
               <div style={{ ...sectionTitle, marginTop: 12 }}>Startup</div>
               <ResultRow label="Align Iq" value={calc.alignIq.toFixed(1)} unit="A" />
@@ -695,8 +932,12 @@ export function MotorTuningPanel() {
               <ResultRow label="Align Torque" value={(calc.ktFoc * calc.alignIq * 1000).toFixed(1)} unit="mN.m" />
 
               <div style={{ ...sectionTitle, marginTop: 12 }}>PLL Estimator</div>
-              <ResultRow label="PLL Kp" value={calc.pllKp.toFixed(1)} unit="" />
-              <ResultRow label="PLL Ki" value={calc.pllKi.toFixed(1)} unit="" />
+              <ResultRow label="PLL Kp" value={calc.pllKp.toFixed(1)} unit=""
+                deprecated
+                deprecatedReason="AN1078 PLL uses garuda_foc_params.h:PLL_KP=628 (50 Hz BW). The 6283 shown here is a 100 Hz value from V2 era and is too aggressive for sensorless." />
+              <ResultRow label="PLL Ki" value={calc.pllKi.toFixed(1)} unit=""
+                deprecated
+                deprecatedReason="AN1078 PLL uses garuda_foc_params.h:PLL_KI=98600 (50 Hz BW). The 395k shown here is a 100 Hz value from V2 era." />
             </div>
           </div>
 

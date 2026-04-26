@@ -168,7 +168,9 @@ export function GaugePanel() {
   const ibus = s.ibus;
   const ibusPeak = s.ibusPeak;
   const focRpm = Math.round(s.focRpm);
-  const focSpeedRads = s.focSpeedRads;
+  /* focSpeedRads still smoothed for any future use, but the rad/s display
+   * was replaced by Mech RPM in the dashboard.  Don't remove the smoothing
+   * (other code may reference s.focSpeedRads). */
   const focPowerW = s.focPowerW;
   const focSubStr = FOC_SUB_STATES[snapshot.focSubState] ?? '?';
   const eRPM = Math.round(s.eRPM);
