@@ -89,6 +89,12 @@ static const GSP_PARAMS_T profileDefaults[4] = {
         .focHandoffRadS       = 262,    /* 500 RPM mech × 5PP × 2π/60 */
         .focFaultOcCentiA     = 1000,   /* 10.0A */
         .focFaultStallDeciRadS = 100,   /* 10.0 rad/s */
+        /* AN1078 defaults — Hurst is a high-Rs motor, fall back to AN1078
+         * reference Kslide.  Conservative theta offset, no FW. */
+        .an1078ThetaBaseDegX10 = 0,     /* AN1078 ref CONSTANT_PHASE_SHIFT = 0 */
+        .an1078ThetaKE7        = 0,
+        .an1078KslideMv        = 8000,  /* 8 V — close to AN1078's 0.85·Vbus */
+        .an1078IdFwMaxDecia    = 0,     /* No FW for Hurst */
     },
     [GSP_PROFILE_A2212] = {
         .rampTargetErpm     = 3000,
@@ -129,6 +135,11 @@ static const GSP_PARAMS_T profileDefaults[4] = {
         .focHandoffRadS       = 500,    /* 500 rad/s — proven reliable on A2212 */
         .focFaultOcCentiA     = 2500,   /* 25.0A */
         .focFaultStallDeciRadS = 500,   /* 50.0 rad/s */
+        /* AN1078 defaults for A2212 — moderate Rs/Ls, no FW needed at 12V */
+        .an1078ThetaBaseDegX10 = 100,   /* 10° base */
+        .an1078ThetaKE7        = 500,   /* K = 0.5e-4 — half of 2810 */
+        .an1078KslideMv        = 4000,  /* 4 V */
+        .an1078IdFwMaxDecia    = 0,     /* No FW */
     },
     [GSP_PROFILE_5010] = {
         /* === 2810 1350KV (7-8" FPV/cine drone motor, 24V bench) ===
@@ -209,6 +220,15 @@ static const GSP_PARAMS_T profileDefaults[4] = {
                                          * draw; this just keeps firmware from
                                          * over-protective trips. */
         .focFaultStallDeciRadS = 500,
+        /* AN1078 SMC tuning — values that took 2810 to 200k+ eRPM.
+         * BASE × 10 = 200 → 20° at zero speed.
+         * K × 1e7 = 1000 → 1.0e-4 rad/(rad/s elec).
+         * Kslide × 1000 = 2500 → 2.5 V.
+         * |Id_FW_max| × 10 = 120 → -12 A (12 A peak field-weakening). */
+        .an1078ThetaBaseDegX10 = 200,
+        .an1078ThetaKE7        = 1000,
+        .an1078KslideMv        = 2500,
+        .an1078IdFwMaxDecia    = 120,
     },
     [GSP_PROFILE_5055] = {
         .rampTargetErpm     = 2000,
@@ -249,6 +269,11 @@ static const GSP_PARAMS_T profileDefaults[4] = {
         .focHandoffRadS       = 800,
         .focFaultOcCentiA     = 3000,   /* 30.0A */
         .focFaultStallDeciRadS = 300,   /* 30.0 rad/s */
+        /* AN1078 defaults for 5055 — large prop motor at 4S */
+        .an1078ThetaBaseDegX10 = 100,   /* 10° base */
+        .an1078ThetaKE7        = 800,
+        .an1078KslideMv        = 6000,  /* 6 V */
+        .an1078IdFwMaxDecia    = 50,    /* 5 A FW */
     },
 };
 
@@ -317,6 +342,12 @@ static const PARAM_DESCRIPTOR_T paramDescriptors[] = {
     { PARAM_ID_FOC_HANDOFF_RAD_S,     PARAM_TYPE_U16, PARAM_GROUP_FOC_STARTUP,  50, 10000, offsetof(GSP_PARAMS_T, focHandoffRadS),    2 },
     { PARAM_ID_FOC_FAULT_OC_CA,       PARAM_TYPE_U16, PARAM_GROUP_FOC_STARTUP, 100, 5000, offsetof(GSP_PARAMS_T, focFaultOcCentiA),   2 },
     { PARAM_ID_FOC_FAULT_STALL_DRS,   PARAM_TYPE_U16, PARAM_GROUP_FOC_STARTUP,  10, 1000, offsetof(GSP_PARAMS_T, focFaultStallDeciRadS), 2 },
+    /* AN1078 SMC tuning (group 11) — live-update on SET_PARAM via
+     * AN_MotorReapplyTune() called from gsp_commands.c. */
+    { PARAM_ID_AN1078_THETA_BASE_DEGX10, PARAM_TYPE_U16, PARAM_GROUP_AN1078,    0, 3600,  offsetof(GSP_PARAMS_T, an1078ThetaBaseDegX10), 2 },
+    { PARAM_ID_AN1078_THETA_K_E7,        PARAM_TYPE_U16, PARAM_GROUP_AN1078,    0, 1000,  offsetof(GSP_PARAMS_T, an1078ThetaKE7),        2 },
+    { PARAM_ID_AN1078_KSLIDE_MV,         PARAM_TYPE_U16, PARAM_GROUP_AN1078,  100, 30000, offsetof(GSP_PARAMS_T, an1078KslideMv),        2 },
+    { PARAM_ID_AN1078_ID_FW_MAX_DECIA,   PARAM_TYPE_U16, PARAM_GROUP_AN1078,    0, 200,   offsetof(GSP_PARAMS_T, an1078IdFwMaxDecia),    2 },
 };
 
 #define PARAM_COUNT (sizeof(paramDescriptors) / sizeof(paramDescriptors[0]))

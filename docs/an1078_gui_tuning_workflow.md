@@ -12,6 +12,31 @@ itself doesn't work, fix that first using `AN_LOCK_TIME` /
 
 ---
 
+## What's GUI-tunable LIVE vs compile-time
+
+As of 2026-04-26, four AN1078 SMO params are **GUI-tunable while motor
+is running** (no recompile, no reflash, takes effect within one PWM
+tick):
+
+| Param ID | Field | Role |
+|----------|-------|------|
+| `0x90` | `an1078ThetaBaseDegX10` | Theta offset BASE (deg × 10) |
+| `0x91` | `an1078ThetaKE7` | Theta offset speed slope K (× 1e7) |
+| `0x92` | `an1078KslideMv` | Sliding gain Kslide (mV) |
+| `0x93` | `an1078IdFwMaxDecia` | Field-weakening max \|Id\| (dA) |
+
+Set them in the GUI **Parameter Editor** (group "AN1078 SMO Live Tune").
+Changes apply **immediately** — even with motor in CL.
+
+These are **RAM-only** today.  Per-profile defaults are baked in
+`gsp_params.c` and reload at boot.  To make a tuned value persist
+across reboots, edit the profile defaults in `gsp_params.c` and
+recompile.  EEPROM persistence (V3→V4 schema bump) is a planned
+follow-up.
+
+Everything else (Rs, Ls, λ, KSLF_*, FW_TRIGGER, AN_OL_RAMP_RATE,
+AN_NOMINAL_SPEED, etc.) still needs a `#define` edit + flash.
+
 ## Step 0 — Plug in motor params
 
 In `dspic33AKESC/foc/an1078_params.h`:
@@ -68,29 +93,45 @@ holding `Id_ref = 0`, the relationship between Vd and observer alignment is:
 | Negative (e.g. -3 V) | **Lags** rotor | INCREASE `THETA_OFFSET_BASE` |
 | Positive (e.g. +3 V) | **Leads** rotor | DECREASE `THETA_OFFSET_BASE` |
 
-**Procedure**:
+**Procedure** (all live in GUI now):
 
 1. Bring motor to a safe low CL speed (around 10× the OL handoff speed).
 2. Hold steady, read `focVd` average from the scope.
-3. Adjust `AN_SMC_THETA_OFFSET_BASE` in `an1078_params.h` (1–2° steps,
-   convert to radians: `1° = 0.01745 rad`), recompile, reflash.
-4. Repeat until `focVd` is within ±0.5 V at this speed.
+3. **In GUI Parameter Editor**, set "AN1078 Theta Offset BASE" (param
+   `0x90`) in `°×10` units.  E.g. 200 = 20°, 250 = 25°.  Step by 10-20
+   counts (1-2°) per iteration.  Change applies within one tick.
+4. Watch focVd update on scope.  Repeat until within ±0.5 V.
 
-**For wide speed range — tune `AN_SMC_THETA_OFFSET_K`**:
+**For wide speed range — tune `THETA_OFFSET_K` (param `0x91`)**:
 
-The LPF group delay grows with motor frequency, so a single offset only
-fits one speed.  After BASE is dialed in at low speed:
+After BASE is dialed at low speed, push motor to high speed and read
+focVd:
 
-1. Bring motor to high speed (e.g. half of `AN_NOMINAL_SPEED_RPM_MECH`).
-2. Read `focVd` average.
-3. If `focVd < 0` (lags more at high speed): increase `THETA_OFFSET_K`.
-4. If `focVd > 0` (leads at high speed): decrease `THETA_OFFSET_K`.
-5. Step in `1e-5` increments — at typical speeds this shifts the offset
-   by a few degrees.
+| focVd at high speed | Action | K (param 0x91 value × 1e7) |
+|---------------------|--------|---------------------------|
+| Negative (lags more) | INCREASE K | step +100 (= +1e-5) |
+| Positive (leads) | DECREASE K | step -100 |
+| ~0 (stable) | done | — |
 
 Goal: `focVd` stays within ±1.5 V across the entire CL speed range.
 With the PLL upgrade in this codebase, `K = 0` often works — only tune K
 if you see speed-dependent drift.
+
+**Tuning Kslide (param `0x92`, mV)**:
+
+If observer struggles to lock at low speed (low BEMF):
+- Lower Kslide (e.g. 1500-2500 mV for low-Rs motors like 2810)
+
+If high-speed angle is noisy or BEMF is large:
+- Raise Kslide (4000-8000 mV).  AN1078 reference uses ~0.85·Vbus
+  (~20000 mV for 24V) for typical motors — too high for our 2810.
+
+**Tuning Field Weakening max |Id| (param `0x93`, dA)**:
+
+Watch `focModIndex` in scope.  When it pegs at 0.95 and speed plateaus:
+- Set FW max in 1A increments (10 dA steps) and watch motor speed climb.
+- Stop when speed stops growing OR motor heating concerns you.
+- 0 = FW disabled, motor caps at voltage ceiling.
 
 ---
 

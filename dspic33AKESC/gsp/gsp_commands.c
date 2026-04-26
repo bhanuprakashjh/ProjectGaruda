@@ -339,15 +339,23 @@ static void HandleSetParam(const uint8_t *payload, uint8_t payloadLen)
 {
     (void)payloadLen;
 
-    if (garudaData.state != ESC_IDLE) {
-        SendError(GSP_ERR_WRONG_STATE);
-        return;
-    }
-
     uint16_t paramId;
     uint32_t value;
     memcpy(&paramId, payload, 2);
     memcpy(&value, payload + 2, 4);
+
+    /* AN1078 SMC tuning IDs are live-update — observer reads from
+     * gspParams every tick.  Allow them to be set during CL so the user
+     * can dial in theta offset / Kslide / FW max while motor is running
+     * (the whole point of live tuning).  All other params must be set
+     * while idle to avoid mid-control-loop discontinuity. */
+    bool is_an1078_live = (paramId >= PARAM_ID_AN1078_THETA_BASE_DEGX10 &&
+                           paramId <= PARAM_ID_AN1078_ID_FW_MAX_DECIA);
+
+    if (!is_an1078_live && garudaData.state != ESC_IDLE) {
+        SendError(GSP_ERR_WRONG_STATE);
+        return;
+    }
 
     PARAM_RESULT_T result = GSP_ParamSet(paramId, value);
 

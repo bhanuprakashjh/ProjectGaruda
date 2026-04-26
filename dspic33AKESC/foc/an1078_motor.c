@@ -23,6 +23,7 @@
 
 #include "an1078_motor.h"
 #include "an1078_params.h"
+#include "../gsp/gsp_params.h"   /* gspParams — live FW tuning */
 #include <math.h>
 #include <stddef.h>
 
@@ -413,7 +414,11 @@ static void an_do_control(AN_Motor_T *m, float dt)
             const float FW_TRIGGER = 0.91f;   /* engage just below clamp */
             const float FW_KP_INT  = 400.0f;  /* A/s per (mod-thresh) unit */
             const float FW_DECAY   = 0.995f;  /* faster decay (was 0.9995) */
-            const float ID_FW_MAX_NEG = -12.0f;
+            /* Live-tunable: |Id_FW_max| × 10 from gspParams (decideci-amps).
+             * 0 disables FW (motor will hit voltage ceiling).  Default is
+             * the compile-time -12A if user hasn't configured. */
+            float id_fw_max_user = (float)gspParams.an1078IdFwMaxDecia * 0.1f;
+            float ID_FW_MAX_NEG = (id_fw_max_user > 0.01f) ? -id_fw_max_user : -12.0f;
             /* Gate: FW only when motor is actively accelerating forward
              * (iq_ref > some threshold).  Without this, FW pumps in
              * negative Id during stale-integrator startup or coasting,

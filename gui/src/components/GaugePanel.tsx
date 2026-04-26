@@ -2,8 +2,10 @@ import { useEffect, useState, useRef } from 'react';
 import { useEscStore } from '../store/useEscStore';
 import { isFocEnabled, FOC_SUB_STATES } from '../protocol/types';
 
-/** EMA smoothing factor — 0 = frozen, 1 = no smoothing. 0.08 gives ~12-sample lag. */
-const ALPHA = 0.08;
+/** EMA smoothing factor — 0 = frozen, 1 = no smoothing.  Lower kills flicker
+ *  on noisy values like Iq/Id at the cost of display lag.  0.04 ≈ 25-sample
+ *  lag = 500 ms at 50 Hz telemetry — readable without feeling sluggish. */
+const ALPHA = 0.04;
 function ema(prev: number, cur: number): number {
   return prev + ALPHA * (cur - prev);
 }
@@ -209,8 +211,12 @@ export function GaugePanel() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 2, marginTop: 12 }}>
         {focMode ? (
           <>
-            <ArcGauge value={focRpm} max={info?.maxErpm ? Math.round(info.maxErpm / polePairs) : 20000}
-              label="Speed" unit="RPM" color="#3b82f6" stale={isStale} />
+            {/* Speed gauge shows ELECTRICAL RPM — what firmware tunes against
+             * and what user expects.  Mech RPM = eRPM/polePairs available
+             * from focRpm if needed elsewhere. */}
+            <ArcGauge value={eRPM} max={info?.maxErpm ? info.maxErpm : 200000}
+              label="Speed" unit="eRPM" color="#3b82f6" stale={isStale}
+              format={v => v >= 1000 ? `${(v/1000).toFixed(1)}k` : Math.round(v).toString()} />
             <StatCard label="Iq" value={s.focIq.toFixed(1)} unit="A" color="var(--accent-yellow)"
               sub={`torque current`} stale={isStale} />
             <StatCard label="Id" value={s.focId.toFixed(1)} unit="A"
@@ -248,7 +254,8 @@ export function GaugePanel() {
           <StatCard label="Ib" value={s.focIb.toFixed(1)} unit="A" color="#c084fc" stale={isStale} />
           <StatCard label="Theta" value={Math.round(s.focTheta * 180 / Math.PI).toString()} unit="deg" color="#22d3ee" stale={isStale} />
           <StatCard label="Obs Theta" value={Math.round(s.focThetaObs * 180 / Math.PI).toString()} unit="deg" color="#06b6d4" stale={isStale} />
-          <StatCard label="Speed" value={Math.round(focSpeedRads).toString()} unit="rad/s" color="#60a5fa" stale={isStale} />
+          <StatCard label="Mech RPM" value={focRpm.toLocaleString()} unit=""
+            color="#60a5fa" sub={`÷${polePairs} PP`} stale={isStale} />
           <StatCard label="Ibus" value={ibus.toFixed(1)} unit="A" color="var(--accent-orange)"
             sub={`peak ${ibusPeak.toFixed(1)}A`} stale={isStale} />
         </div>

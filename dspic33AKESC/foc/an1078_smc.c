@@ -25,11 +25,37 @@
 #include "an1078_params.h"
 #include "pll_estimator.h"
 #include "../garuda_foc_params.h"   /* PLL_ANGLE_OFFSET */
+#include "../gsp/gsp_params.h"      /* gspParams — live tuning */
 #include <math.h>
 
-/* 2π for angle wrap (avoid relying on M_TWOPI portability). */
+/* 2π for angle wrap (defined here so live-tune helpers below can use AN_PI). */
 #define AN_TWO_PI    6.28318530717958647692f
 #define AN_PI        3.14159265358979323846f
+
+/* Live tuning helpers — read from gspParams (GUI-set, RAM-only) with
+ * fallback to compile-time #define for first boot or if value is zero.
+ * Cost: a few u16 reads + scaling per tick.  AN_SMC_THETA_OFFSET_BASE
+ * and K are read every observer step so GUI changes take effect within
+ * one PWM tick. */
+static inline float an_tune_theta_base(void)
+{
+    uint16_t v = gspParams.an1078ThetaBaseDegX10;
+    /* deg × 10 → rad.  v=0 means "use compile-time default". */
+    return (v != 0) ? ((float)v * 0.1f * (AN_PI / 180.0f))
+                    : AN_SMC_THETA_OFFSET_BASE;
+}
+static inline float an_tune_theta_k(void)
+{
+    uint16_t v = gspParams.an1078ThetaKE7;
+    /* K × 1e7 → unit rad/(rad/s elec).  v=0 means "no speed-dependence". */
+    return (float)v * 1.0e-7f;
+}
+static inline float an_tune_kslide(void)
+{
+    uint16_t v = gspParams.an1078KslideMv;
+    /* mV → V. */
+    return (v != 0) ? ((float)v * 0.001f) : AN_SMC_KSLIDE;
+}
 
 /* ── Init / Reset ─────────────────────────────────────────── */
 
@@ -39,7 +65,7 @@ void AN_SMCInit(AN_SMC_T *s)
     s->Fsmopos = AN_F_PLANT;        /* 1 - Rs·Ts/Ls */
     s->Gsmopos = AN_G_PLANT;        /* Ts/Ls        */
 
-    s->Kslide      = AN_SMC_KSLIDE;
+    s->Kslide      = an_tune_kslide();   /* GUI-tunable */
     s->MaxSMCError = AN_SMC_MAX_LINEAR_ERR;
 
     s->KslfScale = AN_SMC_KSLF_SCALE;
@@ -47,7 +73,10 @@ void AN_SMCInit(AN_SMC_T *s)
     s->Kslf      = s->KslfMin;
     s->KslfFinal = s->KslfMin;
 
-    s->ThetaOffset = AN_SMC_THETA_OFFSET;
+    s->ThetaOffset = an_tune_theta_base();   /* GUI-tunable, used as init only;
+                                              * runtime reads via per-tick
+                                              * an_tune_theta_base() in
+                                              * AN_SMC_Position_Estimation. */
 
     AN_SMCReset(s);
 }
@@ -197,10 +226,16 @@ void AN_SMC_Position_Estimation(AN_SMC_T *s)
     pll_update(&s->pll, s->EalphaFinal, s->EbetaFinal, AN_TS);
 
     {
-        float dyn_offset = AN_SMC_THETA_OFFSET_BASE
-                         + AN_SMC_THETA_OFFSET_K * an_abs(s->pll.omega_est);
+        /* Live-tunable: BASE and K read from gspParams every tick so that
+         * GUI changes take effect within one observer step.  Fallback to
+         * compile-time defaults if user hasn't set them. */
+        float dyn_offset = an_tune_theta_base()
+                         + an_tune_theta_k() * an_abs(s->pll.omega_est);
         s->Theta = s->pll.theta_est - PLL_ANGLE_OFFSET + dyn_offset;
         s->Theta = an_wrap_2pi(s->Theta);
+
+        /* Also keep s->Kslide in sync so SET_PARAM lands without re-init. */
+        s->Kslide = an_tune_kslide();
     }
 
     /* Keep ΔTheta accumulator running for telemetry / IRP-averaged
