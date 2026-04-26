@@ -343,7 +343,12 @@ export const FAULT_CODES = ['NONE', 'OVERVOLTAGE', 'UNDERVOLTAGE', 'OVERCURRENT'
 export const FOC_SUB_STATES = ['IDLE', 'ARMED', 'ALIGN', 'I/F RAMP', 'CLOSED_LOOP'] as const;
 export const DETECT_PHASE_NAMES = ['Idle', 'Measuring Rs', 'Measuring Ls', 'Re-Aligning', 'Measuring Lambda', 'Auto-Tuning', 'Complete', 'Failed'] as const;
 
-export const PROFILE_NAMES = ['Hurst Long (300W)', 'A2212 1400KV', '5010 750KV', '5055 580KV', 'Custom'] as const;
+/* Profile slot 2 was originally "5010 750KV" but is now repurposed for the
+ * PRODRONE 2810 (1350 KV) — see dspic33AKESC/foc/an1078_params.h.  The
+ * label needs to match what the firmware tunes for; mismatched labels
+ * caused user confusion when tuning AN1078 for the 2810.  Slot 3 still
+ * holds 5055 (kept since profile defaults haven't been rewritten). */
+export const PROFILE_NAMES = ['Hurst Long (300W)', 'A2212 1400KV', '2810 1350KV', '5055 580KV', 'Custom'] as const;
 export const PROFILE_COUNT = 4; /* built-in profiles (excl. Custom) */
 
 export const PARAM_NAMES: Record<number, string> = {

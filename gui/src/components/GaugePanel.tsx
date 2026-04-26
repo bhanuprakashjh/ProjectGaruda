@@ -130,7 +130,15 @@ export function GaugePanel() {
     ? Math.abs(snapshot.focOmega) * 60 / (2 * Math.PI * polePairs) : 0;
   const rawFocSpeedRads = focMode ? Math.abs(snapshot.focOmega) : 0;
   const rawFocPowerW = focMode ? 1.5 * (snapshot.focVq * snapshot.focIqMeas + snapshot.focVd * snapshot.focIdMeas) : 0;
-  const rawERPM = snapshot.stepPeriod > 0 ? 240000 / snapshot.stepPeriod : 0;
+  /* eRPM source depends on mode:
+   *   FOC: derive from focOmega (electrical rad/s × 60/2π = eRPM)
+   *   6-step: derive from stepPeriod (ZC-period based)
+   * Previously this used stepPeriod always — broken in FOC because
+   * stepPeriod is 0 there, making eRPM display read 0 even when
+   * motor was at 200k. */
+  const rawERPM = focMode
+    ? Math.abs(snapshot.focOmega) * 60 / (2 * Math.PI)
+    : (snapshot.stepPeriod > 0 ? 240000 / snapshot.stepPeriod : 0);
   const rawMechRPM = polePairs > 0 ? rawERPM / polePairs : rawERPM;
   const s = smoothed.current;
   s.vbus = ema(s.vbus, rawVbus);

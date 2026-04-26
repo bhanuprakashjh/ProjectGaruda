@@ -89,6 +89,15 @@ const CHANNELS: ScopeChannel[] = [
     extract: (s) => +s.focOmega.toFixed(1), focOnly: true },
   { key: 'focRpm', label: 'Speed (mech)', unit: 'RPM', color: '#60a5fa', group: 'FOC Angle',
     extract: (s, i) => s.focOmega !== 0 ? Math.round(Math.abs(s.focOmega) * 60 / (2 * Math.PI * i.polePairs)) : 0, focOnly: true },
+  { key: 'focERPM', label: 'eRPM', unit: 'eRPM', color: '#2563eb', group: 'FOC Angle',
+    extract: (s) => s.focOmega !== 0 ? Math.round(Math.abs(s.focOmega) * 60 / (2 * Math.PI)) : 0, focOnly: true },
+  { key: 'focThetaError', label: 'θ Drive − θ Obs', unit: 'deg', color: '#fb7185', group: 'FOC Angle',
+    extract: (s) => {
+      let d = (s.focTheta - s.focThetaObs) * 180 / Math.PI;
+      while (d > 180) d -= 360;
+      while (d < -180) d += 360;
+      return +d.toFixed(2);
+    }, focOnly: true },
 
   // FOC voltage
   { key: 'focVq', label: 'Vq (torque)', unit: 'V', color: '#fb923c', group: 'FOC Voltage',
@@ -187,6 +196,20 @@ const PRESETS: Record<string, { label: string; channels: string[]; focOnly?: boo
   focPower: { label: 'FOC Power', channels: ['focVbus', 'focPower', 'focIq'], focOnly: true },
   focObserver: { label: 'FOC Observer', channels: ['focObsConfidence', 'focModIndex', 'focLambdaEst', 'focObsGain'], focOnly: true },
   focPI: { label: 'FOC PI State', channels: ['focPidDInteg', 'focPidQInteg', 'focPidSpdInteg'], focOnly: true },
+  /* AN1078 SMO tuning preset — for sensorless FOC observer health check.
+   *
+   * Watch:
+   *   focVd: should stay near 0 across the speed range — non-zero Vd means
+   *          observer angle is offset (tune AN_SMC_THETA_OFFSET_BASE
+   *          and/or AN_SMC_THETA_OFFSET_K).  Sustained -V means observer
+   *          lags; sustained +V means observer leads.
+   *   focVq: ≈ ω·λ + R·Iq — climbs with speed, this is BEMF.
+   *   focIq: torque current.  Should be small at no-load, larger under load.
+   *   focId: should be ~0 except during field weakening at high speed.
+   *   focERPM: scrubbed-to-actual eRPM (focOmega-based, NOT stepPeriod).
+   *   focModIndex: voltage utilization.  ≥0.93 → field weakening engages. */
+  an1078SmoTune: { label: 'AN1078 SMO Tune', channels: ['focVd', 'focVq', 'focIq', 'focId', 'focERPM', 'focModIndex'], focOnly: true },
+  an1078Angle: { label: 'AN1078 Angle Health', channels: ['focTheta', 'focThetaObs', 'focThetaError', 'focERPM'], focOnly: true },
   sixStep: { label: '6-Step', channels: ['eRPM', 'duty', 'bemf', 'zcThreshold'], sixStepOnly: true },
   power: { label: 'Power', channels: ['vbus', 'ibus', 'ibusMax', 'duty'] },
 };
