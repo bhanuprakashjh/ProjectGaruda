@@ -605,9 +605,12 @@ Too high → buries weak BEMF, observer loses lock.`}
                   await setParam(0x93, smoIdFwMaxDecia);
                   setSmoStatus(`FW max → ${(smoIdFwMaxDecia/10).toFixed(1)} A negative Id`);
                 }}
-                tooltip={`Field-weakening current cap.
-0 = FW disabled (motor caps at voltage limit ~180k eRPM on 2810).
-120 = 12A (allows ~210k eRPM on 2810 at 24V).`}
+                tooltip={`Field-weakening current cap (negative Id).
+0   = FW DISABLED (motor caps at voltage limit, ~180k eRPM on 2810).
+120 = 12A (default for 2810; reaches ~205k).
+160+ may NOT go faster — bench supply (10A) saturates and Iq-clamp
+limits torque past ~12-13A FW.  Tune from 0 upward, watch focIdMeas
+in scope, stop when speed stops growing.`}
                 min={0} max={200} step={5}
                 disabled={!connected} />
             </div>

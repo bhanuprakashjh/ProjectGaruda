@@ -414,11 +414,18 @@ static void an_do_control(AN_Motor_T *m, float dt)
             const float FW_TRIGGER = 0.91f;   /* engage just below clamp */
             const float FW_KP_INT  = 400.0f;  /* A/s per (mod-thresh) unit */
             const float FW_DECAY   = 0.995f;  /* faster decay (was 0.9995) */
-            /* Live-tunable: |Id_FW_max| × 10 from gspParams (decideci-amps).
-             * 0 disables FW (motor will hit voltage ceiling).  Default is
-             * the compile-time -12A if user hasn't configured. */
+            /* Live-tunable: |Id_FW_max| × 10 from gspParams (deci-amps).
+             *   value 0   → ID_FW_MAX_NEG = 0 → FW truly DISABLED (id_ref_fw
+             *               clamps to 0, no field weakening current commanded).
+             *   value 120 → ID_FW_MAX_NEG = -12 A → standard 2810 setup.
+             *   value 200 → ID_FW_MAX_NEG = -20 A → max range; usually limited
+             *               by bench supply or AN_OVER_CURRENT_LIMIT before
+             *               this is actually reached.
+             * NOTE: more FW does NOT always mean more top speed.  Past a
+             * point, the supply current limit + Iq-clamp interaction causes
+             * top speed to plateau or drop (observed 2026-04-26 with 2810). */
             float id_fw_max_user = (float)gspParams.an1078IdFwMaxDecia * 0.1f;
-            float ID_FW_MAX_NEG = (id_fw_max_user > 0.01f) ? -id_fw_max_user : -12.0f;
+            float ID_FW_MAX_NEG = -id_fw_max_user;   /* 0 = disabled */
             /* Gate: FW only when motor is actively accelerating forward
              * (iq_ref > some threshold).  Without this, FW pumps in
              * negative Id during stale-integrator startup or coasting,
