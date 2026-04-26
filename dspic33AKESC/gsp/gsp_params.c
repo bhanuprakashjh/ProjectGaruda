@@ -220,13 +220,17 @@ static const GSP_PARAMS_T profileDefaults[4] = {
                                          * draw; this just keeps firmware from
                                          * over-protective trips. */
         .focFaultStallDeciRadS = 500,
-        /* AN1078 SMC tuning — values that took 2810 to 200k+ eRPM.
+        /* AN1078 SMC tuning — values validated on 2810 @ 45 kHz.
          * BASE × 10 = 200 → 20° at zero speed.
-         * K × 1e7 = 1000 → 1.0e-4 rad/(rad/s elec).
+         * K × 1e7 = 800 → 8.0e-5 rad/(rad/s elec) — re-tuned for 45 kHz
+         *   2026-04-26.  At 60 kHz K=1000 was the value; at 45 kHz the
+         *   LPF lag profile shifts and 800 keeps Vd within ±2V across
+         *   the 50k → 200k+ range.  K=500 left Vd at -10V (heroic d-PI
+         *   compensation) and K=1000 at +6V (over-corrected).
          * Kslide × 1000 = 2500 → 2.5 V.
          * |Id_FW_max| × 10 = 120 → -12 A (12 A peak field-weakening). */
         .an1078ThetaBaseDegX10 = 200,
-        .an1078ThetaKE7        = 1000,
+        .an1078ThetaKE7        = 800,
         .an1078KslideMv        = 2500,
         .an1078IdFwMaxDecia    = 120,
     },

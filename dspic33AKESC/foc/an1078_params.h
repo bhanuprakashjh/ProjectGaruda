@@ -36,35 +36,45 @@ extern "C" {
 
 /* ── Loop timing ────────────────────────────────────────────────── */
 
-/** ADC ISR runs at PWM rate.  PWMFREQUENCY_HZ in garuda_config.h is
- *  60 kHz (bumped 48→60 on 2026-04-25 chasing 196k eRPM benchmark).
- *  AN_FS_HZ MUST match — F_PLANT/G_PLANT/KSLF_SCALE all derive from
- *  AN_TS, and a mismatch causes the SMC current model to be wrong
- *  by FS_real/FS_assumed.  Previous 24000 was stale → G_PLANT 67%
- *  over-aggressive → observer destabilized at ~85k eRPM. */
-#define AN_FS_HZ                    60000.0f
+/** ADC ISR runs at PWM rate.  PWMFREQUENCY_HZ in garuda_config.h.
+ *  Currently 45 kHz (production-friendly compromise from 60 kHz).
+ *  AN_FS_HZ MUST match PWMFREQUENCY_HZ — F_PLANT/G_PLANT/KSLF_SCALE
+ *  all derive from AN_TS, and a mismatch causes the SMC current model
+ *  to be wrong by FS_real/FS_assumed.  Earlier 24kHz value with 40-60
+ *  kHz hardware caused G_PLANT 67% over-aggressive → observer
+ *  destabilized at ~85k eRPM. */
+#define AN_FS_HZ                    45000.0f
 #define AN_TS                       (1.0f / AN_FS_HZ)
 
 /** Speed loop / observer averaging period in fast-loop ticks.
- *  AN1078: SPEEDLOOPFREQ = 1000 Hz.  At 60 kHz: 60 ticks → 1 kHz. */
-#define AN_IRP_PERCALC              60
+ *  AN1078: SPEEDLOOPFREQ = 1000 Hz.  At 45 kHz: 45 ticks → 1 kHz. */
+#define AN_IRP_PERCALC              45
 
 /** Theta-error transition pacing: AN1078 uses TRANSITION_STEPS = IRP_PERCALC/4. */
 #define AN_TRANSITION_STEPS         (AN_IRP_PERCALC / 4)
 
-/* ── Motor (PRODRONE 2810 @ 24V) ───────────────────────────────── */
+/* ── Motor (A2212 1400KV @ 12V) ─────────────────────────────────
+ *
+ * Switched 2026-04-26 from 2810 @ 24V.  See git history for 2810
+ * tune (an1078_200k_milestone.md memory note).
+ *
+ * A2212 specs (per gspParams profile 1 + GUI preset):
+ *   KV = 1400 RPM/V, 7 PP, Rs ≈ 65 mΩ, Ls ≈ 30 µH
+ *   λ = 60 / (√3·2π·1400·7) = 0.000563 V·s/rad
+ *   No-load max @ 12V = 12 / 0.000563 = 21300 rad/s elec ≈ 200k eRPM
+ *   Practical max with FW + observer headroom: probably 130-150k eRPM. */
 
 #define AN_NOPOLESPAIRS             7                /* 7 PP (14 magnets) */
 
-/** Phase-to-neutral resistance (Ω).  Measured ~22 mΩ. */
-#define AN_MOTOR_RS                 0.022f
+/** Phase-to-neutral resistance (Ω).  A2212 datasheet/auto-detect ≈ 65 mΩ. */
+#define AN_MOTOR_RS                 0.065f
 
-/** Phase-to-neutral inductance (H).  Measured ~10 µH. */
-#define AN_MOTOR_LS                 10e-6f
+/** Phase-to-neutral inductance (H).  A2212 ≈ 30 µH. */
+#define AN_MOTOR_LS                 30e-6f
 
-/** Per-phase peak flux linkage λ (V·s/rad_electrical).
- *  Computed from KV: λ = 60 / (√3 · 2π · KV · PP) ≈ 0.000583 for 1350 KV. */
-#define AN_MOTOR_LAMBDA             0.000583f
+/** Per-phase peak flux linkage λ (V·s/rad_electrical).  λ = 60 / (√3·2π·KV·PP)
+ *  for 1400 KV @ 7PP gives 0.000563. */
+#define AN_MOTOR_LAMBDA             0.000563f
 
 /** Discrete plant pole F = 1 - Rs·Ts/Ls.
  *  2810: 1 - 0.022 × 41.67e-6 / 10e-6 = 0.908.  Stable (must be 0..1). */
@@ -75,11 +85,21 @@ extern "C" {
 
 /* ── Operating speed envelope ──────────────────────────────────── */
 
-/** Open-loop ramp-up end value, mechanical RPM.
- *  Handoff is disabled (see an1078_motor.c) — motor stays in OL at
- *  this speed indefinitely.  Pick a safe bench speed: 500 RPM mech
- *  matches AN1078 reference and gives 0.21 V BEMF (visible on scope). */
-#define AN_END_SPEED_RPM_MECH       500.0f
+/** Open-loop ramp-up end value, mechanical RPM.  Two roles:
+ *  (1) OL→CL handoff speed: motor must reach this before observer
+ *      gating can transition to closed loop.
+ *  (2) Idle CL speed when throttle is below deadband.
+ *
+ *  500 RPM mech (= 3500 eRPM, BEMF 0.21V) was a bench-friendly low
+ *  value but too slow for prop operation: prop drag at 500 RPM is
+ *  significant and BEMF SNR is marginal.
+ *
+ *  1500 RPM mech (= 10500 eRPM, BEMF 0.64V) is prop-friendly:
+ *    - Prop spins at a clean idle, ready to ramp on throttle
+ *    - BEMF triple — observer locks more reliably
+ *    - OL ramp at 1000 rad/s² takes 1.1s to reach this from rest
+ *  Bumped 500→1500 on 2026-04-26 for prop testing. */
+#define AN_END_SPEED_RPM_MECH       1500.0f
 
 /** End-speed in electrical rad/s.  Used as min closed-loop speed
  *  floor and as the LPF Kslf clamp floor. */
@@ -89,12 +109,11 @@ extern "C" {
 /** Nominal motor speed (mech RPM) — full-throttle target speed.
  *  CL throttle range maps 0→full to AN_END_SPEED → AN_NOMINAL_SPEED.
  *
- *  Theoretical no-load max at 24V: Vbus×0.95/√3/λ ≈ 22500 rad/s elec
- *  (~215k eRPM, 30700 RPM mech).  PLL-upgraded observer (2026-04-25)
- *  tracks cleanly to at least 176k eRPM — the throttle map ceiling is
- *  the actual limit now, not the observer.  Push to 30000 RPM mech
- *  (215k eRPM) to let throttle command up to motor's electrical max. */
-#define AN_NOMINAL_SPEED_RPM_MECH   30000.0f     /* = 215k eRPM */
+ *  A2212 @ 12V: theoretical no-load = 12 × 1400 = 16800 RPM mech
+ *  (= 117k eRPM at 7PP).  Practical with FW + observer margin: aim
+ *  for 18000 RPM mech (= 126k eRPM) so throttle map can command into
+ *  FW territory without artificially capping. */
+#define AN_NOMINAL_SPEED_RPM_MECH   18000.0f     /* = 126k eRPM */
 
 /** Maximum mechanical RPM. */
 #define AN_MAX_SPEED_RPM_MECH       3500.0f
@@ -130,12 +149,19 @@ extern "C" {
 #define AN_CL_VELREF_SLEW_RPS2      12000.0f
 
 /** Open-loop q-current reference (A peak).
- *  Must overcome cogging (~15-20 mN·m) AND prop inertia at startup.
- *  No-load: 4 A is plenty (24 mN·m).
- *  With prop: need more — 8 A × Kt(0.0061) = 49 mN·m.  Headroom for
- *  cogging plus rotor + prop spin-up to OL end speed.
- *  Voltage drop: 8 A × 22 mΩ = 176 mV (<1% of Vbus) — still safe. */
-#define AN_Q_CURRENT_REF_OPENLOOP   8.0f
+ *  Must overcome cogging + prop inertia + steady prop drag at OL end speed.
+ *  Sizing: prop drag at 1500 RPM mech ≈ 30-40 mN·m on small motors → need
+ *  > 50 mN·m of motor torque margin to follow synth angle.
+ *
+ *  Per motor:
+ *    A2212 (Kt=0.0059 N·m/A): 12A → 71 mN·m  ← good for prop tests
+ *    2810  (Kt=0.0061 N·m/A): 12A → 73 mN·m  ← also fine, was 8A before
+ *
+ *  Voltage drop @ 12A:
+ *    A2212 (Rs=65mΩ): 0.78V (~6% of 12V)
+ *    2810  (Rs=22mΩ): 0.26V
+ *  Both well under bus voltage. */
+#define AN_Q_CURRENT_REF_OPENLOOP   12.0f
 
 /** PWM warmup phase (ticks).  When motor first starts, hold Vd=Vq=0
  *  (50% duty everywhere = zero net motor voltage) for this many ticks
@@ -198,13 +224,14 @@ extern "C" {
  *
  * For 2810 use modest values; we'll tune from bench. */
 
-/* Speed PI: original conservative values.  Tracking speed comes from
- * AN_CL_VELREF_SLEW_RPS2 slewing velRef in fast — PI doesn't need
- * high gain to feel snappy.  High PI gain causes overshoot at
- * OL→CL handoff: motor 5k→70k in 40 ms with no-load, which would
- * stall under prop load. */
-#define AN_KP_SPD                   0.006f
-#define AN_KI_SPD                   0.10f
+/* Speed PI: bumped 2026-04-26 after OL→CL integrator-reset fix made it
+ * safe to run aggressive gains without handoff overshoot.  Original
+ * 0.006/0.10 was too sluggish (4 seconds for +15k eRPM under throttle).
+ * Tracking speed comes from BOTH AN_CL_VELREF_SLEW_RPS2 (slewing the
+ * setpoint) AND the speed PI (closing the loop on it).  Need decent
+ * KP for the latter to actually track. */
+#define AN_KP_SPD                   0.015f
+#define AN_KI_SPD                   0.30f
 
 /* Anti-windup back-calculation gain (1.0 = no anti-windup, 0 = full).
  * AN1078 uses 0.999 — close to disabled. */

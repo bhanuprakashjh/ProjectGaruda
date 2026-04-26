@@ -412,8 +412,13 @@ static void an_do_control(AN_Motor_T *m, float dt)
          * is comfortably below threshold.  Clamped to ID_FW_MAX_NEG. */
         {
             const float FW_TRIGGER = 0.91f;   /* engage just below clamp */
-            const float FW_KP_INT  = 400.0f;  /* A/s per (mod-thresh) unit */
-            const float FW_DECAY   = 0.995f;  /* faster decay (was 0.9995) */
+            const float FW_RELEASE = 0.86f;   /* hysteresis — release lower than trigger */
+            const float FW_KP_INT  = 150.0f;  /* A/s per (mod-thresh) unit.  400 caused
+                                                 * a ~30 Hz limit cycle near the voltage
+                                                 * saturation boundary on A2212 (Id swung
+                                                 * -1 to -6 A while speed bounced).
+                                                 * 150 damps that without losing depth. */
+            const float FW_DECAY   = 0.995f;
             /* Live-tunable: |Id_FW_max| × 10 from gspParams (deci-amps).
              *   value 0   → ID_FW_MAX_NEG = 0 → FW truly DISABLED (id_ref_fw
              *               clamps to 0, no field weakening current commanded).
@@ -437,10 +442,17 @@ static void an_do_control(AN_Motor_T *m, float dt)
             float v_last = sqrtf(m->vd * m->vd + m->vq * m->vq);
             float mod_now = (vmax > 0.001f) ? v_last / vmax : 0.0f;
 
+            /* Hysteresis: engage above FW_TRIGGER, hold integrated value
+             * down to FW_RELEASE, only decay below RELEASE.  Eliminates
+             * the limit cycle where mod hovers near 0.91 and FW pumps
+             * up/decays each tick.  When in CL operating regime with
+             * voltage saturated, FW stays engaged steadily. */
             if (mod_now > FW_TRIGGER && iq_ref > FW_IQ_GATE) {
                 m->id_ref_fw -= FW_KP_INT * (mod_now - FW_TRIGGER) * dt;
                 if (m->id_ref_fw < ID_FW_MAX_NEG) m->id_ref_fw = ID_FW_MAX_NEG;
-            } else {
+            } else if (mod_now < FW_RELEASE) {
+                /* Below release threshold → decay.  Between RELEASE and
+                 * TRIGGER → hold (no integration, no decay). */
                 m->id_ref_fw *= FW_DECAY;
                 if (m->id_ref_fw > -0.005f) m->id_ref_fw = 0.0f;
             }
@@ -492,10 +504,27 @@ static void an_calc_park_angle(AN_Motor_T *m)
          * noise spikes and ensures observer is actually tracking before
          * we trust its angle. */
         else {
+            /* Handoff gate: SMC's BEMF magnitude must be ≥ threshold pct of
+             * theoretical (λ·ω) and sustained for AN_HANDOFF_DWELL_TICKS.
+             *
+             * Threshold relaxed 80% → 50% on 2026-04-26 to handle the
+             * prop-load case at higher idle (1500 RPM mech).  At low motor
+             * freq the LPF still has significant attenuation, so observed
+             * BEMF magnitude can dip below 0.8·λω even when motor tracks
+             * the synth angle correctly.  50% is enough margin to confirm
+             * observer lock without missing handoff under prop drag.
+             *
+             * Dwell counter still enforces the minimum sustained time —
+             * a brief 50% dip during OL ramp won't trigger handoff. */
             float bemf_mag = sqrtf(m->smc.EalphaFinal * m->smc.EalphaFinal
                                  + m->smc.EbetaFinal  * m->smc.EbetaFinal);
             float bemf_expected = AN_MOTOR_LAMBDA * m->startupRamp;
-            float bemf_min = bemf_expected * 0.8f;
+            /* Relaxed 50%→30% on 2026-04-26 for A2212.  Higher-Rs motors
+             * have less OL torque margin → rotor slips synth angle under
+             * prop drag → real BEMF lower than λ·ω_command.  Plus LPF
+             * cascade attenuates ~20% at low motor freq.  30% still
+             * rejects "no signal at all" while accepting partial slip. */
+            float bemf_min = bemf_expected * 0.3f;
 
             if (bemf_mag >= bemf_min) {
                 m->handoff_dwell++;

@@ -91,33 +91,29 @@ extern "C" {
 #endif
 
 /* PWM Configuration */
-#define PWMFREQUENCY_HZ            60000       /* PWM switching frequency
-                                                 * 24→40 kHz (2026-04-20): ripple/HWZC.
-                                                 * 40→48 kHz (2026-04-25): SMC observer
-                                                 *   per-tick angle resolution.
-                                                 * 48→60 kHz (2026-04-25): targeting 200k
-                                                 *   eRPM ceiling.  After angle PLL was
-                                                 *   added (see an1078_smc.c) the
-                                                 *   per-tick wobble was solved at the
-                                                 *   ALGORITHM level — 60 kHz hardware
-                                                 *   bump is no longer strictly required.
+#define PWMFREQUENCY_HZ            45000       /* PWM switching frequency
+                                                 * History:
+                                                 *   24→40 kHz (2026-04-20): ripple/HWZC.
+                                                 *   40→48 kHz (2026-04-25): SMC angle res.
+                                                 *   48→60 kHz (2026-04-25): chasing 200k.
+                                                 *   60→45 kHz (2026-04-26): production
+                                                 *     compromise — 60 kHz pushed the
+                                                 *     hardware past comfort.  PLL+FW
+                                                 *     reach ~130k eRPM here, plenty for
+                                                 *     drone use under prop load.
                                                  *
-                                                 * ⚠ 60 kHz IS PUSHING THIS HARDWARE ⚠
-                                                 *   - FET switching losses ~50 % above
-                                                 *     40 kHz baseline.  Sustained full
-                                                 *     throttle → measurable heat rise
-                                                 *     on the inverter.
-                                                 *   - MCLV-48V-300W board rated 300 W
-                                                 *     continuous; 60 kHz erodes margin.
-                                                 *   - For production, fall back to
-                                                 *     48 kHz: PLL + FW still reach
-                                                 *     ~195 k eRPM at 48 kHz, well past
-                                                 *     the 6-step 196k benchmark target.
+                                                 * Trade-off vs 60 kHz:
+                                                 *   - Top no-load eRPM: 201k → ~130k (-35%)
+                                                 *   - FET switching losses: ~25% lower
+                                                 *   - Thermal margin: significant
+                                                 *     improvement for sustained ops
+                                                 *   - Per-tick angle res at 130k: ~21°
+                                                 *     (similar to 60 kHz at 200k — same
+                                                 *     observer wobble margin)
                                                  *
-                                                 * If thermal issues appear, revert this
-                                                 * AND `AN_FS_HZ` in an1078_params.h to
-                                                 * 48000 (must move together — they
-                                                 * derive F/G plant constants). */
+                                                 * AN_FS_HZ in an1078_params.h MUST match
+                                                 * (F_PLANT/G_PLANT/KSLF_SCALE all derive
+                                                 * from AN_TS = 1/AN_FS_HZ). */
 
 /*──────────────────────────────────────────────────────────────────────────
  * Motor Profile Selection
