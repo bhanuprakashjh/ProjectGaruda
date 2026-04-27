@@ -579,7 +579,7 @@ typedef struct
     HWZC_STATE_T hwzc;
 #endif
 
-#if !FEATURE_FOC && !FEATURE_FOC_V2 && !FEATURE_FOC_V3
+#if !FEATURE_FOC && !FEATURE_FOC_V2 && !FEATURE_FOC_V3 && !FEATURE_FOC_AN1078
     /* 6-step diagnostic phase-current monitor (AD1CH3=Ia, AD2CH2=Ib via
      * PG1TRIGA @ 24 kHz). Scale ~93 counts/A, bias ~2048 (0 A).
      *
@@ -699,8 +699,8 @@ typedef struct
     uint16_t    focOffsetIb;    /* Calibrated ADC offset Ib */
 #endif
 
-#if FEATURE_FOC_V3
-    /* FOC v3 telemetry — SMO observer */
+#if FEATURE_FOC_V3 || FEATURE_FOC_AN1078
+    /* FOC v3 / AN1078 telemetry — SMO observer */
     float       focIdMeas;      /* D-axis current (A) */
     float       focIqMeas;      /* Q-axis current (A) — torque */
     float       focTheta;       /* Commutation angle (rad) */

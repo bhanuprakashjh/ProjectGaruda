@@ -2,8 +2,10 @@ import { useEffect, useState, useRef } from 'react';
 import { useEscStore } from '../store/useEscStore';
 import { isFocEnabled, FOC_SUB_STATES } from '../protocol/types';
 
-/** EMA smoothing factor — 0 = frozen, 1 = no smoothing. 0.08 gives ~12-sample lag. */
-const ALPHA = 0.08;
+/** EMA smoothing factor — 0 = frozen, 1 = no smoothing.  Lower kills flicker
+ *  on noisy values like Iq/Id at the cost of display lag.  0.04 ≈ 25-sample
+ *  lag = 500 ms at 50 Hz telemetry — readable without feeling sluggish. */
+const ALPHA = 0.04;
 function ema(prev: number, cur: number): number {
   return prev + ALPHA * (cur - prev);
 }
@@ -130,7 +132,15 @@ export function GaugePanel() {
     ? Math.abs(snapshot.focOmega) * 60 / (2 * Math.PI * polePairs) : 0;
   const rawFocSpeedRads = focMode ? Math.abs(snapshot.focOmega) : 0;
   const rawFocPowerW = focMode ? 1.5 * (snapshot.focVq * snapshot.focIqMeas + snapshot.focVd * snapshot.focIdMeas) : 0;
-  const rawERPM = snapshot.stepPeriod > 0 ? 240000 / snapshot.stepPeriod : 0;
+  /* eRPM source depends on mode:
+   *   FOC: derive from focOmega (electrical rad/s × 60/2π = eRPM)
+   *   6-step: derive from stepPeriod (ZC-period based)
+   * Previously this used stepPeriod always — broken in FOC because
+   * stepPeriod is 0 there, making eRPM display read 0 even when
+   * motor was at 200k. */
+  const rawERPM = focMode
+    ? Math.abs(snapshot.focOmega) * 60 / (2 * Math.PI)
+    : (snapshot.stepPeriod > 0 ? 240000 / snapshot.stepPeriod : 0);
   const rawMechRPM = polePairs > 0 ? rawERPM / polePairs : rawERPM;
   const s = smoothed.current;
   s.vbus = ema(s.vbus, rawVbus);
@@ -158,7 +168,9 @@ export function GaugePanel() {
   const ibus = s.ibus;
   const ibusPeak = s.ibusPeak;
   const focRpm = Math.round(s.focRpm);
-  const focSpeedRads = s.focSpeedRads;
+  /* focSpeedRads still smoothed for any future use, but the rad/s display
+   * was replaced by Mech RPM in the dashboard.  Don't remove the smoothing
+   * (other code may reference s.focSpeedRads). */
   const focPowerW = s.focPowerW;
   const focSubStr = FOC_SUB_STATES[snapshot.focSubState] ?? '?';
   const eRPM = Math.round(s.eRPM);
@@ -201,8 +213,12 @@ export function GaugePanel() {
       <div style={{ display: 'flex', alignItems: 'center', gap: 2, marginTop: 12 }}>
         {focMode ? (
           <>
-            <ArcGauge value={focRpm} max={info?.maxErpm ? Math.round(info.maxErpm / polePairs) : 20000}
-              label="Speed" unit="RPM" color="#3b82f6" stale={isStale} />
+            {/* Speed gauge shows ELECTRICAL RPM — what firmware tunes against
+             * and what user expects.  Mech RPM = eRPM/polePairs available
+             * from focRpm if needed elsewhere. */}
+            <ArcGauge value={eRPM} max={info?.maxErpm ? info.maxErpm : 200000}
+              label="Speed" unit="eRPM" color="#3b82f6" stale={isStale}
+              format={v => v >= 1000 ? `${(v/1000).toFixed(1)}k` : Math.round(v).toString()} />
             <StatCard label="Iq" value={s.focIq.toFixed(1)} unit="A" color="var(--accent-yellow)"
               sub={`torque current`} stale={isStale} />
             <StatCard label="Id" value={s.focId.toFixed(1)} unit="A"
@@ -240,7 +256,8 @@ export function GaugePanel() {
           <StatCard label="Ib" value={s.focIb.toFixed(1)} unit="A" color="#c084fc" stale={isStale} />
           <StatCard label="Theta" value={Math.round(s.focTheta * 180 / Math.PI).toString()} unit="deg" color="#22d3ee" stale={isStale} />
           <StatCard label="Obs Theta" value={Math.round(s.focThetaObs * 180 / Math.PI).toString()} unit="deg" color="#06b6d4" stale={isStale} />
-          <StatCard label="Speed" value={Math.round(focSpeedRads).toString()} unit="rad/s" color="#60a5fa" stale={isStale} />
+          <StatCard label="Mech RPM" value={focRpm.toLocaleString()} unit=""
+            color="#60a5fa" sub={`÷${polePairs} PP`} stale={isStale} />
           <StatCard label="Ibus" value={ibus.toFixed(1)} unit="A" color="var(--accent-orange)"
             sub={`peak ${ibusPeak.toFixed(1)}A`} stale={isStale} />
         </div>

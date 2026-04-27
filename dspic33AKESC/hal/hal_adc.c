@@ -27,7 +27,7 @@
  */
 void InitializeADCs(void)
 {
-#if FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3
+#if FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3 || FEATURE_FOC_AN1078
     /* Ia on AD1CH0: OA1OUT = RA2 = AD1AN0, PINSEL=0 */
     AD1CH0CONbits.PINSEL = 0;
     AD1CH0CONbits.SAMC = 3;        /* Low Z from OA1 output */
@@ -115,7 +115,7 @@ void InitializeADCs(void)
     AD2CH1CMPHI = 0;
 #endif
 
-#if !FEATURE_FOC && !FEATURE_FOC_V2 && !FEATURE_FOC_V3
+#if !FEATURE_FOC && !FEATURE_FOC_V2 && !FEATURE_FOC_V3 && !FEATURE_FOC_AN1078
     /* 6-step Phase-current monitor channels — diagnostic peak tracking.
      *
      * AD1CH3 samples OA1OUT (phase A low-side shunt amp) at 1 MHz via
@@ -181,7 +181,7 @@ void InitializeADCs(void)
     AD1CH4CONbits.TRG1SRC = 4;     /* VBUS from PWM1 trigger */
 }
 
-#if !FEATURE_FOC && !FEATURE_FOC_V2 && !FEATURE_FOC_V3
+#if !FEATURE_FOC && !FEATURE_FOC_V2 && !FEATURE_FOC_V3 && !FEATURE_FOC_AN1078
 /**
  * @brief Select which phase voltage to sample on AD2CH0 for the current
  * floating phase. Phase A and C share AD2, so we mux PINSEL.

@@ -27,6 +27,17 @@
 #include "garuda_calc_params.h"
 #include "garuda_types.h"
 #include "garuda_service.h"
+/* Pulled in so the build hash recompiles when any tuning param/header
+ * changes (Make tracks header deps via .d files).  Without these,
+ * edits to an1078_params.h or motor.h leave gsp_commands.o stale and
+ * the hash sticks.  NOTE: .c-only changes in an1078_motor.c still
+ * won't bump the hash without a clean rebuild — accept that limitation
+ * since most tuning happens in .h files. */
+#if FEATURE_FOC_AN1078
+#include "foc/an1078_params.h"
+#include "foc/an1078_motor.h"
+#include "foc/an1078_smc.h"
+#endif
 #if FEATURE_EEPROM_V2
 #include "hal/eeprom.h"
 #endif
@@ -74,7 +85,7 @@ static uint32_t BuildFeatureFlags(void)
     if (FEATURE_RX_PWM)          f |= (1UL << 20);
     if (FEATURE_RX_DSHOT)        f |= (1UL << 21);
     if (FEATURE_RX_AUTO)         f |= (1UL << 22);
-    if (FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3) f |= (1UL << 23);
+    if (FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3 || FEATURE_FOC_AN1078) f |= (1UL << 23);
     if (FEATURE_BURST_SCOPE)         f |= (1UL << 24);
     return f;
 }
@@ -100,6 +111,34 @@ static void HandleGetInfo(const uint8_t *payload, uint8_t payloadLen)
     (void)payload;
     (void)payloadLen;
 
+    /* Build hash: djb2 of __DATE__ " " __TIME__, then folded with key
+     * tuning constants that change between iterations.  Without the
+     * fold, incremental Make leaves gsp_commands.o stale when only
+     * an1078_params.h changes — host sees an unchanged hash even
+     * though firmware behavior changed.  Folding the live numeric
+     * values in guarantees the hash differs when behavior differs. */
+    static const char buildStamp[] = __DATE__ " " __TIME__;
+    uint32_t buildHash = 5381u;
+    for (const char *p = buildStamp; *p; p++) {
+        buildHash = ((buildHash << 5) + buildHash) ^ (uint32_t)(uint8_t)*p;
+    }
+#if FEATURE_FOC_AN1078
+    /* Fold key tunables — any edit to these reshapes the hash. */
+    buildHash ^= (uint32_t)(AN_FS_HZ);
+    buildHash ^= (uint32_t)(AN_NOMINAL_SPEED_RPM_MECH * 10.0f);
+    buildHash ^= (uint32_t)(AN_OL_RAMP_RATE_RPS2);
+    buildHash ^= (uint32_t)(AN_CL_VELREF_SLEW_RPS2);
+    buildHash ^= (uint32_t)(AN_SMC_THETA_OFFSET_BASE * 1.0e6f);
+    buildHash ^= (uint32_t)(AN_SMC_THETA_OFFSET_K   * 1.0e8f);
+    buildHash ^= (uint32_t)(AN_SMC_KSLIDE * 1.0e3f);
+    buildHash ^= (uint32_t)(AN_SMC_KSLF_MAX * 1.0e4f);
+    buildHash ^= (uint32_t)(AN_OVER_CURRENT_LIMIT * 1.0e3f);
+    buildHash ^= (uint32_t)(AN_Q_CURRENT_REF_OPENLOOP * 1.0e3f);
+    buildHash ^= (uint32_t)(AN_KP_SPD * 1.0e6f);
+    buildHash ^= (uint32_t)(AN_KI_SPD * 1.0e6f);
+#endif
+    buildHash ^= (uint32_t)PWMFREQUENCY_HZ;
+
     GSP_INFO_T info;
     memset(&info, 0, sizeof(info));
 
@@ -113,6 +152,7 @@ static void HandleGetInfo(const uint8_t *payload, uint8_t payloadLen)
     info.featureFlags    = BuildFeatureFlags();
     info.pwmFrequency    = PWMFREQUENCY_HZ;
     info.maxErpm         = gspParams.maxClosedLoopErpm;
+    info.buildHash       = buildHash;
 
     GSP_SendResponse(GSP_CMD_GET_INFO, (const uint8_t *)&info, sizeof(info));
 }
@@ -299,17 +339,40 @@ static void HandleSetParam(const uint8_t *payload, uint8_t payloadLen)
 {
     (void)payloadLen;
 
-    if (garudaData.state != ESC_IDLE) {
-        SendError(GSP_ERR_WRONG_STATE);
-        return;
-    }
-
     uint16_t paramId;
     uint32_t value;
     memcpy(&paramId, payload, 2);
     memcpy(&value, payload + 2, 4);
 
+    /* AN1078 SMC tuning IDs are live-update — observer reads from
+     * gspParams every tick.  Allow them to be set during CL so the user
+     * can dial in theta offset / Kslide / FW max while motor is running
+     * (the whole point of live tuning).  All other params must be set
+     * while idle to avoid mid-control-loop discontinuity. */
+    bool is_an1078_live = (paramId >= PARAM_ID_AN1078_THETA_BASE_DEGX10 &&
+                           paramId <= PARAM_ID_AN1078_ID_FW_MAX_DECIA);
+
+    if (!is_an1078_live && garudaData.state != ESC_IDLE) {
+        SendError(GSP_ERR_WRONG_STATE);
+        return;
+    }
+
     PARAM_RESULT_T result = GSP_ParamSet(paramId, value);
+
+    /* Re-init the AN1078 observer plant model when motor params change.
+     * Rs, Ls, Ke (IDs 0x70, 0x71, 0x72) feed F_PLANT/G_PLANT and the
+     * BEMF threshold.  AN_SMCInit reads the new gspParams values and
+     * recomputes.  Safe to call from IDLE state (which the gate above
+     * already enforced for non-AN1078-tune IDs). */
+#if FEATURE_FOC_AN1078
+    if (result == PARAM_OK &&
+        (paramId == PARAM_ID_FOC_RS_MOHM ||
+         paramId == PARAM_ID_FOC_LS_UH ||
+         paramId == PARAM_ID_FOC_KE_UV_S_RAD)) {
+        extern AN_Motor_T s_foc_an;
+        AN_SMCInit(&s_foc_an.smc);
+    }
+#endif
 
     switch (result) {
     case PARAM_OK: {

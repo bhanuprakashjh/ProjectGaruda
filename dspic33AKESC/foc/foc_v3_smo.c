@@ -1,67 +1,73 @@
 /**
  * @file foc_v3_smo.c
- * @brief Sliding Mode Observer implementation — correct classical SMO.
+ * @brief Sliding Mode Observer — AN1078 float port.
  *
- * Reference: Microchip AN1078 (dsPIC33CK SMO), adapted to float
- * for dsPIC33AK hardware FPU.
+ * Direct translation of Microchip AN1078 `smcpos.c` (Q15 fixed-point)
+ * to IEEE float, preserving the algorithm exactly.  Reference:
+ *   lvmc-dspic33ck256mp508-an1078/smcpos.c
  *
- * Key differences from AN1078 Q15 implementation:
- *   - All float (no Q15 normalization headaches)
- *   - Sigmoid switching instead of linear+saturate
- *   - Speed-adaptive LPF bandwidth (AN1078 uses speed-proportional Kslf)
- *   - PLL for speed instead of delta-theta accumulation
- *   - Explicit health metrics: residual, confidence, observable flag
- *   - Phase delay model: v3_smo_phase_delay() for commutation comp
+ * Algorithm (per tick at FOC_TS_FAST_S = 1/f_pwm):
+ *
+ *   1. Current-model update (forward Euler):
+ *        î[k+1] = F·î[k] + G·(V − E1 − Z)
+ *      where F = 1 − Rs·dt/Ls,  G = dt/Ls.
+ *
+ *   2. Current error:  e = î − i_meas.
+ *
+ *   3. Sliding control (linear-in-boundary, saturated outside):
+ *        if |e| < MaxSMCError:  Z = Kslide · e / MaxSMCError
+ *        else:                  Z = ±Kslide   (sign of e)
+ *
+ *   4. Back-EMF extraction via two cascaded 1st-order IIRs on Z:
+ *        E1 += Kslf · (Z  − E1)      (fed back into current model)
+ *        E2 += Kslf · (E1 − E2)      (used for angle)
+ *      Kslf = |ω_elec| · THETA_FILTER_CNST, floored at kslf_min.
+ *
+ *   5. Angle:  θ = atan2(−E2α, E2β) + CONSTANT_PHASE_SHIFT.
+ *
+ *   6. Speed:  LP-filtered delta-θ per tick.
+ *
+ * Phase 1 of the AN1078-port plan.  The runtime/handoff logic in
+ * foc_v3_control.c still calls `v3_smo_pll_*` — those remain untouched
+ * until Phase 4 removes the PLL.
  *
  * Component: FOC V3
  */
 
 #include "foc_v3_smo.h"
-#include "foc_v2_math.h"      /* foc_clampf, FOC_TWO_PI, FOC_PI_F */
+#include "foc_v2_math.h"      /* FOC_TWO_PI, FOC_PI_F, foc_angle_wrap */
 #include <math.h>
-
-/* ── Sigmoid switching function ──────────────────────────────── */
-
-/**
- * Sigmoid: F(x) = x / (|x| + φ)
- * Smooth approximation of sign(x) with boundary layer φ.
- * |F(x)| < 1 always, F(x) → sign(x) as |x| >> φ.
- */
-static inline float sigmoid(float x, float phi)
-{
-    float ax = (x >= 0.0f) ? x : -x;
-    return x / (ax + phi);
-}
 
 /* ── SMO Init / Reset ────────────────────────────────────────── */
 
 void v3_smo_init(SMO_Observer_t *smo, const SMO_Config_t *cfg)
 {
-    /* Discrete plant model: forward Euler
-     *   i[k+1] = (1 - Rs*dt/Ls)*i[k] + (dt/Ls)*(V - E - Z)
-     * F must be < 1 for stability.  At 24kHz, A2212:
-     *   F = 1 - 0.065*41.67e-6/30e-6 = 1 - 0.0903 = 0.910 (stable) */
+    /* Discrete plant model (forward Euler):
+     *   F = 1 − Rs·dt/Ls,  G = dt/Ls.
+     * Stability requires F ∈ (0, 1) — at 24 kHz, 2810 (22mΩ, 10µH):
+     *   F = 1 − 0.022·4.17e-5/1e-5 = 1 − 0.0917 = 0.908. */
     smo->F = 1.0f - cfg->Rs * cfg->dt / cfg->Ls;
     smo->G = cfg->dt / cfg->Ls;
 
-    /* Rs adaptation: store initial Rs and plant params */
+    /* Stored motor + timing */
     smo->Rs_est    = cfg->Rs;
     smo->Ls        = cfg->Ls;
     smo->dt        = cfg->dt;
     smo->lambda_pm = cfg->lambda_pm;
 
-    /* Sliding gain state */
-    smo->k_base        = cfg->k_base;
-    smo->k_bemf_scale  = cfg->k_bemf_scale;
-    smo->k_max         = cfg->k_max;
-    smo->k_adapt_alpha = cfg->k_adapt_alpha;
-    smo->phi           = cfg->phi;
+    /* Sliding controller */
+    smo->Kslide       = cfg->Kslide;
+    smo->MaxSMCError  = cfg->MaxSMCError;
 
-    /* LPF state */
-    smo->alpha_base = cfg->alpha_base;
-    smo->omega_ref  = cfg->omega_ref;
-    smo->alpha_min  = cfg->alpha_min;
-    smo->alpha_max  = cfg->alpha_max;
+    /* BEMF LPF */
+    smo->theta_filter_cnst = cfg->theta_filter_cnst;
+    smo->kslf_min          = cfg->kslf_min;
+
+    /* Angle offset (AN1078 CONSTANT_PHASE_SHIFT) */
+    smo->theta_offset = cfg->theta_offset;
+
+    /* Back-compat alias for focObsGain snapshot field */
+    smo->k_base = cfg->Kslide;
 
     /* Health thresholds */
     smo->conf_min     = cfg->conf_min;
@@ -84,106 +90,103 @@ void v3_smo_reset(SMO_Observer_t *smo)
     smo->omega_est   = 0.0f;
     smo->theta_prev  = 0.0f;
     smo->omega_lpf   = 0.0f;
-    smo->k_adapt     = smo->k_base;
-    smo->alpha_now   = smo->alpha_base;
-    smo->tau_lpf     = 0.0f;
+    smo->alpha_now   = smo->kslf_min;
     smo->err_alpha   = 0.0f;
     smo->err_beta    = 0.0f;
-    smo->err_mag_filt = 0.0f;
     smo->bemf_mag_filt = 0.0f;
     smo->confidence  = 0.0f;
     smo->residual    = 0.0f;
     smo->observable  = false;
 }
 
-/* ── SMO Update (one tick at 24 kHz) ─────────────────────────── */
+/* ── SMO Update (one tick at f_pwm) ──────────────────────────── */
 
 void v3_smo_update(SMO_Observer_t *smo,
                 float v_alpha, float v_beta,
                 float i_alpha, float i_beta,
                 float omega_est)
 {
-    /* 0. Absolute speed (used by adaptive K and adaptive LPF) */
     float abs_omega = (omega_est >= 0.0f) ? omega_est : -omega_est;
 
-    /* 1. Current estimation error */
-    float err_alpha = smo->i_hat_alpha - i_alpha;
-    float err_beta  = smo->i_hat_beta  - i_beta;
-    smo->err_alpha = err_alpha;
-    smo->err_beta  = err_beta;
-
-    /* 2. Sliding mode switching function (sigmoid).
-     *
-     * Adaptive K: LP-filtered from error magnitude.
-     * K_now = max(K_bemf, K_adapt), where K_adapt tracks:
-     *   K_target = k_base + k_base × |err|
-     * LP filter (k_adapt_alpha) prevents K oscillation. */
-    float err_mag = sqrtf(err_alpha * err_alpha + err_beta * err_beta);
-    smo->err_mag_filt += smo->k_adapt_alpha * (err_mag - smo->err_mag_filt);
-
-    float K_target = smo->k_base * 0.5f + smo->k_base * smo->err_mag_filt;
-    smo->k_adapt += smo->k_adapt_alpha * (K_target - smo->k_adapt);
-
-    float K_bemf = smo->k_bemf_scale * smo->lambda_pm * abs_omega;
-    float K_now = (K_bemf > smo->k_adapt) ? K_bemf : smo->k_adapt;
-    if (K_now > smo->k_max) K_now = smo->k_max;
-
-    smo->z_alpha = K_now * sigmoid(err_alpha, smo->phi);
-    smo->z_beta  = K_now * sigmoid(err_beta,  smo->phi);
-
-    /* 3. Current model update (forward Euler)
-     *    Î[k+1] = F·Î[k] + G·(V - E_stage1 - Z) */
+    /* ── 1. Current-model update (forward Euler) ───────────────
+     * î[k+1] = F·î[k] + G·(V − E1 − Z).  Uses E1 and Z from the
+     * previous tick, as in AN1078's CalcEstI. */
     smo->i_hat_alpha = smo->F * smo->i_hat_alpha
                      + smo->G * (v_alpha - smo->e1_alpha - smo->z_alpha);
     smo->i_hat_beta  = smo->F * smo->i_hat_beta
                      + smo->G * (v_beta  - smo->e1_beta  - smo->z_beta);
 
-    /* 4. Back-EMF extraction via cascaded LPF on switching signal Z.
-     *
-     * Speed-adaptive cutoff: alpha = base × |omega/omega_ref|,
-     * clamped [alpha_min, alpha_max]. */
-    float alpha_scale = abs_omega / smo->omega_ref;
-    if (alpha_scale < 0.1f) alpha_scale = 0.1f;
-    float alpha = smo->alpha_base * alpha_scale;
-    if (alpha < smo->alpha_min) alpha = smo->alpha_min;
-    if (alpha > smo->alpha_max) alpha = smo->alpha_max;
-    smo->alpha_now = alpha;
+    /* ── 2. Current estimation error ──────────────────────────── */
+    smo->err_alpha = smo->i_hat_alpha - i_alpha;
+    smo->err_beta  = smo->i_hat_beta  - i_beta;
 
-    /* Stage 1: Z → E1 (first LPF, fed back to current model) */
-    smo->e1_alpha += alpha * (smo->z_alpha - smo->e1_alpha);
-    smo->e1_beta  += alpha * (smo->z_beta  - smo->e1_beta);
+    /* ── 3. Sliding switching law — linear in boundary, saturate
+     *      outside.  Direct port of AN1078 CalcEstI. */
+    {
+        float abs_a = (smo->err_alpha >= 0.0f) ? smo->err_alpha : -smo->err_alpha;
+        if (abs_a < smo->MaxSMCError) {
+            smo->z_alpha = smo->Kslide * smo->err_alpha / smo->MaxSMCError;
+        } else {
+            smo->z_alpha = (smo->err_alpha > 0.0f) ? smo->Kslide : -smo->Kslide;
+        }
 
-    /* Stage 2: E1 → E2 (second LPF, used for angle) */
-    smo->e2_alpha += alpha * (smo->e1_alpha - smo->e2_alpha);
-    smo->e2_beta  += alpha * (smo->e1_beta  - smo->e2_beta);
+        float abs_b = (smo->err_beta >= 0.0f) ? smo->err_beta : -smo->err_beta;
+        if (abs_b < smo->MaxSMCError) {
+            smo->z_beta = smo->Kslide * smo->err_beta / smo->MaxSMCError;
+        } else {
+            smo->z_beta = (smo->err_beta > 0.0f) ? smo->Kslide : -smo->Kslide;
+        }
+    }
 
-    /* Store LPF cutoff for accurate arctan phase compensation.
-     * ωc = α·fs / (1-α).  Phase delay per stage = arctan(ω/ωc). */
-    smo->tau_lpf = alpha / ((1.0f - alpha) * smo->dt);  /* = ωc */
+    /* ── 4. Back-EMF extraction — cascaded 1st-order IIR on Z.
+     * AN1078 uses single Kslf = KslfFinal, speed-proportional, floored.
+     * Kslf = |ω|·THETA_FILTER_CNST, clamped at kslf_min. */
+    {
+        float kslf = abs_omega * smo->theta_filter_cnst;
+        if (kslf < smo->kslf_min) kslf = smo->kslf_min;
+        if (kslf > 1.0f)          kslf = 1.0f;
+        smo->alpha_now = kslf;
 
-    /* 5. Angle extraction from filtered back-EMF.
-     *    eα = -λ·ω·sin(θ),  eβ = +λ·ω·cos(θ)
-     *    θ = atan2(-eα, eβ) */
-    float theta_raw = atan2f(-smo->e2_alpha, smo->e2_beta);
-    if (theta_raw < 0.0f)
-        theta_raw += FOC_TWO_PI;
-    smo->theta_est = theta_raw;
+        /* Stage 1 — E1 fed back into current model next tick */
+        smo->e1_alpha += kslf * (smo->z_alpha - smo->e1_alpha);
+        smo->e1_beta  += kslf * (smo->z_beta  - smo->e1_beta );
 
-    /* 5b. Health metrics */
+        /* Stage 2 — E2 used for angle extraction */
+        smo->e2_alpha += kslf * (smo->e1_alpha - smo->e2_alpha);
+        smo->e2_beta  += kslf * (smo->e1_beta  - smo->e2_beta );
+    }
+
+    /* ── 5. Angle from filtered back-EMF.
+     *      Eα = −λω sin(θ), Eβ = +λω cos(θ)
+     *   → θ = atan2(−Eα, Eβ) + CONSTANT_PHASE_SHIFT. */
+    {
+        float theta_raw = atan2f(-smo->e2_alpha, smo->e2_beta) + smo->theta_offset;
+        /* Wrap to [0, 2π) */
+        while (theta_raw >= FOC_TWO_PI) theta_raw -= FOC_TWO_PI;
+        while (theta_raw < 0.0f)        theta_raw += FOC_TWO_PI;
+        smo->theta_est = theta_raw;
+    }
+
+    /* ── 6. Speed estimate from delta-θ, LP-filtered ─────────── */
+    {
+        float dtheta = smo->theta_est - smo->theta_prev;
+        if (dtheta >  FOC_PI_F) dtheta -= FOC_TWO_PI;
+        if (dtheta < -FOC_PI_F) dtheta += FOC_TWO_PI;
+        smo->theta_prev = smo->theta_est;
+
+        float omega_raw = dtheta / smo->dt;
+        smo->omega_lpf += 0.05f * (omega_raw - smo->omega_lpf);
+        smo->omega_est = smo->omega_lpf;
+    }
+
+    /* ── 7. Diagnostics (do NOT affect the observer math) ─────
+     * BEMF magnitude, confidence = observed/expected, residual =
+     * LP-filtered |err|, observable flag. */
     {
         float bemf_mag = sqrtf(smo->e2_alpha * smo->e2_alpha
                              + smo->e2_beta  * smo->e2_beta);
         smo->bemf_mag_filt += 0.005f * (bemf_mag - smo->bemf_mag_filt);
 
-        /* Residual: normalized current estimation error (0-1 scale).
-         * Raw err_mag ≈ G×K (inherent SMO chattering). Normalizing by
-         * G×K_now gives a convergence quality metric where ~0.5-0.7 is
-         * normal (current model absorbs ~40% of switching signal). */
-        float GK = smo->G * K_now;
-        float res_norm = (GK > 0.1f) ? (err_mag / GK) : 0.0f;
-        smo->residual += 0.005f * (res_norm - smo->residual);
-
-        /* Confidence: observed / expected BEMF ratio */
         float bemf_expected = smo->lambda_pm * abs_omega;
         if (bemf_expected > 0.01f) {
             float conf = smo->bemf_mag_filt / bemf_expected;
@@ -194,52 +197,46 @@ void v3_smo_update(SMO_Observer_t *smo,
             smo->confidence = 0.0f;
         }
 
-        /* Observable flag: confidence-based (residual is inherent SMO
-         * switching chattering at G×K ≈ 16A/tick, not a convergence metric) */
+        float err_mag = sqrtf(smo->err_alpha * smo->err_alpha
+                            + smo->err_beta  * smo->err_beta);
+        smo->residual += 0.005f * (err_mag - smo->residual);
+
         smo->observable = (smo->confidence >= smo->conf_min);
     }
-
-    /* 6. Simple speed estimate from delta-theta (for telemetry).
-     *    The PLL provides the smooth speed used for control. */
-    float dtheta = smo->theta_est - smo->theta_prev;
-    if (dtheta >  FOC_PI_F) dtheta -= FOC_TWO_PI;
-    if (dtheta < -FOC_PI_F) dtheta += FOC_TWO_PI;
-    smo->theta_prev = smo->theta_est;
-
-    float omega_raw = dtheta / smo->dt;
-    smo->omega_lpf += 0.05f * (omega_raw - smo->omega_lpf);
-    smo->omega_est = smo->omega_lpf;
 }
 
-/* ── SMO Phase Delay ─────────────────────────────────────────── */
-
+/* ── SMO Phase Delay ─────────────────────────────────────────────
+ *
+ * AN1078 bakes the observer's bulk angle correction into a constant
+ * CONSTANT_PHASE_SHIFT applied inside SMO (see step 5 above), and does
+ * NOT compute dynamic group-delay compensation.  We preserve the API
+ * for call-site compatibility but return 0 — all offset is already
+ * applied to `theta_est`. */
 float v3_smo_phase_delay(const SMO_Observer_t *smo, float omega)
 {
-    /* Exact phase delay for 2 cascaded 1st-order IIR stages + transport delay.
-     * φ = 2·arctan(ω/ωc) + ω·dt
-     * tau_lpf field stores ωc (LPF cutoff in rad/s). */
-    float wc = smo->tau_lpf;
-    if (wc < 1.0f) wc = 1.0f;  /* safety */
-    return 2.0f * atanf(omega / wc) + omega * smo->dt;
+    (void)smo;
+    (void)omega;
+    return 0.0f;
 }
 
-/* ── Rs Online Adaptation ────────────────────────────────────── */
-
+/* ── Rs Online Adaptation — unchanged from pre-AN1078 port ─────
+ *
+ * Not called from foc_v3_control.c today; kept as reusable utility.
+ * Projects current error onto the measured current vector and nudges
+ * Rs_est by an LP-filtered amount, with ±50% of initial Rs as hard
+ * clamps.  Recomputes F. */
 void v3_smo_adapt_rs(SMO_Observer_t *smo,
                      float i_alpha, float i_beta,
                      float Rs_init)
 {
     const float adapt_gain = 0.1f;
 
-    float err_alpha = smo->i_hat_alpha - i_alpha;
-    float err_beta  = smo->i_hat_beta  - i_beta;
-    float err_proj  = err_alpha * i_alpha + err_beta * i_beta;
+    float err_proj = smo->err_alpha * i_alpha + smo->err_beta * i_beta;
 
     float i_sq = i_alpha * i_alpha + i_beta * i_beta;
     if (i_sq < 0.25f) return;
 
     float dRs = adapt_gain * err_proj / i_sq * smo->dt;
-
     smo->Rs_est += dRs;
 
     float Rs_min = Rs_init * 0.5f;
@@ -250,7 +247,12 @@ void v3_smo_adapt_rs(SMO_Observer_t *smo,
     smo->F = 1.0f - smo->Rs_est * smo->dt / smo->Ls;
 }
 
-/* ── PLL for smooth speed estimation ─────────────────────────── */
+/* ── PLL for smooth speed estimation ─────────────────────────────
+ *
+ * Retained verbatim pending Phase 4 removal.  AN1078 does not use a
+ * separate PLL — it accumulates delta-θ over N ticks to compute ω.
+ * Our existing foc_v3_control.c still calls these, so keeping them
+ * callable avoids touching the control loop in this phase. */
 
 void v3_smo_pll_init(SMO_PLL_t *pll,
                      float bw_min_hz, float bw_max_hz,
@@ -287,30 +289,24 @@ float v3_smo_pll_update(SMO_PLL_t *pll, float theta_meas, float dt)
         float frac = abs_w / pll->omega_bw_ref;
         if (frac > 1.0f) frac = 1.0f;
 
-        float bw = pll->bw_min_hz + frac * (pll->bw_max_hz - pll->bw_min_hz);
+        float bw  = pll->bw_min_hz + frac * (pll->bw_max_hz - pll->bw_min_hz);
         float w_n = FOC_TWO_PI * bw;
-        pll->kp = 2.0f * 1.2f * w_n;       /* 2·ζ·ωn (ζ=1.2) */
-        pll->ki = w_n * w_n;                 /* ωn² */
+        pll->kp = 2.0f * 1.2f * w_n;       /* 2·ζ·ωn (ζ = 1.2) */
+        pll->ki = w_n * w_n;
     }
 
-    /* Phase error */
     float delta = theta_meas - pll->theta_est;
     if (delta >  FOC_PI_F) delta -= FOC_TWO_PI;
     if (delta < -FOC_PI_F) delta += FOC_TWO_PI;
 
-    /* Track innovation for health monitoring */
     float abs_delta = (delta >= 0.0f) ? delta : -delta;
     pll->innovation = abs_delta;
     pll->innovation_lpf += 0.01f * (abs_delta - pll->innovation_lpf);
 
-    /* PI update */
     pll->omega_est += pll->ki * delta * dt;
-
-    /* Clamp speed: unidirectional */
     if (pll->omega_est > pll->omega_max) pll->omega_est = pll->omega_max;
-    if (pll->omega_est < 0.0f) pll->omega_est = 0.0f;
+    if (pll->omega_est < 0.0f)           pll->omega_est = 0.0f;
 
-    /* Advance angle */
     pll->theta_est += (pll->omega_est + pll->kp * delta) * dt;
     pll->theta_est = foc_angle_wrap(pll->theta_est);
 

@@ -18,13 +18,15 @@
 extern "C" {
 #endif
 
-/* Firmware version (no existing macros — define here for GSP_INFO_T) */
+/* Firmware version — bump on meaningful changes so the logger
+ * unambiguously shows what's running on the chip. */
 #define GSP_FW_MAJOR    0
-#define GSP_FW_MINOR    1
+#define GSP_FW_MINOR    2
 #define GSP_FW_PATCH    0
 
-/* GSP protocol version */
-#define GSP_PROTOCOL_VERSION  2
+/* GSP protocol version — bump when GSP_INFO_T or other wire formats
+ * change.  V3 = added 4-byte buildHash to GSP_INFO_T. */
+#define GSP_PROTOCOL_VERSION  3
 
 /* Board IDs */
 #define GSP_BOARD_MCLV48V300W  0x0001
@@ -79,7 +81,11 @@ typedef enum {
     GSP_ERR_EEPROM_THROTTLED = 0x08
 } GSP_ERR_CODE_T;
 
-/* GSP_INFO_T — 20 bytes, returned by GET_INFO */
+/* GSP_INFO_T — 24 bytes, returned by GET_INFO.
+ *
+ * V3 ADDED buildHash: a djb2 hash of __DATE__ " " __TIME__ computed at
+ * firmware boot.  Every recompile produces a new buildHash, so the host
+ * tool can unambiguously identify which binary is on the chip. */
 typedef struct __attribute__((packed)) {
     uint8_t  protocolVersion;
     uint8_t  fwMajor;
@@ -91,9 +97,10 @@ typedef struct __attribute__((packed)) {
     uint32_t featureFlags;
     uint32_t pwmFrequency;
     uint32_t maxErpm;           /* V2: widened from u16+reserved to u32 */
+    uint32_t buildHash;         /* V3: hash of __DATE__ __TIME__ */
 } GSP_INFO_T;
 
-_Static_assert(sizeof(GSP_INFO_T) == 20, "GSP_INFO_T wire size mismatch");
+_Static_assert(sizeof(GSP_INFO_T) == 24, "GSP_INFO_T wire size mismatch");
 
 /* GSP_SNAPSHOT_T — 68 bytes, returned by GET_SNAPSHOT */
 typedef struct __attribute__((packed)) {

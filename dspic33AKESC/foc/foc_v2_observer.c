@@ -77,27 +77,24 @@ void foc_observer_update(FOC_Observer_t *obs, FOC_PLL_t *pll,
     obs->i_alpha_last = i_alpha;
     obs->i_beta_last  = i_beta;
 
-    /* Adaptive lambda tracking (VESC MXLEMMING_LAMBDA_COMP).
-     * Adjusts flux estimate to match observed flux magnitude. */
+    /* 2026-04-23: Adaptive lambda DISABLED for 2810@24V debugging.
+     * Suspected cause of observer drift that gives Vd ~1.8V steady-state
+     * bias across all speeds. Force lambda_est = configured lambda so
+     * the flux magnitude clamp uses a fixed reference.
+     * Low-speed upward boost (×1.1/tick when |flux|<λ/2) also disabled
+     * — at 2000 rad/s flux should be well above λ/2 but any transient
+     * dip would cause explosive inflation. */
     float mag_sq = obs->x1 * obs->x1 + obs->x2 * obs->x2;
-    float err = obs->lambda_est * obs->lambda_est - mag_sq;
-    obs->lambda_est += 0.1f * obs->gain * obs->lambda_est * (-err) * dt;
-    obs->lambda_est = foc_clampf(obs->lambda_est, lambda * 0.3f, lambda * 2.5f);
+    (void)mag_sq;
+    obs->lambda_est = lambda;    /* fixed, no adaptation */
 
-    /* Circular normalization: constrain flux magnitude to lambda_est
-     * while preserving angle. */
+    /* Circular normalization: downward clamp only, no upward boost. */
     {
         float mag_c = sqrtf(obs->x1 * obs->x1 + obs->x2 * obs->x2);
-        if (mag_c > 1e-12f) {
-            if (mag_c > obs->lambda_est) {
-                float sc = obs->lambda_est / mag_c;
-                obs->x1 *= sc;
-                obs->x2 *= sc;
-            } else if (mag_c < lambda * 0.5f) {
-                float sc = 1.0f + 0.1f * dt * 24000.0f;
-                obs->x1 *= sc;
-                obs->x2 *= sc;
-            }
+        if (mag_c > lambda) {
+            float sc = lambda / mag_c;
+            obs->x1 *= sc;
+            obs->x2 *= sc;
         }
     }
 
@@ -142,7 +139,16 @@ void foc_observer_bemf_correct(FOC_Observer_t *obs,
      * load current.  The ramp ensures gentle activation after
      * the high-current startup regime. */
     float abs_omega = (omega >= 0.0f) ? omega : -omega;
-    if (abs_omega < 2000.0f) {
+    /* 2026-04-23: BEMF correction re-enabled with a wide/gentle ramp.
+     * Earlier disable (threshold=10000) caused 50° observer angle drift
+     * because flux integrator had no angle feedback. Motor was running
+     * open-loop and PI had to absorb the full offset via Vd integrator,
+     * which saturated at higher modIdx → BOARD_PCI.
+     * Original 2000 rad/s gate also problematic (discontinuous activation).
+     * New: gate at 200 rad/s (well below handoff), ramp Kp from 0 → full
+     * over a wide range so observer gets progressive feedback from the
+     * very start of CL. */
+    if (abs_omega < 200.0f) {
         obs->bemf_int = 0.0f;
         return;
     }
@@ -182,9 +188,13 @@ void foc_observer_bemf_correct(FOC_Observer_t *obs,
      *   angle_err = 0.1/1.69 = 0.059 rad
      *   correction = 0.075 * 0.059 = 0.0044 rad/tick
      *   vs ω*dt = 0.125 rad/tick → 3.5% perturbation (safe). */
-    const float BEMF_KP_MAX  = 0.15f;
-    const float RAMP_LO      = 2000.0f;
-    const float RAMP_HI      = 4000.0f;
+    /* Gentler correction + wider ramp (2026-04-23).
+     * KP_MAX halved from 0.15 to prevent any single-step kick being large.
+     * Ramp starts at 500 rad/s (just above gate, below OL handoff) and
+     * reaches full gain by 3000 rad/s — 2.5 krad/s of gentle engagement. */
+    const float BEMF_KP_MAX  = 0.075f;    /* was 0.15 — halved for smoother engagement */
+    const float RAMP_LO      = 500.0f;    /* was 10000 — engage very early */
+    const float RAMP_HI      = 3000.0f;   /* was 12000 — full gain by typical cruise speed */
 
     float kp_scale = (abs_omega - RAMP_LO) / (RAMP_HI - RAMP_LO);
     if (kp_scale > 1.0f) kp_scale = 1.0f;

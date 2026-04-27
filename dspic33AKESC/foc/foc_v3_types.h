@@ -24,7 +24,10 @@
 extern "C" {
 #endif
 
-/* ── SMO configuration (runtime, from motor params) ────────────── */
+/* ── SMO configuration (runtime, from motor params) ──────────────
+ *
+ * AN1078-style classical SMO, float port.  Fixed sliding gain and
+ * speed-proportional filter cutoff, no adaptive tuning layer. */
 typedef struct {
     float Rs;
     float Ls;
@@ -32,25 +35,28 @@ typedef struct {
     float vbus_nom;
     float dt;
 
-    /* Sliding gain tuning */
-    float k_base;            /* Minimum sliding gain (V) */
-    float k_bemf_scale;      /* BEMF-proportional floor: K >= scale·λ·|ω| */
-    float k_max;             /* Maximum sliding gain (V) — typically Vbus */
-    float k_adapt_alpha;     /* LP filter rate for adaptive K */
-    float phi;               /* Sigmoid boundary layer (A) */
+    /* Sliding controller */
+    float Kslide;            /* Sliding control gain (same units as V — see .c) */
+    float MaxSMCError;       /* Boundary-layer half-width (A) — above this, Z saturates */
 
-    /* LPF tuning */
-    float alpha_base;        /* Base LPF coefficient at omega_ref */
-    float omega_ref;         /* Reference speed for LPF scaling (rad/s) */
-    float alpha_min;         /* Minimum alpha (heavy filtering at low speed) */
-    float alpha_max;         /* Maximum alpha (light filtering at high speed) */
+    /* BEMF low-pass filter (speed-proportional) */
+    float theta_filter_cnst; /* Kslf scale — AN1078: 2π/60·Ts */
+    float kslf_min;          /* Minimum Kslf (at and below end-speed) */
 
-    /* Health thresholds */
-    float conf_min;          /* Minimum confidence for observable=true */
-    float residual_max;      /* Maximum residual for observable=true */
+    /* Angle offset (AN1078 CONSTANT_PHASE_SHIFT, radians) */
+    float theta_offset;
+
+    /* Health thresholds — kept for handoff gating (non-algorithmic) */
+    float conf_min;
+    float residual_max;
 } SMO_Config_t;
 
-/* ── SMO observer state ──────────────────────────────────────── */
+/* ── SMO observer state ──────────────────────────────────────────
+ *
+ * AN1078 classical SMO, float port.  Field names `e1_alpha` (stage 1,
+ * fed back to current model) and `e2_alpha` (stage 2, used for angle)
+ * follow our prior convention — they correspond to AN1078's `Ealpha`
+ * and `EalphaFinal` respectively. */
 typedef struct {
     /* Estimated currents (α-β frame) */
     float i_hat_alpha;
@@ -60,60 +66,58 @@ typedef struct {
     float z_alpha;
     float z_beta;
 
-    /* Back-EMF estimates — stage 1 (feedback to current model) */
+    /* Back-EMF stage 1 — feedback into current model (AN1078: Ealpha) */
     float e1_alpha;
     float e1_beta;
 
-    /* Back-EMF estimates — stage 2 (filtered, used for angle) */
+    /* Back-EMF stage 2 — used for angle (AN1078: EalphaFinal) */
     float e2_alpha;
     float e2_beta;
 
-    /* Angle and speed output */
-    float theta_est;         /* atan2 of filtered BEMF (rad, [0, 2π)) */
-    float omega_est;         /* Speed from delta-theta (rad/s) */
+    /* Angle + speed output */
+    float theta_est;         /* [0, 2π) */
+    float omega_est;         /* rad/s (LP-filtered delta-θ) */
 
     /* Speed estimation internals */
-    float theta_prev;        /* Previous theta for delta computation */
-    float omega_lpf;         /* LP-filtered speed for smooth output */
+    float theta_prev;
+    float omega_lpf;
 
     /* Discrete plant coefficients */
-    float F;                 /* 1 - Rs*Ts/Ls (plant pole) */
-    float G;                 /* Ts/Ls (plant gain) */
+    float F;                 /* 1 - Rs*dt/Ls */
+    float G;                 /* dt/Ls */
 
-    /* Stored motor/timing params for Rs adaptation */
-    float Rs_est;            /* Online Rs estimate (Ω) */
-    float Ls;                /* Inductance (H) */
-    float dt;                /* Sample period (s) */
-    float lambda_pm;         /* Flux linkage (V·s/rad) */
+    /* Motor / timing params (stored for Rs adaptation and diagnostics) */
+    float Rs_est;
+    float Ls;
+    float dt;
+    float lambda_pm;
 
-    /* Sliding gain state */
-    float k_base;            /* Stored from config */
-    float k_bemf_scale;      /* Stored from config */
-    float k_max;             /* Stored from config */
-    float k_adapt;           /* Current adaptive gain (V) */
-    float k_adapt_alpha;     /* LP filter rate */
-    float phi;               /* Sigmoid boundary (A) */
+    /* Sliding controller params (AN1078 style) */
+    float Kslide;
+    float MaxSMCError;
 
-    /* LPF state */
-    float alpha_base;        /* Base LPF alpha */
-    float omega_ref;         /* Reference speed for scaling */
-    float alpha_min;         /* Min alpha */
-    float alpha_max;         /* Max alpha */
-    float alpha_now;         /* Current computed alpha (for phase delay calc) */
-    float tau_lpf;           /* Current total group delay (s) */
+    /* BEMF LPF params (AN1078 style) */
+    float theta_filter_cnst;
+    float kslf_min;
+    float alpha_now;         /* Last Kslf computed (telemetry + phase-delay stub) */
 
-    /* Current estimation error */
-    float err_alpha;         /* i_hat - i_meas, α */
-    float err_beta;          /* i_hat - i_meas, β */
-    float err_mag_filt;      /* LP-filtered |err| (A) */
+    /* Angle offset (AN1078 CONSTANT_PHASE_SHIFT) */
+    float theta_offset;
 
-    /* Observer health metrics */
-    float bemf_mag_filt;     /* LP-filtered BEMF magnitude (V) */
-    float confidence;        /* BEMF_observed / BEMF_expected [0..1] */
-    float residual;          /* LP-filtered current estimation error (A) */
-    bool  observable;        /* confidence > min AND residual < max */
-    float conf_min;          /* Stored threshold */
-    float residual_max;      /* Stored threshold */
+    /* Back-compat aliases (kept so external telemetry/config still compile) */
+    float k_base;            /* = Kslide (legacy snapshot field `focObsGain`) */
+
+    /* Current estimation error — exposed for diagnostics */
+    float err_alpha;
+    float err_beta;
+
+    /* Observer health metrics (diagnostic layer, not used by observer math) */
+    float bemf_mag_filt;
+    float confidence;
+    float residual;
+    bool  observable;
+    float conf_min;
+    float residual_max;
 } SMO_Observer_t;
 
 /* ── PLL for SMO speed estimation ────────────────────────────── */
@@ -164,6 +168,12 @@ typedef struct {
 
     /* CL commutation state */
     float theta_delay_comp;  /* Current dynamic phase delay compensation (rad) */
+
+    /* Smooth OL→CL transition (AN1078 pmsm.c trick).  Captured at
+     * handoff as (theta_ol − smo.theta_est); added to the commutation
+     * angle in CL and bled toward zero so the rotor never sees an
+     * angle step. */
+    float theta_error;
 
     /* Current/voltage outputs */
     float iq_ref, id_ref;

@@ -15,11 +15,11 @@ extern "C" {
 #endif
 
 /* Feature Flags (0=disabled, 1=enabled) */
-#define FEATURE_BEMF_CLOSED_LOOP 1  /* Phase 2: BEMF ZC detection (0=Phase 1 open-loop only) */
+#define FEATURE_BEMF_CLOSED_LOOP 0  /* Phase 2: BEMF ZC detection — DISABLED for FOC V2 (mutex) */
 #define FEATURE_VBUS_FAULT       1  /* Phase A4: Bus voltage OV/UV fault enforcement */
 #define FEATURE_DESYNC_RECOVERY  1  /* Phase B2: Controlled restart-on-desync (ESC_RECOVERY) */
 #define FEATURE_DUTY_SLEW        1  /* Phase B1: Asymmetric duty slew rate limiter */
-#define FEATURE_TIMING_ADVANCE   1  /* Phase B3: Linear timing advance by RPM (0-15 deg linear by speed) */
+#define FEATURE_TIMING_ADVANCE   0  /* Phase B3: Linear timing advance by RPM — DISABLED for FOC V2 (6-step feature; references MIN_ADC_STEP_PERIOD gated under FEATURE_BEMF_CLOSED_LOOP) */
 #define FEATURE_DYNAMIC_BLANKING 1  /* Phase C1: Speed+duty-aware blanking (extra blank at high duty/demag) */
 #define FEATURE_VBUS_SAG_LIMIT   1  /* Phase C2: Bus voltage sag power limiting (reduce duty on Vbus dip) */
 #define FEATURE_BEMF_INTEGRATION 1  /* Phase E: Shadow integration estimator (shadow-only, no control) */
@@ -29,13 +29,14 @@ extern "C" {
                                      * advances steps at increasing rate with RAMP_DUTY_CAP.
                                      * Much easier to reason about current and timing
                                      * than sine modulation. */
-#define FEATURE_ADC_CMP_ZC       1  /* Phase F: ADC comparator-based high-speed ZC */
+#define FEATURE_ADC_CMP_ZC       0  /* Phase F: ADC comparator-based high-speed ZC — DISABLED for FOC V2 (mutex) */
 #define FEATURE_HW_OVERCURRENT  1  /* Phase G: Hardware overcurrent protection via CMP3+OA3 */
 
 /* FOC (Field-Oriented Control) — compile-time alternative to 6-step */
 #define FEATURE_FOC              0  /* Phase I: OLD FOC v1 (reference, deprecated) */
 #define FEATURE_FOC_V2           0  /* Phase I v2: closed-loop current control + MXLEMMING */
-#define FEATURE_FOC_V3           0  /* Phase J: FOC v3 — SMO observer + OL ramp startup */
+#define FEATURE_FOC_V3           0  /* Phase J: FOC v3 — SMO observer + PLL */
+#define FEATURE_FOC_AN1078       1  /* Phase K: AN1078 float port — direct Microchip reference */
 #define FEATURE_SMO              0  /* 0=PLL only, 1=PLL+SMO parallel (v1 only) */
 #define FEATURE_MXLEMMING        0  /* 0=PLL chain, 1=MXLEMMING flux observer (v1 only) */
 #define FEATURE_LEARN_MODULES    0  /* master: ring buffer + quality + health */
@@ -90,17 +91,29 @@ extern "C" {
 #endif
 
 /* PWM Configuration */
-#define PWMFREQUENCY_HZ            40000       /* PWM switching frequency
-                                                 * Bumped 24 kHz → 40 kHz (2026-04-20):
-                                                 * - Current ripple shrinks ~40 %
-                                                 * - Mistimed-commutation current buildup
-                                                 *   per cycle drops ~40 % (29 V × L × 6.25 µs
-                                                 *   = 3.6 A/cyc vs 6 A/cyc at 24 kHz)
-                                                 * - Board 5.5 kHz RC filter gives better
-                                                 *   attenuation of PWM ripple in the HWZC
-                                                 *   comparator → ~40 % fewer phantom ZCs.
-                                                 * Costs: ~40 % higher FET switching losses,
-                                                 * MIN_DUTY climbs 2.4 % → 4 %. */
+#define PWMFREQUENCY_HZ            45000       /* PWM switching frequency
+                                                 * History:
+                                                 *   24→40 kHz (2026-04-20): ripple/HWZC.
+                                                 *   40→48 kHz (2026-04-25): SMC angle res.
+                                                 *   48→60 kHz (2026-04-25): chasing 200k.
+                                                 *   60→45 kHz (2026-04-26): production
+                                                 *     compromise — 60 kHz pushed the
+                                                 *     hardware past comfort.  PLL+FW
+                                                 *     reach ~130k eRPM here, plenty for
+                                                 *     drone use under prop load.
+                                                 *
+                                                 * Trade-off vs 60 kHz:
+                                                 *   - Top no-load eRPM: 201k → ~130k (-35%)
+                                                 *   - FET switching losses: ~25% lower
+                                                 *   - Thermal margin: significant
+                                                 *     improvement for sustained ops
+                                                 *   - Per-tick angle res at 130k: ~21°
+                                                 *     (similar to 60 kHz at 200k — same
+                                                 *     observer wobble margin)
+                                                 *
+                                                 * AN_FS_HZ in an1078_params.h MUST match
+                                                 * (F_PLANT/G_PLANT/KSLF_SCALE all derive
+                                                 * from AN_TS = 1/AN_FS_HZ). */
 
 /*──────────────────────────────────────────────────────────────────────────
  * Motor Profile Selection

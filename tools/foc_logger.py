@@ -372,9 +372,27 @@ def main():
     # Get info
     resp = send_cmd(ser, GSP_CMD_GET_INFO)
     if resp and resp[0] == GSP_CMD_GET_INFO and len(resp[1]) >= 14:
-        flags = struct.unpack_from("<I", resp[1], 8)[0]
+        proto_ver = resp[1][0]
+        fw_maj    = resp[1][1]
+        fw_min    = resp[1][2]
+        fw_pat    = resp[1][3]
+        flags     = struct.unpack_from("<I", resp[1], 8)[0]
         is_foc = bool(flags & (1 << 23))
-        print(f"  Mode: {'FOC V2' if is_foc else '6-step'}")
+
+        # FOC variant from feature flags bits 23 + others.
+        # Logger can't directly tell V2/V3/AN1078 apart from flags alone
+        # — they all set bit 23.  Use buildHash + fw version as primary
+        # build identifier instead.
+        print(f"  GSP proto v{proto_ver}  FW v{fw_maj}.{fw_min}.{fw_pat}")
+
+        # buildHash (V3+ protocol, bytes 20-23 of GSP_INFO_T)
+        if proto_ver >= 3 and len(resp[1]) >= 24:
+            build_hash = struct.unpack_from("<I", resp[1], 20)[0]
+            print(f"  Build hash: 0x{build_hash:08X}")
+        else:
+            print(f"  Build hash: (unsupported, proto v{proto_ver} < 3)")
+
+        print(f"  Mode: {'FOC' if is_foc else '6-step'}")
         print(f"  Feature flags: 0x{flags:08X}")
     else:
         is_foc = False
@@ -427,7 +445,7 @@ def main():
 
     print(f"\n  Recording... (Ctrl+C to stop)\n")
     print(f"  {'Time':>7s}  {'State':>8s}  {'Sub':>5s}  {'Iq':>7s}  "
-          f"{'Id':>7s}  {'Vq':>7s}  {'Vd':>7s}  {'RPM':>7s}  {'Vbus':>6s}  "
+          f"{'Id':>7s}  {'Vq':>7s}  {'Vd':>7s}  {'eRPM':>7s}  {'Vbus':>6s}  "
           f"{'Thr':>5s}  {'Fault':>6s}")
     print(f"  {'─'*7}  {'─'*8}  {'─'*5}  {'─'*7}  {'─'*7}  {'─'*7}  "
           f"{'─'*7}  {'─'*7}  {'─'*6}  {'─'*5}  {'─'*6}")
@@ -480,7 +498,7 @@ def main():
 
             line = (f"\r  {row['time_s']:>7s}  {state_name:>8s}  {sub_name:>5s}  "
                     f"Iq={foc_iq:>6s}  Id={foc_id:>6s}  Vq={foc_vq:>6s}  "
-                    f"{rpm:>6s}rpm  {vbus:>5s}V  mod={mod_idx:>5s}  "
+                    f"{rpm:>6s}eRPM  {vbus:>5s}V  mod={mod_idx:>5s}  "
                     f"conf={obs_conf:>5s}  {fault:>6s}")
             print(line, end="", flush=True)
             last_print = now

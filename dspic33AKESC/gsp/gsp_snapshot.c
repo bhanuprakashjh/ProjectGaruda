@@ -108,7 +108,7 @@ void GSP_CaptureSnapshot(GSP_SNAPSHOT_T *dst)
     dst->uptimeSec  = src->systemTick / 1000;
 
     /* FOC telemetry (float fields: may tear, acceptable for telemetry) */
-#if FEATURE_FOC_V2 || FEATURE_FOC_V3
+#if FEATURE_FOC_V2 || FEATURE_FOC_V3 || FEATURE_FOC_AN1078
     dst->focIdMeas   = src->focIdMeas;
     dst->focIqMeas   = src->focIqMeas;
     dst->focTheta    = src->focTheta;
@@ -131,12 +131,16 @@ void GSP_CaptureSnapshot(GSP_SNAPSHOT_T *dst)
     dst->focSubState = src->focSubState;
     dst->focOffsetIa = src->focOffsetIa;
     dst->focOffsetIb = src->focOffsetIb;
+  #if FEATURE_FOC_V3
+    /* v3-only: SMO + PLL observer fields — GARUDA_DATA_T doesn't include
+     * these under v2 (which uses MXLEMMING flux observer instead). */
     dst->smoResidual    = src->smoResidual;
     dst->pllInnovation  = src->pllInnovation;
     dst->pllOmega       = src->pllOmega;
     dst->omegaOl        = src->omegaOl;
     dst->handoffCtr     = src->handoffCtr;
     dst->smoObservable  = src->smoObservable;
+  #endif
 #elif FEATURE_FOC
     dst->focTheta    = src->focTheta;
     dst->focOmega    = src->focOmega;
@@ -169,7 +173,7 @@ void GSP_CaptureSnapshot(GSP_SNAPSHOT_T *dst)
     dst->hwzcNoiseReject    = ReadU32Consistent(&src->hwzc.noiseRejectCount);
 #endif
 
-#if !FEATURE_FOC && !FEATURE_FOC_V2 && !FEATURE_FOC_V3
+#if !FEATURE_FOC && !FEATURE_FOC_V2 && !FEATURE_FOC_V3 && !FEATURE_FOC_AN1078
     /* Phase-current monitor (16-bit fields are atomic on dsPIC33AK).
      * Read the window max/min, then reset them in one block so the ADC ISR
      * starts a fresh window. Small race here: if the ADC ISR fires between

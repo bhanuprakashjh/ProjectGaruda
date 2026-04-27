@@ -343,7 +343,12 @@ export const FAULT_CODES = ['NONE', 'OVERVOLTAGE', 'UNDERVOLTAGE', 'OVERCURRENT'
 export const FOC_SUB_STATES = ['IDLE', 'ARMED', 'ALIGN', 'I/F RAMP', 'CLOSED_LOOP'] as const;
 export const DETECT_PHASE_NAMES = ['Idle', 'Measuring Rs', 'Measuring Ls', 'Re-Aligning', 'Measuring Lambda', 'Auto-Tuning', 'Complete', 'Failed'] as const;
 
-export const PROFILE_NAMES = ['Hurst Long (300W)', 'A2212 1400KV', '5010 750KV', '5055 580KV', 'Custom'] as const;
+/* Profile slot 2 was originally "5010 750KV" but is now repurposed for the
+ * PRODRONE 2810 (1350 KV) — see dspic33AKESC/foc/an1078_params.h.  The
+ * label needs to match what the firmware tunes for; mismatched labels
+ * caused user confusion when tuning AN1078 for the 2810.  Slot 3 still
+ * holds 5055 (kept since profile defaults haven't been rewritten). */
+export const PROFILE_NAMES = ['Hurst Long (300W)', 'A2212 1400KV', '2810 1350KV', '5055 580KV', 'Custom'] as const;
 export const PROFILE_COUNT = 4; /* built-in profiles (excl. Custom) */
 
 export const PARAM_NAMES: Record<number, string> = {
@@ -406,6 +411,11 @@ export const PARAM_NAMES: Record<number, string> = {
   0x7E: 'CL Handoff Speed [focHandoffRadS]',
   0x7F: 'OC Fault Threshold [focFaultOcCentiA]',
   0x80: 'Stall Speed Threshold [focFaultStallDeciRadS]',
+  // AN1078 SMO Live Tuning (group 11) — settable while motor is running
+  0x90: 'AN1078 Theta Offset BASE [an1078ThetaBaseDegX10]',
+  0x91: 'AN1078 Theta Offset K [an1078ThetaKE7]',
+  0x92: 'AN1078 SMC Kslide [an1078KslideMv]',
+  0x93: 'AN1078 FW Max |Id| [an1078IdFwMaxDecia]',
 };
 
 export const PARAM_UNITS: Record<number, string> = {
@@ -427,6 +437,11 @@ export const PARAM_UNITS: Record<number, string> = {
   // FOC Startup
   0x79: 'cA', 0x7A: 'cA', 0x7B: 'ms', 0x7C: 'ms',
   0x7D: 'rad/s\u00B2', 0x7E: 'rad/s', 0x7F: 'cA', 0x80: 'drad/s',
+  // AN1078 SMO live tuning
+  0x90: '\u00B0\u00D710',     /* deg × 10 */
+  0x91: '\u00D71e7',          /* K × 1e7 */
+  0x92: 'mV',
+  0x93: 'dA',                 /* deci-amp */
 };
 
 export const PARAM_TOOLTIPS: Record<number, string> = {
@@ -481,6 +496,11 @@ export const PARAM_TOOLTIPS: Record<number, string> = {
   0x7E: 'Speed threshold for closed-loop handoff. PLL must track within 20% for 10ms.',
   0x7F: 'Software overcurrent fault threshold in centiamps. Motor faults if |I| exceeds this.',
   0x80: 'Stall detection speed in decirad/s. Motor faults if speed stays below this while commanding motion.',
+  // AN1078 SMO Live Tuning — these can be changed WHILE motor is running
+  0x90: 'AN1078 SMO theta-offset BASE in 0.1° units. Compensates BEMF→rotor offset at low speed. 200=20°. Watch focVd in scope: -ve=lags, +ve=leads, 0=aligned. Tune at low CL speed first.',
+  0x91: 'AN1078 SMO theta-offset speed coefficient × 1e7. Compensates LPF lag that grows with speed. 1000 = 1.0e-4 rad/(rad/s elec). Tune at high CL speed AFTER BASE is dialed in.',
+  0x92: 'AN1078 SMC sliding gain (Kslide) in mV. Magnitude of Z signal. 2500=2.5V good for low-Rs motors (2810). Higher motors (Hurst) want 6000-20000. Too high → buries weak BEMF.',
+  0x93: 'AN1078 field-weakening max |Id|, in deci-amps. 120 = 12A. 0 disables FW (motor speed capped at voltage limit). Engage cautiously — increases motor heating.',
 };
 
 export const PARAM_GROUPS: Record<number, string> = {
@@ -495,6 +515,7 @@ export const PARAM_GROUPS: Record<number, string> = {
   8: 'FOC Motor Model',
   9: 'FOC Tuning',
   10: 'FOC Startup',
+  11: 'AN1078 SMO Live Tune',
 };
 
 export const FEATURE_NAMES: Record<number, string> = {

@@ -84,6 +84,17 @@
 #endif
 #endif
 
+#if FEATURE_FOC_AN1078
+#include <math.h>
+#include "garuda_foc_params.h"
+#include "foc/an1078_motor.h"
+#include "foc/an1078_params.h"
+#include "hal/hal_pwm.h"
+#if FEATURE_GSP
+#include "gsp/gsp_params.h"
+#endif
+#endif
+
 #if FEATURE_BURST_SCOPE
 #include "scope/scope_burst.h"
 #endif
@@ -102,10 +113,19 @@ volatile bool gspFocReinitNeeded;
 /* FOC v3 state — SMO observer, accessed only from ADC ISR */
 static V3_State_t s_foc_v3;
 volatile bool gspFocReinitNeeded;
+#elif FEATURE_FOC_AN1078
+/* AN1078 motor controller — accessed only from ADC ISR */
+/* Non-static so gsp_commands.c can re-init the SMC observer when motor
+ * model params (Rs/Ls/Ke) are changed via SET_PARAM — re-uses gspParams
+ * values to recompute F_PLANT/G_PLANT without firmware recompile. */
+AN_Motor_T s_foc_an;
+volatile bool gspFocReinitNeeded;
 #endif
 
 #if FEATURE_FOC_V2 || FEATURE_FOC_V3
-/** Build FOC_MotorParams_t from GSP runtime params (or compile-time fallback). */
+/** Build FOC_MotorParams_t from GSP runtime params (or compile-time fallback).
+ *  AN1078 uses its own constants in an1078_params.h, doesn't call this. */
+static FOC_MotorParams_t BuildFocMotorParams(void) __attribute__((unused));
 static FOC_MotorParams_t BuildFocMotorParams(void)
 {
     FOC_MotorParams_t mp;
@@ -265,8 +285,8 @@ static inline float counts_to_vbus(uint16_t raw)
 }
 #endif /* FEATURE_FOC */
 
-#if FEATURE_FOC_V2 || FEATURE_FOC_V3
-/* Reuse same helper for v2/v3 telemetry raw→amps conversion */
+#if FEATURE_FOC_V2 || FEATURE_FOC_V3 || FEATURE_FOC_AN1078
+/* Reuse same helper for v2/v3/AN1078 telemetry raw→amps conversion */
 static inline float v2_counts_to_amps(uint16_t raw, uint16_t offset)
 {
     return -((float)(int16_t)(raw - offset)) * CURRENT_SCALE_A_PER_COUNT;
@@ -322,7 +342,7 @@ void GARUDA_ServiceInit(void)
     garudaData.desyncRestartAttempts = 0;
     garudaData.recoveryCounter = 0;
 
-#if !FEATURE_FOC && !FEATURE_FOC_V2 && !FEATURE_FOC_V3
+#if !FEATURE_FOC && !FEATURE_FOC_V2 && !FEATURE_FOC_V3 && !FEATURE_FOC_AN1078
     /* Phase-current monitor — start with empty max/min. iaMin initialized
      * to 0xFFFF so the first real sample wins the "less than" comparison. */
     garudaData.phaseCurrent.iaRaw = 0;
@@ -383,6 +403,11 @@ void GARUDA_ServiceInit(void)
     {
         FOC_MotorParams_t mp = BuildFocMotorParams();
         foc_v3_init(&s_foc_v3, &mp);
+        gspFocReinitNeeded = false;
+    }
+#elif FEATURE_FOC_AN1078
+    {
+        AN_MotorInit(&s_foc_an);
         gspFocReinitNeeded = false;
     }
 #endif
@@ -491,7 +516,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
 {
     /* Read all ADC buffers. MUST read AD1CH0DATA first — interrupt source.
      * Reading clears data-ready condition on dsPIC33AK. */
-#if FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3
+#if FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3 || FEATURE_FOC_AN1078
     /* FOC: AD1CH0 = Ia (OA1OUT), AD2CH0 = Ib (OA2OUT) — raw uint16_t */
     uint16_t raw_ia = ADCBUF_IA;
     uint16_t raw_ib = ADCBUF_IB;
@@ -704,7 +729,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
     HWZC_OnSoftwareSample(&garudaData);
 #endif
 
-#if !FEATURE_FOC && !FEATURE_FOC_V2 && !FEATURE_FOC_V3
+#if !FEATURE_FOC && !FEATURE_FOC_V2 && !FEATURE_FOC_V3 && !FEATURE_FOC_AN1078
     /* Phase-current peak tracking (diagnostic). AD1CH3 / AD2CH2 convert at
      * 24 kHz (PG1TRIGA, mid-ON valley). max/min are the per-sample window
      * peaks; they're reset after each GSP snapshot read (see gsp_snapshot.c).
@@ -834,7 +859,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
     }
 #endif
 #else
-#if !FEATURE_FOC && !FEATURE_FOC_V2 && !FEATURE_FOC_V3
+#if !FEATURE_FOC && !FEATURE_FOC_V2 && !FEATURE_FOC_V3 && !FEATURE_FOC_AN1078
     garudaData.bemf.bemfRaw = phaseB_val;
     (void)phaseAC_val;  /* AD2CH0DATA must be read; suppress unused warning */
 #endif
@@ -1715,6 +1740,142 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
         }
 #endif
     } /* end FOC v3 scope */
+#elif FEATURE_FOC_AN1078
+    /* ── AN1078 control path — float port of Microchip reference ──
+     * State machine: STOPPED → LOCK → OPEN_LOOP → CLOSED_LOOP
+     * Direct port of pmsm.c + smcpos.c.  No PLL, no v2/v3 hybridization.
+     */
+    {
+        uint16_t throttle_an = garudaData.throttle;
+
+        /* Arming logic — mirror v3:
+         *   SW1 / GSP-run cmd → main loop sets garudaData.state = ESC_ARMED
+         *   We see ESC_ARMED + cal_done + no fault → AN_MotorStart
+         *   SW1 / GSP-stop or fault → main loop sets state = ESC_IDLE / ESC_FAULT
+         *   We see those → AN_MotorStop
+         * Throttle alone NEVER arms.  This matches v3 semantics. */
+
+        /* Hardware fault recovery: if board PCI tripped, force-stop AN1078
+         * so PI doesn't wind up against blocked PWM. */
+        if (garudaData.faultCode == FAULT_BOARD_PCI &&
+            s_foc_an.mode != AN_MODE_STOPPED) {
+            AN_MotorStop(&s_foc_an);
+        }
+
+        /* Main-loop wants us idle → stop. */
+        if ((garudaData.state == ESC_IDLE || garudaData.state == ESC_FAULT) &&
+            s_foc_an.mode != AN_MODE_STOPPED) {
+            AN_MotorStop(&s_foc_an);
+        }
+
+        /* Main-loop pressed SW1 / sent GSP run → state=ESC_ARMED →
+         * start when calibration done and no latched board fault. */
+        if (garudaData.state == ESC_ARMED &&
+            s_foc_an.mode == AN_MODE_STOPPED &&
+            s_foc_an.cal_done &&
+            garudaData.faultCode != FAULT_BOARD_PCI) {
+            AN_MotorStart(&s_foc_an);
+        }
+
+        float da_an, db_an, dc_an;
+        AN_MotorFastTick(&s_foc_an,
+                         raw_ia, raw_ib,
+                         garudaData.vbusRaw, throttle_an,
+                         &da_an, &db_an, &dc_an);
+
+        /* PWM enable: match V2/V3 pattern (proven on this hardware).
+         * Release overrides first, then write duty.  V2/V3's first PWM
+         * cycle sees duty register state from prior HAL_MC1PWMDisableOutputs
+         * (PWM_PDC*=0, gates LOW), then SetDuty kicks in next cycle. */
+        {
+            static bool an_ovr_released = false;
+            if (s_foc_an.mode >= AN_MODE_LOCK && s_foc_an.mode <= AN_MODE_CLOSED_LOOP) {
+                if (!an_ovr_released) {
+                    HAL_PWM_ReleaseAllOverrides();
+                    an_ovr_released = true;
+                }
+                HAL_PWM_SetDutyFloat3Phase(da_an, db_an, dc_an);
+            } else if (s_foc_an.mode == AN_MODE_FAULT && an_ovr_released) {
+                HAL_PWM_SetDutyFloat3Phase(0.5f, 0.5f, 0.5f);
+            } else if (s_foc_an.mode == AN_MODE_STOPPED && an_ovr_released) {
+                HAL_MC1PWMDisableOutputs();
+                an_ovr_released = false;
+            } else {
+                an_ovr_released = false;
+            }
+        }
+
+        /* Map AN1078 mode → ESC state.  DO NOT overwrite ESC_FAULT set
+         * externally by the hardware PCI ISR — main loop needs to see
+         * that fault state so SW1 fault-clear works. */
+        if (garudaData.state != ESC_FAULT) {
+            switch (s_foc_an.mode) {
+                case AN_MODE_STOPPED:     garudaData.state = ESC_IDLE; break;
+                case AN_MODE_LOCK:        garudaData.state = ESC_ALIGN; break;
+                case AN_MODE_OPEN_LOOP:   garudaData.state = ESC_OL_RAMP; break;
+                case AN_MODE_CLOSED_LOOP: garudaData.state = ESC_CLOSED_LOOP; break;
+                case AN_MODE_FAULT:       garudaData.state = ESC_FAULT; break;
+                default:                  garudaData.state = ESC_FAULT; break;
+            }
+        }
+
+        /* Fault propagation */
+        if (s_foc_an.mode == AN_MODE_FAULT) {
+            HAL_MC1PWMDisableOutputs();
+            if (garudaData.faultCode == FAULT_NONE)
+                garudaData.faultCode = s_foc_an.faultCode
+                                     ? s_foc_an.faultCode : FAULT_FOC_INTERNAL;
+            garudaData.runCommandActive = false;
+            LED2 = 0;
+        }
+
+        /* Telemetry — reuse v2/v3 fields */
+        garudaData.focIdMeas   = s_foc_an.id_meas;
+        garudaData.focIqMeas   = s_foc_an.iq_meas;
+        garudaData.focTheta    = s_foc_an.theta_drive;
+        garudaData.focOmega    = s_foc_an.smc.OmegaFltred;
+        garudaData.focVbus     = s_foc_an.vbus;
+        garudaData.focIa       = s_foc_an.ia;
+        garudaData.focIb       = s_foc_an.ib;
+        garudaData.focThetaObs = s_foc_an.smc.Theta;
+        garudaData.focVd       = s_foc_an.vd;
+        garudaData.focVq       = s_foc_an.vq;
+        garudaData.focFluxAlpha   = s_foc_an.smc.EalphaFinal;
+        garudaData.focFluxBeta    = s_foc_an.smc.EbetaFinal;
+        garudaData.focLambdaEst   = s_foc_an.thetaError;
+        garudaData.focObsGain     = s_foc_an.smc.Kslf;
+        garudaData.focPidDInteg   = s_foc_an.pi_d.integrator;
+        garudaData.focPidQInteg   = s_foc_an.pi_q.integrator;
+        garudaData.focPidSpdInteg = s_foc_an.pi_spd.integrator;
+
+        {
+            float v_mag = sqrtf(s_foc_an.vd * s_foc_an.vd
+                              + s_foc_an.vq * s_foc_an.vq);
+            float v_max = s_foc_an.vbus * 0.57735027f;
+            garudaData.focModIndex = (v_max > 0.1f) ? (v_mag / v_max) : 0.0f;
+
+            /* Confidence-like ratio: observed BEMF magnitude vs expected */
+            float bemf_mag = sqrtf(s_foc_an.smc.EalphaFinal * s_foc_an.smc.EalphaFinal
+                                 + s_foc_an.smc.EbetaFinal  * s_foc_an.smc.EbetaFinal);
+            float omega_abs = (s_foc_an.smc.OmegaFltred >= 0)
+                            ?  s_foc_an.smc.OmegaFltred : -s_foc_an.smc.OmegaFltred;
+            float bemf_exp = AN_MOTOR_LAMBDA * omega_abs;
+            float conf = (bemf_exp > 0.01f) ? (bemf_mag / bemf_exp) : 0.0f;
+            if (conf > 1.0f) conf = 1.0f;
+            garudaData.focObsConfidence = conf;
+        }
+        garudaData.focSubState = (uint8_t)s_foc_an.mode;
+        garudaData.focOffsetIa = (uint16_t)s_foc_an.ia_offset;
+        garudaData.focOffsetIb = (uint16_t)s_foc_an.ib_offset;
+
+        /* Duty for telemetry */
+        {
+            float dmax = da_an;
+            if (db_an > dmax) dmax = db_an;
+            if (dc_an > dmax) dmax = dc_an;
+            garudaData.duty = (uint32_t)(dmax * LOOPTIME_TCY);
+        }
+    }
 #else
     /* ── 6-step state machine ── */
     /* State machine */
@@ -2826,7 +2987,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
             HAL_MC1PWMDisableOutputs();
             break;
     }
-#endif /* !FEATURE_FOC && !FEATURE_FOC_V2 && !FEATURE_FOC_V3 — end of 6-step state machine */
+#endif /* !FEATURE_FOC && !FEATURE_FOC_V2 && !FEATURE_FOC_V3 && !FEATURE_FOC_AN1078 — end of 6-step state machine */
 
 #if FEATURE_BEMF_CLOSED_LOOP
     /* Track state for transition detection (must be last before flag clear).
@@ -2881,7 +3042,7 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
             break;
 
         case ESC_ARMED:
-#if FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3
+#if FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3 || FEATURE_FOC_AN1078
             /* FOC: arming handled in ADC ISR slow loop (1kHz) to avoid
              * cross-ISR races. Timer1 is a no-op for ESC_ARMED with FOC. */
             break;
@@ -2908,7 +3069,7 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
 #endif
 
         case ESC_ALIGN:
-#if FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3
+#if FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3 || FEATURE_FOC_AN1078
             /* FOC: alignment handled in ADC ISR. Timer1 is a no-op. */
             break;
 #elif FEATURE_SINE_STARTUP
@@ -2925,7 +3086,7 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
 #endif
 
         case ESC_OL_RAMP:
-#if FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3
+#if FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3 || FEATURE_FOC_AN1078
             /* FOC: I/f ramp handled in ADC ISR. Timer1 is a no-op. */
             break;
 #elif DIAGNOSTIC_MANUAL_STEP
@@ -2964,7 +3125,7 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
 #endif
 
         case ESC_MORPH:
-#if FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3
+#if FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3 || FEATURE_FOC_AN1078
             /* FOC: no morph phase. Unreachable. */
             break;
 #elif FEATURE_SINE_STARTUP
@@ -2975,7 +3136,7 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
             break;
 #endif
 
-#if FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3
+#if FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3 || FEATURE_FOC_AN1078
         case ESC_CLOSED_LOOP:
             /* FOC: all control in ADC ISR. Timer1 does nothing. */
             break;

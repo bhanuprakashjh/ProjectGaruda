@@ -19,7 +19,7 @@
 #include "board_service.h"
 #include "../garuda_config.h"
 #include "../garuda_types.h"    /* GARUDA_DATA_T, FAULT_TRAP_* for trap handlers */
-#if (FEATURE_HW_OVERCURRENT || FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3)
+#if (FEATURE_HW_OVERCURRENT || FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3 || FEATURE_FOC_AN1078)
 #include "port_config.h"      /* HAL_OA3_Init (HW_OC), HAL_OA12_Init (FOC/V2/V3) */
 #endif
 #if FEATURE_HW_OVERCURRENT

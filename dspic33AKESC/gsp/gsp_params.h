@@ -80,6 +80,12 @@ extern "C" {
 #define PARAM_ID_FOC_FAULT_OC_CA        0x7F
 #define PARAM_ID_FOC_FAULT_STALL_DRS    0x80
 
+/* AN1078 SMC tuning IDs — live-update on SET_PARAM */
+#define PARAM_ID_AN1078_THETA_BASE_DEGX10  0x90
+#define PARAM_ID_AN1078_THETA_K_E7         0x91
+#define PARAM_ID_AN1078_KSLIDE_MV          0x92
+#define PARAM_ID_AN1078_ID_FW_MAX_DECIA    0x93
+
 /* Parameter type codes (for descriptor table) */
 #define PARAM_TYPE_U8   0
 #define PARAM_TYPE_U16  1
@@ -97,6 +103,7 @@ extern "C" {
 #define PARAM_GROUP_FOC_MOTOR    8
 #define PARAM_GROUP_FOC_TUNING   9
 #define PARAM_GROUP_FOC_STARTUP  10
+#define PARAM_GROUP_AN1078       11
 
 /* ── Runtime parameter struct (31 fields) ────────────────────────────── */
 
@@ -156,6 +163,13 @@ typedef struct {
     uint16_t focHandoffRadS;         /* CL handoff speed (rad/s) */
     uint16_t focFaultOcCentiA;       /* OC fault threshold × 100 (cA) */
     uint16_t focFaultStallDeciRadS;  /* Stall threshold × 10 (drad/s) */
+    /* AN1078 SMC observer tuning (RAM-only, not persisted to V3 EEPROM —
+     * defaults loaded from per-profile init in gsp_params.c at boot.
+     * Add to V4 persist when ready to bake validated values). */
+    uint16_t an1078ThetaBaseDegX10;  /* SMC theta offset base × 10 (deg) — 0-3600 */
+    uint16_t an1078ThetaKE7;         /* SMC theta offset K × 1e7 — 0-1000 */
+    uint16_t an1078KslideMv;         /* SMC sliding gain × 1000 (mV) — 100-30000 */
+    uint16_t an1078IdFwMaxDecia;     /* |Id_fw_max| × 10 (dA) — 0-200, sign forced negative */
 } GSP_PARAMS_T;
 
 /* ── Derived values (precomputed from params, ISR reads these) ───────── */

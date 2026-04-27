@@ -233,78 +233,89 @@
 
 #elif MOTOR_PROFILE == 2
 /* ----------------------------------------------------------------
- * Flycat i-Motor 5010-750KV (heavy-lift drone motor)
- * 12N14P, 7 pole pairs, 4S/14.8V nominal
- * Rs ~ 80 mohm, Ls ~ 30 uH (ESTIMATED -- measure on bench!)
- * 750 KV -> no-load 11100 RPM @ 14.8V
- * Typical prop: 14x4.7 to 16x5.5, frame: 450-850mm multirotor
+ * 2810 1350 KV — 6S LiPo / 24 V bench, no prop
+ * 12N14P, 7 pole pairs, Rs=50 mΩ, Ls=25 µH.
+ * Parameters match garuda_config.h Profile 2.
+ * Bench: 24 V supply, 10 A current limit, no prop loading.
+ * GEPRC EM2810 / T-Motor F100 / BrotherHobby Avenger 2810 range.
+ * (Replaces earlier "Flycat 5010 750KV @14.8V" profile 2026-04-23.)
  * ---------------------------------------------------------------- */
 
-/** Phase resistance (ohm) -- ESTIMATED, needs bench measurement.
- *  RCTimer 5010 series: 60-120 mohm typical. Using 80 mohm as starting point. */
-#define MOTOR_RS_OHM            0.080f
-/** Phase inductance (H) -- ESTIMATED, needs LCR measurement.
- *  Similar 12N14P outrunners measure 20-50 uH. Using 30 uH. */
-#define MOTOR_LS_H              30e-6f
-/** λ_pm = 60/(sqrt3 * 2pi * 750 * 7) = 0.001050 V*s/rad_elec (per-phase) */
-#define MOTOR_KE_VPEAK          0.001050f
+/** Phase resistance — PRODRONE 2810 1350KV guesstimate 2026-04-23.
+ *  Typical 2810 1350KV phase-phase Rs ≈ 43 mΩ (GEPRC/MAD data).
+ *  Phase-to-neutral = phase-phase / 2 = 21.5 mΩ. Round to 22 mΩ.
+ *  Was 50 mΩ — that was phase-phase misapplied as phase-to-neutral. */
+#define MOTOR_RS_OHM            0.022f
+/** Phase inductance — guesstimate from drone-motor class typicals.
+ *  2810 12N14P phase-phase Ls ≈ 15-20 µH → phase-to-neutral ≈ 8-10 µH.
+ *  Using 10 µH. Was 25 µH (too high, caused Kp_DQ to be too aggressive). */
+#define MOTOR_LS_H              10.0e-6f
+/** λ_pm = 60/(√3 × 2π × 1350 × 7) = 0.000583 V·s/rad_elec (per-phase peak). */
+#define MOTOR_KE_VPEAK          0.000583f
 #define MOTOR_POLE_PAIRS_FOC    7
-#define MOTOR_VBUS_NOM_V        14.8f       /* 4S LiPo nominal */
-#define MOTOR_MAX_CURRENT_A     30.0f
-/** 11100 RPM * 7PP * 2pi/60 = 8134, round up for headroom. */
-#define MOTOR_MAX_ELEC_RAD_S    8500.0f
-/** Flux linkage = λ_pm (per-phase). */
-#define MOTOR_FLUX_LINKAGE      0.001050f
+#define MOTOR_VBUS_NOM_V        24.0f       /* 6S LiPo / 24 V bench */
+/** Bench current cap — user specified 10 A supply limit. */
+#define MOTOR_MAX_CURRENT_A     10.0f
+/** No-load max eRPM at 24V = 1350 × 24 × 7 / 60 × 2π = 23750 rad/s.
+ *  Used as PLL speed clamp.  Set just above theoretical to avoid
+ *  artificial clipping while still catching runaway. */
+#define MOTOR_MAX_ELEC_RAD_S    25000.0f    /* ~239k eRPM */
+#define MOTOR_FLUX_LINKAGE      0.000583f
 
-/* D/Q Current Loop PI (BW ~ 1 kHz, parallel form)
- *   Kp = ωbw * Ls = 2pi*1000 * 30e-6 = 0.1885 ≈ 0.19
- *   Ki = ωbw * Rs = 2pi*1000 * 0.080 = 503  (parallel form) */
-#define KP_DQ                   0.19f
-#define KI_DQ                   503.0f
+/* D/Q Current Loop PI — recomputed 2026-04-23 from corrected Rs/Ls.
+ *   Kp = ωbw × Ls = 2π × 1000 × 10 µH = 0.063
+ *   Ki = ωbw × Rs = 2π × 1000 × 0.022 = 138
+ * 1 kHz BW, parallel form. Pass-1 detune values (0.05 / 100) were
+ * close by accident; these are the correctly-derived gains. */
+#define KP_DQ                   0.063f    /* was 0.157f, Pass 1 0.05f */
+#define KI_DQ                   138.0f    /* was 314.0f, Pass 1 100.0f */
 
-/* Speed Loop PI (outer loop — active after CL handoff) */
-#define KP_SPD                  0.005f
-#define KI_SPD                  0.5f
+/* Speed Loop PI — detuned 2026-04-23 (Pass 2).
+ * Initial values (0.00025 / 0.01) caused speed PI integrator to grow
+ * during pot bumps, commanding rising Iq_ref while D-axis PI was also
+ * winding up — combined transient tripped BOARD_PCI on 2810@24V.
+ * Halved both gains to smooth throttle response; motor is no-prop so
+ * sluggishness is acceptable. */
+#define KP_SPD                  0.00010f   /* was 0.00025f */
+#define KI_SPD                  0.004f     /* was 0.01f */
 
-/* I/f (Current-Forced) Startup — heavier rotor + big prop
- * Kt_FOC = (3/2)*7*0.001050 = 0.01103 N·m/A (with √3-corrected λ_pm).
- * NOTE: With corrected Kt, consider bumping RAMP_IQ to 5-6A for heavy
- * 14"+ props — 3A gives only 33 mN·m which may be marginal under load. */
-/** Alignment Id (A) — 3A × 0.01103 = 33 mN·m, locks 5010 rotor. */
-#define STARTUP_ALIGN_IQ_A      3.0f
-/** OL running Iq (A) — 3A for 14"+ prop inertia during acceleration.
- *  Consider 5-6A if prop stalls during I/f ramp (Kt*5 = 55 mN·m). */
+/* V/f Startup (Rs=50 mΩ too low for stable I/f current control).
+ * Kt_FOC = (3/2) × 7 × 0.000583 = 0.00612 N·m/A. */
+/** Align Iq (A): 2A × 0.00612 = 12 mN·m — enough to lock bare 2810 rotor. */
+#define STARTUP_ALIGN_IQ_A      2.0f
+/** Ramp Iq (A): 3A → 18 mN·m. No prop = tiny inertia, 3 A is plenty. */
 #define STARTUP_RAMP_IQ_A       3.0f
-/** Iq ramp ticks (24kHz).  12000 = 500ms — smooth transition. */
-#define STARTUP_IQ_RAMP_TICKS   12000U
-/** Alignment dwell (ticks).  18000 = 750ms — heavier rotor settling. */
-#define STARTUP_ALIGN_TICKS     18000U
-/** 100 rad/s^2 — slow ramp for 14" prop inertia.
- *  ~10 seconds to reach handoff at 1000 rad/s with full pot. */
-#define STARTUP_RAMP_RATE_RPS2  100.0f
-/** BEMF at 1000 = 0.001050*1000 = 1.05V — 7.1% of 14.8V Vbus. */
+#define STARTUP_IQ_RAMP_TICKS   4800U       /* 200 ms @ 24 kHz */
+#define STARTUP_ALIGN_TICKS     4800U       /* 200 ms — no-prop rotor settles fast */
+/** 800 rad/s² — aggressive: no-prop = negligible inertia.
+ *  Time to handoff: 1000 rad/s / 800 = 1.25 s ramp. */
+#define STARTUP_RAMP_RATE_RPS2  800.0f
+/** Handoff at 1000 rad/s: BEMF = 0.000583 × 1000 = 0.58V.
+ *  Dead-time comp at 24V = 24 × 2×500ns/41.67µs = 0.58V.
+ *  BEMF ≥ dt_comp at handoff — observer can track (parity).
+ *  Raise to 1500 rad/s if low-speed oscillation appears. */
 #define STARTUP_HANDOFF_RAD_S   1000.0f
-#define STARTUP_MIN_OL_RAD_S    1500.0f     /* ~2045 RPM mech */
-/** At 14.8V: Vbus/Ke = 14.8/0.001050 = 14095, cap at 85% → 12000. */
-#define STARTUP_MAX_OL_RAD_S    12000.0f
+#define STARTUP_MIN_OL_RAD_S    1500.0f
+/** Vbus/Ke = 24/0.000583 = 41167, cap at 40% → 16500.
+ *  We cap lower at MAX_ELEC_RAD_S for current-budget safety. */
+#define STARTUP_MAX_OL_RAD_S    MOTOR_MAX_ELEC_RAD_S
 
-/** Startup: V/f needed (Rs=80mΩ, low like A2212). */
-#define STARTUP_USE_VF          1
+/** I/f — PI current control during startup. V/f was pulling 20A+ because
+ * low Rs (22mΩ) turns even 1V of V/f boost into high current. I/f regulates
+ * phase current directly via PI (target STARTUP_RAMP_IQ_A = 3A), which is
+ * bounded by design. Changed 2026-04-23 for V3 bring-up on 2810@24V. */
+#define STARTUP_USE_VF          0
 
-/* Fault Thresholds */
-#define FAULT_OC_A              35.0f
+/* Fault Thresholds — honour the 10 A bench cap with margin. */
+#define FAULT_OC_A              9.0f        /* HW fault just below supply limit */
 #define FAULT_STALL_RAD_S       50.0f
 
-/* Observer LPF -- 5010 (moderate-speed motor)
- * Max elec freq = 8500/(2pi) = 1353 Hz.
- * alpha=0.20 -> cutoff ~ 765 Hz: adequate for speeds up to ~5000 rad/s.
- * At max speed, ~30 deg phase lag -- PLL compensates. */
-#define OBS_LPF_ALPHA           0.20f
+/* Observer LPF — 2810 is similar spectrum to A2212 (light filtering). */
+#define OBS_LPF_ALPHA           0.35f
 
-/* SMO tuning -- 5010 (moderately high-speed motor)
- * LPF cutoff ~ 2x max elec freq = 2 * 8500/(2pi) = 2706 Hz
- * alpha = 2pi * 2706 * Ts = 0.71, round to 0.70 */
-#define SMO_LPF_ALPHA           0.70f
+/* SMO tuning — low-Ls motor, match A2212 (heavy LPF to reject current noise).
+ * At 24V the switching noise is larger than at 12V so stay on the heavy side. */
+#define SMO_LPF_ALPHA           0.15f
 
 #elif MOTOR_PROFILE == 3
 /* ----------------------------------------------------------------
@@ -473,72 +484,95 @@
 #define OBS_LAG_COEFF           ((1.0f - OBS_LPF_ALPHA) / OBS_LPF_ALPHA)
 #define OBS_LAG_COMP_MAX_RAD    0.52f   /* Clamp at 30 deg for safety */
 
-/* -- Sliding Mode Observer (SMO) — V4 correct classical SMO ------- */
-/*   SMO_K_BASE: minimum sliding gain (V). Must maintain sliding
- *     condition: G×K > max current error. Cap at 25% Vbus.
- *   SMO_K_BEMF_SCALE: K_bemf = scale × λ × |ω| ensures convergence
- *     at high speed.
- *   SMO_K_ADAPT_ALPHA: LP filter rate for adaptive K tracking.
- *   SMO_SIGMOID_PHI: boundary layer width for sigmoid switching.
- *   SMO_LPF_ALPHA: per-profile (above) — base alpha at omega_ref.
- *   SMO_ALPHA_MIN/MAX: adaptive LPF clamp range.
- *   SMO_CONF_MIN: health threshold for observable flag.
- *   SMO_RESIDUAL_MAX: health threshold for observable flag.
- *   SMO_*_HANDOFF: handoff-specific thresholds. */
+/* -- Sliding Mode Observer (SMO) — AN1078 float port ---------------
+ *
+ * Classical SMO from Microchip AN1078, ported to float (no Q15
+ * normalization factors).  Linear+saturate switching, two-stage
+ * cascaded LPF on the switching signal, fixed angle offset, delta-θ
+ * speed estimate.
+ *
+ *   SMO_KSLIDE            — fixed sliding gain.  Dimensionally mixes
+ *                           with Z → fed into the current model
+ *                           alongside V and E.  Start at 0.85 × Vbus
+ *                           (matches AN1078 Q15 0.85 after scaling).
+ *   SMO_MAX_SMC_ERROR     — boundary-layer half-width (A).  Below this
+ *                           the switching is linear (Z = Kslide·err/Max);
+ *                           above, it saturates at ±Kslide.
+ *   SMO_END_SPEED_ELEC_RS — "end speed" in electrical rad/s — the
+ *                           floor below which the LPF cutoff stops
+ *                           decreasing.  Should match the minimum CL
+ *                           speed (our handoff_rad_s).
+ *   SMO_THETA_FILTER_CNST — Kslf scale: Kslf = |ω_elec|·CNST, clamped
+ *                           at Kslf_min = end_speed_elec·CNST.  AN1078
+ *                           uses (2π/60)·Ts — in our units that's
+ *                           (2π/60)·(1/f_pwm).  We treat this as a
+ *                           tuning knob, not a derived constant.
+ *   SMO_THETA_OFFSET      — fixed angle offset applied to θ_est after
+ *                           atan2.  AN1078 uses π/2 (90°).
+ *   SMO_DT_COMP_MODE      — dead-time compensation mode for voltage
+ *                           reconstruction.  Kept (important for 2810).
+ *   SMO_CONF_MIN / RESIDUAL_MAX — diagnostic thresholds for the
+ *                           `observable` health flag.  Do NOT affect
+ *                           observer math. */
 
-/** Legacy SMO gain for V1 smo_observer.c */
+/** Legacy SMO gain for V1 smo_observer.c — kept, not used by V3. */
 #define SMO_GAIN                MOTOR_VBUS_NOM_V
 
-/** Minimum sliding gain (V).
- *  K_base = 1.5·Ls/dt, capped at 25% Vbus.
- *  A2212: 1.5×30e-6/41.67e-6 = 1.08V (< 3V cap).
- *  Hurst: 1.5×471e-6/41.67e-6 = 16.9V → capped to 6.0V. */
-/* Computed at init time in SMO_Config_t — these are defaults.
- * 1.5·Ls/dt capped at 25% Vbus. */
-#define SMO_K_BASE_RAW      (1.5f * MOTOR_LS_H / FOC_TS_FAST_S)
-#define SMO_K_BASE_CAP      (MOTOR_VBUS_NOM_V * 0.25f)
-#define SMO_K_BASE          ((SMO_K_BASE_RAW > SMO_K_BASE_CAP) ? \
-                             SMO_K_BASE_CAP : SMO_K_BASE_RAW)
+/** Legacy sigmoid boundary layer (A) — used by V1 smo_observer.c only.
+ *  V3 uses linear-in-boundary saturation (AN1078 style), not sigmoid. */
+#define SMO_SIGMOID_PHI         0.1f
 
-/** BEMF-proportional floor: K >= scale × λ × |ω| */
-#define SMO_K_BEMF_SCALE    1.5f
+/** Sliding gain.  Start at 85% of nominal Vbus; cap at Vbus.
+ *  AN1078 uses Q15(0.85) which is dimensionless; in our float port the
+ *  Z signal is fed into the current-model equation on equal footing
+ *  with V, so Kslide has units of volts. */
+#define SMO_KSLIDE              (MOTOR_VBUS_NOM_V * 0.85f)
 
-/** LP filter rate for adaptive K (0.01 = ~4ms settling) */
-#define SMO_K_ADAPT_ALPHA   0.01f
+/** Boundary-layer half-width (A) — linear range of the switching law.
+ *  AN1078 uses 0.005 Q15 of I_max.  In our scale, pick 1% of a
+ *  reasonable peak current: 0.1 A for most drone motors. */
+#define SMO_MAX_SMC_ERROR       0.1f
+
+/** End speed (electrical rad/s) — the LPF cutoff floor.
+ *  Set to the runtime handoff speed; below this we stop reducing
+ *  Kslf so the filter doesn't collapse when the motor is essentially
+ *  still.  Tuned for v2-proven 1000 rad/s handoff on 2810. */
+#define SMO_END_SPEED_ELEC_RS   1000.0f
+
+/** Kslf scale factor (per rad/s of electrical speed).
+ *
+ *  In AN1078 Q15 the speed variable is in RPM, so their constant
+ *  THETA_FILTER_CNST = (2π/60)×Ts converts RPM to rad/s per tick.
+ *  Our float port feeds speed already in rad/s, so the (2π/60) factor
+ *  must NOT be re-applied — otherwise Kslf is 10× too small and the
+ *  BEMF LPF becomes so slow the observer never converges.
+ *
+ *  Correct: Kslf = |ω_elec_rad/s| × Ts → matches AN1078 exactly
+ *  (Hurst: ω=261.8 rad/s × 50µs = 0.01309, identical to Q15 form). */
+#define SMO_THETA_FILTER_CNST   FOC_TS_FAST_S
+
+/** Fixed angle offset after atan2 (radians).  AN1078: 90°. */
+#define SMO_THETA_OFFSET        (3.14159265f * 0.5f)
 
 /** Dead-time compensation mode for observer voltage reconstruction.
  *  0 = none (raw duty), 1 = per-phase ABC, 2 = αβ approximation.
- *  A2212 dt_comp=0.29V ≈ BEMF at handoff — DT comp error can
- *  dominate the signal. Test 0 vs 1 vs 2 to find best residual. */
-#define SMO_DT_COMP_MODE   1
+ *  Critical for low-Rs motors (2810): dt_comp at 24V × 500ns × 24kHz
+ *  = 0.58V, larger than the IR drop at startup current. */
+#define SMO_DT_COMP_MODE        1
 
-/** Sigmoid boundary layer thickness (A).
- *  0.1A: sharp tracking, smooth enough for ADC noise floor. */
-#define SMO_SIGMOID_PHI     0.1f
-
-/** Adaptive LPF clamp range.
- *  alpha_max=0.30 keeps 2-stage LPF active at high speed.
- *  At 4200 rad/s: -10 dB 3rd harmonic rejection, 0.9 dB fundamental loss.
- *  Phase delay = ~1.1 rad (64°) — compensated by arctan model. */
-#define SMO_ALPHA_MIN       0.02f
-#define SMO_ALPHA_MAX       0.30f
-
-/** Observer health thresholds (for observable flag) */
-#define SMO_CONF_MIN        0.10f     /* min confidence for observable=true */
-#define SMO_RESIDUAL_MAX    5.0f      /* max residual for observable=true (A) */
+/** Observer health thresholds (for observable flag — diagnostic only) */
+#define SMO_CONF_MIN            0.10f
+#define SMO_RESIDUAL_MAX        5.0f
 
 /** Handoff-specific thresholds (can be tighter than runtime) */
 #define SMO_CONF_MIN_HANDOFF     0.15f
 #define SMO_RESIDUAL_MAX_HANDOFF 3.0f
-#define SMO_BEMF_MIN_HANDOFF     0.01f  /* min BEMF mag for handoff (V) */
+#define SMO_BEMF_MIN_HANDOFF     0.01f
 
-/** PLL speed-adaptive bandwidth tunables.
- *  BW scales linearly from bw_min at ω=0 to bw_max at ω=omega_bw_ref.
- *  Rule of thumb: PLL BW should be ~10-25% of electrical frequency.
- *  20 Hz min → 60 Hz max covers handoff (262-500 rad/s) to full speed. */
-#define SMO_PLL_BW_MIN_HZ   20.0f    /* Min BW at low speed (Hz) */
-#define SMO_PLL_BW_MAX_HZ   60.0f    /* Max BW at high speed (Hz) */
-#define SMO_PLL_BW_REF_FRAC 0.5f     /* BW=max at this fraction of omega_max */
+/** PLL speed-adaptive bandwidth tunables (kept; PLL removed in Phase 4). */
+#define SMO_PLL_BW_MIN_HZ       20.0f
+#define SMO_PLL_BW_MAX_HZ       60.0f
+#define SMO_PLL_BW_REF_FRAC     0.5f
 
 /* -- Startup Mode Flags ------------------------------------------ */
 

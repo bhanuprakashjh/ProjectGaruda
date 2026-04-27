@@ -89,6 +89,12 @@ static const GSP_PARAMS_T profileDefaults[4] = {
         .focHandoffRadS       = 262,    /* 500 RPM mech × 5PP × 2π/60 */
         .focFaultOcCentiA     = 1000,   /* 10.0A */
         .focFaultStallDeciRadS = 100,   /* 10.0 rad/s */
+        /* AN1078 defaults — Hurst is a high-Rs motor, fall back to AN1078
+         * reference Kslide.  Conservative theta offset, no FW. */
+        .an1078ThetaBaseDegX10 = 0,     /* AN1078 ref CONSTANT_PHASE_SHIFT = 0 */
+        .an1078ThetaKE7        = 0,
+        .an1078KslideMv        = 8000,  /* 8 V — close to AN1078's 0.85·Vbus */
+        .an1078IdFwMaxDecia    = 0,     /* No FW for Hurst */
     },
     [GSP_PROFILE_A2212] = {
         .rampTargetErpm     = 3000,
@@ -129,6 +135,11 @@ static const GSP_PARAMS_T profileDefaults[4] = {
         .focHandoffRadS       = 500,    /* 500 rad/s — proven reliable on A2212 */
         .focFaultOcCentiA     = 2500,   /* 25.0A */
         .focFaultStallDeciRadS = 500,   /* 50.0 rad/s */
+        /* AN1078 defaults for A2212 — moderate Rs/Ls, no FW needed at 12V */
+        .an1078ThetaBaseDegX10 = 100,   /* 10° base */
+        .an1078ThetaKE7        = 500,   /* K = 0.5e-4 — half of 2810 */
+        .an1078KslideMv        = 4000,  /* 4 V */
+        .an1078IdFwMaxDecia    = 0,     /* No FW */
     },
     [GSP_PROFILE_5010] = {
         /* === 2810 1350KV (7-8" FPV/cine drone motor, 24V bench) ===
@@ -168,26 +179,60 @@ static const GSP_PARAMS_T profileDefaults[4] = {
         .ocStartupMa        = 22000,   /* Startup relaxed near sensor saturation */
         .rampCurrentGateMa  = 10000,   /* Gate ramp accel if bus >10A during OL */
         TUNING_DEFAULTS,
-        /* FOC motor model: 2810 1350KV (7PP, 24V) */
-        .focRsMilliOhm       = 50,     /* 0.050 Ω (avg of 43-61mΩ mfg spread) */
-        .focLsMicroH          = 25,     /* 25 µH */
-        .focKeUvSRad          = 527,    /* 1350 KV → Ke = 60/(2π * 1350 * √3) V·s/rad
-                                         * = 5.27e-4 V·s/rad → 527 in µV·s/rad */
+        /* FOC motor model: 2810 1350KV (7PP, 24V) — PRODRONE bench
+         * 2026-04-23: corrected phase-to-neutral values. The EEPROM
+         * defaults are the actual runtime source (the .h #defines aren't
+         * read at runtime — BuildFocMotorParams pulls from gspParams).
+         * Old values (Rs=50, Ls=25) were phase-phase misapplied. */
+        .focRsMilliOhm       = 22,     /* 22 mΩ (= 43 mΩ phase-phase / 2) */
+        .focLsMicroH          = 10,     /* 10 µH (= ~15-20 µH phase-phase / 2) */
+        .focKeUvSRad          = 583,    /* 0.000583 V·s/rad = 60/(√3×2π×1350×7) */
         .focVbusNomCentiV     = 2400,   /* 24V nominal */
-        .focMaxCurrentCentiA  = 3000,   /* 30.0A */
-        .focMaxElecRadS       = 15000,  /* 200k eRPM target = 200000/60*2π = ~20944
-                                         * rad/s; 15000 gives margin for CL */
-        .focKpDqMilli         = 120,
-        .focKiDq              = 400,
-        .focObsLpfAlphaMilli  = 200,
-        .focAlignIqCentiA     = 200,    /* 2.0A */
-        .focRampIqCentiA      = 200,    /* 2.0A */
-        .focAlignTimeMs       = 500,
-        .focIqRampTimeMs      = 300,
-        .focRampRateRps2      = 300,
-        .focHandoffRadS       = 800,
-        .focFaultOcCentiA     = 3500,
+        .focMaxCurrentCentiA  = 500,    /* 5.0A speed-PI clamp.
+                                         * Was 3A (safety during open-loop
+                                         * observer debugging). With BEMF
+                                         * correction restored, Iq_ref
+                                         * shouldn't saturate the speed PI
+                                         * under normal operation. */
+        .focMaxElecRadS       = 25000,  /* ~239k eRPM at 7PP — past the
+                                         * proven 213k peak with FW.  Was
+                                         * 10000 (96k) — way too low,
+                                         * artificially capped pot range. */
+        .focKpDqMilli         = 63,     /* Kp = 2π × 1000 × 10 µH = 0.063 */
+        .focKiDq              = 138,    /* Ki = 2π × 1000 × 0.022 = 138 */
+        .focObsLpfAlphaMilli  = 350,    /* 0.35 (matches A2212, high-speed drone) */
+        .focAlignIqCentiA     = 500,    /* 5.0A align — firm rotor lock. */
+        .focRampIqCentiA      = 600,    /* 6.0A ramp torque. Kt=0.00612 N·m/A
+                                         * → 36 mN·m. Plenty for a 2810 no-prop. */
+        .focAlignTimeMs       = 1000,   /* 1 full second for rotor to settle
+                                         * mechanically at theta=0 before ramp. */
+        .focIqRampTimeMs      = 500,
+        .focRampRateRps2      = 80,     /* Very slow ramp — rotor MUST be able
+                                         * to follow. 80 rad/s² reaches 400 rad/s
+                                         * handoff in 5 seconds. Bench: OK. */
+        .focHandoffRadS       = 400,    /* Lower handoff. BEMF at 400 rad/s =
+                                         * 0.23V (marginal SNR but acceptable
+                                         * with SMO's LPF filtering). */
+        .focFaultOcCentiA     = 1500,   /* 15A SW fault — V3 V/f startup pulls
+                                         * 10A+ transients via Rs=22mΩ, need
+                                         * headroom above those. Bench supply
+                                         * at 10A will still CC-limit the real
+                                         * draw; this just keeps firmware from
+                                         * over-protective trips. */
         .focFaultStallDeciRadS = 500,
+        /* AN1078 SMC tuning — values validated on 2810 @ 45 kHz.
+         * BASE × 10 = 200 → 20° at zero speed.
+         * K × 1e7 = 800 → 8.0e-5 rad/(rad/s elec) — re-tuned for 45 kHz
+         *   2026-04-26.  At 60 kHz K=1000 was the value; at 45 kHz the
+         *   LPF lag profile shifts and 800 keeps Vd within ±2V across
+         *   the 50k → 200k+ range.  K=500 left Vd at -10V (heroic d-PI
+         *   compensation) and K=1000 at +6V (over-corrected).
+         * Kslide × 1000 = 2500 → 2.5 V.
+         * |Id_FW_max| × 10 = 120 → -12 A (12 A peak field-weakening). */
+        .an1078ThetaBaseDegX10 = 200,
+        .an1078ThetaKE7        = 800,
+        .an1078KslideMv        = 2500,
+        .an1078IdFwMaxDecia    = 120,
     },
     [GSP_PROFILE_5055] = {
         .rampTargetErpm     = 2000,
@@ -228,6 +273,11 @@ static const GSP_PARAMS_T profileDefaults[4] = {
         .focHandoffRadS       = 800,
         .focFaultOcCentiA     = 3000,   /* 30.0A */
         .focFaultStallDeciRadS = 300,   /* 30.0 rad/s */
+        /* AN1078 defaults for 5055 — large prop motor at 4S */
+        .an1078ThetaBaseDegX10 = 100,   /* 10° base */
+        .an1078ThetaKE7        = 800,
+        .an1078KslideMv        = 6000,  /* 6 V */
+        .an1078IdFwMaxDecia    = 50,    /* 5 A FW */
     },
 };
 
@@ -296,6 +346,12 @@ static const PARAM_DESCRIPTOR_T paramDescriptors[] = {
     { PARAM_ID_FOC_HANDOFF_RAD_S,     PARAM_TYPE_U16, PARAM_GROUP_FOC_STARTUP,  50, 10000, offsetof(GSP_PARAMS_T, focHandoffRadS),    2 },
     { PARAM_ID_FOC_FAULT_OC_CA,       PARAM_TYPE_U16, PARAM_GROUP_FOC_STARTUP, 100, 5000, offsetof(GSP_PARAMS_T, focFaultOcCentiA),   2 },
     { PARAM_ID_FOC_FAULT_STALL_DRS,   PARAM_TYPE_U16, PARAM_GROUP_FOC_STARTUP,  10, 1000, offsetof(GSP_PARAMS_T, focFaultStallDeciRadS), 2 },
+    /* AN1078 SMC tuning (group 11) — live-update on SET_PARAM via
+     * AN_MotorReapplyTune() called from gsp_commands.c. */
+    { PARAM_ID_AN1078_THETA_BASE_DEGX10, PARAM_TYPE_U16, PARAM_GROUP_AN1078,    0, 3600,  offsetof(GSP_PARAMS_T, an1078ThetaBaseDegX10), 2 },
+    { PARAM_ID_AN1078_THETA_K_E7,        PARAM_TYPE_U16, PARAM_GROUP_AN1078,    0, 1000,  offsetof(GSP_PARAMS_T, an1078ThetaKE7),        2 },
+    { PARAM_ID_AN1078_KSLIDE_MV,         PARAM_TYPE_U16, PARAM_GROUP_AN1078,  100, 30000, offsetof(GSP_PARAMS_T, an1078KslideMv),        2 },
+    { PARAM_ID_AN1078_ID_FW_MAX_DECIA,   PARAM_TYPE_U16, PARAM_GROUP_AN1078,    0, 200,   offsetof(GSP_PARAMS_T, an1078IdFwMaxDecia),    2 },
 };
 
 #define PARAM_COUNT (sizeof(paramDescriptors) / sizeof(paramDescriptors[0]))
