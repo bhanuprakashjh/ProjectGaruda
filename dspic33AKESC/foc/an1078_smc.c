@@ -61,9 +61,25 @@ static inline float an_tune_kslide(void)
 
 void AN_SMCInit(AN_SMC_T *s)
 {
-    /* Plant model coefficients — float, no scaling factors. */
-    s->Fsmopos = AN_F_PLANT;        /* 1 - Rs·Ts/Ls */
-    s->Gsmopos = AN_G_PLANT;        /* Ts/Ls        */
+    /* Plant model coefficients — derived from per-profile motor params
+     * loaded into gspParams at boot (and editable via GUI Profile
+     * Selector + GET_PARAM/SET_PARAM, persisted to EEPROM in V3 schema).
+     * AN1078 used to read these from compile-time #defines, which made
+     * "switch motor in GUI" a lie — observer kept using the previous
+     * motor's plant constants until firmware was recompiled.  Now they
+     * follow the active profile.
+     *
+     * Fall back to the #define values if gspParams isn't populated yet
+     * (e.g. very early boot before EEPROM load). */
+    float Rs = (gspParams.focRsMilliOhm > 0)
+             ? gspParams.focRsMilliOhm * 1.0e-3f
+             : AN_MOTOR_RS;
+    float Ls = (gspParams.focLsMicroH > 0)
+             ? gspParams.focLsMicroH * 1.0e-6f
+             : AN_MOTOR_LS;
+
+    s->Fsmopos = 1.0f - Rs * AN_TS / Ls;   /* 1 - Rs·Ts/Ls */
+    s->Gsmopos = AN_TS / Ls;               /* Ts/Ls */
 
     s->Kslide      = an_tune_kslide();   /* GUI-tunable */
     s->MaxSMCError = AN_SMC_MAX_LINEAR_ERR;

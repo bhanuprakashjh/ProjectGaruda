@@ -196,26 +196,39 @@ of them.
 
 ---
 
-## C-code changes still needed (for full tuning automation)
+## What's per-profile (live, no recompile)
 
-Today, these AN1078 inputs are still hardcoded `#define`s — changing
-them requires recompile + reflash:
+As of 2026-04-27, switching profiles in the GUI Profile Selector
+auto-loads these per-profile values:
 
-| Param | Lives in | Live-tunable? |
-|-------|---------|--------------|
-| `AN_MOTOR_RS / LS / LAMBDA` | `an1078_params.h` | ❌ |
-| `AN_NOPOLESPAIRS` | `an1078_params.h` | ❌ |
-| `AN_FS_HZ` (= PWMFREQUENCY_HZ) | `garuda_config.h` + `an1078_params.h` | ❌ |
-| `AN_NOMINAL_SPEED_RPM_MECH` | `an1078_params.h` | ❌ |
-| `AN_OL_RAMP_RATE_RPS2` | `an1078_params.h` | ❌ |
-| `AN_Q_CURRENT_REF_OPENLOOP` | `an1078_params.h` | ❌ |
-| `AN_KP_DQ / AN_KI_DQ` | `an1078_params.h` | ❌ |
-| `AN_KP_SPD / AN_KI_SPD` | `an1078_params.h` | ❌ |
-| `AN_SMC_KSLF_MIN/MAX/SCALE` | `an1078_params.h` | ❌ |
-| `AN_SMC_THETA_OFFSET_BASE` | gspParams (live) | ✅ |
-| `AN_SMC_THETA_OFFSET_K` | gspParams (live) | ✅ |
-| `AN_SMC_KSLIDE` | gspParams (live) | ✅ |
-| `ID_FW_MAX_NEG` | gspParams (live) | ✅ |
+| Param | Source | Live update? |
+|-------|--------|--------------|
+| `Rs` (motor resistance) | `gspParams.focRsMilliOhm` | ✅ Re-init on SET_PARAM |
+| `Ls` (motor inductance) | `gspParams.focLsMicroH` | ✅ Re-init on SET_PARAM |
+| `Ke` (back-EMF constant) | `gspParams.focKeUvSRad` | ✅ Re-init on SET_PARAM |
+| **Throttle max speed** | `gspParams.focMaxElecRadS` | ✅ Per-tick |
+| `THETA_OFFSET_BASE` | `gspParams.an1078ThetaBaseDegX10` | ✅ Per-tick |
+| `THETA_OFFSET_K` | `gspParams.an1078ThetaKE7` | ✅ Per-tick |
+| `Kslide` | `gspParams.an1078KslideMv` | ✅ Per-tick |
+| `Id_FW_max` | `gspParams.an1078IdFwMaxDecia` | ✅ Per-tick |
+
+When you switch profiles in the GUI, all of these values reload from
+the new profile's defaults in `gsp_params.c`.  AN_SMCInit is called
+to recompute F_PLANT/G_PLANT from new Rs/Ls.  Motor's now using the
+new profile's plant constants — **no firmware recompile**.
+
+## What's still hardcoded (TODOs)
+
+| Param | Lives in | Why hardcoded |
+|-------|---------|---------------|
+| `AN_NOPOLESPAIRS` | `an1078_params.h` | Compile-time macros depend on it |
+| `AN_FS_HZ` (= PWMFREQUENCY_HZ) | `garuda_config.h` | Hardware PWM rate |
+| `AN_END_SPEED_RPM_MECH` | `an1078_params.h` | Macro-derived constants |
+| `AN_OL_RAMP_RATE_RPS2` | `an1078_params.h` | Affects OL stability |
+| `AN_Q_CURRENT_REF_OPENLOOP` | `an1078_params.h` | OL torque profile |
+| `AN_KP_DQ / AN_KI_DQ` | `an1078_params.h` | Current-loop PI |
+| `AN_KP_SPD / AN_KI_SPD` | `an1078_params.h` | Speed-loop PI |
+| `AN_SMC_KSLF_MIN/MAX/SCALE` | `an1078_params.h` | LPF behavior |
 
 To make the **motor model** (Rs, Ls, λ) live-tunable too, two things
 need to change in firmware:

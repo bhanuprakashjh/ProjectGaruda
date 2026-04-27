@@ -53,28 +53,28 @@ extern "C" {
 /** Theta-error transition pacing: AN1078 uses TRANSITION_STEPS = IRP_PERCALC/4. */
 #define AN_TRANSITION_STEPS         (AN_IRP_PERCALC / 4)
 
-/* ── Motor (A2212 1400KV @ 12V) ─────────────────────────────────
+/* ── Motor (PRODRONE 2810 1350KV @ 24V) ─────────────────────────
  *
- * Switched 2026-04-26 from 2810 @ 24V.  See git history for 2810
- * tune (an1078_200k_milestone.md memory note).
+ * Switched back from A2212@12V on 2026-04-27.
  *
- * A2212 specs (per gspParams profile 1 + GUI preset):
- *   KV = 1400 RPM/V, 7 PP, Rs ≈ 65 mΩ, Ls ≈ 30 µH
- *   λ = 60 / (√3·2π·1400·7) = 0.000563 V·s/rad
- *   No-load max @ 12V = 12 / 0.000563 = 21300 rad/s elec ≈ 200k eRPM
- *   Practical max with FW + observer headroom: probably 130-150k eRPM. */
+ * 2810 specs:
+ *   KV = 1350 RPM/V, 7 PP, Rs ≈ 22 mΩ, Ls ≈ 10 µH
+ *   λ = 60 / (√3·2π·1350·7) = 0.000583 V·s/rad
+ *   No-load max @ 24V = 24 / 0.000583 = 41200 rad/s elec ≈ 393k eRPM
+ *   Practical max with FW + observer headroom: ~210k eRPM (validated
+ *   2026-04-25, see an1078_200k_milestone memory note). */
 
 #define AN_NOPOLESPAIRS             7                /* 7 PP (14 magnets) */
 
-/** Phase-to-neutral resistance (Ω).  A2212 datasheet/auto-detect ≈ 65 mΩ. */
-#define AN_MOTOR_RS                 0.065f
+/** Phase-to-neutral resistance (Ω).  Measured ~22 mΩ. */
+#define AN_MOTOR_RS                 0.022f
 
-/** Phase-to-neutral inductance (H).  A2212 ≈ 30 µH. */
-#define AN_MOTOR_LS                 30e-6f
+/** Phase-to-neutral inductance (H).  Measured ~10 µH. */
+#define AN_MOTOR_LS                 10e-6f
 
 /** Per-phase peak flux linkage λ (V·s/rad_electrical).  λ = 60 / (√3·2π·KV·PP)
- *  for 1400 KV @ 7PP gives 0.000563. */
-#define AN_MOTOR_LAMBDA             0.000563f
+ *  for 1350 KV @ 7PP gives 0.000583. */
+#define AN_MOTOR_LAMBDA             0.000583f
 
 /** Discrete plant pole F = 1 - Rs·Ts/Ls.
  *  2810: 1 - 0.022 × 41.67e-6 / 10e-6 = 0.908.  Stable (must be 0..1). */
@@ -99,7 +99,7 @@ extern "C" {
  *    - BEMF triple — observer locks more reliably
  *    - OL ramp at 1000 rad/s² takes 1.1s to reach this from rest
  *  Bumped 500→1500 on 2026-04-26 for prop testing. */
-#define AN_END_SPEED_RPM_MECH       1500.0f
+#define AN_END_SPEED_RPM_MECH       2000.0f
 
 /** End-speed in electrical rad/s.  Used as min closed-loop speed
  *  floor and as the LPF Kslf clamp floor. */
@@ -109,11 +109,10 @@ extern "C" {
 /** Nominal motor speed (mech RPM) — full-throttle target speed.
  *  CL throttle range maps 0→full to AN_END_SPEED → AN_NOMINAL_SPEED.
  *
- *  A2212 @ 12V: theoretical no-load = 12 × 1400 = 16800 RPM mech
- *  (= 117k eRPM at 7PP).  Practical with FW + observer margin: aim
- *  for 18000 RPM mech (= 126k eRPM) so throttle map can command into
- *  FW territory without artificially capping. */
-#define AN_NOMINAL_SPEED_RPM_MECH   18000.0f     /* = 126k eRPM */
+ *  2810 @ 24V: theoretical no-load = 24 × 1350 = 32400 RPM mech
+ *  (= 227k eRPM at 7PP).  Practical with FW + observer margin: 30000
+ *  RPM mech (= 210k eRPM) — past the 196k 6-step benchmark target. */
+#define AN_NOMINAL_SPEED_RPM_MECH   30000.0f     /* = 210k eRPM */
 
 /** Maximum mechanical RPM. */
 #define AN_MAX_SPEED_RPM_MECH       3500.0f

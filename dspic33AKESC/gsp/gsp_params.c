@@ -194,10 +194,10 @@ static const GSP_PARAMS_T profileDefaults[4] = {
                                          * correction restored, Iq_ref
                                          * shouldn't saturate the speed PI
                                          * under normal operation. */
-        .focMaxElecRadS       = 10000,  /* ~96k eRPM mech. With BEMF angle
-                                         * correction re-enabled the observer
-                                         * should track cleanly past 5k rad/s.
-                                         * If oscillation returns: lower this. */
+        .focMaxElecRadS       = 25000,  /* ~239k eRPM at 7PP — past the
+                                         * proven 213k peak with FW.  Was
+                                         * 10000 (96k) — way too low,
+                                         * artificially capped pot range. */
         .focKpDqMilli         = 63,     /* Kp = 2π × 1000 × 10 µH = 0.063 */
         .focKiDq              = 138,    /* Ki = 2π × 1000 × 0.022 = 138 */
         .focObsLpfAlphaMilli  = 350,    /* 0.35 (matches A2212, high-speed drone) */

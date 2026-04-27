@@ -341,7 +341,15 @@ static void an_do_control(AN_Motor_T *m, float dt)
          * Speed PI on top: also runs every tick (same dt, same kp/ki
          * tuning gives same closed-loop behavior). */
 
-        /* Throttle-mapped speed setpoint */
+        /* Throttle-mapped speed setpoint.  Max speed comes from
+         * gspParams.focMaxElecRadS (per-profile, GUI-editable) so the
+         * pot range matches what the actual motor can physically reach.
+         * Without this, switching profiles in the GUI worked for the
+         * motor model but the pot still mapped 0-100% to the previous
+         * motor's max — second half of pot had no effect on speed. */
+        float max_speed_target = (gspParams.focMaxElecRadS > 0)
+                               ? (float)gspParams.focMaxElecRadS
+                               : AN_NOMINAL_SPEED_ELEC_RS;
         float speed_target;
         if (m->throttle <= AN_THROTTLE_DEADBAND) {
             speed_target = AN_END_SPEED_ELEC_RS;
@@ -349,7 +357,7 @@ static void an_do_control(AN_Motor_T *m, float dt)
             float frac = (float)(m->throttle - AN_THROTTLE_DEADBAND)
                        / (4095.0f - (float)AN_THROTTLE_DEADBAND);
             speed_target = AN_END_SPEED_ELEC_RS
-                         + frac * (AN_NOMINAL_SPEED_ELEC_RS - AN_END_SPEED_ELEC_RS);
+                         + frac * (max_speed_target - AN_END_SPEED_ELEC_RS);
         }
 
         /* Slew velRef toward target — uses CL-specific rate, faster
@@ -381,6 +389,13 @@ static void an_do_control(AN_Motor_T *m, float dt)
          * not leak into a fresh start. */
         if (m->changeMode) {
             m->changeMode = false;
+            /* Bumpless OL→CL transition.  Without this the speed PI sees
+             * velRef=0 vs measured=ω_handoff (~1099 rad/s) at first CL
+             * tick, computes a huge negative error, demands -12A Iq,
+             * motor brakes hard immediately, observer can't keep up,
+             * desync within 100 ms.  Setting velRef=measured makes the
+             * initial error ~0 so Iq stays smooth across the boundary. */
+            m->velRef_rad_s = m->smc.OmegaFltred;
             an_pi_preload(&m->pi_spd, AN_Q_CURRENT_REF_OPENLOOP);
             m->pi_d.integrator = 0.0f;
             m->pi_q.integrator = 0.0f;
@@ -481,9 +496,31 @@ static void an_do_control(AN_Motor_T *m, float dt)
 static void an_calc_park_angle(AN_Motor_T *m)
 {
     if (m->openLoop) {
-        /* LOCK: align rotor at θ=0.  startupRamp held at zero. */
+        /* LOCK: align rotor.  startupRamp held at zero.
+         *
+         * IMPORTANT: AN1078 applies Iq (not Id) during alignment with
+         * synth=0.  Iq at synth=0 means current is on stator β-axis →
+         * rotor d-axis pulls to β = stator angle π/2.  After alignment,
+         * rotor d sits at stator β, NOT stator α.
+         *
+         * To make OL ramp start with rotor d aligned to synth d (so the
+         * Iq-q current generates maximum forward torque), the synth
+         * angle must be set to π/2 at the LOCK→RAMP transition.  Then
+         * synth d at stator angle π/2 = rotor d position → aligned.
+         *
+         * Without this offset, OL starts at synth=0 with rotor d at
+         * synth q (90° offset).  Current is parallel to rotor d → ZERO
+         * initial torque.  With prop drag, prop friction nudges rotor
+         * out of this dead zone and motor catches up.  Without prop, low
+         * inertia rotor stays stuck and OL ramp doesn't follow.  Fixed
+         * 2026-04-26 after observing A2212 stuck-in-OL with no prop. */
         if (m->startupLock < AN_LOCK_TIME) {
             m->startupLock++;
+            if (m->startupLock == AN_LOCK_TIME) {
+                /* End of alignment — offset synth angle to match where
+                 * rotor actually settled (stator β-axis). */
+                m->thetaOpenLoop = AN_PI * 0.5f;
+            }
         }
         /* RAMP: accelerate forced angle until END_SPEED reached. */
         else if (m->startupRamp < AN_END_SPEED_ELEC_RS) {
@@ -518,13 +555,27 @@ static void an_calc_park_angle(AN_Motor_T *m)
              * a brief 50% dip during OL ramp won't trigger handoff. */
             float bemf_mag = sqrtf(m->smc.EalphaFinal * m->smc.EalphaFinal
                                  + m->smc.EbetaFinal  * m->smc.EbetaFinal);
-            float bemf_expected = AN_MOTOR_LAMBDA * m->startupRamp;
+            /* λ from gspParams (per-profile, GUI-editable) with fallback
+             * to compile-time default if EEPROM not yet loaded. */
+            float lambda = (gspParams.focKeUvSRad > 0)
+                         ? gspParams.focKeUvSRad * 1.0e-6f
+                         : AN_MOTOR_LAMBDA;
+            float bemf_expected = lambda * m->startupRamp;
             /* Relaxed 50%→30% on 2026-04-26 for A2212.  Higher-Rs motors
              * have less OL torque margin → rotor slips synth angle under
              * prop drag → real BEMF lower than λ·ω_command.  Plus LPF
              * cascade attenuates ~20% at low motor freq.  30% still
              * rejects "no signal at all" while accepting partial slip. */
-            float bemf_min = bemf_expected * 0.3f;
+            /* Threshold lowered 0.30 → 0.20 on 2026-04-26 after observing
+             * that conf naturally sits at 0.33-0.36 during OL even when
+             * motor is properly tracking — so 30% is right at the edge
+             * and handoff fires only by chance.  Working morning test
+             * (foc_20260426_160120.csv) had conf bouncing 0.29-0.44 with
+             * occasional crossings above 0.30 → handoff sometimes fires.
+             * Failed evening test had conf pinned at 0.34 → never
+             * sustained 53ms above 0.30 → stuck.  20% is well below the
+             * natural noise floor → handoff fires reliably. */
+            float bemf_min = bemf_expected * 0.2f;
 
             if (bemf_mag >= bemf_min) {
                 m->handoff_dwell++;

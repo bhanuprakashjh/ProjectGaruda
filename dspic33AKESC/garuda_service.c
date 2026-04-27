@@ -115,7 +115,10 @@ static V3_State_t s_foc_v3;
 volatile bool gspFocReinitNeeded;
 #elif FEATURE_FOC_AN1078
 /* AN1078 motor controller — accessed only from ADC ISR */
-static AN_Motor_T s_foc_an;
+/* Non-static so gsp_commands.c can re-init the SMC observer when motor
+ * model params (Rs/Ls/Ke) are changed via SET_PARAM — re-uses gspParams
+ * values to recompute F_PLANT/G_PLANT without firmware recompile. */
+AN_Motor_T s_foc_an;
 volatile bool gspFocReinitNeeded;
 #endif
 

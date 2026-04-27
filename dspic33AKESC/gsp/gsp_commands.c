@@ -359,6 +359,21 @@ static void HandleSetParam(const uint8_t *payload, uint8_t payloadLen)
 
     PARAM_RESULT_T result = GSP_ParamSet(paramId, value);
 
+    /* Re-init the AN1078 observer plant model when motor params change.
+     * Rs, Ls, Ke (IDs 0x70, 0x71, 0x72) feed F_PLANT/G_PLANT and the
+     * BEMF threshold.  AN_SMCInit reads the new gspParams values and
+     * recomputes.  Safe to call from IDLE state (which the gate above
+     * already enforced for non-AN1078-tune IDs). */
+#if FEATURE_FOC_AN1078
+    if (result == PARAM_OK &&
+        (paramId == PARAM_ID_FOC_RS_MOHM ||
+         paramId == PARAM_ID_FOC_LS_UH ||
+         paramId == PARAM_ID_FOC_KE_UV_S_RAD)) {
+        extern AN_Motor_T s_foc_an;
+        AN_SMCInit(&s_foc_an.smc);
+    }
+#endif
+
     switch (result) {
     case PARAM_OK: {
         uint8_t resp[6];
