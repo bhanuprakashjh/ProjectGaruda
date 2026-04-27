@@ -445,7 +445,7 @@ def main():
 
     print(f"\n  Recording... (Ctrl+C to stop)\n")
     print(f"  {'Time':>7s}  {'State':>8s}  {'Sub':>5s}  {'Iq':>7s}  "
-          f"{'Id':>7s}  {'Vq':>7s}  {'Vd':>7s}  {'RPM':>7s}  {'Vbus':>6s}  "
+          f"{'Id':>7s}  {'Vq':>7s}  {'Vd':>7s}  {'eRPM':>7s}  {'Vbus':>6s}  "
           f"{'Thr':>5s}  {'Fault':>6s}")
     print(f"  {'─'*7}  {'─'*8}  {'─'*5}  {'─'*7}  {'─'*7}  {'─'*7}  "
           f"{'─'*7}  {'─'*7}  {'─'*6}  {'─'*5}  {'─'*6}")
@@ -498,7 +498,7 @@ def main():
 
             line = (f"\r  {row['time_s']:>7s}  {state_name:>8s}  {sub_name:>5s}  "
                     f"Iq={foc_iq:>6s}  Id={foc_id:>6s}  Vq={foc_vq:>6s}  "
-                    f"{rpm:>6s}rpm  {vbus:>5s}V  mod={mod_idx:>5s}  "
+                    f"{rpm:>6s}eRPM  {vbus:>5s}V  mod={mod_idx:>5s}  "
                     f"conf={obs_conf:>5s}  {fault:>6s}")
             print(line, end="", flush=True)
             last_print = now
