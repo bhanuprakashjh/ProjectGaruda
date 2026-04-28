@@ -410,13 +410,10 @@ void __attribute__((interrupt, auto_psv)) _ADCInterrupt(void)
             {
                 /* 3-read deglitch: reject single-sample GPIO bounce /
                  * comparator chatter near threshold. Majority vote of
-                 * 3 reads with short gaps (~400 ns total).
-                 *
-                 * Earlier also had inline FIFO drain (Phase A) — removed
-                 * once the janitor/reader model was understood: CCP ISR
-                 * drains FIFO within µs of each edge, so by the time the
-                 * ADC ISR fires at PWM mid-ON the FIFO is already empty.
-                 * The inline drain was redundant with CCP ISR's work. */
+                 * 3 reads with short gaps (~400 ns total). Tested
+                 * single-read above 150k 2026-04-28 — regressed peak
+                 * 195k→178k, so 3-read is load-bearing for noise
+                 * rejection at all speeds. */
                 uint8_t r1 = ReadBEMFComp();
                 Nop(); Nop(); Nop(); Nop();
                 uint8_t r2 = ReadBEMFComp();

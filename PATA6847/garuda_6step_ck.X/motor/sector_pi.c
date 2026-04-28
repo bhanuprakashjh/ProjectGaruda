@@ -690,7 +690,17 @@ void SectorPI_Commutate(void)
          * In SP mode, extend past pulse turn-off + 10µs settle. */
         uint16_t sectorHR = (actualStepPeriodHR >= V4_MIN_PERIOD)
                             ? actualStepPeriodHR : timerPeriod;
-        uint16_t blankHR = sectorHR >> 2;
+        /* Runtime blanking (V4 Commutate ISR) — was hardcoded `>> 2`
+         * (25%), ignoring v4Params.blankingPct.  Wired up 2026-04-28
+         * so SET_PARAM 0xF3 actually takes effect.  Fallback to 25%
+         * if pct is zero or out of range. */
+        uint8_t  blankPct = v4Params.blankingPct;
+        uint16_t blankHR;
+        if (blankPct == 0U || blankPct > 100U) {
+            blankHR = sectorHR >> 2;   /* safe fallback */
+        } else {
+            blankHR = (uint16_t)(((uint32_t)sectorHR * blankPct) / 100U);
+        }
         if (v4_spActive)
         {
             uint16_t dutyHR = (uint16_t)(((uint32_t)actualAmplitude
@@ -810,15 +820,35 @@ void SectorPI_Commutate(void)
             v4_timerPeriod = timerPeriod;  /* expose for CCP ISR */
         }
 
-        /* Reactive target: ZC timestamp + halfPeriod - advance.
-         * TAL=2 (15°) at low speed for stable startup.
-         * TAL=3 (22.5°) above 60k eRPM for high-speed margin.
-         * 60k eRPM = 15.6M/60000 = 260 ticks. */
+        /* Reactive target: ZC timestamp + delay-to-next-commutation.
+         *
+         * Speed-adaptive advance (proven 196k baseline):
+         *   schedPeriod >= 260 HR (≤60k eRPM): TAL=2 → 15° advance
+         *   schedPeriod <  260 HR (>60k eRPM): TAL=3 → 22.5° advance
+         *
+         * The 2026-04-28 unification (using v4Derived.advancePlus30Fp8
+         * for both PI and scheduler) removed this ramp and motor walled
+         * at 130k.  Restored: PI's setValue stays at fixed 15° (its own
+         * model); scheduler keeps speed-adaptive ramp. */
         uint16_t schedPeriod = v4_spActive ? actualStepPeriodHR : timerPeriod;
         uint16_t halfHR = schedPeriod >> 1;
-        uint16_t tal = (schedPeriod < 260) ? 3 : 2;
-        uint16_t advHR = (schedPeriod >> 3) * tal;
-        uint16_t delayHR = (halfHR > advHR) ? (halfHR - advHR) : 2;
+        /* Speed-adaptive TAL ramp:
+         *   schedPeriod >= 260 HR (≤60k eRPM):  TAL=2 → 15°
+         *   130-260   (60-120k eRPM):           TAL=3 → 22.5°
+         *   schedPeriod < 130 HR (>120k eRPM):  TAL=4 → 30°
+         * 4th band added 2026-04-28 to push past 178k wall.
+         *
+         * Predicted-scheduling experiment 2026-04-28: tried thisCommHR-
+         * anchored target above 175k for >30° advance. Regressed peak
+         * 195k→178k because timerPeriod saturates at minPeriodHr giving
+         * a bad period estimate. Reverted; current TAL=4 floor at 195k
+         * may be a real BEMF/timing limit, not a scheduler one. */
+        uint16_t tal;
+        if      (schedPeriod >= 260U) tal = 2U;
+        else if (schedPeriod >= 130U) tal = 3U;
+        else                          tal = 4U;
+        uint16_t advHR  = (uint16_t)((schedPeriod >> 3) * tal);
+        uint16_t delayHR = (halfHR > advHR) ? (uint16_t)(halfHR - advHR) : 2U;
         uint16_t targetHR = (uint16_t)(v4_lastCaptureHR + delayHR);
 
         diagDelta = (int16_t)(targetHR - thisCommHR);  /* margin */

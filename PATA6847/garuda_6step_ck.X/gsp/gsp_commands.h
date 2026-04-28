@@ -22,7 +22,7 @@ extern "C" {
 #define GSP_FW_PATCH    0
 
 /* GSP protocol version (same as AK board) */
-#define GSP_PROTOCOL_VERSION  2
+#define GSP_PROTOCOL_VERSION  3   /* V3: GSP_INFO_T extended with buildHash */
 
 /* Board IDs — GUI uses this to select CK vs AK UI */
 #define GSP_BOARD_MCLV48V300W  0x0001   /* dsPIC33AK + MCLV-48V-300W */
@@ -65,18 +65,23 @@ typedef enum {
     GSP_ERR_CROSS_VALIDATION = 0x07,
 } GSP_ERR_CODE_T;
 
-/* GSP_INFO_T — 20 bytes, same as AK board (protocol-compatible) */
+/* GSP_INFO_T — 24 bytes (was 20).  Bumped 2026-04-28 to add buildHash
+ * so host can verify which firmware build is on the chip — eliminates
+ * the "did the flash actually take effect?" debug ambiguity. */
 typedef struct __attribute__((packed)) {
     uint8_t  protocolVersion;
     uint8_t  fwMajor;
     uint8_t  fwMinor;
     uint8_t  fwPatch;
     uint16_t boardId;           /* 0x0002 for CK board */
-    uint8_t  motorProfile;      /* 0=Hurst, 1=A2212 */
+    uint8_t  motorProfile;      /* 0=Hurst, 1=A2212, 2=2810 */
     uint8_t  motorPolePairs;
     uint32_t featureFlags;      /* CK-specific feature bits */
     uint32_t pwmFrequency;
     uint32_t maxErpm;
+    uint32_t buildHash;         /* djb2 hash of __DATE__ " " __TIME__ +
+                                 * folded V4 tunables (advance, blanking,
+                                 * Kp/Ki shifts).  Bumps every recompile. */
 } GSP_INFO_T;
 
 /* CK Feature flag bits */

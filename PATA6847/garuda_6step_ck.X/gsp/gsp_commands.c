@@ -21,6 +21,7 @@
 #include "gsp_ck_params.h"
 #include "../garuda_types.h"
 #include "../garuda_service.h"
+#include "../motor/v4_params.h"   /* v4Params for buildHash fold */
 
 /* ── Telemetry streaming state ──────────────────────────────────── */
 
@@ -91,6 +92,25 @@ static void HandleGetInfo(const uint8_t *payload, uint8_t payloadLen)
     info.featureFlags    = BuildFeatureFlags();
     info.pwmFrequency    = PWMFREQUENCY_HZ;
     info.maxErpm         = ckParams.maxClosedLoopErpm;
+
+    /* Build hash: djb2 of __DATE__ " " __TIME__ folded with key V4
+     * tunables.  Updates every recompile AND every time a tunable
+     * changes — host can verify "is the firmware I expect actually
+     * on the chip?" by comparing the printed hash. */
+    {
+        static const char buildStamp[] = __DATE__ " " __TIME__;
+        uint32_t hash = 5381UL;
+        for (const char *p = buildStamp; *p; p++) {
+            hash = ((hash << 5) + hash) ^ (uint32_t)(uint8_t)*p;
+        }
+        /* Fold V4 tunables so any GUI param tweak shifts the hash too. */
+        hash ^= (uint32_t)v4Params.phaseAdvanceDegX10;
+        hash ^= ((uint32_t)v4Params.blankingPct) << 8;
+        hash ^= ((uint32_t)v4Params.piKpShift)   << 16;
+        hash ^= ((uint32_t)v4Params.piKiShift)   << 20;
+        hash ^= ((uint32_t)v4Params.minPeriodHr) << 0;
+        info.buildHash = hash;
+    }
 
     GSP_SendResponse(GSP_CMD_GET_INFO, (const uint8_t *)&info, sizeof(info));
 }

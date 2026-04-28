@@ -41,7 +41,12 @@ void V4Params_InitDefaults(void)
     v4Params.phaseAdvanceDegX10 = (uint16_t)(V4_PHASE_ADVANCE_DEG * 10.0f + 0.5f);
     v4Params.piKpShift          = V4_KP_SHIFT;
     v4Params.piKiShift          = V4_KI_SHIFT;
-    v4Params.blankingPct        = 40;          /* matches hal_capture.c old hardcode */
+    v4Params.blankingPct        = 25;          /* matches V4 Commutate ISR
+                                                * effective behavior (was hardcoded
+                                                * `>> 2`).  Now wired runtime via
+                                                * sector_pi.c:693, so SET_PARAM 0xF3
+                                                * actually takes effect — try 15-20
+                                                * for more detection window at speed. */
     v4Params.piFeedPolarity     = 1;           /* default: rising-only (proven 196k baseline) */
     v4Params.minPeriodHr        = V4_MIN_PERIOD;
 

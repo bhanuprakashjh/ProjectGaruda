@@ -425,6 +425,21 @@ def main():
         print("ERROR: No PING response")
         return
 
+    # GET_INFO — print build hash so we can verify which firmware is on the chip
+    ser.write(build_packet(0x01))   # CMD_GET_INFO
+    time.sleep(0.2)
+    info_buf = ser.read(4096)
+    info_pkt, _ = parse_packet(info_buf)
+    if info_pkt and info_pkt[0] == 0x01 and len(info_pkt[1]) >= 24:
+        # GSP_INFO_T V3: 24 bytes ending in u32 buildHash
+        proto_v = info_pkt[1][0]
+        fw_maj, fw_min, fw_pat = info_pkt[1][1], info_pkt[1][2], info_pkt[1][3]
+        if proto_v >= 3:
+            build_hash = struct.unpack_from('<I', info_pkt[1], 20)[0]
+            print(f"  Build hash: 0x{build_hash:08X}  (FW v{fw_maj}.{fw_min}.{fw_pat}, proto v{proto_v})")
+        else:
+            print(f"  FW v{fw_maj}.{fw_min}.{fw_pat}, proto v{proto_v} (no build hash — firmware too old)")
+
     # Start telemetry
     rate_ms = max(10, 1000 // args.rate)
     ser.write(build_packet(CMD_TELEM_START, struct.pack('<H', rate_ms)))

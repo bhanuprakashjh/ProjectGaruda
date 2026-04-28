@@ -23,15 +23,13 @@
 #define FOSC_PWM_MHZ        400U         /* PWM timing base (CK: 2x Fosc) */
 
 /* ── PWM ───────────────────────────────────────────────────────────── */
-#define PWMFREQUENCY_HZ     40000U       /* 40 kHz — proven baseline reaching
-                                          * 124k eRPM at 56% duty with
-                                          * complementary drive + midpoint ZC.
-                                          * 20 kHz tested: marginally better at
-                                          * low duty, worse at high duty due to
-                                          * doubled current ripple. Discarded.
-                                          * Higher headroom now requires ZC
-                                          * detection improvements (PI, deglitch,
-                                          * blanking, EGBLT). */
+#define PWMFREQUENCY_HZ     60000U       /* 60 kHz — bumped from 40 kHz on
+                                          * 2026-04-29 to push past 195k.
+                                          * At 178k+ eRPM, sector ≈ 80 HR ticks
+                                          * = ~2.2 PWM cycles per sector at 40k.
+                                          * 60k gives 3.3 cycles/sector → tighter
+                                          * ADC midpoint sample alignment +
+                                          * lower per-cycle current ripple. */
 #define LOOPTIME_MICROSEC   (uint16_t)(1000000UL / PWMFREQUENCY_HZ)  /* 50 us */
 #define LOOPTIME_TCY        (uint16_t)((uint32_t)LOOPTIME_MICROSEC * FOSC_PWM_MHZ / 2 - 1)
 /* PWM drive mode: complementary vs unipolar.
@@ -718,7 +716,21 @@
 #if FEATURE_V4_SECTOR_PI
 
 /* Motor phase advance (electrical degrees, 0..30).
- * 10° is Microchip default for similar KV motors (A2207-2500KV). */
+ *
+ * Default 15° = old TAL=2 value (used at low/mid speed in the original
+ * piecewise scheduler).  This is conservative for startup since the
+ * unified PI+scheduler now applies this value across all speeds.
+ *
+ * Bumped to 22.5° (= old TAL=3) briefly on 2026-04-28 to preserve
+ * high-speed behavior, but that destabilized low-speed startup
+ * (motor stuck around 28k eRPM, eTPm frozen, PI saturated).  Reverted
+ * to 15° as safe starting point — tune up live via SET_PARAM 0xF0
+ * once startup is stable:
+ *   SET_PARAM 0xF0 200  → 20.0°  (compromise, recommended high-speed)
+ *   SET_PARAM 0xF0 225  → 22.5°  (max benefit, may need bench validation)
+ *
+ * For motors that need more low-speed advance, drop further:
+ *   SET_PARAM 0xF0 100  → 10.0°  (original Microchip A2207 default) */
 #define V4_PHASE_ADVANCE_DEG    10.0f
 
 /* Board detector delay (µs). ATA6847 comparator propagation ~2 µs.
