@@ -219,20 +219,21 @@
 #define MOTOR_LS_MICROH     25U          /* Phase inductance (estimated) */
 #define MOTOR_KV            1350U        /* RPM/V */
 
-/* Startup — gentle ramp proven to work on this motor.
- * Low Rs (50mΩ) means high current at moderate duty.
- * At 13V, 5% duty → I = 0.05 × 13 / 0.050 = 13A peak (brief ramp). */
-#define ALIGN_TIME_MS       200U
-#define ALIGN_DUTY          (LOOPTIME_TCY / 20)    /* ~5% for 40kHz (CCPT overhead) */
-#define INITIAL_STEP_PERIOD 1000U        /* Timer1 ticks (50ms = ~200 eRPM) */
+/* Startup — aligned with profile 1's proven bench cadence on
+ * 2026-04-29. The previous "gentle 2810" values (5% align, /8 duty
+ * cap, 500 eRPM/s ramp) were never bench-validated and broke startup
+ * (rotor didn't track the slow ramp → CL seeded with bad period →
+ * PI runaway to phantom 700k eRPM). Profile 1's settings drive the
+ * 2810 motor reliably to 235-238k eRPM, so adopting them here.
+ * ZC tunables (blanking, advance) are kept profile-2-specific because
+ * those are CL-stage params where the 2810's higher-speed regime
+ * benefits from tighter blanking (8% vs 10%, 15 µs floor vs 25 µs). */
+#define ALIGN_TIME_MS       150U
+#define ALIGN_DUTY          (LOOPTIME_TCY / 40)    /* ~2.5% — matches profile 1 */
+#define INITIAL_STEP_PERIOD 800U
 #define MIN_STEP_PERIOD     50U          /* Timer1 ticks (2.5ms = ~4000 eRPM) */
-#define RAMP_ACCEL_ERPM_S   1500U        /* eRPM/s — was 500U, demonstrated 2026-04-29
-                                          * to be too slow: rotor didn't track the
-                                          * forced ramp before MIN_STEP_PERIOD hit, so
-                                          * CL seeded with bad period → PI runaway to
-                                          * phantom 700k eRPM. 1500 is the proven
-                                          * bench cadence (matches profile 1). */
-#define RAMP_DUTY_CAP       (LOOPTIME_TCY / 8)     /* ~12.5% for 40kHz */
+#define RAMP_ACCEL_ERPM_S   1500U        /* Matches profile 1 — proven bench cadence */
+#define RAMP_DUTY_CAP       (LOOPTIME_TCY / 6)     /* ~17% — matches profile 1 */
 
 /* ZC Detection */
 #define ZC_BLANKING_PERCENT 20U          /* For OL_RAMP ADC backup poll only.
