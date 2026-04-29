@@ -998,7 +998,12 @@ void SectorPI_TimeTick(void)
     }
 }
 
-#define V4_MIN_AMPLITUDE  4000U  /* ~12% duty — enough BEMF at CL entry */
+#define V4_MIN_AMPLITUDE  5000U  /* ~15.3% duty — bumped from 4000 (12.2%) on
+                                  * 2026-04-29 because at 60 kHz the per-cycle
+                                  * switching overhead eats more of the shorter
+                                  * 16.7µs cycle, so 12.2% Q15 only delivers
+                                  * ~10% effective. Empirical desync threshold
+                                  * was ~12% commanded; 15.3% gives margin. */
 
 void SectorPI_CommandSet(uint16_t amplitude)
 {

@@ -231,7 +231,12 @@ void HAL_PWM_SetDutyCycle(uint32_t duty)
  * so behavior matches HAL_PWM_SetDutyCycle (per-200 ≈ MAX_DUTY). */
 void HAL_PWM_SetDutyCyclePeriod(uint32_t duty, uint16_t per)
 {
-    uint32_t maxD = (per > 200U) ? (uint32_t)(per - 200U) : (uint32_t)per;
+    /* MIN_OFF reduced from 200 → 100 ticks (1µs → 500ns) on 2026-04-29.
+     * ATA6847 has charge pumps (datasheet: "100% PWM Duty Cycle Control"),
+     * so bootstrap-refresh argument for the 200-tick clamp doesn't apply.
+     * 100 ticks gives ~97% effective duty at 60kHz, leaving headroom for
+     * adaptive deadtime + CCPT during H↔L transitions when below 100%. */
+    uint32_t maxD = (per > 100U) ? (uint32_t)(per - 100U) : (uint32_t)per;
     if (duty > maxD) duty = maxD;
     if (duty < MIN_DUTY) duty = MIN_DUTY;
 
