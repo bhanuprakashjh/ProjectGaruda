@@ -14,7 +14,7 @@
 
 /* ── Motor Profile Selection ──────────────────────────────────────── */
 #ifndef MOTOR_PROFILE
-#define MOTOR_PROFILE   1   /* 0=Hurst, 1=A2212, 2=2810 */
+#define MOTOR_PROFILE   1   /* 0=Hurst, 1=A2212, 2=2810, 3=HiZ1460 */
 #endif
 
 /* ── Clock ─────────────────────────────────────────────────────────── */
@@ -226,7 +226,12 @@
 #define ALIGN_DUTY          (LOOPTIME_TCY / 20)    /* ~5% for 40kHz (CCPT overhead) */
 #define INITIAL_STEP_PERIOD 1000U        /* Timer1 ticks (50ms = ~200 eRPM) */
 #define MIN_STEP_PERIOD     50U          /* Timer1 ticks (2.5ms = ~4000 eRPM) */
-#define RAMP_ACCEL_ERPM_S   500U         /* eRPM/s — moderate, proven on this motor */
+#define RAMP_ACCEL_ERPM_S   1500U        /* eRPM/s — was 500U, demonstrated 2026-04-29
+                                          * to be too slow: rotor didn't track the
+                                          * forced ramp before MIN_STEP_PERIOD hit, so
+                                          * CL seeded with bad period → PI runaway to
+                                          * phantom 700k eRPM. 1500 is the proven
+                                          * bench cadence (matches profile 1). */
 #define RAMP_DUTY_CAP       (LOOPTIME_TCY / 8)     /* ~12.5% for 40kHz */
 
 /* ZC Detection */
@@ -291,8 +296,65 @@
                                          * Board FETs rated 100V — 40V is safe. */
 #define VBUS_UV_THRESHOLD   (12110U)       /* ~10V → 1211*10 */
 
+#elif MOTOR_PROFILE == 3
+/* ── Motor: HiZ1460 (high-impedance 1460KV @ 30V) ────────────────
+ * 7PP, 16Ω phase resistance, 15µH inductance, 1460 RPM/V, 30V max.
+ * High-Z motor: max current capped by Rs at 30/16 = 1.87A. Cannot
+ * overcurrent regardless of duty — runs very different operating
+ * point from 2810/A2212 (low-Rs, high-current motors).
+ *
+ *   ALIGN: 50% duty × 30V = 15V → ~0.94A align current
+ *   RAMP : 80% duty × 30V = 24V → ~1.50A peak ramp
+ *   FULL : 100% duty × 30V = 30V → 1.87A (ohmic limit)
+ * Theoretical no-load: 1460 × 30 = 43800 RPM = 306k eRPM. */
+#define MOTOR_POLE_PAIRS    7U
+#define MOTOR_RS_MILLIOHM   16000U       /* 16 Ω */
+#define MOTOR_LS_MICROH     15U
+#define MOTOR_KV            1460U
+
+/* Startup — needs HIGH duty to develop torque (Rs is the bottleneck,
+ * not duty). Cannot overcurrent so set duty caps generously.
+ * Ramp cadence (TIME, ACCEL, INITIAL_STEP) matches profile 1's proven
+ * 1500 eRPM/s rate; duty caps are high to push current through 16 Ω. */
+#define ALIGN_TIME_MS       150U
+#define ALIGN_DUTY          (LOOPTIME_TCY * 50U / 100U)  /* 50% → 0.94 A */
+#define INITIAL_STEP_PERIOD 800U
+#define MIN_STEP_PERIOD     50U          /* 2.5 ms = ~4000 eRPM handoff */
+#define RAMP_ACCEL_ERPM_S   1500U        /* Proven cadence on profile 1 */
+#define RAMP_DUTY_CAP       (LOOPTIME_TCY * 80U / 100U)  /* 80% → 1.5 A peak */
+
+/* ZC Detection — same as 2810; low Ls means fast current settling. */
+#define ZC_BLANKING_PERCENT 20U
+#define ZC_FILTER_THRESHOLD 3U
+#define ZC_BLANK_PCT_SLOW   12U
+#define ZC_BLANK_PCT_FAST    8U
+#define ZC_BLANK_FLOOR_US   15U
+#define ZC_BLANK_CAP_PCT    45U
+#define FEATURE_IC_ZC_ADAPTIVE 1
+#define TIMING_ADVANCE_LEVEL 3U
+
+/* Closed-Loop */
+#define MAX_CLOSED_LOOP_ERPM 250000U     /* 30V × KV × PP headroom */
+#define MIN_CL_STEP_PERIOD   2U
+#define RAMP_TARGET_ERPM     3000U
+
+/* Idle duty for high-Z motor — needs more % to make any torque.
+ * 35% × 30V = 10.5V → 0.66 A continuous. */
+#define CL_IDLE_DUTY_PERCENT 35U
+
+/* V4_MIN_AMPLITUDE_PROFILE for HiZ1460 is set in the V4 startup block
+ * below (50% Q15). High-Z motor desyncs below ~50% Q15 because BEMF is
+ * too weak for the duty to maintain lock. */
+
+/* ATA6847 ILIM — max possible current is 1.87A, far below any DAC
+ * setting. Effectively disabled (current is naturally Rs-limited). */
+#define ILIM_DAC            120U
+
+#define VBUS_OV_THRESHOLD   (48440U)     /* ~40V — same as 2810 */
+#define VBUS_UV_THRESHOLD   (12110U)     /* ~10V */
+
 #else
-#error "Unknown MOTOR_PROFILE — select 0 (Hurst), 1 (A2212), or 2 (2810)"
+#error "Unknown MOTOR_PROFILE — select 0 (Hurst), 1 (A2212), 2 (2810), or 3 (HiZ1460)"
 #endif
 
 /* ================================================================
@@ -748,19 +810,45 @@
 #define V4_KP_SHIFT             2       /* Kp = 1/4 */
 #define V4_KI_SHIFT             4       /* Ki = 1/16 */
 
-/* Startup */
+/* Startup + V4_MIN_AMPLITUDE + block-comm thresholds (per-profile).
+ *
+ * V4_MIN_AMPLITUDE_PROFILE  Q15 amplitude floor. Pot-at-zero target.
+ *                           Must be high enough at the profile's Vbus to
+ *                           push past the BEMF-blind low-speed regime
+ *                           (~10k eRPM) so CL doesn't stall at idle.
+ * V4_BLOCK_ENTER_ERPM       Block-comm engagement floor — should be just
+ *                           below the duty-saturation eRPM at the
+ *                           profile's Vbus (where motor naturally clips
+ *                           the 96.9% duty cap).
+ * V4_BLOCK_EXIT_ERPM        Re-entry hysteresis — typically 0.85× enter. */
 #if MOTOR_PROFILE == 0   /* Hurst */
 #define V4_STARTUP_SPEED_ERPM   3000UL
 #define V4_STARTUP_CURRENT_MA   2000.0f
 #define V4_ALIGN_DURATION_MS    200U
-#elif MOTOR_PROFILE == 1  /* A2212 */
+#define V4_MIN_AMPLITUDE_PROFILE 5000U     /* 15.3% Q15 — Hurst is high-Rs, idles fine */
+#define V4_BLOCK_ENTER_ERPM     30000UL    /* Hurst peaks ~25-30k, mostly out of range */
+#define V4_BLOCK_EXIT_ERPM      25000UL
+#elif MOTOR_PROFILE == 1  /* A2212 @ 12V */
 #define V4_STARTUP_SPEED_ERPM   500UL
 #define V4_STARTUP_CURRENT_MA   3000.0f
 #define V4_ALIGN_DURATION_MS    100U
-#elif MOTOR_PROFILE == 2  /* 2810 */
+#define V4_MIN_AMPLITUDE_PROFILE 5000U     /* 15.3% Q15 — baseline idle */
+#define V4_BLOCK_ENTER_ERPM     100000UL   /* A2212 @ 12V peaks ~123k */
+#define V4_BLOCK_EXIT_ERPM      85000UL
+#elif MOTOR_PROFILE == 2  /* 2810 @ 25V */
 #define V4_STARTUP_SPEED_ERPM   500UL
 #define V4_STARTUP_CURRENT_MA   3000.0f
 #define V4_ALIGN_DURATION_MS    100U
+#define V4_MIN_AMPLITUDE_PROFILE 5000U     /* 15.3% — proven on 2810 @ 25V */
+#define V4_BLOCK_ENTER_ERPM     150000UL   /* 2810 @ 25V peaks ~237k */
+#define V4_BLOCK_EXIT_ERPM      130000UL
+#elif MOTOR_PROFILE == 3  /* HiZ1460 — Rs caps current at 1.87A */
+#define V4_STARTUP_SPEED_ERPM   500UL
+#define V4_STARTUP_CURRENT_MA   1500.0f
+#define V4_ALIGN_DURATION_MS    100U       /* Matches profile 1 — settling not Rs-dependent */
+#define V4_MIN_AMPLITUDE_PROFILE 16384U    /* 50% Q15 — high-Z motor needs lots of duty */
+#define V4_BLOCK_ENTER_ERPM     250000UL   /* HiZ1460 @ 30V theoretical 306k */
+#define V4_BLOCK_EXIT_ERPM      220000UL
 #endif
 
 #define V4_STARTUP_TIME_MS      1000U   /* Forced ramp duration before commands accepted */

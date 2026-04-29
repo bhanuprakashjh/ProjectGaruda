@@ -101,10 +101,11 @@ def decode_ck_snapshot(data):
     s['icAccepted'] = struct.unpack_from('<H', data, 32)[0]
     s['icFalse'] = struct.unpack_from('<H', data, 34)[0]
     s['filterLevel'] = data[36]
-    sp_bits = data[37]              # V4: bit0=SP active, bit1=SP requested
+    sp_bits = data[37]              # V4: bit0=SP active, bit1=SP requested, bit2=block-comm
     s['spBits'] = sp_bits
     s['spMode'] = sp_bits & 0x01
     s['spRequest'] = (sp_bits >> 1) & 0x01
+    s['blockComm'] = (sp_bits >> 2) & 0x01
     s['erpmTP'] = struct.unpack_from('<H', data, 38)[0]  # V4: eRPM from timerPeriod
     # s['ilimActive'] = data[39] != 0  # overwritten by erpmTP high byte
     s['systemTick'] = struct.unpack_from('<I', data, 40)[0]
@@ -538,12 +539,14 @@ def main():
                 sacc = snap.get('syncAccepts', 0)
                 sm_str = SYNC_MODES[smode] if smode < len(SYNC_MODES) else '?'
                 capv = snap.get('syncVsReactive', 0)  # repurposed: carries capValueHR
-                if snap.get('spMode', 0):
-                    sp_str = 'SP'
+                if snap.get('blockComm', 0):
+                    sp_str = 'BLK'
+                elif snap.get('spMode', 0):
+                    sp_str = 'SP '
                 elif snap.get('spRequest', 0):
-                    sp_str = 'RQ'
+                    sp_str = 'RQ '
                 else:
-                    sp_str = '  '
+                    sp_str = '   '
                 etp = snap.get('erpmTP', 0)
                 # Capture acceptance ratio at the Commutate side:
                 # diagCaptures / sectorCount. icAccepted=diagCaptures,

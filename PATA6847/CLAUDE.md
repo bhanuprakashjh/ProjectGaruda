@@ -14,12 +14,17 @@
 ```bash
 # CLI build (specify motor profile)
 cd garuda_6step_ck.X
-make -f Makefile-cli.mk MOTOR_PROFILE=1  # 0=Hurst, 1=A2212, 2=2810
+make -f Makefile-cli.mk MOTOR_PROFILE=1  # 0=Hurst, 1=A2212, 2=2810, 3=HiZ1460
 
 # MPLAB build
 # Uses MOTOR_PROFILE default from garuda_config.h line 17
 # Open garuda_6step_ck.X in MPLAB X, Build & Program
 ```
+
+## V4 Tuning References
+- **Symptom → knob lookup:** `docs/v4_motor_tuning_guide.md`
+- **Block commutation (238k milestone):** `docs/v4_block_commutation.md`
+- **228k pre-block milestone:** `docs/v4_228k_milestone_session.md`
 
 ## Key Files
 - `garuda_config.h` — ALL configuration (profiles, features, tuning)

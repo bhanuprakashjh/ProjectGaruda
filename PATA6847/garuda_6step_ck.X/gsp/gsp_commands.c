@@ -754,8 +754,11 @@ void GSP_TelemTick(void)
      * pinned the gates at ~94-97%. */
     extern volatile uint16_t g_pwmActualDuty;
     extern volatile uint16_t g_pwmPer;
+    extern volatile bool     g_blockCommActive;
     uint8_t dutyPct = 0;
-    if (g_pwmPer > 0U && t.actualAmplitude > 0U)
+    if (g_blockCommActive)
+        dutyPct = 100;                          /* override path → solid ON */
+    else if (g_pwmPer > 0U && t.actualAmplitude > 0U)
         dutyPct = (uint8_t)((uint32_t)g_pwmActualDuty * 100UL / g_pwmPer);
     d[6] = dutyPct;                          /* dutyPct */
     d[7] = t.commandEnabled ? 1 : 0;        /* zcSynced (repurpose as PI active) */
@@ -804,7 +807,7 @@ void GSP_TelemTick(void)
      * 2 = request latched but SP not yet applied (boundary lag / error)
      * 3 = SP active and requested
      * 1 = stale/impossible active state */
-    d[37] = (t.spMode ? 1U : 0U) | (t.spRequest ? 2U : 0U);
+    d[37] = (t.spMode ? 1U : 0U) | (t.spRequest ? 2U : 0U) | (g_blockCommActive ? 4U : 0U);
     { uint16_t erpm16 = (t.erpmNow > 0xFFFF) ? 0xFFFF : (uint16_t)t.erpmNow;
       memcpy(&d[38], &erpm16, 2); }          /* erpmNow from timerPeriod */
 

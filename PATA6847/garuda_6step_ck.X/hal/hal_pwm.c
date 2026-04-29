@@ -27,6 +27,9 @@ extern volatile bool v4_spActive;
 /* Last duty written to PG[123]DC AFTER clamping. Telemetry reads this. */
 volatile uint16_t g_pwmActualDuty = 0;
 
+/* Block-commutation flag — see hal_pwm.h. */
+volatile bool g_blockCommActive = false;
+
 /* Override data bits: [11:10] = OVRDAT, bit11=H, bit10=L
  *                     [13]    = OVRENH, [12] = OVRENL
  *
@@ -46,6 +49,20 @@ static inline void ApplyPhaseState(volatile uint16_t *ioconl,
     switch (state)
     {
         case PHASE_PWM_ACTIVE:
+            if (g_blockCommActive)
+            {
+                /* Block commutation: H solid ON, L solid OFF.
+                 * No PWM chopping during the active sector.
+                 *   OVRDAT_H = 1 → POL=active-low inverts → ATA6847 HS pin
+                 *                 driven LOW → HS FET ON
+                 *   OVRDAT_L = 0 → no invert → ATA6847 LS pin LOW → LS FET OFF
+                 * Activated via duty-saturation hysteresis in sector_pi.c
+                 * TimeTick. Float phase BEMF stays clean (no switching),
+                 * so the existing ADC-midpoint capture path keeps working. */
+                val |= 0x3000u;                            /* OVRENH=1, OVRENL=1 */
+                val = (val & ~0x0400u) | 0x0800u;          /* OVRDAT = 10 (H=1, L=0) */
+                break;
+            }
 #if PWM_DRIVE_UNIPOLAR
             /* H-PWM / L-OFF (unipolar). 34x fewer ZC timeouts vs
              * complementary — half the switching edges = clean comparator.

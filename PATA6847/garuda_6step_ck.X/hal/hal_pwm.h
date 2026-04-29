@@ -21,6 +21,13 @@ void     HAL_PWM_SetDutyCyclePeriod(uint32_t duty, uint16_t per);
  * telemetry "% of period" so the displayed duty reflects what's
  * really at the gate, not the upstream commanded value. */
 extern volatile uint16_t g_pwmActualDuty;
+
+/* Block-commutation flag — when true, the active-phase H gate is
+ * driven solid ON via override (no PWM chopping during the active
+ * sector). Set/cleared by sector_pi.c TimeTick based on duty-
+ * saturation hysteresis. ApplyPhaseState() reads this in the
+ * PHASE_PWM_ACTIVE case. */
+extern volatile bool g_blockCommActive;
 void     HAL_PWM_ChargeBootstrap(void);
 void     HAL_PWM_ForceAllFloat(void);
 void     HAL_PWM_ForceAllLow(void);
