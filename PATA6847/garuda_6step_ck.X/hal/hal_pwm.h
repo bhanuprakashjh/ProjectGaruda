@@ -15,6 +15,12 @@ void     HAL_PWM_DisableOutputs(void);
 void     HAL_PWM_SetCommutationStep(uint8_t step);
 void     HAL_PWM_SetDutyCycle(uint32_t duty);
 void     HAL_PWM_SetDutyCyclePeriod(uint32_t duty, uint16_t per);
+
+/* Last duty value the hardware actually saw, AFTER clamping in
+ * HAL_PWM_SetDutyCycle / HAL_PWM_SetDutyCyclePeriod. Use this for
+ * telemetry "% of period" so the displayed duty reflects what's
+ * really at the gate, not the upstream commanded value. */
+extern volatile uint16_t g_pwmActualDuty;
 void     HAL_PWM_ChargeBootstrap(void);
 void     HAL_PWM_ForceAllFloat(void);
 void     HAL_PWM_ForceAllLow(void);

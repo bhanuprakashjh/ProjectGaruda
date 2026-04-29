@@ -23,13 +23,15 @@
 #define FOSC_PWM_MHZ        400U         /* PWM timing base (CK: 2x Fosc) */
 
 /* ── PWM ───────────────────────────────────────────────────────────── */
-#define PWMFREQUENCY_HZ     60000U       /* 60 kHz — bumped from 40 kHz on
-                                          * 2026-04-29 to push past 195k.
-                                          * At 178k+ eRPM, sector ≈ 80 HR ticks
-                                          * = ~2.2 PWM cycles per sector at 40k.
-                                          * 60k gives 3.3 cycles/sector → tighter
-                                          * ADC midpoint sample alignment +
-                                          * lower per-cycle current ripple. */
+#define PWMFREQUENCY_HZ     60000U       /* 60 kHz — proven keeper.
+                                          * 40 kHz: peak 195k, walls early
+                                          * 50 kHz: peak 220k (also with 2x ADC)
+                                          * 60 kHz: peak 228k stable
+                                          * Win is current-ripple / BEMF
+                                          * cleanliness, not sampling rate
+                                          * (verified 2026-04-29 with 2x ADC
+                                          * experiment at 50 kHz that gave
+                                          * no improvement). */
 #define LOOPTIME_MICROSEC   (uint16_t)(1000000UL / PWMFREQUENCY_HZ)  /* 50 us */
 #define LOOPTIME_TCY        (uint16_t)((uint32_t)LOOPTIME_MICROSEC * FOSC_PWM_MHZ / 2 - 1)
 /* PWM drive mode: complementary vs unipolar.

@@ -746,9 +746,17 @@ void GSP_TelemTick(void)
     d[3] = 0;                                /* ataStatus */
     d[4] = (uint8_t)(gV4PotRaw & 0xFF);     /* potRaw L */
     d[5] = (uint8_t)(gV4PotRaw >> 8);       /* potRaw H */
+    /* Duty% from the value the hardware actually wrote, not the upstream
+     * commanded amplitude. g_pwmActualDuty is the post-clamp PG[123]DC
+     * value and g_pwmPer is its denominator (LOOPTIME_TCY in normal mode,
+     * sector-period in SP). Was previously `actualAmplitude * 100 / 32768`
+     * which always showed 99% even when the per-200 (now per-100) clamp
+     * pinned the gates at ~94-97%. */
+    extern volatile uint16_t g_pwmActualDuty;
+    extern volatile uint16_t g_pwmPer;
     uint8_t dutyPct = 0;
-    if (t.actualAmplitude > 0)
-        dutyPct = (uint8_t)((uint32_t)t.actualAmplitude * 100 / 32768);
+    if (g_pwmPer > 0U && t.actualAmplitude > 0U)
+        dutyPct = (uint8_t)((uint32_t)g_pwmActualDuty * 100UL / g_pwmPer);
     d[6] = dutyPct;                          /* dutyPct */
     d[7] = t.commandEnabled ? 1 : 0;        /* zcSynced (repurpose as PI active) */
 

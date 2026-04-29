@@ -24,6 +24,9 @@
  * during the long OFF portion of an SP frame decelerates the motor. */
 extern volatile bool v4_spActive;
 
+/* Last duty written to PG[123]DC AFTER clamping. Telemetry reads this. */
+volatile uint16_t g_pwmActualDuty = 0;
+
 /* Override data bits: [11:10] = OVRDAT, bit11=H, bit10=L
  *                     [13]    = OVRENH, [12] = OVRENL
  *
@@ -135,7 +138,12 @@ void HAL_PWM_Init(void)
     PG1DCA = 0x00;
     PG1PER = 0x10;
     PG1TRIGA = 0x00;        /* Trigger at center (for current ADC) */
-    PG1TRIGB = 0x00;
+    PG1TRIGB = 0x00;        /* 2x-ADC experiment (PG1TRIGB=200) on
+                             * 2026-04-29 produced no peak-eRPM gain at
+                             * 50 kHz PWM (220k → 220k), ruling out sample
+                             * rate as the limit. Reverted to single trigger;
+                             * the 60 kHz vs 50 kHz peak gap (228k vs 220k)
+                             * is current-ripple / float-phase cleanliness. */
     PG1TRIGC = 0x00;
     PG1DTL = DEADTIME_TCY;
     PG1DTH = DEADTIME_TCY;
@@ -210,6 +218,7 @@ void HAL_PWM_SetDutyCycle(uint32_t duty)
     PG2DC = (uint16_t)duty;
     PG3DC = (uint16_t)duty;
     PG1DC = (uint16_t)duty;
+    g_pwmActualDuty = (uint16_t)duty;
 
 #if FEATURE_PTG_ZC
     /* Track switching edge for PTG edge-relative sampling.
@@ -243,6 +252,7 @@ void HAL_PWM_SetDutyCyclePeriod(uint32_t duty, uint16_t per)
     PG2DC = (uint16_t)duty;
     PG3DC = (uint16_t)duty;
     PG1DC = (uint16_t)duty;
+    g_pwmActualDuty = (uint16_t)duty;
 
     PG1STATbits.UPDREQ = 1;
     PG2STATbits.UPDREQ = 1;
