@@ -1,0 +1,237 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configurationDescriptor version="65">
+  <logicalFolder name="root" displayName="root" projectFiles="true">
+    <logicalFolder name="HeaderFiles"
+                   displayName="Header Files"
+                   projectFiles="true">
+      <itemPath>garuda_config.h</itemPath>
+      <itemPath>garuda_types.h</itemPath>
+      <itemPath>garuda_service.h</itemPath>
+      <itemPath>hal/clock.h</itemPath>
+      <itemPath>hal/port_config.h</itemPath>
+      <itemPath>hal/hal_uart.h</itemPath>
+      <itemPath>hal/hal_diag.h</itemPath>
+      <itemPath>hal/hal_spi.h</itemPath>
+      <itemPath>hal/hal_ata6847.h</itemPath>
+      <itemPath>hal/hal_adc.h</itemPath>
+      <itemPath>hal/hal_pwm.h</itemPath>
+      <itemPath>hal/hal_timer1.h</itemPath>
+      <itemPath>hal/hal_capture.h</itemPath>
+      <itemPath>hal/hal_com_timer.h</itemPath>
+      <itemPath>hal/hal_ptg.h</itemPath>
+      <itemPath>hal/hal_opa.h</itemPath>
+      <itemPath>hal/hal_ic.h</itemPath>
+      <itemPath>hal/hal_ic_dma.h</itemPath>
+      <itemPath>hal/hal_clc.h</itemPath>
+      <itemPath>hal/hal_dma_burst.h</itemPath>
+      <itemPath>hal/hal_ak_compat.h</itemPath>
+      <itemPath>hal/delay.h</itemPath>
+      <itemPath>hal/board_service.h</itemPath>
+      <itemPath>motor/commutation.h</itemPath>
+      <itemPath>motor/startup.h</itemPath>
+      <itemPath>motor/bemf_zc.h</itemPath>
+      <itemPath>motor/sector_pi.h</itemPath>
+      <itemPath>motor/v4_params.h</itemPath>
+      <itemPath>gsp/gsp.h</itemPath>
+      <itemPath>gsp/gsp_commands.h</itemPath>
+      <itemPath>gsp/gsp_snapshot.h</itemPath>
+      <itemPath>gsp/gsp_ck_params.h</itemPath>
+    </logicalFolder>
+    <logicalFolder name="ExternalFiles"
+                   displayName="Important Files"
+                   projectFiles="true">
+      <itemPath>Makefile</itemPath>
+    </logicalFolder>
+    <logicalFolder name="LinkerScript"
+                   displayName="Linker Files"
+                   projectFiles="true">
+    </logicalFolder>
+    <logicalFolder name="SourceFiles"
+                   displayName="Source Files"
+                   projectFiles="true">
+      <itemPath>main.c</itemPath>
+      <itemPath>garuda_service.c</itemPath>
+      <itemPath>hal/clock.c</itemPath>
+      <itemPath>hal/device_config.c</itemPath>
+      <itemPath>hal/port_config.c</itemPath>
+      <itemPath>hal/hal_uart.c</itemPath>
+      <itemPath>hal/hal_diag.c</itemPath>
+      <itemPath>hal/hal_spi.c</itemPath>
+      <itemPath>hal/hal_ata6847.c</itemPath>
+      <itemPath>hal/hal_adc.c</itemPath>
+      <itemPath>hal/hal_pwm.c</itemPath>
+      <itemPath>hal/hal_timer1.c</itemPath>
+      <itemPath>hal/hal_capture.c</itemPath>
+      <itemPath>hal/hal_com_timer.c</itemPath>
+      <itemPath>hal/hal_ptg.c</itemPath>
+      <itemPath>hal/hal_trap.c</itemPath>
+      <itemPath>hal/board_service.c</itemPath>
+      <itemPath>motor/commutation.c</itemPath>
+      <itemPath>motor/startup.c</itemPath>
+      <itemPath>motor/bemf_zc.c</itemPath>
+      <itemPath>motor/sector_pi.c</itemPath>
+      <itemPath>motor/v4_params.c</itemPath>
+      <itemPath>gsp/gsp.c</itemPath>
+      <itemPath>gsp/gsp_commands.c</itemPath>
+      <itemPath>gsp/gsp_snapshot.c</itemPath>
+      <itemPath>gsp/gsp_ck_params.c</itemPath>
+    </logicalFolder>
+  </logicalFolder>
+  <sourceRootList>
+    <Elem>.</Elem>
+  </sourceRootList>
+  <projectmakefile>Makefile</projectmakefile>
+  <confs>
+    <conf name="default" type="2">
+      <toolsSet>
+        <developmentServer>localhost</developmentServer>
+        <targetDevice>dsPIC33AK128MC106</targetDevice>
+        <targetHeader></targetHeader>
+        <targetPluginBoard></targetPluginBoard>
+        <platformTool>PK5Tool</platformTool>
+        <languageToolchain>XCDSC</languageToolchain>
+        <languageToolchainVersion>3.30</languageToolchainVersion>
+        <platform>2</platform>
+      </toolsSet>
+      <packs>
+        <pack name="dsPIC33AK-MC_DFP" vendor="Microchip" version="1.4.172"/>
+      </packs>
+      <ScriptingSettings>
+      </ScriptingSettings>
+      <compileType>
+        <linkerTool>
+          <linkerLibItems>
+          </linkerLibItems>
+        </linkerTool>
+        <archiverTool>
+        </archiverTool>
+        <loading>
+          <useAlternateLoadableFile>false</useAlternateLoadableFile>
+          <parseOnProdLoad>false</parseOnProdLoad>
+          <alternateLoadableFile></alternateLoadableFile>
+        </loading>
+        <subordinates>
+        </subordinates>
+      </compileType>
+      <makeCustomizationType>
+        <makeCustomizationPreStepEnabled>false</makeCustomizationPreStepEnabled>
+        <makeUseCleanTarget>false</makeUseCleanTarget>
+        <makeCustomizationPreStep></makeCustomizationPreStep>
+        <makeCustomizationPostStepEnabled>false</makeCustomizationPostStepEnabled>
+        <makeCustomizationPostStep></makeCustomizationPostStep>
+        <makeCustomizationPutChecksumInUserID>false</makeCustomizationPutChecksumInUserID>
+        <makeCustomizationEnableLongLines>false</makeCustomizationEnableLongLines>
+        <makeCustomizationNormalizeHexFile>false</makeCustomizationNormalizeHexFile>
+      </makeCustomizationType>
+      <C30>
+        <property key="enable-all-warnings" value="true"/>
+        <property key="enable-symbols" value="true"/>
+        <property key="extra-include-directories" value="hal;motor;gsp;."/>
+        <property key="optimization-level" value="1"/>
+        <property key="preprocessor-macros" value=""/>
+      </C30>
+      <C30-AR>
+        <property key="additional-options-chop-files" value="false"/>
+      </C30-AR>
+      <C30-AS>
+        <property key="warning-level" value="emit-warnings"/>
+      </C30-AS>
+      <C30-CO>
+        <property key="stack-guidance" value="false"/>
+      </C30-CO>
+      <C30-LD>
+        <property key="boot-eeprom" value="no_eeprom"/>
+        <property key="boot-flash" value="no_flash"/>
+        <property key="boot-ram" value="no_ram"/>
+        <property key="boot-write-protect" value="no_write_protect"/>
+        <property key="create-vtable" value="true"/>
+        <property key="enable-data-init" value="true"/>
+        <property key="enable-handles" value="true"/>
+        <property key="enable-pack-data" value="true"/>
+        <property key="general-code-protect" value="no_code_protect"/>
+        <property key="general-write-protect" value="no_write_protect"/>
+        <property key="linker-stack" value="true"/>
+        <property key="map-file" value="${DISTDIR}/${PROJECTNAME}.${IMAGE_TYPE}.map"/>
+        <property key="oXC16ld-stackguard" value="16"/>
+        <property key="report-memory-usage" value="true"/>
+        <property key="secure-eeprom" value="no_eeprom"/>
+        <property key="secure-flash" value="no_flash"/>
+        <property key="secure-ram" value="no_ram"/>
+        <property key="secure-write-protect" value="no_write_protect"/>
+        <property key="stack-size" value="16"/>
+      </C30-LD>
+      <C30Global>
+        <property key="legacy-libc" value="true"/>
+        <property key="output-file-format" value="elf"/>
+      </C30Global>
+      <Tool>
+        <property key="ADC1" value="true"/>
+        <property key="ADC2" value="true"/>
+        <property key="AutoSelectMemRanges" value="auto"/>
+        <property key="CCP 1" value="true"/>
+        <property key="CCP 2" value="true"/>
+        <property key="CCP 3" value="true"/>
+        <property key="CCP 4" value="true"/>
+        <property key="DMA" value="true"/>
+        <property key="FRZ" value="true"/>
+        <property key="Freeze All Other Peripherals" value="true"/>
+        <property key="PG1" value="true"/>
+        <property key="PG2" value="true"/>
+        <property key="PG3" value="true"/>
+        <property key="PG4" value="true"/>
+        <property key="SPI1" value="true"/>
+        <property key="SPI2" value="true"/>
+        <property key="SPI3" value="true"/>
+        <property key="SecureSegment.SegmentProgramming" value="FullChipProgramming"/>
+        <property key="TIMER1" value="true"/>
+        <property key="UART1" value="true"/>
+        <property key="UART2" value="true"/>
+        <property key="UART3" value="true"/>
+        <property key="communication.interface" value=""/>
+        <property key="debugoptions.debug-startup" value="Use system settings"/>
+        <property key="debugoptions.reset-behaviour" value="Use system settings"/>
+        <property key="memories.bootflash" value="true"/>
+        <property key="memories.configurationmemory" value="true"/>
+        <property key="memories.eeprom" value="true"/>
+        <property key="memories.programmemory" value="true"/>
+        <property key="programoptions.eraseb4program" value="true"/>
+        <property key="programoptions.pgmentry.voltage" value="low"/>
+        <property key="programoptions.pgmspeed" value="Med"/>
+      </Tool>
+      <pkob4hybrid>
+        <property key="ADC1" value="true"/>
+        <property key="ADC2" value="true"/>
+        <property key="AutoSelectMemRanges" value="auto"/>
+        <property key="CCP 1" value="true"/>
+        <property key="CCP 2" value="true"/>
+        <property key="CCP 3" value="true"/>
+        <property key="CCP 4" value="true"/>
+        <property key="DMA" value="true"/>
+        <property key="FRZ" value="true"/>
+        <property key="Freeze All Other Peripherals" value="true"/>
+        <property key="PG1" value="true"/>
+        <property key="PG2" value="true"/>
+        <property key="PG3" value="true"/>
+        <property key="PG4" value="true"/>
+        <property key="SPI1" value="true"/>
+        <property key="SPI2" value="true"/>
+        <property key="SPI3" value="true"/>
+        <property key="SecureSegment.SegmentProgramming" value="FullChipProgramming"/>
+        <property key="TIMER1" value="true"/>
+        <property key="UART1" value="true"/>
+        <property key="UART2" value="true"/>
+        <property key="UART3" value="true"/>
+        <property key="communication.interface" value=""/>
+        <property key="debugoptions.debug-startup" value="Use system settings"/>
+        <property key="debugoptions.reset-behaviour" value="Use system settings"/>
+        <property key="memories.bootflash" value="true"/>
+        <property key="memories.configurationmemory" value="true"/>
+        <property key="memories.eeprom" value="true"/>
+        <property key="memories.programmemory" value="true"/>
+        <property key="programoptions.eraseb4program" value="true"/>
+        <property key="programoptions.pgmentry.voltage" value="low"/>
+        <property key="programoptions.pgmspeed" value="Med"/>
+      </pkob4hybrid>
+    </conf>
+  </confs>
+</configurationDescriptor>

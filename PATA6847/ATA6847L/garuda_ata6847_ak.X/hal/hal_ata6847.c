@@ -1,0 +1,310 @@
+/**
+ * @file hal_ata6847.c
+ * @brief ATA6847L gate driver SPI interface and initialization (AK port).
+ *
+ * Forked from CK `../../garuda_6step_ck.X/hal/hal_ata6847.c`. ATA6847L
+ * register layout matches ATA6847 for every field used here; the L's
+ * three extra protection bits (DOPMCR.VdIOOVSD, GDUCR4.VDHOVSD,
+ * WDCR1.WDSLP) and 2-bit MLDRR.DIAG fields are unused by this driver.
+ *
+ * SPI protocol: 16-bit word
+ *   [15:9] = 7-bit register address
+ *   [8]    = W/R (0=write, 1=read)
+ *   [7:0]  = register data
+ *
+ * Init sequence:
+ *   1. Disable watchdog
+ *   2. Configure all protection/control registers
+ *   3. Write all registers to chip
+ *   4. On motor start: enable CSA → GDU Standby → GDU Normal → poll DSR1.GDUS
+ *
+ * [AK PORT] libpic30.h `__delay_us/__delay_ms` work on dsPIC33AK with
+ * XC-DSC v3.30+ provided FCY is defined before include — same pattern
+ * as CK.  Verified in dspic33AKESC sibling project.
+ */
+
+#include <xc.h>
+#include "../garuda_config.h"  /* FCY must be defined before libpic30.h */
+#include <libpic30.h>
+#include "hal_ata6847.h"
+#include "hal_spi.h"
+#include "hal_uart.h"
+
+/* SPI word builder */
+static inline uint16_t MakeSpiWord(uint8_t addr, uint8_t wr, uint8_t data)
+{
+    /* [15:9]=addr, [8]=wr, [7:0]=data */
+    return ((uint16_t)(addr & 0x7F) << 9) | ((uint16_t)(wr & 1) << 8) | data;
+}
+
+void HAL_ATA6847_WriteReg(uint8_t addr, uint8_t data)
+{
+    HAL_SPI_Exchange16(MakeSpiWord(addr, 0, data));
+}
+
+uint8_t HAL_ATA6847_ReadReg(uint8_t addr)
+{
+    uint16_t rx = HAL_SPI_Exchange16(MakeSpiWord(addr, 1, 0x00));
+    return (uint8_t)(rx & 0xFF);
+}
+
+void HAL_ATA6847_Init(void)
+{
+    uint8_t rb;
+
+    /* Disable watchdog first (match reference exactly) */
+    HAL_ATA6847_WriteReg(ATA_WDTRIG, 0x55);
+    HAL_ATA6847_WriteReg(ATA_WDCR1, (0x01 << 5));  /* WDC=WGD_OFF in bits[7:5] */
+    __delay_us(1);
+
+    /* Read and clear power-up faults */
+    HAL_ATA6847_ReadReg(ATA_SIR1);
+    __delay_us(1);
+
+    /* Write protection off + unused regs */
+    HAL_ATA6847_WriteReg(ATA_RWPCR, 0x00);
+    HAL_ATA6847_WriteReg(ATA_MLDCR, 0x00);
+
+    /* LIN normal mode */
+    HAL_ATA6847_WriteReg(ATA_LOPMCR, 0x02);
+
+    /* Wake-up control */
+    HAL_ATA6847_WriteReg(ATA_WUCR, 0x03);
+
+    /* Current limitation — DISABLED.
+     * Cycle-by-cycle chopping limits prop performance: at 24V with
+     * 8" props, phase current transients during commutation reach
+     * 15-25A even at mid-speed, triggering ILIM and capping eRPM.
+     * VDS short-circuit protection (SCPCR) still active for hardware
+     * safety. Software RECOVER mode handles desync current. */
+    HAL_ATA6847_WriteReg(ATA_ILIMCR, (0 << 7) | (6 << 3) | (0 << 2));
+    HAL_ATA6847_WriteReg(ATA_ILIMTH, ILIM_DAC);
+
+    /* Short circuit protection */
+    HAL_ATA6847_WriteReg(ATA_SCPCR, (1 << 7) | (15 << 3) | 7);
+    /* SCSDEN=1 (shutdown enabled), SCFLT=15 (7.5µs max filter),
+     * SCTHSEL=7 (2000mV max threshold).
+     * Was SCFLT=7 (3.5µs). Regen VDS spikes from wrong commutation
+     * at 24V are brief (~2-4µs). 7.5µs filter rejects them while
+     * still catching real shorts (which persist longer). */
+    /* SCTHSEL=7 (2000mV). VDS spikes scale with Vbus — at 24V the
+     * switching transients exceed 1500mV at moderate current, tripping
+     * SCTHSEL=5. 2000mV gives headroom for 24V operation.
+     * SCTHLSEL=7 for low-side too. Still protects real shorts. */
+
+    /* Current sense: disabled, gain=16, offset=VRef/2 */
+    HAL_ATA6847_WriteReg(ATA_CSCR, (0x00 << 5) | (0x03 << 2) | 0x01);
+
+    /* GDU OFF */
+    HAL_ATA6847_WriteReg(ATA_GOPMCR, GDU_OFF);
+
+    /* GDUCR1-4 (match reference byte values) */
+    HAL_ATA6847_WriteReg(ATA_GDUCR1, (7 << 2) | (1 << 1) | 1);   /* 0x1F: BEMFEN=1 for 6-step ZC */
+    /* GDUCR2: Edge blanking time + standby behavior.
+     * EGBLT[3:0] = N → blanking = N × 250ns (0=off, 1=250ns, ..., 15=3750ns).
+     * Was 5 (1250ns). Increased to 12 (3000ns = 3µs) — at high speed the
+     * BEMF comparator sees switching transients during demag that pass
+     * the software deglitch filter. HW blanking suppresses the comparator
+     * output itself, which software blanking cannot do.
+     * HSOFF=1, LSOFF=1: HS/LS off in standby. TSWTO=0b00: 250ns adaptive. */
+    HAL_ATA6847_WriteReg(ATA_GDUCR2, (1 << 7) | (1 << 6) | 15);  /* 0xCF: EGBLT=15 (3.75µs MAX).
+                                                                     * Helps at 18V. At 24V the Vbus
+                                                                     * swings dominate, not EGBLT.
+                                                                     * 3µs covers the ringing. */
+    /* GDUCR3: Slew rate + adaptive dead-time.
+     * HSSRC=0b11 (12.5%), LSSRC=0b11 (12.5%), no adaptive dead time.
+     *
+     * Previously LSSRC was 0b00 (full speed). But per-step timeout data
+     * shows steps after a PWM-active phase (1,3,5) have 3-50× more
+     * timeouts than steps after a LOW-held phase (2,4). The fast LS
+     * turn-on creates dV/dt that couples into the floating phase through
+     * mutual inductance, corrupting the BEMF comparator.
+     * Slowing LS to 12.5% reduces this coupling.
+     *
+     * Previous test notes (at 20kHz PWM, before CLC/IC):
+     *   Both 50%: desync at 28k eRPM
+     *   Both full: desync at 45k eRPM
+     * Those results were WITHOUT CLC D-FF filtering and IC capture.
+     * With current CLC+IC+210.5kHz poll architecture, slow LS should
+     * work because the detection is much more robust now. */
+    /* ADDTHS=0b01 (50-160ns), ADDTLS=0b01 (50-160ns): adaptive dead time.
+     * ATA6847 monitors VDS to detect when MOSFET has actually turned off,
+     * then shortens dead time to minimum. Reduces body diode conduction
+     * → less noise on floating phase during dead time intervals.
+     * Combined with slow slew rate, this gives clean transitions. */
+    HAL_ATA6847_WriteReg(ATA_GDUCR3, (0x01 << 6) | (0x01 << 4) | (0x03 << 2) | 0x03);
+    /* 0x5F: ADDTHS=50-160ns, ADDTLS=50-160ns, HSSRC=12.5%, LSSRC=12.5%.
+     * Best high-speed performance: 2.2 TO/snap at 85-95k, 4.3 at 95k+.
+     * ADT 150-210ns had cleaner comparator (4% flip rate) but worse at 95k+
+     * because wider dead time eats into the tight step period. */
+    HAL_ATA6847_WriteReg(ATA_GDUCR4, (1 << 6) | (1 << 5) | (1 << 4) | 2); /* 0x72 */
+
+    /* Interrupt masks.
+     * SIECER1 bit 5 (ILIMM) = 0: mask ILIM from nIRQ.
+     * ILIM chopping is cycle-by-cycle and non-latching — it should
+     * chop silently, not trigger a fault that kills the motor.
+     * Was 0xE7 (ILIM unmasked), now 0xC7 (ILIM masked). */
+    HAL_ATA6847_WriteReg(ATA_SIECER1, 0xC7);
+    HAL_ATA6847_WriteReg(ATA_SIECER2, 0x1F);
+
+    /* Device operation mode: Normal + RSTLVL
+     * Write with delay and verify — this is critical for GDU startup */
+    HAL_ATA6847_WriteReg(ATA_DOPMCR, (1 << 7) | 0x07);
+    __delay_ms(2);
+
+    /* Verify DOPMCR — retry if needed */
+    rb = HAL_ATA6847_ReadReg(ATA_DOPMCR);
+    HAL_UART_WriteString(" DOM=");
+    HAL_UART_WriteHex8(rb);
+    if ((rb & 0x07) != 0x07)
+    {
+        /* Device didn't accept Normal mode — try stepping through modes */
+        HAL_UART_WriteString("!retry ");
+        /* Standby first, then Normal */
+        HAL_ATA6847_WriteReg(ATA_DOPMCR, (1 << 7) | 0x04);
+        __delay_ms(5);
+        HAL_ATA6847_WriteReg(ATA_DOPMCR, (1 << 7) | 0x07);
+        __delay_ms(5);
+        rb = HAL_ATA6847_ReadReg(ATA_DOPMCR);
+        HAL_UART_WriteHex8(rb);
+
+        if ((rb & 0x07) != 0x07)
+        {
+            /* Still not Normal — try without RSTLVL */
+            HAL_ATA6847_WriteReg(ATA_DOPMCR, 0x07);
+            __delay_ms(5);
+            rb = HAL_ATA6847_ReadReg(ATA_DOPMCR);
+            HAL_UART_WriteString("/");
+            HAL_UART_WriteHex8(rb);
+        }
+    }
+    HAL_UART_WriteByte(' ');
+
+    /* Read back all critical registers for diagnostics */
+    HAL_UART_WriteString("V:");
+    HAL_UART_WriteHex8(HAL_ATA6847_ReadReg(ATA_GDUCR1));
+    HAL_UART_WriteByte('.');
+    HAL_UART_WriteHex8(HAL_ATA6847_ReadReg(ATA_CSCR));
+    HAL_UART_WriteByte('.');
+    HAL_UART_WriteHex8(HAL_ATA6847_ReadReg(ATA_GOPMCR));
+}
+
+/**
+ * @brief Power up GDU to Normal mode.
+ * Sequence: enable CSA → GDU Standby → GDU Normal → poll DSR1.GDUS.
+ * @return true on success, false on timeout
+ */
+/* Bring-up instrumentation: filled in by HAL_ATA6847_EnterGduNormal so a
+ * post-attempt GSP_CMD_ATA_DIAG can show what the SPI poll observed. */
+volatile uint8_t  gAta_LastDsr1AtNormal = 0xAB; /* 0xAB = never called yet */
+volatile uint16_t gAta_LastGduAttempts = 0xFFFF;
+volatile uint8_t  gAta_LastGduResult   = 0;     /* 1 = success, 0 = timeout */
+
+bool HAL_ATA6847_EnterGduNormal(void)
+{
+    uint16_t attempts;
+
+    /* Debug: print DSR1/DSR2 before anything */
+    HAL_UART_WriteString("pre:");
+    HAL_UART_WriteHex8(HAL_ATA6847_ReadReg(ATA_DSR1));
+    HAL_UART_WriteByte('/');
+    HAL_UART_WriteHex8(HAL_ATA6847_ReadReg(ATA_DSR2));
+    HAL_UART_WriteByte(' ');
+
+    /* Enable all current sense amplifiers (match reference sequence) */
+    uint8_t cscr = HAL_ATA6847_ReadReg(ATA_CSCR);
+    cscr |= (0x07 << 5);  /* Set CSA1EN, CSA2EN, CSA3EN */
+    HAL_ATA6847_WriteReg(ATA_CSCR, cscr);
+
+    /* Verify key registers were written correctly during Init */
+    HAL_UART_WriteString("GDU1=");
+    HAL_UART_WriteHex8(HAL_ATA6847_ReadReg(ATA_GDUCR1));
+    HAL_UART_WriteString(" DOM=");
+    HAL_UART_WriteHex8(HAL_ATA6847_ReadReg(ATA_DOPMCR));
+    HAL_UART_WriteString(" CSC=");
+    HAL_UART_WriteHex8(HAL_ATA6847_ReadReg(ATA_CSCR));
+    HAL_UART_WriteByte(' ');
+
+    /* Standby → Normal (match reference sequence exactly) */
+    HAL_ATA6847_WriteReg(ATA_GOPMCR, GDU_STANDBY);
+
+    /* Debug: check after Standby */
+    HAL_UART_WriteString("stby:");
+    HAL_UART_WriteHex8(HAL_ATA6847_ReadReg(ATA_DSR1));
+    HAL_UART_WriteByte(' ');
+
+    HAL_ATA6847_WriteReg(ATA_GOPMCR, GDU_NORMAL);
+
+    /* Debug: check immediately after Normal */
+    HAL_UART_WriteString("norm:");
+    HAL_UART_WriteHex8(HAL_ATA6847_ReadReg(ATA_DSR1));
+    HAL_UART_WriteByte(' ');
+
+    /* Poll DSR1.GDUS (bit 2). Cap at 2000 attempts (~10 ms at 5 us/read).
+     * Previously 50000 — at minutes of MCU-frozen busy-wait when SPI returns
+     * 0xFFFF on each read, which falsely satisfies the GDUS-bit check and
+     * leads us to think the gate driver is in Normal when it isn't.
+     * After the loop, the last read DSR1 is exposed via GSP_CMD_ATA_DIAG. */
+    uint8_t dsr1 = 0xFF;
+    for (attempts = 0; attempts < 2000u; attempts++)
+    {
+        dsr1 = HAL_ATA6847_ReadReg(ATA_DSR1);
+        /* 0xFF likely indicates SPI timeout — don't treat as success. */
+        if (dsr1 != 0xFFu && (dsr1 & 0x04u))
+        {
+            gAta_LastDsr1AtNormal = dsr1;
+            gAta_LastGduAttempts  = attempts;
+            gAta_LastGduResult    = 1;
+            return true;
+        }
+    }
+    gAta_LastDsr1AtNormal = dsr1;
+    gAta_LastGduAttempts  = attempts;
+    gAta_LastGduResult    = 0;
+    return false;
+}
+
+/**
+ * @brief Read GDU fault/status registers for diagnostics.
+ * Stores results in provided array: [DSR1, DSR2, SIR1, SIR2, SIR3, GOPMCR]
+ */
+void HAL_ATA6847_ReadDiag(uint8_t diag[8])
+{
+    diag[0] = HAL_ATA6847_ReadReg(ATA_DSR1);
+    diag[1] = HAL_ATA6847_ReadReg(ATA_DSR2);
+    diag[2] = HAL_ATA6847_ReadReg(ATA_SIR1);
+    diag[3] = HAL_ATA6847_ReadReg(ATA_SIR2);
+    diag[4] = HAL_ATA6847_ReadReg(ATA_SIR3);
+    diag[5] = HAL_ATA6847_ReadReg(ATA_SIR4);
+    diag[6] = HAL_ATA6847_ReadReg(ATA_SIR5);
+    diag[7] = HAL_ATA6847_ReadReg(ATA_GOPMCR);
+}
+
+void HAL_ATA6847_EnterGduStandby(void)
+{
+    HAL_ATA6847_WriteReg(ATA_GOPMCR, GDU_OFF);
+
+    /* Disable CSA */
+    uint8_t cscr = HAL_ATA6847_ReadReg(ATA_CSCR);
+    cscr &= ~(0x07 << 5);
+    HAL_ATA6847_WriteReg(ATA_CSCR, cscr);
+}
+
+void HAL_ATA6847_ClearFaults(void)
+{
+    uint8_t sir;
+
+    HAL_ATA6847_ReadReg(ATA_DSR1);
+    HAL_ATA6847_ReadReg(ATA_DSR2);
+
+    sir = HAL_ATA6847_ReadReg(ATA_SIR1);
+    HAL_ATA6847_WriteReg(ATA_SIR1, sir);
+    sir = HAL_ATA6847_ReadReg(ATA_SIR2);
+    HAL_ATA6847_WriteReg(ATA_SIR2, sir);
+    sir = HAL_ATA6847_ReadReg(ATA_SIR3);
+    HAL_ATA6847_WriteReg(ATA_SIR3, sir);
+    sir = HAL_ATA6847_ReadReg(ATA_SIR4);
+    HAL_ATA6847_WriteReg(ATA_SIR4, sir);
+    sir = HAL_ATA6847_ReadReg(ATA_SIR5);
+    HAL_ATA6847_WriteReg(ATA_SIR5, sir);
+}
