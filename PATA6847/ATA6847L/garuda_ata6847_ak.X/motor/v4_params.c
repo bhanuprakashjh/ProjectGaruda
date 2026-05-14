@@ -10,6 +10,7 @@
 #include <stddef.h>
 #include <stdint.h>
 #include <stdbool.h>
+#include <xc.h>     /* PG1TRIGA register access */
 
 /* ── Globals ───────────────────────────────────────────────────── */
 volatile V4_PARAMS_T  v4Params;
@@ -30,6 +31,10 @@ static const V4_PARAM_DESC_T descTable[V4_PARAM_COUNT] = {
 
     /* Limits */
     { V4_PARAM_MIN_PERIOD_HR,     V4_TYPE_U16, V4_GROUP_LIMITS,     5, 500 },
+
+    /* AK ADC trigger position — sweep target for cF lockout diagnostic.
+     * Bit 15 = CAHALF, bits 0-14 = TRIGA value. Range covers both cycles. */
+    { V4_PARAM_TRIGA_POS,         V4_TYPE_U16, V4_GROUP_LIMITS,     0, 0xFFFF },
 };
 
 /* ── Implementation ────────────────────────────────────────────── */
@@ -80,6 +85,12 @@ uint32_t V4Params_Get(uint16_t paramId, bool *ok)
         case V4_PARAM_BLANKING_PCT:      return v4Params.blankingPct;
         case V4_PARAM_PI_FEED_POLARITY:  return v4Params.piFeedPolarity;
         case V4_PARAM_MIN_PERIOD_HR:     return v4Params.minPeriodHr;
+        case V4_PARAM_TRIGA_POS: {
+            uint32_t reg = PG1TRIGA;
+            uint16_t pos = (uint16_t)(reg & 0x7FFFu);
+            if (reg & (1UL << 31)) pos |= 0x8000u;
+            return pos;
+        }
         default:
             if (ok) *ok = false;
             return 0;
@@ -110,6 +121,12 @@ bool V4Params_Set(uint16_t paramId, uint32_t value)
         case V4_PARAM_BLANKING_PCT:      v4Params.blankingPct        = (uint8_t)value;  break;
         case V4_PARAM_PI_FEED_POLARITY:  v4Params.piFeedPolarity     = (uint8_t)value;  break;
         case V4_PARAM_MIN_PERIOD_HR:     v4Params.minPeriodHr        = (uint16_t)value; break;
+        case V4_PARAM_TRIGA_POS: {
+            uint32_t v = (uint32_t)((uint16_t)value & 0x7FFFu);
+            if ((uint16_t)value & 0x8000u) v |= (1UL << 31);
+            PG1TRIGA = v;
+            break;
+        }
         default: return false;
     }
 

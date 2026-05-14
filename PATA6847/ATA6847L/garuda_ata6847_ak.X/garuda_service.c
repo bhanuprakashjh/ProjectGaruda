@@ -89,15 +89,29 @@ volatile uint16_t gV4PotRaw = 0;
 volatile uint16_t gV4VbusRaw = 0;
 volatile int16_t  gV4IaRaw = 0;
 volatile int16_t  gV4IbRaw = 0;
+volatile int16_t  gV4IbusRaw = 0;       /* direct DC-bus shunt read (OA3OUT) */
 
-/* Phase-current peak tracking (rolling window, reset on snapshot read).
- * ADC ISR updates max/min every 20 kHz. Same scale as gV4IaRaw. */
-volatile int16_t  gV4IaPkMax   = 0, gV4IaPkMin   = 0;
-volatile int16_t  gV4IbPkMax   = 0, gV4IbPkMin   = 0;
-volatile int16_t  gV4IbusPkMax = 0, gV4IbusPkMin = 0;
+/* Calibrated electrical values — produced in the ADC ISR by applying the
+ * board-specific scale factors from garuda_config.h.  These are what the
+ * GSP telemetry ships to the host, so the Python tool only has to display
+ * them; it never knows the shunt/gain/divider numbers itself. */
+volatile int16_t  gV4Ia_mA   = 0;       /* signed milliamps */
+volatile int16_t  gV4Ib_mA   = 0;
+volatile int16_t  gV4Ibus_mA = 0;
+volatile uint16_t gV4Vbus_mV = 0;       /* unsigned millivolts */
+
+/* Current peak tracking (rolling window, reset on snapshot read).
+ * Units: SIGNED MILLIAMPS, written by the ADC ISR after the count→mA
+ * conversion.  Previously these held raw ADC counts; switched to mA so
+ * the host doesn't need to know the shunt/gain calibration.  Range is
+ * ±32 A in int16, well above the ±22 A ADC hardware ceiling. */
+volatile int16_t  gV4IaPkMax   = 0, gV4IaPkMin   = 0;   /* mA */
+volatile int16_t  gV4IbPkMax   = 0, gV4IbPkMin   = 0;   /* mA */
+volatile int16_t  gV4IbusPkMax = 0, gV4IbusPkMin = 0;   /* mA */
 
 /* At-fault frozen snapshot — populated when V4 enters FAULT, preserved
- * until motor restart. Captures exact peaks at the moment of trip. */
+ * until motor restart. Captures exact peaks at the moment of trip.
+ * Units: milliamps (same as the live peaks above). */
 volatile int16_t  gV4IaAtFaultMax = 0, gV4IaAtFaultMin = 0;
 volatile int16_t  gV4IbAtFaultMax = 0, gV4IbAtFaultMin = 0;
 volatile int16_t  gV4IbusAtFaultMax = 0, gV4IbusAtFaultMin = 0;
@@ -109,9 +123,9 @@ static inline void V4FreezeAtFaultPeaks(void)
     gV4IaAtFaultMax   = gV4IaPkMax;   gV4IaAtFaultMin   = gV4IaPkMin;
     gV4IbAtFaultMax   = gV4IbPkMax;   gV4IbAtFaultMin   = gV4IbPkMin;
     gV4IbusAtFaultMax = gV4IbusPkMax; gV4IbusAtFaultMin = gV4IbusPkMin;
-    gV4IaAtFaultInst   = gV4IaRaw;
-    gV4IbAtFaultInst   = gV4IbRaw;
-    gV4IbusAtFaultInst = 0;  /* ibus ≈ max(|ia|,|ib|) computed host-side */
+    gV4IaAtFaultInst   = gV4Ia_mA;
+    gV4IbAtFaultInst   = gV4Ib_mA;
+    gV4IbusAtFaultInst = gV4Ibus_mA;
     gV4FaultSnapshotValid = 1;
 }
 static volatile uint8_t  gV4TickDiv = 0;
@@ -374,6 +388,16 @@ volatile uint32_t v5_postZcRisingRej  = 0;
 volatile uint32_t v5_postZcFallingAcc = 0;
 volatile uint32_t v5_postZcFallingRej = 0;
 
+/* B1 mid-ON diagnostic (FEATURE_MIDON_DIAG_PROBE).
+ * Falling-sector second-read counters. PTG ISR fires at mid-OFF
+ * (PG1TRIGB = duty match) and runs V4_ProcessBemfSample. When this
+ * feature is on, the ISR busy-waits ~half a PWM period after the
+ * normal mid-OFF read, takes a second comp read at mid-ON, and
+ * classifies it for falling sectors only. Tests the hypothesis
+ * that mid-ON has cleaner falling-sector BEMF than mid-OFF. */
+volatile uint32_t v5_midOnFallingAcc = 0;
+volatile uint32_t v5_midOnFallingRej = 0;
+
 /* Edge-detection state for FEATURE_V5_POST_ZC_OWN.
  *
  * AK bring-up showed that pure "comp == expectedPost" acceptance phantoms
@@ -405,37 +429,85 @@ void __attribute__((interrupt, auto_psv)) _AD1CH4Interrupt(void)
 {
     gV4PotRaw  = ADCBUF_POT;
     gV4VbusRaw = ADCBUF_VBUS;
-    gV4IaRaw   = (int16_t)ADCBUF1;
-    gV4IbRaw   = (int16_t)ADCBUF4;
-    (void)ADCBUF0;  /* Must read to clear data-ready */
+    /* Phase + bus currents: unsigned 12-bit ADC reads, zero-current bias
+     * subtracted to give a signed int16 swing around 0.  Raw counts are
+     * kept for internal use; the host-facing values are converted to
+     * milliamps below using the calibration constants from garuda_config.h. */
+    gV4IaRaw   = (int16_t)((int16_t)ADCBUF_IA   - ADC_CURRENT_BIAS);
+    gV4IbRaw   = (int16_t)((int16_t)ADCBUF_IB   - ADC_CURRENT_BIAS);
+    gV4IbusRaw = (int16_t)((int16_t)ADCBUF_IBUS - ADC_CURRENT_BIAS);
 
-    /* Phase-current peak tracking (rolling window reset each snapshot).
-     * Ia/Ib peaks tracked here directly; ibus peak computed host-side
-     * from |Ia|/|Ib| extrema (ibus ≈ max(|ia|,|ib|) for symmetric 6-step
-     * in all non-C-PWM sectors). Avoids pulling sector state into ISR. */
-    if (gV4IaRaw > gV4IaPkMax) gV4IaPkMax = gV4IaRaw;
-    if (gV4IaRaw < gV4IaPkMin) gV4IaPkMin = gV4IaRaw;
-    if (gV4IbRaw > gV4IbPkMax) gV4IbPkMax = gV4IbRaw;
-    if (gV4IbRaw < gV4IbPkMin) gV4IbPkMin = gV4IbRaw;
+    /* Convert ADC counts → physical units once, at the source.  All
+     * downstream consumers (snapshot builder, fault snapshot, peak
+     * tracker, future current limiter) read the calibrated globals so
+     * that swapping the DIM gain resistors only requires updating the
+     * two _Q8 constants in garuda_config.h.  Q8 fixed-point keeps the
+     * multiply in int32 and the result in int16 with no FP. */
+    gV4Vbus_mV = (uint16_t)(((uint32_t)gV4VbusRaw * ADC_VBUS_MV_PER_COUNT_Q8) >> 8);
+    gV4Ia_mA   = (int16_t)(((int32_t)gV4IaRaw   * ADC_MA_PER_COUNT_Q8) >> 8);
+    gV4Ib_mA   = (int16_t)(((int32_t)gV4IbRaw   * ADC_MA_PER_COUNT_Q8) >> 8);
+    gV4Ibus_mA = (int16_t)(((int32_t)gV4IbusRaw * ADC_MA_PER_COUNT_Q8) >> 8);
+
+    /* Peak tracking in milliamps (rolling window reset on snapshot read).
+     * Direct OA3 read of the DC-bus shunt → ibusPk straight from gV4Ibus_mA
+     * instead of being host-reconstructed from |Ia|/|Ib| extrema (which
+     * underestimated by √3 in C-PWM sectors). */
+    if (gV4Ia_mA   > gV4IaPkMax)   gV4IaPkMax   = gV4Ia_mA;
+    if (gV4Ia_mA   < gV4IaPkMin)   gV4IaPkMin   = gV4Ia_mA;
+    if (gV4Ib_mA   > gV4IbPkMax)   gV4IbPkMax   = gV4Ib_mA;
+    if (gV4Ib_mA   < gV4IbPkMin)   gV4IbPkMin   = gV4Ib_mA;
+    if (gV4Ibus_mA > gV4IbusPkMax) gV4IbusPkMax = gV4Ibus_mA;
+    if (gV4Ibus_mA < gV4IbusPkMin) gV4IbusPkMin = gV4Ibus_mA;
 
 #if FEATURE_V4_MIDPOINT_ZC == 1
-    /* Tried a rising-only gate here (2026-04-21) plus 30% blanking and
-     * ISR disables — bundled experiment regressed top-end from 196k to
-     * 107k. Reverted everything to pre-experiment state.
-     *
-     * Phase A hardening (2026-04-21): make the comparator-read operation
-     * self-sufficient. Today the ADC ISR's detection quality depends on
-     * side effects from SCCP1/CCP2/CCP5/PTG ISRs that we can't isolate.
-     * Before touching those ISRs we need the ADC ISR to be robust on
-     * its own. Two defenses:
-     *   1. Drain CCP2/5 FIFO + clear flags (defensive — CCP peripheral
-     *      state isn't supposed to affect GPIO reads, but if it does,
-     *      this eliminates it)
-     *   2. 3-read deglitch on the comparator GPIO (rejects momentary
-     *      bounce / switching glitches on the ATA6847 output line)
-     * If 196k still reached with these added, the ADC ISR is authoritative
-     * and Phase B/C can safely disable the diagnostic ISRs.
-     */
+#if !FEATURE_BEMF_VIA_PTG
+    /* Default path: BEMF detection runs inside the ADC ISR, right after
+     * the current/Vbus reads.  When FEATURE_BEMF_VIA_PTG=1 the same body
+     * runs from the PTG ISR instead, ~1.5 µs earlier and decoupled from
+     * the ADC scan.  See V4_ProcessBemfSample() below for the actual
+     * logic — kept as one function so both call sites stay byte-equal. */
+    V4_ProcessBemfSample();
+#endif
+#elif FEATURE_V4_MIDPOINT_ZC == 2
+    if (SectorPI_IsRunning() && SectorPI_GetPhase() == 3
+        && !v4_captureValid && !v4_zcConfirmed)
+    {
+        uint16_t nowHR = CCP4TMRL;
+        if ((int16_t)(nowHR - v4_blankingEndHR) >= 0)
+        {
+            uint8_t comp = ReadBEMFComp();
+            uint8_t expected = HAL_Capture_IsRisingZc() ? 1 : 0;
+            if (comp == expected)
+            {
+                v4_zcConfirmed = true;
+            }
+        }
+    }
+#endif
+
+    /* [AK PORT] CK had a shared ADCIF; AK uses per-channel flags.
+     * Clear AD1CH4 (VBUS) since it triggered this ISR. */
+    _AD1CH4IF = 0;
+}
+
+#if FEATURE_V4_MIDPOINT_ZC == 1
+/* ── V4 BEMF detection — one PWM mid-OFF sample worth of work ─────
+ * Extracted from the ADC ISR so the PTG ISR can call the same logic
+ * when FEATURE_BEMF_VIA_PTG=1.  Identical body — only the trigger
+ * source (ADC scan complete vs PTG step IRQ) changes.
+ *
+ * Counters retain their `v4_adc*` names for diagnostic continuity;
+ * they reflect "BEMF sample" outcomes, not anything specific to the
+ * ADC peripheral.
+ *
+ * NOT marked inline: called from two ISRs, both in different .o
+ * files (garuda_service.c and hal_ptg.c).  Out-of-line is correct. */
+void V4_ProcessBemfSample(void)
+{
+    /* Same scaffold the ADC ISR used to host directly.  Original
+     * comments preserved verbatim because they document hard-won
+     * tuning history (single-read vs 3-read regression, isRising
+     * stuck-true workarounds, PI-feed polarity rationale, etc). */
     if (!v4_spActive
         && SectorPI_IsRunning() && SectorPI_GetPhase() == 3)
     {
@@ -515,31 +587,14 @@ void __attribute__((interrupt, auto_psv)) _AD1CH4Interrupt(void)
                     bool    sectorRising = (expectedPost == 0u);
                     if (comp != expectedPost)
                     {
-                        /* PRE-ZC state observed. Arm the gate so the NEXT
-                         * post-ZC reading becomes a real edge-detected ZC,
-                         * not an idle-bias phantom. */
                         v5_sawPreZc = 1u;
                         v4_adcStateMismatch++;
                     }
                     else if (v5_sawPreZc)
                     {
-                        /* PRE → POST transition: real ZC. */
                         v4_adcCaptureSet++;
                         if (sectorRising) v4_adcSetRising++;
 
-                        /* Honor piFeedPolarity even in the OWN path —
-                         * CK V4 baseline only feeds PI from rising-ZC
-                         * sectors (default piFeedPolarity=1); falling
-                         * sectors return CAP_SENTINEL by design.
-                         *   1 = rising-only (proven CK 196k baseline)
-                         *   2 = falling-only
-                         *   any other = both polarities
-                         * 2026-05-12: AK trace showed pF≈5% (falling
-                         * sectors basically never reach POST), and
-                         * feeding those into the PI integrated as
-                         * noise that walked timerPeriod down → rotor
-                         * lag spiral. Diagnostic counters still log
-                         * v4_adcCaptureSet/SetRising for both. */
                         bool feedPi;
                         switch (v4Params.piFeedPolarity)
                         {
@@ -552,12 +607,21 @@ void __attribute__((interrupt, auto_psv)) _AD1CH4Interrupt(void)
                             v4_lastCaptureHR = nowHR;
                             v4_captureValid  = true;
                         }
-                        v5_sawPreZc = 0u;       /* one-shot per sector */
+                        v5_sawPreZc = 0u;
                     }
-                    /* else: comp matches expectedPost but pre-ZC was never
-                     * seen this sector — idle-bias phantom, drop silently. */
                 }
 #else
+                /* Legacy V4 PRE-ZC detection.
+                 *
+                 * Polarity gate uses v5_ptgExpectedComp (written by Commutate
+                 * per sector — reliable) instead of HAL_Capture_IsRisingZc()
+                 * (function call exhibits "stuck-true" behavior in ISR context,
+                 * see comments at ~line 535 and CCP2 ISR for history).
+                 * `isRising` is still used for state-match counting because
+                 * that's tied to the inverted-ATA6847 comp polarity rules
+                 * and is independent of which sector flag we trust. */
+                extern volatile uint8_t v5_ptgExpectedComp;
+                bool sectorRising_v5 = (v5_ptgExpectedComp == 0u);
                 uint8_t expected = isRising ? 1 : 0;
                 if (comp != expected)
                 {
@@ -566,14 +630,14 @@ void __attribute__((interrupt, auto_psv)) _AD1CH4Interrupt(void)
                 else
                 {
                     v4_adcCaptureSet++;
-                    if (isRising) v4_adcSetRising++;
+                    if (sectorRising_v5) v4_adcSetRising++;
 
                     bool feedPi;
                     switch (v4Params.piFeedPolarity)
                     {
-                        case 1:  feedPi = isRising;   break;
-                        case 2:  feedPi = !isRising;  break;
-                        default: feedPi = true;       break;
+                        case 1:  feedPi = sectorRising_v5;   break;
+                        case 2:  feedPi = !sectorRising_v5;  break;
+                        default: feedPi = true;              break;
                     }
                     if (feedPi)
                     {
@@ -584,28 +648,36 @@ void __attribute__((interrupt, auto_psv)) _AD1CH4Interrupt(void)
 #endif
             }
         }
-    }
-#elif FEATURE_V4_MIDPOINT_ZC == 2
-    if (SectorPI_IsRunning() && SectorPI_GetPhase() == 3
-        && !v4_captureValid && !v4_zcConfirmed)
-    {
-        uint16_t nowHR = CCP4TMRL;
-        if ((int16_t)(nowHR - v4_blankingEndHR) >= 0)
+
+#if FEATURE_MIDON_DIAG_PROBE
+        /* B1 mid-ON diagnostic. Runs every time the PTG ISR enters with
+         * sector 3 + PI active, regardless of blanking or captureValid.
+         * Busy-waits ~half a PWM period, then re-reads the BEMF comp.
+         * Classifies falling-sector samples only — testing whether
+         * mid-ON has a cleaner signal than mid-OFF for falling sectors
+         * (where cF=0 / pF=0% under the normal mid-OFF read).
+         *
+         * Cost: ~MIDON_DIAG_LOOPS × 6 cycles inside the PTG ISR. At
+         * 60kHz PWM that's ~8µs busy-wait, ~50% of PWM period burned
+         * in ISR. Disable for normal operation — diagnostic only. */
         {
-            uint8_t comp = ReadBEMFComp();
-            uint8_t expected = HAL_Capture_IsRisingZc() ? 1 : 0;
-            if (comp == expected)
-            {
-                v4_zcConfirmed = true;
+            extern volatile uint8_t v5_ptgExpectedComp;
+            uint8_t expectedPostZc = v5_ptgExpectedComp;
+            bool sectorRising = (expectedPostZc == 0u);
+            if (!sectorRising) {
+                volatile uint16_t spinIdx;
+                for (spinIdx = 0; spinIdx < MIDON_DIAG_LOOPS; spinIdx++) {
+                    /* spin */
+                }
+                uint8_t comp_midOn = ReadBEMFComp();
+                if (comp_midOn == expectedPostZc) v5_midOnFallingAcc++;
+                else                              v5_midOnFallingRej++;
             }
         }
-    }
 #endif
-
-    /* [AK PORT] CK had a shared ADCIF; AK uses per-channel flags.
-     * Clear AD1CH4 (VBUS) since it triggered this ISR. */
-    _AD1CH4IF = 0;
+    }
 }
+#endif /* FEATURE_V4_MIDPOINT_ZC == 1 */
 
 /* ── SCCP1 ISR: falling ZC level check at PWM OFF-mid ────────────
  * Fires at 40 kHz, phase-offset from ADC ISR by 12.5 µs (PWM peak).

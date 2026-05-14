@@ -47,7 +47,14 @@ extern "C" {
 /* Group 2: Limits */
 #define V4_PARAM_MIN_PERIOD_HR       0xF4  /* Speed ceiling — timerPeriod floor */
 
-#define V4_PARAM_COUNT  6
+/* Group 3: Diagnostic / AK-port tuning */
+#define V4_PARAM_TRIGA_POS           0xF6  /* PG1TRIGA position for ADC trigger.
+                                            * Bits 0-14: TRIGA value (0..LOOPTIME_TCY-1).
+                                            * Bit 15:    CAHALF (0=cycle1, 1=cycle2).
+                                            * Written to PG1TRIGA on Set. Read returns
+                                            * current PG1TRIGA decoded into this format. */
+
+#define V4_PARAM_COUNT  7
 
 /* ── Group IDs ─────────────────────────────────────────────────── */
 /* Numbered 8/9/10 to avoid GUI metadata collision with V3 groups 0-7

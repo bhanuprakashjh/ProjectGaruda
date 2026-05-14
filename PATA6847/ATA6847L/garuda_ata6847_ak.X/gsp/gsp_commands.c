@@ -830,28 +830,21 @@ void GSP_TelemTick(void)
     d[6] = dutyPct;                          /* dutyPct */
     d[7] = t.commandEnabled ? 1 : 0;        /* zcSynced (repurpose as PI active) */
 
-    /* Electrical (offset 8-17) */
-    memcpy(&d[8],  &gV4VbusRaw, 2);         /* vbusRaw */
-    memcpy(&d[10], &gV4IaRaw, 2);           /* iaRaw */
-    memcpy(&d[12], &gV4IbRaw, 2);           /* ibRaw */
-    /* Reconstruct IBus from the active PWM phase per commutation step
-     * (mirrors V3 logic at garuda_service.c:1431). The PWM-active phase
-     * carries the full DC bus current; phases A/B sensed directly,
-     * phase C inferred from -(Ia+Ib).
-     *   Steps 0,5: A=PWM → IBus = |Ia|
-     *   Steps 3,4: B=PWM → IBus = |Ib|
-     *   Steps 1,2: C=PWM → IBus = |-(Ia+Ib)|
-     * Computed here (cold path) instead of in the ADC ISR to keep the
-     * ISR fast and to avoid touching shared globals from two paths. */
+    /* Electrical (offset 8-17) — calibrated physical units.
+     *   d[8..9]   vbus_mV   uint16   (0 .. ~52 V)
+     *   d[10..11] ia_mA     int16    signed phase A current
+     *   d[12..13] ib_mA     int16    signed phase B current
+     *   d[14..15] ibus_mA   int16    signed DC bus current (direct from OA3)
+     * All conversions happen in the ADC ISR using the Q8 constants in
+     * garuda_config.h.  The host only divides by 1000 to display volts/amps;
+     * it doesn't know the shunt, gain, or divider values. */
     {
-        int16_t ibus;
-        switch (t.position) {
-            case 0: case 5: ibus = gV4IaRaw; break;
-            case 3: case 4: ibus = gV4IbRaw; break;
-            default:        ibus = (int16_t)(-(gV4IaRaw + gV4IbRaw)); break;
-        }
-        if (ibus < 0) ibus = (int16_t)(-ibus);
-        memcpy(&d[14], &ibus, 2);            /* ibusRaw (abs, like V3) */
+        extern volatile uint16_t gV4Vbus_mV;
+        extern volatile int16_t  gV4Ia_mA, gV4Ib_mA, gV4Ibus_mA;
+        memcpy(&d[8],  &gV4Vbus_mV, 2);
+        memcpy(&d[10], &gV4Ia_mA,   2);
+        memcpy(&d[12], &gV4Ib_mA,   2);
+        memcpy(&d[14], &gV4Ibus_mA, 2);
     }
     memcpy(&d[16], &t.actualAmplitude, 2);   /* duty (raw) */
 
@@ -910,8 +903,18 @@ void GSP_TelemTick(void)
     /* V5.1 ADC post-ZC shadow counters. */
     memcpy(&d[92],  &t.postZcRisingAcc,  4);
     memcpy(&d[96],  &t.postZcRisingRej,  4);
+#if FEATURE_MIDON_DIAG_PROBE || FEATURE_DUAL_POS_PROBE
+    /* B1/B2 diagnostic: pF% in python output shows mid-ON falling accept
+     * rate instead of mid-OFF post-ZC shadow. Rising slots unchanged. */
+    {
+        extern volatile uint32_t v5_midOnFallingAcc, v5_midOnFallingRej;
+        memcpy(&d[100], &v5_midOnFallingAcc, 4);
+        memcpy(&d[104], &v5_midOnFallingRej, 4);
+    }
+#else
     memcpy(&d[100], &t.postZcFallingAcc, 4);
     memcpy(&d[104], &t.postZcFallingRej, 4);
+#endif
 
     /* V5.2 measurement-PI tracker. */
     memcpy(&d[108], &t.tMeasHR, 2);
@@ -919,46 +922,47 @@ void GSP_TelemTick(void)
     /* Full 32-bit sectorCount for host-side rate computation. */
     memcpy(&d[110], &t.sectorCount, 4);
 
-    /* Phase-current peaks (2026-04-21) — validate kickback theory on CK.
-     * Rolling window reset on snapshot read; at-fault fields preserved
-     * across snapshots until motor restart (valid==1). */
+    /* Phase + bus current peaks. Rolling window reset on snapshot read;
+     * at-fault fields preserved across snapshots until motor restart
+     * (valid==1). ibus is now a direct OA3 shunt read (see hal_adc.c)
+     * — previously zero with a host-side max(|Ia|,|Ib|) fallback. */
     extern volatile int16_t gV4IaPkMax, gV4IaPkMin;
     extern volatile int16_t gV4IbPkMax, gV4IbPkMin;
+    extern volatile int16_t gV4IbusPkMax, gV4IbusPkMin;
     extern volatile int16_t gV4IaAtFaultMax, gV4IaAtFaultMin;
     extern volatile int16_t gV4IbAtFaultMax, gV4IbAtFaultMin;
-    extern volatile int16_t gV4IaAtFaultInst, gV4IbAtFaultInst;
+    extern volatile int16_t gV4IbusAtFaultMax, gV4IbusAtFaultMin;
+    extern volatile int16_t gV4IaAtFaultInst, gV4IbAtFaultInst, gV4IbusAtFaultInst;
     extern volatile uint8_t gV4FaultSnapshotValid;
-    extern volatile int16_t gV4IaRaw, gV4IbRaw;
+    extern volatile int16_t gV4IaRaw, gV4IbRaw, gV4IbusRaw;
 
-    /* Reconstruct ibus peaks host-side from Ia/Ib extrema. We emit
-     * zero for ibus fields; host can compute |ibus|pk ≈ max(|ia|,|ib|)
-     * which is a lower bound (exact for steps 0,5,3,4; underestimate by
-     * up to √3 for steps 1,2 where C is PWM). Good enough to compare
-     * against AKESC datasets. */
-    int16_t ibusZero = 0;
-
-    memcpy(&d[114], &gV4IaPkMax,   2);
-    memcpy(&d[116], &gV4IaPkMin,   2);
-    memcpy(&d[118], &gV4IbPkMax,   2);
-    memcpy(&d[120], &gV4IbPkMin,   2);
-    memcpy(&d[122], &ibusZero,     2);
-    memcpy(&d[124], &ibusZero,     2);
+    memcpy(&d[114], &gV4IaPkMax,        2);
+    memcpy(&d[116], &gV4IaPkMin,        2);
+    memcpy(&d[118], &gV4IbPkMax,        2);
+    memcpy(&d[120], &gV4IbPkMin,        2);
+    memcpy(&d[122], &gV4IbusPkMax,      2);
+    memcpy(&d[124], &gV4IbusPkMin,      2);
     memcpy(&d[126], &gV4IaAtFaultMax,   2);
     memcpy(&d[128], &gV4IaAtFaultMin,   2);
     memcpy(&d[130], &gV4IbAtFaultMax,   2);
     memcpy(&d[132], &gV4IbAtFaultMin,   2);
-    memcpy(&d[134], &ibusZero,          2);
-    memcpy(&d[136], &ibusZero,          2);
+    memcpy(&d[134], &gV4IbusAtFaultMax, 2);
+    memcpy(&d[136], &gV4IbusAtFaultMin, 2);
     memcpy(&d[138], &gV4IaAtFaultInst,   2);
     memcpy(&d[140], &gV4IbAtFaultInst,   2);
-    memcpy(&d[142], &ibusZero,           2);
+    memcpy(&d[142], &gV4IbusAtFaultInst, 2);
     d[144] = gV4FaultSnapshotValid;
     d[145] = 0;  /* pad */
 
     /* Reset rolling peaks for next 20 ms window. Seed with current
-     * instantaneous sample so the window doesn't start at stale extrema. */
-    gV4IaPkMax = gV4IaPkMin = gV4IaRaw;
-    gV4IbPkMax = gV4IbPkMin = gV4IbRaw;
+     * instantaneous sample so the window doesn't start at stale extrema.
+     * Peaks track milliamps (same scale as the live mA values). */
+    {
+        extern volatile int16_t gV4Ia_mA, gV4Ib_mA, gV4Ibus_mA;
+        gV4IaPkMax   = gV4IaPkMin   = gV4Ia_mA;
+        gV4IbPkMax   = gV4IbPkMin   = gV4Ib_mA;
+        gV4IbusPkMax = gV4IbusPkMin = gV4Ibus_mA;
+    }
 
     GSP_SendResponse(GSP_CMD_TELEM_FRAME, snap, sizeof(snap));
 }

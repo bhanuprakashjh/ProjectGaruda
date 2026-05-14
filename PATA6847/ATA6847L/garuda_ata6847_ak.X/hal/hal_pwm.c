@@ -211,20 +211,39 @@ void HAL_PWM_Init(void)
      * fires in. The trigger fires ONCE per PWM period (in whichever
      * cycle CAHALF selects), not twice.
      *
-     * 2026-05-12: place the trigger at the START of cycle 2 (TRIGA=0,
-     * CAHALF=1) — fires immediately after the cycle 1 → cycle 2 wrap.
-     * Previously used PER-1 in cycle 1 which fires immediately BEFORE
-     * the wrap; the two positions are 1 PWM tick (2.5 ns) apart in
-     * time, straddling the boundary register-reload event. Sampling
-     * the "after" side gives the PWM module state time to settle
-     * after CAHALF flip and any pending PG1DC/PG1PER reloads. */
-    PG1TRIGA = (uint32_t)(1UL << 31);   /* CAHALF=1, TRIGA=0 (start of cycle 2) */
+     * 2026-05-13: switched from MID-ON to MID-OFF sampling to match
+     * the proven CK port behaviour.
+     *
+     * CK uses Mode 4 (double-update center-aligned, MODSEL=100) with
+     * PG1TRIGA=0x00 / CAHALF=0 — that fires at counter=0 in cycle 1,
+     * which is the PERIOD BOUNDARY, geometrically midway between two
+     * adjacent PWM pulses = MID-OFF. In complementary mode, the LS
+     * FETs are conducting during OFF time, di/dt has settled, and the
+     * floating-phase voltage equals pure BEMF — comp output is a clean
+     * polarity indicator.
+     *
+     * Previous AK mid-ON position (CAHALF=1, TRIGA=0 = cycle 1/2
+     * boundary = pulse center) sampled in the middle of the ON pulse,
+     * where inductive coupling biased the comp output and we saw
+     * pR_pct=90% (POST state dominated, BEMF reading polluted). CK at
+     * the same scheduler / detection logic gets pR_pct~50% because it
+     * samples mid-OFF instead. Aligning AK to mid-OFF restores the CK
+     * behaviour. */
+    PG1TRIGA = 0x00000000UL;   /* CAHALF=0, TRIGA=0 — period boundary = MID-OFF (CK-equivalent) */
+#if FEATURE_DUAL_POS_PROBE || FEATURE_PER_SECTOR_PTG
+    PG1TRIGB = PTG_TRIG_MID_OFF_POS;  /* B2/Phase 1: init at mid-OFF. Commutate
+                                       * (PER_SECTOR_PTG) or PTG ISR (DUAL_POS)
+                                       * writes this per-sector / per-fire.
+                                       * HAL_PWM_SetDutyCycle does NOT update
+                                       * PG1TRIGB while either flag is on. */
+#else
     PG1TRIGB = 0x00;        /* 2x-ADC experiment (PG1TRIGB=200) on
                              * 2026-04-29 produced no peak-eRPM gain at
                              * 50 kHz PWM (220k → 220k), ruling out sample
                              * rate as the limit. Reverted to single trigger;
                              * the 60 kHz vs 50 kHz peak gap (228k vs 220k)
                              * is current-ripple / float-phase cleanliness. */
+#endif
     PG1TRIGC = 0x00;
     PG1DTL = DEADTIME_TCY;
     PG1DTH = DEADTIME_TCY;
@@ -306,10 +325,13 @@ void HAL_PWM_SetDutyCycle(uint32_t duty)
     PG1DC = (uint16_t)duty;
     g_pwmActualDuty = (uint16_t)duty;
 
-#if FEATURE_PTG_ZC
+#if FEATURE_PTG_ZC && !FEATURE_DUAL_POS_PROBE && !FEATURE_PER_SECTOR_PTG
     /* Track switching edge for PTG edge-relative sampling.
      * PG1TRIGB fires ADC Trigger 2 at counter=duty (ON→OFF edge).
-     * PTG waits for this trigger, delays, then samples BEMF. */
+     * PTG waits for this trigger, delays, then samples BEMF.
+     *
+     * Disabled when FEATURE_DUAL_POS_PROBE or FEATURE_PER_SECTOR_PTG is
+     * on: PG1TRIGB is owned by the PTG ISR / Commutate respectively. */
     PG1TRIGB = (uint16_t)duty;
 #endif
 
@@ -427,9 +449,10 @@ void HAL_PWM_ExitSinglePulse(void)
     if (spMode)
     {
         MPER = LOOPTIME_TCY;
-        /* Restore ADC trigger to mid-pulse on AK center-aligned (see init):
-         * CAHALF=1, TRIGA=0 → fires at start of cycle 2, right after wrap. */
-        PG1TRIGA = (uint32_t)(1UL << 31);
+        /* Restore ADC trigger to mid-OFF on AK center-aligned (see init):
+         * CAHALF=0, TRIGA=0 → fires at period boundary = MID-OFF, the
+         * CK-equivalent sample position. */
+        PG1TRIGA = 0x00000000UL;
         PG1STATbits.UPDREQ = 1;
         PG2STATbits.UPDREQ = 1;
         PG3STATbits.UPDREQ = 1;

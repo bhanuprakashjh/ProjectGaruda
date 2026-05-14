@@ -292,8 +292,14 @@
 #define ALIGN_DUTY          (LOOPTIME_TCY / 40)    /* ~2.5% — matches profile 1 */
 #define INITIAL_STEP_PERIOD 800U
 #define MIN_STEP_PERIOD     50U          /* Timer1 ticks (2.5ms = ~4000 eRPM) */
-#define RAMP_ACCEL_ERPM_S   1500U        /* Matches profile 1 — proven bench cadence */
-#define RAMP_DUTY_CAP       (LOOPTIME_TCY / 6)     /* ~17% — matches profile 1 */
+/* OL ramp tuning 2026-05-13:
+ * - Faster ramp (2500 vs 1500 eRPM/s) → 2.0s → 1.2s in forced mode.
+ * - Duty cap stays at /6 (17%): bench-tested /10 (10%) and /8 (12.5%)
+ *   both failed to break standstill on the 2810 (iaPk≈0.4A, rotor
+ *   stationary, stl=41 at CL entry). 2810 cogging needs the full 17%.
+ *   Startup roughness reduction comes from the shorter ramp time only. */
+#define RAMP_ACCEL_ERPM_S   2500U        /* 1500 → 2500: ramp 2.0s → 1.2s */
+#define RAMP_DUTY_CAP       (LOOPTIME_TCY / 6)     /* ~17% during OL ramp */
 
 /* ZC Detection */
 #define ZC_BLANKING_PERCENT 20U          /* For OL_RAMP ADC backup poll only.
@@ -872,8 +878,17 @@
  *   SET_PARAM 0xF0 225  → 22.5°  (max benefit, may need bench validation)
  *
  * For motors that need more low-speed advance, drop further:
- *   SET_PARAM 0xF0 100  → 10.0°  (original Microchip A2207 default) */
-#define V4_PHASE_ADVANCE_DEG    10.0f
+ *   SET_PARAM 0xF0 100  → 10.0°  (original Microchip A2207 default)
+ *
+ * Phase 3 PTG calibration sweep (2026-05-13):
+ *   10.0f  →  194k peak, pR=85% at top
+ *    5.0f  →  190k peak, pR=77% at top  (worse acceptance, slightly slower)
+ *    7.5f  →  ← current.  Bench-test as midpoint.
+ *   12.5f  →  try if 7.5 also undershoots — going UP may recover top speed
+ * The PTG path has lower latency than ADC ISR, so the bias-portion of this
+ * constant should drop — but empirically 5° hurts more than 10°, suggesting
+ * this value is partly real torque advance, not pure latency compensation. */
+#define V4_PHASE_ADVANCE_DEG    7.5f
 
 /* Board detector delay (µs). ATA6847 comparator propagation ~2 µs.
  * CK board has no RC filter on BEMF inputs (unlike Microchip MPPB
@@ -923,8 +938,17 @@
 #define V4_STARTUP_CURRENT_MA   3000.0f
 #define V4_ALIGN_DURATION_MS    100U
 #define V4_MIN_AMPLITUDE_PROFILE 5000U     /* 15.3% — proven on 2810 @ 25V */
-#define V4_BLOCK_ENTER_ERPM     150000UL   /* 2810 @ 25V peaks ~237k */
-#define V4_BLOCK_EXIT_ERPM      130000UL
+#define V4_BLOCK_ENTER_ERPM     100000UL   /* 2810 @ 25V — engage earlier than the
+                                            * original 150k. Block-comm = solid-ON
+                                            * HS-FET, no PWM chopping → less
+                                            * switching loss in the 100-150k climb
+                                            * zone where the motor was previously
+                                            * fighting PWM modulation. CK 228k
+                                            * milestone implicitly relied on early
+                                            * block-comm; AK was tuned conservatively. */
+#define V4_BLOCK_EXIT_ERPM       80000UL   /* 0.8× enter; gives wide hysteresis so
+                                            * brief BEMF wall dips don't drop out
+                                            * of block-comm under prop load. */
 #elif MOTOR_PROFILE == 3  /* HiZ1460 — Rs caps current at 1.87A */
 #define V4_STARTUP_SPEED_ERPM   500UL
 #define V4_STARTUP_CURRENT_MA   1500.0f
@@ -942,7 +966,10 @@
 #define V4_STARTUP_TIME_MS      1000U   /* Forced ramp duration before commands accepted */
 #define V4_STALL_THRESHOLD      200U    /* Consecutive no-capture sectors → stall.
                                          * At 3000 eRPM: 200 sectors ≈ 0.4s */
-#define V4_MIN_PERIOD           10U     /* Timer period floor (~1.5M eRPM, safety) */
+#define V4_MIN_PERIOD           10U     /* Timer period floor (~1.5M eRPM, safety).
+                                         * Tested 10 → 60 on 2026-05-13: no effect
+                                         * on top-end (motor never hits the clamp
+                                         * during normal operation). Reverted. */
 
 /* Sector timer clock: SCCP4 HR timer rate (640 ns/tick).
  * V4 algorithm — advance fractions, blanking, PI scaling — was tuned
@@ -1035,14 +1062,114 @@
  * When =1: PTG init runs at motor start, ISR counts samples (shadow
  *          only in V5.0-step1 — does NOT set v4_captureValid). */
 #ifndef FEATURE_V5_PTG_ZC
-#define FEATURE_V5_PTG_ZC  0   /* Phase D attempt (2026-04-21) — disabled
-                                * again now that Phase A/B are in place.
-                                * Previous disable broke at 107k; this
-                                * time ADC ISR has inline FIFO drain +
-                                * deglitch (Phase A) and SCCP1 is off
-                                * (Phase B). Test whether PTG's role was
-                                * just jitter dithering that the other
-                                * ISRs now cover. */
+#define FEATURE_V5_PTG_ZC  1   /* AK PTG phase-1 heartbeat (2026-05-13).
+                                * hal_ptg.c provides a real implementation
+                                * for the dsPIC33AK128MC106 — PTG fires
+                                * _PTG0Interrupt at every PG1TRIGB match
+                                * (mid-OFF), ISR increments v5_ptgFires.
+                                * Flag flipped on so the existing
+                                * snapshot path at sector_pi.c:1347
+                                * exposes the heartbeat count to the host.
+                                * NOTE: this does NOT compile any V5 BEMF
+                                * logic on AK — there's no equivalent of
+                                * the CK V5 ISR.  Phase 2 will add real
+                                * BEMF + PI handling inside
+                                * _PTG0Interrupt. */
+#endif
+
+/* PTG-driven BEMF detection master flag.
+ *   0 — ADC ISR reads BEMF GPIO + runs V4 ZC detection
+ *       (original/CK-style path; Phase 1 default).
+ *   1 — PTG ISR reads BEMF + runs V4 ZC detection; ADC ISR keeps
+ *       current/Vbus only (Phase 2).  Latency to BEMF read drops
+ *       from ~1.5 µs to ~50 ns.
+ *
+ * If enabling Phase 2 and the motor walls below the previous milestone,
+ * try LOWERING V4_PHASE_ADVANCE_DEG (currently 10°) — that constant
+ * compensates for the old ADC-ISR latency and is now too large for the
+ * PTG path.  Sweep 10 → 5 → 2 → 1 to find the new optimum. */
+#ifndef FEATURE_BEMF_VIA_PTG
+#define FEATURE_BEMF_VIA_PTG    1
+#endif
+
+/* B1 mid-ON diagnostic probe (2026-05-13).
+ * When enabled, V4_ProcessBemfSample busy-waits ~half a PWM period after
+ * its normal mid-OFF read, then takes a second comp read at mid-ON and
+ * classifies it for FALLING sectors only. Counters expose via the
+ * snapshot pF% slot (replaces post-ZC shadow when enabled).
+ *
+ * Tests whether mid-ON has a cleaner falling-sector BEMF signal than
+ * mid-OFF. If pF% jumps from ~12% (current mid-OFF) to >70%, then a
+ * proper PTG dual-trigger architecture (option A) is justified.
+ *
+ * COST: ~8µs busy-wait inside PTG ISR at 60kHz (~50% of PWM period
+ * burned). Top-end performance will tank during the test. Run a low-
+ * speed (60-80k) sweep with the prop off to read pF%. DISABLE for
+ * normal operation by setting to 0. */
+/* B1 busy-wait probe — rejected 2026-05-13. The 8µs delay-after-PG1TRIGB
+ * sample didn't actually land at mid-ON; PG1TRIGB fires at counter==duty
+ * (duty-edge), and 8µs later put us at the next switching edge or in
+ * deep OFF region. Not a fair test of mid-ON. Disabled. */
+#ifndef FEATURE_MIDON_DIAG_PROBE
+#define FEATURE_MIDON_DIAG_PROBE   0
+#endif
+
+/* B2 dual-position probe (2026-05-13).
+ * Alternates PG1TRIGB between MID-OFF (counter=1, just past period
+ * boundary) and MID-ON (counter=LOOPTIME_TCY-1, just before peak) on
+ * each PTG ISR fire. This puts the diagnostic sample at the actual
+ * peak of the ON pulse — independent of duty cycle.
+ *
+ * PTG fires alternate at MID-OFF and MID-ON positions. ISR uses a
+ * toggle state to know which position the current sample is at. Mid-OFF
+ * fires run normal V4_ProcessBemfSample (feeds the PI). Mid-ON fires
+ * only increment the diagnostic counters — no PI feed, no PWM-cycle
+ * dependent behavior change.
+ *
+ * Expected ISR rate: same as current (one fire per PWM cycle) if
+ * PG1TRIGB shadow-updates on period boundary, OR double rate if
+ * immediate-update. Both are fine for diagnosis.
+ *
+ * Compare pF% (= midOn falling acc from FEATURE_MIDON_DIAG_PROBE
+ * snapshot wiring) against pre-experiment pF% (~5% at midOff via
+ * V5_POST_ZC_ACCEPT shadow). Big jump = mid-ON is the right position. */
+#ifndef FEATURE_DUAL_POS_PROBE
+#define FEATURE_DUAL_POS_PROBE     0   /* superseded by FEATURE_PER_SECTOR_PTG */
+#endif
+
+#define PTG_TRIG_MID_OFF_POS       1U
+#define PTG_TRIG_MID_ON_POS        (LOOPTIME_TCY - 1U)
+
+/* Phase 1 — Per-sector PTG trigger position (2026-05-13).
+ * B2 result: mid-OFF works for rising sectors (pR=95%); mid-ON has real
+ * signal for falling sectors (pF=47% raw, expected ~85% after blanking).
+ *
+ * Per-sector adaptive sampling: Commutate ISR writes PG1TRIGB based on
+ * the next sector's polarity. Rising sectors fire PTG at mid-OFF (works
+ * with the proven V4 detection path). Falling sectors fire PTG at mid-ON
+ * (new path — falling-sector BEMF is readable there but not at mid-OFF).
+ *
+ * Phase 1 keeps piFeedPolarity=1 (rising-only PI feed) — observation
+ * mode. Watch pF via the diagnostic; should climb from 47% toward >80%
+ * once blanking gates the pre-ZC half of falling-sector samples. */
+/* Phase 1 fix-pass 2026-05-13:
+ *  (a) Commutate writes PG1TRIGB + sets PG1STATbits.UPDREQ → buffer
+ *      transfers to active at next SOC (within ~1 PWM cycle), so the
+ *      per-sector position takes effect before the sector ends even
+ *      at 200k eRPM (3 PWM cycles per sector).
+ *  (b) Legacy V4 detection polarity gate now reads v5_ptgExpectedComp
+ *      instead of HAL_Capture_IsRisingZc() (stuck-true). With
+ *      piFeedPolarity=1 falling sectors stay out of PI until we
+ *      explicitly flip to piFeedPolarity=0 in Phase 2. */
+#ifndef FEATURE_PER_SECTOR_PTG
+#define FEATURE_PER_SECTOR_PTG     1
+#endif
+
+/* Spin-loop iteration count to delay ~half a PWM period.
+ * FCY=200MHz (5 ns/cycle). Volatile-counter loop ~6 cyc/iter on XC-DSC.
+ * 60kHz PWM half-period = 8.33µs = 1666 cycles / 6 ≈ 278 iter. */
+#ifndef MIDON_DIAG_LOOPS
+#define MIDON_DIAG_LOOPS           280U
 #endif
 
 /* PTG ISR priority — above ADC(3), tied with Timer1(4), below CCP(5).
@@ -1310,11 +1437,64 @@
 #define ADCBUF_POT          AD1CH1DATA   /* AD1CH1.PINSEL=10 → AN10/RA11 */
 #define ADCBUF_VBUS         AD1CH4DATA   /* AD1CH4.PINSEL=6  → AN6/RA7  */
 
-/* [AK PORT] Phase-current ADC channels not yet wired on EV92R69A.
- * ATA6847L CSA outputs route through DIM lines TBD. Stub as 0 so the
- * V4 ADC ISR builds; revisit once ATA6847L CSA → AK ADC pinout known. */
-#define ADCBUF0             ((int16_t)0)
-#define ADCBUF1             ((int16_t)0)
-#define ADCBUF4             ((int16_t)0)
+/* Phase + DC bus currents — through the dsPIC's internal op-amps OA1/OA2/OA3
+ * which amplify the raw shunt voltages routed in on DIM 13/15, 21/23 and
+ * 29/31 (AN6285 §3 + DS70005527 §2).  J5/J7/J9 on the EV92R69A must be in
+ * BEMF position (default) so the ATA6847L's BEMF comparators stay live;
+ * that frees us to use the dsPIC op-amps for current sense.  Raw ADC is
+ * unsigned 12-bit, zero current = ~2048; the ADC ISR subtracts the bias
+ * to land a signed int16 in gV4IaRaw / gV4IbRaw / gV4IbusRaw. */
+#define ADCBUF_IA           AD1CH0DATA   /* AD1CH0.PINSEL=0 → OA1OUT/AN0/RA2 */
+#define ADCBUF_IB           AD2CH0DATA   /* AD2CH0.PINSEL=1 → OA2OUT/AN1/RB0 */
+#define ADCBUF_IBUS         AD1CH2DATA   /* AD1CH2.PINSEL=3 → OA3OUT/AN3/RA5 */
+#define ADC_CURRENT_BIAS    2048         /* mid-scale of 12-bit ADC = zero current */
+
+/* ── Calibration: convert raw ADC counts to physical units ─────────────
+ *
+ * Current (Ia / Ib / Ibus):
+ *   shunt R   = 3 mΩ      (EV92R69A BOM: RS1/RS2/RS3 = WSLF25123L000FEA)
+ *   amp G     = 24.95×    (AK DIM differential gain: R_F/(R_IN1+R_IN2)
+ *                          = 4.99 kΩ / 200 Ω, DS70005527 Table 2-1)
+ *   ADC slope = 4096 / 3.3 V = 1241.21 counts/V
+ *   → counts per amp = G × R × slope = 24.95 × 0.003 × 1241.21 ≈ 92.89
+ *   → milliamps per count = 1000 / 92.89 ≈ 10.7654
+ *   Q8 fixed-point: 10.7654 × 256 = 2756 (fits int16).
+ *   Saturation check: count = ±2048 → mA = (2048 × 2756) >> 8 = ±22055 mA.
+ *
+ * Vbus:
+ *   divider   = 16:1 (R47 36 kΩ / R49 2.4 kΩ, AN6285 Table 5-2)
+ *   → millivolts per count = 3.3 V × 16 × 1000 / 4096 = 12.8906
+ *   Q8 fixed-point: 12.8906 × 256 = 3300 (rounded).
+ *   Saturation check: count = 4095 → mV = (4095 × 3300) >> 8 = 52777 mV.
+ *
+ * ── CURRENT CONFIG (NO PROP / NO-LOAD BENCH) ──────────────────────────
+ * Stock AK DIM, R_F = 4.99 kΩ, G = 24.95×, range = ±22 A peak.  This is
+ * adequate for no-load testing (observed peaks 18-22 A at 200k eRPM on
+ * the 2810 motor).  WILL SATURATE under prop load.
+ *
+ * ── BEFORE PROP TESTING — DIM REWORK REQUIRED ─────────────────────────
+ * The AK DIM (EV68M17A) has six 4.99 kΩ feedback resistors that set the
+ * differential gain.  To raise the current measurement ceiling:
+ *
+ *   Replace ALL SIX (0603, 0.1% thin-film, matched reel — CMRR matters):
+ *     OA1 (Ia):   R5,  R18
+ *     OA2 (Ib):   R24, R31
+ *     OA3 (Ibus): R10, R21
+ *
+ *   Target peak | new R_F | new G    | ADC_MA_PER_COUNT_Q8
+ *   ±44 A       | 2.49 kΩ | 12.45×   |  5520
+ *   ±55 A       | 2.00 kΩ | 10.00×   |  6872   (recommended for drone prop)
+ *   ±73 A       | 1.50 kΩ |  7.50×   |  9162
+ *   ±110 A      | 1.00 kΩ |  5.00×   | 13743
+ *
+ *   After rework: change ADC_MA_PER_COUNT_Q8 below to the matching value,
+ *   rebuild, reflash.  NO OTHER FIRMWARE CHANGE NEEDED — the snapshot,
+ *   peak tracker, and Python tool all read the calibrated globals.
+ *
+ *   Recommended part for ±55 A target: Panasonic ERA-3AEB2001V × 6
+ *   (0.1% thin-film, AEC-Q200, same series as the parts being replaced).
+ */
+#define ADC_MA_PER_COUNT_Q8       2756U   /* G=24.95× (stock, ±22 A peak) */
+#define ADC_VBUS_MV_PER_COUNT_Q8  3300U   /* 12.8906 mV/count × 256       */
 
 #endif /* GARUDA_CONFIG_H */

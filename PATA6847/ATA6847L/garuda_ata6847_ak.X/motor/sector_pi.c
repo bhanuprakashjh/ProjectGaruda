@@ -259,7 +259,7 @@ static void ShutOff(void)
     if (v4_spActive)
     {
         MPER = LOOPTIME_TCY;
-        PG1TRIGA = (uint32_t)(1UL << 31);    /* CAHALF=1, TRIGA=0 — cycle 2 start (AK mid-pulse) */
+        PG1TRIGA = 0x00000000UL;    /* CAHALF=0, TRIGA=0 — period boundary = MID-OFF (CK-equivalent) */
         PG1STATbits.UPDREQ = 1;
         PG2STATbits.UPDREQ = 1;
         PG3STATbits.UPDREQ = 1;
@@ -641,7 +641,14 @@ static void CommutateV5_3(void)
 #if FEATURE_V5_PTG_ZC || FEATURE_V5_POST_ZC_ACCEPT
     {
         extern volatile uint8_t v5_ptgExpectedComp;
-        v5_ptgExpectedComp = (uint8_t)(position & 1u);
+        uint8_t newExpected = (uint8_t)(position & 1u);
+        v5_ptgExpectedComp = newExpected;
+        /* PG1TRIGB switching moved to PTG ISR (per-PWM-cycle refresh)
+         * rather than per-sector in Commutate. UPDREQ-from-Commutate
+         * approach (2026-05-13) failed: pF=0% at all speeds + startup
+         * regression. Likely UPDREQ was forcing premature PG1DC transfers
+         * during OL→CL handoff. PTG-ISR-driven write matches the proven
+         * B2 architecture. */
     }
 #endif
 
@@ -799,7 +806,7 @@ void SectorPI_Commutate(void)
         else
         {
             MPER = LOOPTIME_TCY;
-            PG1TRIGA = (uint32_t)(1UL << 31);    /* CAHALF=1, TRIGA=0 — cycle 2 start (AK mid-pulse) */
+            PG1TRIGA = 0x00000000UL;    /* CAHALF=0, TRIGA=0 — period boundary = MID-OFF (CK-equivalent) */
             g_pwmPer = LOOPTIME_TCY;
         }
         PG1STATbits.UPDREQ = 1;
@@ -891,7 +898,10 @@ void SectorPI_Commutate(void)
              * V4 scheduler's ASAP+fallback pairing — see V5.3 scheduler
              * rewrite proposal. The flag itself is correct per-sector;
              * the software state just isn't 1:1 with physical rotor. */
-            v5_ptgExpectedComp = (uint8_t)(position & 1u);
+            uint8_t newExpected = (uint8_t)(position & 1u);
+            v5_ptgExpectedComp = newExpected;
+            /* PG1TRIGB switching moved to PTG ISR — see other Commutate
+             * path comment for rationale. */
         }
 #endif
         /* HAL_PTG_SetDelay call intentionally removed for this test. */
@@ -1035,10 +1045,14 @@ void SectorPI_Commutate(void)
          * 195k→178k because timerPeriod saturates at minPeriodHr giving
          * a bad period estimate. Reverted; current TAL=4 floor at 195k
          * may be a real BEMF/timing limit, not a scheduler one. */
+        /* TAL band 2026-05-13: added 5th band (TAL=5 = 37.5°) at <100 HR
+         * (>156k eRPM). AK rising-only feeds PI at half-rate, so extra
+         * advance at top end compensates for PI lag. */
         uint16_t tal;
-        if      (schedPeriod >= 260U) tal = 2U;
-        else if (schedPeriod >= 130U) tal = 3U;
-        else                          tal = 4U;
+        if      (schedPeriod >= 260U) tal = 2U;     /* ≤60k:    15° */
+        else if (schedPeriod >= 130U) tal = 3U;     /* 60-120k: 22.5° */
+        else if (schedPeriod >= 100U) tal = 4U;     /* 120-156k:30° */
+        else                          tal = 5U;     /* >156k:   37.5° */
         uint16_t advHR  = (uint16_t)((schedPeriod >> 3) * tal);
         uint16_t delayHR = (halfHR > advHR) ? (uint16_t)(halfHR - advHR) : 2U;
         uint16_t targetHR = (uint16_t)(v4_lastCaptureHR + delayHR);

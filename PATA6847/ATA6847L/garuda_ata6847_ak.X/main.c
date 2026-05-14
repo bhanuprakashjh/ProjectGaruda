@@ -272,6 +272,17 @@ int main(void)
 #if FEATURE_V4_SECTOR_PI
     /* V4: sector timer + capture timer init happens in SectorPI_Init() */
     HAL_UART_WriteString("V4.");
+
+#if FEATURE_V5_PTG_ZC
+    /* PTG heartbeat — fires _PTG0Interrupt at every PG1TRIGB match
+     * (mid-OFF).  Phase 1: just increments v5_ptgFires for the host to
+     * verify the path is live.  Started here once and left running for
+     * the lifetime of the firmware — SectorPI_Start/Stop still call
+     * HAL_PTG_Start/Stop too, which just resets counters. */
+    HAL_PTG_Init();
+    HAL_PTG_Start();
+    HAL_UART_WriteString("PTG.");
+#endif
 #else
 #if FEATURE_IC_ZC && FEATURE_CLC_BLANKING
     /* 7b. CLC D-FF BEMF blanking — must be after PWM init (needs PWMEVTA) */
