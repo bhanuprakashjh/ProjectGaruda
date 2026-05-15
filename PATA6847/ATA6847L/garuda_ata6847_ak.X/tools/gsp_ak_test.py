@@ -2,8 +2,14 @@
 """Minimal GSP smoke test for the AK port.
 
 Usage:
-    python3 gsp_ak_test.py [port] [baud]              # smoke + 5 telem frames
-    python3 gsp_ak_test.py mon  [port] [baud]         # live monitor (Ctrl-C to stop)
+    python3 gsp_ak_test.py [port] [baud]                     # smoke + 5 telem frames
+    python3 gsp_ak_test.py mon  [port] [baud] [csv_path]     # live monitor + CSV log
+    python3 gsp_ak_test.py mon  [port] [csv_path]            # baud defaults to 115200
+    python3 gsp_ak_test.py bemf [port] [count]               # BEMF GPIO probe (hand-rotation)
+
+`mon` mode now decodes every documented telemetry field, prints a one-line
+summary per snapshot, and writes the full set as CSV on Ctrl-C. Default
+CSV path is `ak_telem_<timestamp>.csv` in the current directory.
 
 Frame format (V2):  STX=0x02 | LEN | CMD | PAYLOAD | CRC16-BE (CCITT, init 0xFFFF, poly 0x1021)
 CRC covers LEN+CMD+PAYLOAD.
@@ -56,52 +62,148 @@ def _kfmt(n: int) -> str:
         return f"{n//1000:4d}k"
     return f"{n:5d}"
 
+# Snapshot field layout — buf[] indices.
+# Built from gsp_commands.c BuildV4Snapshot (snap[0..1] = seq prefix, then d[]
+# from offset 0 → buf[2]). Keep this table in sync with that function.
+SNAPSHOT_FIELDS = [
+    # (key,            offset, struct_fmt, scale, unit, comment)
+    ('seq',                0, '<H', 1,     '',     'sequence number'),
+    ('state',              2, 'B',  1,     '',     'gV4State (0=IDLE..6=FLT)'),
+    ('step',               4, 'B',  1,     '',     'commutation step 0..5'),
+    ('potRaw',             6, '<H', 1,     '',     'pot ADC counts'),
+    ('dutyPct',            8, 'B',  1,     '%',    'g_pwmActualDuty/g_pwmPer, 100=block-comm override'),
+    ('cmdEn',              9, 'B',  1,     '',     't.commandEnabled (throttle gate)'),
+    ('vbus_mV',           10, '<H', 1,     'mV',   'Vbus in millivolts (firmware-scaled)'),
+    ('ia_mA',             12, '<h', 1,     'mA',   'phase A current, signed milliamps'),
+    ('ib_mA',             14, '<h', 1,     'mA',   'phase B current, signed milliamps'),
+    ('ibus_mA',           16, '<h', 1,     'mA',   'DC bus current, signed milliamps (direct OA3)'),
+    ('actualAmp_Q15',     18, '<H', 1,     '',     'actualAmplitude Q15 (32768 = 100%)'),
+    ('timerPeriod',       20, '<H', 1,     'HR',   'PI estimate of sector period'),
+    ('eRpm',              24, '<I', 1,     '',     'electrical RPM'),
+    ('sectors16',         28, '<H', 1,     '',     'low 16 bits of sectorCount'),
+    ('diagLastCap',       30, '<H', 1,     'HR',   'last capValue from PI'),
+    ('diagDelta',         32, '<h', 1,     'HR',   'PI delta (signed: target - measured)'),
+    ('diagCaptures',      34, '<H', 1,     '',     'PI-fed captures (16-bit rolling)'),
+    ('diagPiRuns',        36, '<H', 1,     '',     'PI run counter'),
+    ('stallCnt',          38, 'B',  1,     '',     'stall counter (trip at V4_STALL_THRESHOLD)'),
+    ('erpmNow16',         40, '<H', 1,     '',     'erpmNow derived from timerPeriod'),
+    ('systemTick',        42, '<I', 1,     '',     '50µs Timer1 tick'),
+    ('uptime_s',          46, '<I', 1,     's',    'uptime seconds'),
+    ('adcBlankRej',       50, '<I', 1,     '',     'ADC samples rejected by blanking'),
+    ('adcStateMis',       54, '<I', 1,     '',     'ADC samples: comp != expected'),
+    ('adcCapSet',         58, '<I', 1,     '',     'ADC captures (cR + cF total)'),
+    ('adcSetRising',      62, '<I', 1,     '',     'ADC captures on rising sectors (cR)'),
+    ('offMidCap',         66, '<I', 1,     '',     'OFF-mid sampler captures (unused on AK)'),
+    ('offMidMis',         70, '<I', 1,     '',     'OFF-mid sampler mismatches'),
+    ('ptgFires',          74, '<I', 1,     '',     'V5.0 PTG ISR fire count'),
+    ('ptgR_acc',          78, '<I', 1,     '',     'PTG rising-sector accept'),
+    ('ptgR_rej',          82, '<I', 1,     '',     'PTG rising-sector reject'),
+    ('ptgF_acc',          86, '<I', 1,     '',     'PTG falling-sector accept'),
+    ('ptgF_rej',          90, '<I', 1,     '',     'PTG falling-sector reject'),
+    ('pR_acc',            94, '<I', 1,     '',     'V5 shadow rising: comp==0 (POST for rising)'),
+    ('pR_rej',            98, '<I', 1,     '',     'V5 shadow rising: comp==1 (PRE  for rising)'),
+    ('pF_acc',           102, '<I', 1,     '',     'V5 shadow falling: comp==1 (POST for falling)'),
+    ('pF_rej',           106, '<I', 1,     '',     'V5 shadow falling: comp==0 (PRE  for falling)'),
+    ('tMeasHR',          110, '<H', 1,     'HR',   'measurement-PI tracker (raw measured Tsector)'),
+    ('sectorCount32',    112, '<I', 1,     '',     'sectorCount full 32-bit'),
+    ('iaPkMax_mA',       116, '<h', 1,     'mA',   'rolling max Ia in window, mA'),
+    ('iaPkMin_mA',       118, '<h', 1,     'mA',   'rolling min Ia, mA'),
+    ('ibPkMax_mA',       120, '<h', 1,     'mA',   'rolling max Ib, mA'),
+    ('ibPkMin_mA',       122, '<h', 1,     'mA',   'rolling min Ib, mA'),
+    # 2026-05-14 mechanism probe: elapsed snapshots from the plausibility
+    # filter in sector_pi.c. Tell us *why* one polarity is rejected.
+    # Compare elapRejR vs filterHR: rejR ≈ filterHR+small → drift; rejR
+    # near 65535 → stale capture (wrap from prior sector). Compare aF vs
+    # filterHR: aF < filterHR/2 means accepted polarity grabs early edge.
+    ('elapAccR',         148, '<H', 1,     'HR',   'last accepted elapsed, rising'),
+    ('elapAccF',         150, '<H', 1,     'HR',   'last accepted elapsed, falling'),
+    ('elapRejR',         152, '<H', 1,     'HR',   'last rejected elapsed, rising'),
+    ('elapRejF',         154, '<H', 1,     'HR',   'last rejected elapsed, falling'),
+    ('filterHRLast',     156, '<H', 1,     'HR',   'filterHR at last filter decision'),
+    # Capture-layer probe: comp tally past blanking, by sector polarity.
+    # PRE-ZC state on inverted ATA6847: rising→1, falling→0.
+    # POST-ZC state:                     rising→0, falling→1.
+    ('cR_hi',            158, '<I', 1,     '',     'rising sector, comp=1 (pre-ZC)'),
+    ('cR_lo',            162, '<I', 1,     '',     'rising sector, comp=0 (post-ZC)'),
+    ('cF_hi',            166, '<I', 1,     '',     'falling sector, comp=1 (post-ZC)'),
+    ('cF_lo',            170, '<I', 1,     '',     'falling sector, comp=0 (pre-ZC)'),
+    # PTG postscale experiment: count of fires that bypassed
+    # V4_ProcessBemfSample(). Effective sample rate = (ptgFires-ptgSkipped)/sec.
+    ('ptgSkipped',       174, '<I', 1,     '',     'PTG postscaled-out fires'),
+]
+
+
+def parse_snapshot(buf: bytes) -> dict:
+    """Pull every field defined in SNAPSHOT_FIELDS into a dict. Missing tail
+    bytes return 0 for that field."""
+    out = {}
+    for key, off, fmt, _scale, _unit, _comment in SNAPSHOT_FIELDS:
+        size = struct.calcsize(fmt)
+        if len(buf) >= off + size:
+            out[key] = struct.unpack_from(fmt, buf, off)[0]
+        else:
+            out[key] = 0
+    # Derived counters
+    out['capRise']    = out['adcSetRising']
+    out['capFall']    = out['adcCapSet'] - out['adcSetRising']
+    out['amp_pct']    = (out['actualAmp_Q15'] * 100) / 32768 if out['actualAmp_Q15'] else 0
+    # The firmware ships physical units directly (see garuda_config.h).  The
+    # host only divides by 1000 to display volts / amps; it never knows the
+    # shunt resistance, op-amp gain, or Vbus divider.  If the AK DIM is
+    # reworked for a different sense gain, ONLY the firmware Q8 constants
+    # change — this tool tracks it automatically.
+    out['vbusV']      = out['vbus_mV']    / 1000.0
+    out['ia_A']       = out['ia_mA']      / 1000.0
+    out['ib_A']       = out['ib_mA']      / 1000.0
+    out['ibus_A']     = out['ibus_mA']    / 1000.0
+    out['iaPkMax_A']  = out['iaPkMax_mA'] / 1000.0
+    out['iaPkMin_A']  = out['iaPkMin_mA'] / 1000.0
+    out['ibPkMax_A']  = out['ibPkMax_mA'] / 1000.0
+    out['ibPkMin_A']  = out['ibPkMin_mA'] / 1000.0
+    pR_tot = out['pR_acc'] + out['pR_rej']
+    pF_tot = out['pF_acc'] + out['pF_rej']
+    out['pR_pct'] = (100 * out['pR_acc'] // pR_tot) if pR_tot else 0
+    out['pF_pct'] = (100 * out['pF_acc'] // pF_tot) if pF_tot else 0
+    # Capture-layer ratios. preR% = fraction of rising-sector samples that
+    # see comp=1 (pre-ZC). High preR% (≥90) means rising BEMF never crossed
+    # the (shifted) virtual neutral by the sample point — physics
+    # asymmetry. Low preR% means comp is transitioning fine, but the
+    # accept logic is failing.
+    cR_tot = out['cR_hi'] + out['cR_lo']
+    cF_tot = out['cF_hi'] + out['cF_lo']
+    out['preR_pct']  = (100 * out['cR_hi'] // cR_tot) if cR_tot else 0
+    out['postF_pct'] = (100 * out['cF_hi'] // cF_tot) if cF_tot else 0
+    return out
+
+
 def decode_telem(buf: bytes) -> str:
-    """Decode key fields out of a 148-byte V4 telemetry frame payload."""
+    """One-line live decode of a telemetry frame payload."""
     if len(buf) < 48:
         return f"short frame ({len(buf)}B)"
-    seq      = buf[0] | (buf[1] << 8)
-    state    = buf[2]; step = buf[4]
-    potRaw   = buf[6]  | (buf[7]  << 8)
-    dutyPct  = buf[8]
-    cmdEn    = buf[9]                                    # d[7] — commandEnabled
-    vbusRaw  = buf[10] | (buf[11] << 8)
-    timerPer = buf[20] | (buf[21] << 8)                  # d[18:20] — timerPeriod (HR ticks)
-    eRpm     = struct.unpack('<I', buf[24:28])[0]
-    sectors  = buf[28] | (buf[29] << 8)
-    diagCap  = buf[34] | (buf[35] << 8)                  # d[32:34] — diagCaptures (PI-fed)
-    diagPI   = buf[36] | (buf[37] << 8)                  # d[34:36] — diagPiRuns
-    stallCnt = buf[38]                                   # d[36] — stallCounter (max 200)
-    tick     = struct.unpack('<I', buf[42:46])[0]
-    # ADC diag counters live in the V3 tail of the 64-byte snapshot.
-    #   snap[48..51]  adcBlankReject  (u32) → buf[50..53]
-    #   snap[52..55]  adcStateMismatch(u32) → buf[54..57]
-    #   snap[56..59]  adcCaptureSet   (u32) → buf[58..61]
-    #   snap[60..63]  adcSetRising    (u32) → buf[62..65]
-    blankRej = struct.unpack('<I', buf[50:54])[0] if len(buf) >= 54 else 0
-    stateMis = struct.unpack('<I', buf[54:58])[0] if len(buf) >= 58 else 0
-    capSet   = struct.unpack('<I', buf[58:62])[0] if len(buf) >= 62 else 0
-    capRise  = struct.unpack('<I', buf[62:66])[0] if len(buf) >= 66 else 0
-    capFall  = capSet - capRise
-    # V5_POST_ZC_ACCEPT shadow — raw "comp == expectedPost" per polarity
-    # (no edge gate). High Acc/(Acc+Rej) means BEMF is crossing neutral.
-    #   snap[92..95]  postZcRisingAcc   → buf[94..97]
-    #   snap[96..99]  postZcRisingRej   → buf[98..101]
-    #   snap[100..103]postZcFallingAcc  → buf[102..105]
-    #   snap[104..107]postZcFallingRej  → buf[106..109]
-    pR_acc = struct.unpack('<I', buf[94:98])[0]  if len(buf) >= 98  else 0
-    pR_rej = struct.unpack('<I', buf[98:102])[0] if len(buf) >= 102 else 0
-    pF_acc = struct.unpack('<I', buf[102:106])[0] if len(buf) >= 106 else 0
-    pF_rej = struct.unpack('<I', buf[106:110])[0] if len(buf) >= 110 else 0
-    pR_pct = (100 * pR_acc // (pR_acc + pR_rej)) if (pR_acc + pR_rej) else 0
-    pF_pct = (100 * pF_acc // (pF_acc + pF_rej)) if (pF_acc + pF_rej) else 0
-    name     = ESC_STATE.get(state, f"S{state}")
-    vbusV    = vbusRaw / 100.0   # raw counts → volts (0.01 V/lsb)
-    return (f"#{seq:5d} {name} s{step} pot={potRaw:4d} d={dutyPct:3d}% "
-            f"V={vbusV:5.2f} RPM={eRpm:7d} Tp={timerPer:5d} "
-            f"stl={stallCnt:3d} cE={cmdEn} "
-            f"cR={_kfmt(capRise)} cF={_kfmt(capFall)} "
-            f"pR={pR_pct:3d}% pF={pF_pct:3d}%")
+    s = parse_snapshot(buf)
+    name = ESC_STATE.get(s['state'], f"S{s['state']}")
+    # Block-comm override: dutyPct field reads as 100 but actualAmp shows
+    # the upstream commanded value — print "BC" so it's obvious.
+    block_comm = (s['dutyPct'] == 100 and s['actualAmp_Q15'] < 32768)
+    duty_tag = " BC" if block_comm else "   "
+    # Phase peak in this snapshot window (|max| or |min|, whichever bigger).
+    iaPk_A = max(abs(s['iaPkMax_A']), abs(s['iaPkMin_A']))
+    ibPk_A = max(abs(s['ibPkMax_A']), abs(s['ibPkMin_A']))
+    return (f"#{s['seq']:5d} {name} s{s['step']} "
+            f"pot={s['potRaw']:4d} d={s['dutyPct']:3d}%{duty_tag} "
+            f"amp={s['amp_pct']:5.1f}% "
+            f"V={s['vbusV']:5.2f} "
+            f"iaPk={iaPk_A:5.1f}A ibPk={ibPk_A:5.1f}A ibus={s['ibus_A']:+5.1f}A "
+            f"RPM={s['eRpm']:7d} Tp={s['timerPeriod']:5d} "
+            f"PIdlt={s['diagDelta']:+5d} "
+            f"stl={s['stallCnt']:3d} cE={s['cmdEn']} "
+            f"cR={_kfmt(s['capRise'])} cF={_kfmt(s['capFall'])} "
+            f"pR={s['pR_pct']:3d}% pF={s['pF_pct']:3d}% | "
+            f"aR{s['elapAccR']:5d} aF{s['elapAccF']:5d} "
+            f"rR{s['elapRejR']:5d} rF{s['elapRejF']:5d} "
+            f"fH{s['filterHRLast']:5d} | "
+            f"preR{s['preR_pct']:3d}% postF{s['postF_pct']:3d}% "
+            f"skip={_kfmt(s['ptgSkipped'])}")
 
 def read_frames(ser, want_cmd: int, count: int, timeout_s: float = 3.0):
     """Read `count` frames matching want_cmd or until timeout. Yields (cmd, payload)."""
@@ -131,27 +233,54 @@ def read_frames(ser, want_cmd: int, count: int, timeout_s: float = 3.0):
                 got += 1
                 if got >= count: return
 
-def live_monitor(port: str, baud: int):
-    """Stream telemetry frames forever; one line per frame; Ctrl-C to stop."""
+def live_monitor(port: str, baud: int, csv_path: str = None):
+    """Stream telemetry frames forever; one line per frame + log every field
+    to CSV at the end. Ctrl-C to stop."""
+    import csv
+    from datetime import datetime
+    if csv_path is None:
+        csv_path = f"ak_telem_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
     print(f"Opening {port} @ {baud}  (live monitor — Ctrl-C to stop)")
+    print(f"CSV log → {csv_path}")
     s = serial.Serial(port, baud, timeout=0.05)
     time.sleep(0.2); s.reset_input_buffer()
     s.write(frame(0x14)); s.flush()   # TELEM_START
     # Track pot min/max to help spot whether the wheel reaches the ADC at all
     pot_min, pot_max = 0xFFFF, 0
+    rows = []  # collected snapshot dicts, written to CSV on exit
+    field_keys = [k for (k, *_rest) in SNAPSHOT_FIELDS] + [
+        'capRise', 'capFall', 'vbusV', 'amp_pct', 'pR_pct', 'pF_pct',
+        'ia_A', 'ib_A', 'ibus_A',
+        'iaPkMax_A', 'iaPkMin_A', 'ibPkMax_A', 'ibPkMin_A',
+        'host_t_ms',
+    ]
+    t0 = time.time()
     try:
         for cmd, payload in read_frames(s, want_cmd=0x80, count=10**9, timeout_s=10**9):
             potRaw = payload[6] | (payload[7] << 8)
             pot_min = min(pot_min, potRaw); pot_max = max(pot_max, potRaw)
-            line = decode_telem(payload)
-            print(f"{line} pot[{pot_min}..{pot_max}]")
+            # Parse all fields + display the compact line.
+            snap = parse_snapshot(payload)
+            snap['host_t_ms'] = int((time.time() - t0) * 1000)
+            rows.append(snap)
+            print(f"{decode_telem(payload)} pot[{pot_min}..{pot_max}]")
     except KeyboardInterrupt:
         pass
     finally:
         try: s.write(frame(0x15)); s.flush()
         except Exception: pass
         s.close()
-        print(f"\nstopped. final pot range: {pot_min}..{pot_max}")
+        # Write CSV with EVERY field per snapshot. One row per telemetry frame.
+        try:
+            with open(csv_path, 'w', newline='') as f:
+                w = csv.DictWriter(f, fieldnames=field_keys, extrasaction='ignore')
+                w.writeheader()
+                for r in rows:
+                    w.writerow(r)
+            print(f"\nstopped. wrote {len(rows)} rows to {csv_path}")
+        except Exception as e:
+            print(f"\nCSV write failed: {e}")
+        print(f"final pot range: {pot_min}..{pot_max}")
 
 def ata_diag(port: str, baud: int):
     """Read ATA6847L gate-driver diagnostic registers and decode."""
@@ -242,9 +371,17 @@ def main():
         bemf_probe(port, 115200, cnt)
         return
     if len(sys.argv) > 1 and sys.argv[1] == "mon":
-        port = sys.argv[2] if len(sys.argv) > 2 else '/dev/ttyACM1'
-        baud = int(sys.argv[3]) if len(sys.argv) > 3 else 115200
-        live_monitor(port, baud)
+        # Accept: mon [port] [baud] [csv_path]
+        args = sys.argv[2:]
+        port = args[0] if len(args) >= 1 else '/dev/ttyACM1'
+        baud = int(args[1]) if len(args) >= 2 and args[1].isdigit() else 115200
+        # Anything that doesn't look like baud goes to csv_path.
+        csv_path = None
+        if len(args) >= 2 and not args[1].isdigit():
+            csv_path = args[1]
+        elif len(args) >= 3:
+            csv_path = args[2]
+        live_monitor(port, baud, csv_path)
         return
     if len(sys.argv) > 1 and sys.argv[1] == "ata":
         port = sys.argv[2] if len(sys.argv) > 2 else '/dev/ttyACM1'

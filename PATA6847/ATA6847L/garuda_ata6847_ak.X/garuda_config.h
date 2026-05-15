@@ -69,7 +69,14 @@
  * [AK PORT] 20 kHz has not been bench-validated on this firmware since
  * the V4 milestone — verify ADC ISR timing budget at 50 µs/tick still
  * leaves headroom for sector PI + GSP. */
-#define PWMFREQUENCY_HZ     60000U   /* 20000U | 40000U | 60000U */
+#define PWMFREQUENCY_HZ     60000U   /* 20000U | 40000U | 60000U
+                                      * 2026-05-15: tested 40 kHz — peak
+                                      * dropped 226k→166k with desync,
+                                      * currents *increased* at same speed.
+                                      * Definitive: AK gap is commutation
+                                      * accuracy, not switching loss. AK
+                                      * needs the 60 kHz BEMF sample rate
+                                      * to keep timing accurate at peak. */
 #define LOOPTIME_MICROSEC   (uint16_t)(1000000UL / PWMFREQUENCY_HZ)  /* 50 us */
 
 /* [AK PORT — CRITICAL] PWM period equation on dsPIC33AK is NOT the simple
@@ -883,12 +890,12 @@
  * Phase 3 PTG calibration sweep (2026-05-13):
  *   10.0f  →  194k peak, pR=85% at top
  *    5.0f  →  190k peak, pR=77% at top  (worse acceptance, slightly slower)
- *    7.5f  →  ← current.  Bench-test as midpoint.
- *   12.5f  →  try if 7.5 also undershoots — going UP may recover top speed
+ *    7.5f  →  208k peak (was current)
+ *   12.5f  →  ← TESTING (2026-05-15) — unexplored upward direction
  * The PTG path has lower latency than ADC ISR, so the bias-portion of this
  * constant should drop — but empirically 5° hurts more than 10°, suggesting
  * this value is partly real torque advance, not pure latency compensation. */
-#define V4_PHASE_ADVANCE_DEG    7.5f
+#define V4_PHASE_ADVANCE_DEG    12.5f
 
 /* Board detector delay (µs). ATA6847 comparator propagation ~2 µs.
  * CK board has no RC filter on BEMF inputs (unlike Microchip MPPB
@@ -938,17 +945,20 @@
 #define V4_STARTUP_CURRENT_MA   3000.0f
 #define V4_ALIGN_DURATION_MS    100U
 #define V4_MIN_AMPLITUDE_PROFILE 5000U     /* 15.3% — proven on 2810 @ 25V */
-#define V4_BLOCK_ENTER_ERPM     100000UL   /* 2810 @ 25V — engage earlier than the
-                                            * original 150k. Block-comm = solid-ON
-                                            * HS-FET, no PWM chopping → less
-                                            * switching loss in the 100-150k climb
-                                            * zone where the motor was previously
-                                            * fighting PWM modulation. CK 228k
-                                            * milestone implicitly relied on early
-                                            * block-comm; AK was tuned conservatively. */
-#define V4_BLOCK_EXIT_ERPM       80000UL   /* 0.8× enter; gives wide hysteresis so
-                                            * brief BEMF wall dips don't drop out
-                                            * of block-comm under prop load. */
+#define V4_BLOCK_ENTER_ERPM     150000UL   /* 2810 @ 25V — matches CK GitHub
+                                            * baseline (CK peaks 235k with this
+                                            * threshold). 2026-05-15 reverted
+                                            * from AK-specific 100k after the
+                                            * PTG postscale experiment ruled out
+                                            * sample rate as the gap source.
+                                            * Testing whether the climb path
+                                            * (PWM modulation up to 150k vs to
+                                            * 100k on AK) accounts for the 9k
+                                            * gap to CK. */
+#define V4_BLOCK_EXIT_ERPM      130000UL   /* CK-matched hysteresis (~0.87×).
+                                            * Narrower than AK's old 80k; the
+                                            * wide-hysteresis rationale was
+                                            * untested at 150k entry. */
 #elif MOTOR_PROFILE == 3  /* HiZ1460 — Rs caps current at 1.87A */
 #define V4_STARTUP_SPEED_ERPM   500UL
 #define V4_STARTUP_CURRENT_MA   1500.0f
@@ -1165,6 +1175,30 @@
 #define FEATURE_PER_SECTOR_PTG     1
 #endif
 
+/* PTG ISR postscaler (2026-05-15 CK-rate experiment).
+ * AK currently runs PTG at 60 kHz (every PWM cycle) while CK runs its
+ * ADC ISR at ~15-20 kHz via PG1EVTL.ADTR1PS=0b00011 (1:4). CK peaks
+ * 235k eRPM with that low rate; AK peaks 226k with 3-4x more data.
+ * Hypothesis: extra samples either feed noise into the PI integrator,
+ * or shift the elapsed-to-match distribution in a way the advance
+ * constant can't fully absorb.
+ *
+ * N=1: every fire processed (current 60 kHz behaviour)
+ * N=3: 1-in-3 fires processed → 20 kHz BEMF (closest to CK's
+ *      source-comment claim)
+ * N=4: 1-in-4 fires processed → 15 kHz BEMF (matches CK's actual
+ *      postscaler math)
+ *
+ * Skipped ISR fires still execute the PG1TRIGB write so the trigger
+ * stays armed — only V4_ProcessBemfSample() is gated. v5_ptgSkipped
+ * counts gated fires for telemetry. */
+#ifndef PTG_POSTSCALE_N
+#define PTG_POSTSCALE_N            1U   /* 2026-05-15: tested N=3 (20kHz)
+                                          * → peak 172k vs 226k baseline.
+                                          * Lower rate actively hurts AK.
+                                          * Restored to 1 (60kHz). */
+#endif
+
 /* Spin-loop iteration count to delay ~half a PWM period.
  * FCY=200MHz (5 ns/cycle). Volatile-counter loop ~6 cyc/iter on XC-DSC.
  * 60kHz PWM half-period = 8.33µs = 1666 cycles / 6 ≈ 278 iter. */
@@ -1216,20 +1250,15 @@
 #endif
 
 #ifndef FEATURE_V5_POST_ZC_OWN
-#define FEATURE_V5_POST_ZC_OWN     0   /* AK uses legacy V4 PRE-ZC detection.
-                                        * OWN edge gate doesn't behave like
-                                        * CK on AK rising sectors: 2026-05-12
-                                        * bench tests showed rising captures
-                                        * stay ~40% even with the CK-matched
-                                        * 8-Nop deglitch window; stall counter
-                                        * runs away within 300 ms. Root cause
-                                        * not yet isolated but appears to be
-                                        * BEMF physics specific to AK hardware
-                                        * (idle-bias asymmetry, PWM 2-cycle
-                                        * structure, or comparator response)
-                                        * rather than the deglitch timing.
-                                        * Legacy V4 PRE-ZC + piFeedPolarity=1
-                                        * + weighted stall is the proven path. */
+#define FEATURE_V5_POST_ZC_OWN     0   /* 2026-05-14 reverted to V4 PRE-ZC after
+                                        * git diff revealed local CK V5_OWN
+                                        * changes are EXPERIMENTAL (commented
+                                        * "Verify high-speed baseline isn't
+                                        * regressed before declaring stable").
+                                        * GitHub CK working at 235k uses
+                                        * V5_POST_ZC_OWN=0 (V4 PRE-ZC). AK V5
+                                        * without edge gate causes cR cascade.
+                                        * Stay on legacy V4 path here too. */
 #endif
 
 #if FEATURE_V5_POST_ZC_OWN && !FEATURE_V5_POST_ZC_ACCEPT

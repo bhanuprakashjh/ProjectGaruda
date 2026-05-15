@@ -370,6 +370,25 @@ volatile uint32_t v4_adcAlreadySet   = 0;  /* skipped — already true    */
  * that one polarity class (rising vs falling) misses every time. */
 volatile uint32_t v4_adcSetRising    = 0;
 
+/* 2026-05-14 capture-layer probe: tally what the PTG sample finds at the
+ * mid-ON instant, binned by sector polarity. Used to decide if
+ * rising-sector misses are a *physics asymmetry* (comp stuck in pre-state
+ * at the sample point — no transition ever observed) or a *software*
+ * problem (comp shows post-state but accept logic discards it).
+ *
+ * On the inverted ATA6847:
+ *   rising-BEMF sector: pre-ZC comp=1, post-ZC comp=0
+ *   falling-BEMF sector: pre-ZC comp=0, post-ZC comp=1
+ *
+ * Healthy capture requires comp == post-ZC by the time we sample. If
+ * compRising_High >> compRising_Low across the run, the rising-sector
+ * BEMF isn't reaching the (mid-ON-shifted) virtual neutral and the
+ * capture layer can never see the transition. */
+volatile uint32_t v4_compRising_High  = 0;  /* rising sector,  comp=1 (pre-ZC state)  */
+volatile uint32_t v4_compRising_Low   = 0;  /* rising sector,  comp=0 (post-ZC state) */
+volatile uint32_t v4_compFalling_High = 0;  /* falling sector, comp=1 (post-ZC state) */
+volatile uint32_t v4_compFalling_Low  = 0;  /* falling sector, comp=0 (pre-ZC state)  */
+
 /* SCCP1 off-mid falling ZC diagnostic (fires at PWM peak) */
 volatile uint32_t v4_offMidCapture   = 0;
 volatile uint32_t v4_offMidMismatch  = 0;
@@ -539,6 +558,24 @@ void V4_ProcessBemfSample(void)
 
                 bool isRising = HAL_Capture_IsRisingZc();
 
+                /* Capture-layer probe (2026-05-14): tally comp value per
+                 * sector polarity, past blanking. Runs in BOTH detection
+                 * paths (V4 PRE-ZC and V5 POST_ZC_OWN) so the same probe
+                 * can compare what mid-OFF vs mid-ON sees regardless of
+                 * which accept logic is active. Uses v5_ptgExpectedComp
+                 * (reliable per-sector flag) not isRising (stuck-true). */
+                {
+                    extern volatile uint8_t v5_ptgExpectedComp;
+                    bool sectorRising_probe = (v5_ptgExpectedComp == 0u);
+                    if (sectorRising_probe) {
+                        if (comp) v4_compRising_High++;
+                        else      v4_compRising_Low++;
+                    } else {
+                        if (comp) v4_compFalling_High++;
+                        else      v4_compFalling_Low++;
+                    }
+                }
+
 #if FEATURE_V5_POST_ZC_ACCEPT
                 /* V5.1 shadow: count what post-ZC accept logic would do.
                  * Reads v5_ptgExpectedComp (written by Commutate) instead
@@ -580,6 +617,14 @@ void V4_ProcessBemfSample(void)
                  * caught one polarity and fed the PI bimodal capValues
                  * (one cluster = real ZC at ~50% T, other = first
                  * post-blanking sample where pre-ZC state still held). */
+                /* 2026-05-14 reverted to edge-gated form. CK-aligned version
+                 * (no edge gate, no piFeedPolarity) caused cR cascade on AK
+                 * — accepted-first-match-of-expectedPost is a positive-
+                 * feedback loop at CL entry on AK hardware (idle bias
+                 * matches expectedPost every PTG fire). The v5_sawPreZc
+                 * gate is an AK-specific cascade protection. CK GitHub
+                 * baseline uses V5_OWN=0 anyway, so V5_OWN=1 on AK is
+                 * untested even in concept. */
                 {
                     extern volatile uint8_t v5_ptgExpectedComp;
                     extern volatile uint8_t v5_sawPreZc;
@@ -622,6 +667,7 @@ void V4_ProcessBemfSample(void)
                  * and is independent of which sector flag we trust. */
                 extern volatile uint8_t v5_ptgExpectedComp;
                 bool sectorRising_v5 = (v5_ptgExpectedComp == 0u);
+
                 uint8_t expected = isRising ? 1 : 0;
                 if (comp != expected)
                 {

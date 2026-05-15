@@ -200,6 +200,35 @@ volatile int16_t  diagDelta;
 /* Commutate ISR: capValue == SENTINEL (no valid capture this sector) */
 volatile uint32_t diagCommutateNoCapture;
 
+/* 2026-05-14 instrumentation: per-polarity PI feed accounting.
+ * Counted at the actual PI-feed point (after plausibility filter) so we
+ * can see which sector type is actually contributing measurements vs
+ * falling through to scheduler-only commutation. */
+volatile uint32_t diagPiFedRising   = 0;
+volatile uint32_t diagPiFedFalling  = 0;
+volatile uint32_t diagPiMissRising  = 0;  /* sector was rising, no PI feed */
+volatile uint32_t diagPiMissFalling = 0;  /* sector was falling, no PI feed */
+
+/* 2026-05-14 mechanism probe: per-polarity elapsed-snapshot. Snapshot the
+ * last elapsed value and the contemporaneous filterHR at the accept point
+ * AND the reject point, separately for rising and falling sectors. With
+ * Phase 2 locked (cR≈208 frozen, cF≈309k growing), this tells us *why*
+ * rising is being filtered:
+ *   - If diagElapsedRejectRising ≈ diagFilterHRLast + small  → drift past
+ *     window (rotor sector slightly longer than truth-based filterHR)
+ *   - If diagElapsedRejectRising near 65535 / huge            → capture is
+ *     stale (from prior sector, didn't get cleared)
+ *   - If diagElapsedRejectRising ≈ 0..tiny                    → capture
+ *     fired right at the commutate boundary, before this sector's BEMF
+ * Pair-comparison with diagElapsedAcceptFalling answers: is the accepted
+ * polarity's elapsed structurally smaller (within filter) while rejected
+ * polarity's is structurally larger (past filter)? */
+volatile uint16_t diagElapsedAcceptRising  = 0;
+volatile uint16_t diagElapsedAcceptFalling = 0;
+volatile uint16_t diagElapsedRejectRising  = 0;
+volatile uint16_t diagElapsedRejectFalling = 0;
+volatile uint16_t diagFilterHRLast         = 0;
+
 /* Corridor good-streak: PI only runs after 12 consecutive
  * sectors with a valid corridor capture. */
 #define CORRIDOR_GOOD_THRESHOLD  12
@@ -752,6 +781,11 @@ void SectorPI_Commutate(void)
     }
     uint16_t capValue = CAP_SENTINEL;
 
+    /* Per-polarity PI-feed accounting (2026-05-14):
+     * position holds the JUST-CONSUMED sector index (incremented AFTER
+     * this block). Even positions = rising-BEMF sectors, odd = falling. */
+    bool sectorWasRising = ((position & 1u) == 0u);
+
     if (v4_captureValid)
     {
         uint16_t elapsed = (uint16_t)(v4_lastCaptureHR - prevCommHR);
@@ -763,20 +797,27 @@ void SectorPI_Commutate(void)
          * actualStepPeriodHR isn't initialized yet. */
         uint16_t filterHR = (actualStepPeriodHR >= V4_MIN_PERIOD)
                             ? actualStepPeriodHR : timerPeriod;
+        diagFilterHRLast = filterHR;
         if (elapsed < filterHR)
         {
             capValue = elapsed;
             diagCaptures++;
+            if (sectorWasRising) { diagPiFedRising++;  diagElapsedAcceptRising  = elapsed; }
+            else                 { diagPiFedFalling++; diagElapsedAcceptFalling = elapsed; }
         }
         else
         {
             diagCommutateNoCapture++;  /* capture present but past filter */
+            if (sectorWasRising) { diagPiMissRising++;  diagElapsedRejectRising  = elapsed; }
+            else                 { diagPiMissFalling++; diagElapsedRejectFalling = elapsed; }
         }
         v4_captureValid = false;
     }
     else
     {
         diagCommutateNoCapture++;      /* no capture at all this sector */
+        if (sectorWasRising) diagPiMissRising++;
+        else                 diagPiMissFalling++;
     }
     /* Re-arm the V5_POST_ZC_OWN edge-detection gate. The ADC ISR can
      * only accept on a pre→post transition; this clears the per-sector

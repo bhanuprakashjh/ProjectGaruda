@@ -52,12 +52,17 @@ void V4Params_InitDefaults(void)
                                                 * v5_sawPreZc edge gate in
                                                 * the V5_POST_ZC_OWN path
                                                 * (see garuda_service.c). */
-    v4Params.piFeedPolarity     = 1;           /* Matches CK default. With FEATURE_V5_POST_ZC_OWN=1,
-                                                * this field is unused — the OWN path fills
-                                                * v4_captureValid for both polarities unconditionally.
-                                                * Kept at 1 for consistency with CK baseline and so
-                                                * that disabling OWN (legacy V4) still gives the
-                                                * proven rising-only behavior. */
+    v4Params.piFeedPolarity     = 0;           /* 2026-05-14 diagnostic run: feed BOTH polarities.
+                                                * With OWN=0 (legacy V4 PRE-ZC), this routes both
+                                                * rising and falling captures through to the PI
+                                                * via the `default: feedPi = true` branch in
+                                                * garuda_service.c. The new diagPiFed{Rising,
+                                                * Falling}/Miss{Rising,Falling} counters in the
+                                                * snapshot will tell us per-polarity which sectors
+                                                * actually reach the PI through the plausibility
+                                                * filter. cR=44k/cF=3417 frozen at 1 proved Phase
+                                                * 1 (piFeedPolarity=1) was structurally
+                                                * rising-only-fed — 3 captures/cycle vs CK's 6. */
     v4Params.minPeriodHr        = V4_MIN_PERIOD;
 
     V4Params_RecomputeDerived();

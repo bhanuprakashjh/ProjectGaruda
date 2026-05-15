@@ -44,6 +44,10 @@ extern volatile uint32_t v5_ptgRisingRej;
 extern volatile uint32_t v5_ptgFallingAcc;
 extern volatile uint32_t v5_ptgFallingRej;
 
+/* PTG postscaler skipped-fire count — gated fires that bypass
+ * V4_ProcessBemfSample() (see PTG_POSTSCALE_N in garuda_config.h). */
+extern volatile uint32_t v5_ptgSkipped;
+
 void HAL_PTG_Init(void);
 void HAL_PTG_Start(void);
 void HAL_PTG_Stop(void);

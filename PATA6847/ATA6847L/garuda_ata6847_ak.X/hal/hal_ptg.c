@@ -36,6 +36,7 @@ volatile uint32_t v5_ptgRisingAcc  = 0;
 volatile uint32_t v5_ptgRisingRej  = 0;
 volatile uint32_t v5_ptgFallingAcc = 0;
 volatile uint32_t v5_ptgFallingRej = 0;
+volatile uint32_t v5_ptgSkipped    = 0;
 
 /* Per-sector expected post-ZC comparator state — written by Commutate
  * in sector_pi.c when V5_POST_ZC_ACCEPT is enabled.  Read by Phase 2
@@ -159,6 +160,16 @@ void __attribute__((interrupt, no_auto_psv)) _PTG0Interrupt(void)
     _PTG0IF = 0;
     v5_ptgFires++;
 #if FEATURE_BEMF_VIA_PTG && FEATURE_V4_MIDPOINT_ZC == 1
+  #if PTG_POSTSCALE_N > 1U
+    /* CK-rate experiment: process 1 of every PTG_POSTSCALE_N fires. */
+    static uint8_t postscaler = 0;
+    if (++postscaler < PTG_POSTSCALE_N) {
+        v5_ptgSkipped++;
+        PG1TRIGB = PTG_TRIG_MID_ON_POS;   /* keep next fire armed at MID-ON */
+        return;
+    }
+    postscaler = 0;
+  #endif
   #if FEATURE_DUAL_POS_PROBE
     if (v5_sampleAtMidOn) {
         /* This fire was at MID-ON — diagnostic only, no PI feed. */
