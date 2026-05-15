@@ -510,17 +510,87 @@ void __attribute__((interrupt, auto_psv)) _AD1CH4Interrupt(void)
 }
 
 #if FEATURE_V4_MIDPOINT_ZC == 1
-/* ── V4 BEMF detection — one PWM mid-OFF sample worth of work ─────
- * Extracted from the ADC ISR so the PTG ISR can call the same logic
- * when FEATURE_BEMF_VIA_PTG=1.  Identical body — only the trigger
- * source (ADC scan complete vs PTG step IRQ) changes.
+#if FEATURE_V4_PTG_RESCHEDULE
+/* ── V4_NextTargetHR — capture-anchored next-Commutate target ──────
  *
- * Counters retain their `v4_adc*` names for diagnostic continuity;
- * they reflect "BEMF sample" outcomes, not anything specific to the
- * ADC peripheral.
+ * What it does:
+ *   Given a fresh capture timestamp (in SCCP4 HR-tick domain) and the
+ *   PI's current sector-period estimate, compute the HR time at which
+ *   the next Commutate should fire to land the PWM step at the correct
+ *   electrical advance relative to the rotor's physical ZC.
  *
- * NOT marked inline: called from two ISRs, both in different .o
- * files (garuda_service.c and hal_ptg.c).  Out-of-line is correct. */
+ * The formula:
+ *     halfHR  = T/2                    // half a sector
+ *     tal     = speed-banded multiplier (2..5)
+ *     advHR   = (T/8) * tal             // advance in HR ticks
+ *     delayHR = max(halfHR - advHR, 2)  // time from capture to target
+ *     target  = captureHR + delayHR
+ *
+ * The 2-tick clamp engages above ~156 k eRPM when advHR > T/2 — at
+ * that point we fire essentially immediately after the capture. This
+ * is part of the 2T:ε pacing the legacy V4 scheduler relies on; see
+ * docs/v4_ak_port_scheduler.md §7.
+ *
+ * Two callers must agree on this formula:
+ *   1. PTG ISR (this file, V4_ProcessBemfSample) — pulls CCP3 forward
+ *      the instant a capture is accepted, so CCP3 fires at the
+ *      capture-anchored target instead of the previously-armed
+ *      fallback. ONLY when FEATURE_V4_PTG_RESCHEDULE=1.
+ *   2. SectorPI_Commutate tail (sector_pi.c ~line 1094-1116) — when
+ *      consuming the capture, computes the same target.
+ *
+ * Lifted into an inline so the two callers can never drift. */
+static inline uint16_t V4_NextTargetHR(uint16_t captureHR,
+                                       uint16_t schedPeriod)
+{
+    uint16_t halfHR = (uint16_t)(schedPeriod >> 1);
+    uint16_t tal    = (schedPeriod >= 260U) ? 2U   /* ≤60 k eRPM  → 15.0° */
+                    : (schedPeriod >= 130U) ? 3U   /* 60-120 k    → 22.5° */
+                    : (schedPeriod >= 100U) ? 4U   /* 120-156 k   → 30.0° */
+                    :                         5U;  /* >156 k      → 37.5° */
+    uint16_t advHR   = (uint16_t)((schedPeriod >> 3) * tal);
+    uint16_t delayHR = (halfHR > advHR) ? (uint16_t)(halfHR - advHR) : 2U;
+    return (uint16_t)(captureHR + delayHR);
+}
+
+/* Diagnostic counter — incremented every PTG fire that called
+ * HAL_ComTimer_ScheduleAbsolute via the reschedule path. Useful to
+ * confirm at the bench that the feature is actually engaged. */
+volatile uint32_t v4_ptgRescheduleCount = 0;
+#endif /* FEATURE_V4_PTG_RESCHEDULE */
+
+/* ── V4_ProcessBemfSample — runs once per PTG fire, decides ZC ─────
+ *
+ * Called from _PTG0Interrupt (hal_ptg.c) when FEATURE_BEMF_VIA_PTG=1.
+ * Historically also called from the ADC ISR — hence the `v4_adc*`
+ * counter names. Active path is PTG.
+ *
+ * Decision flow:
+ *   Gate 1: motor must be in CL  → else return.
+ *   Gate 2: v4_captureValid already set this sector? → just bump
+ *           v4_adcAlreadySet and return (one accepted ZC per sector).
+ *   Gate 3: are we past v4_blankingEndHR? → else v4_adcBlankReject++.
+ *           Blanking rejects the post-Commutate ringing window.
+ *   Probe: tally per-(sector,phase) comp=1 counts in v4_bemfTally[].
+ *          Tally is reset on each telemetry snapshot send so the
+ *          ratios are a fresh ~50 ms window.
+ *   Deglitch: read the comparator 3 times with NOPs between (~400 ns
+ *             total). Majority vote rejects single-sample bounces.
+ *   Polarity gate: compare `comp` to `expected`. Expected is currently
+ *                  hard-coded to 0 (catches comp=0 events). Sectors
+ *                  matching → set captureValid + lastCaptureHR. Other
+ *                  polarity → just count v4_adcStateMismatch.
+ *   Optional reschedule (FEATURE_V4_PTG_RESCHEDULE): pull CCP3
+ *                 forward to fire at captureHR+delayHR. OFF by default
+ *                 on this branch — see config.h comment.
+ *
+ * The two key globals it writes:
+ *   v4_captureValid — "there's a fresh capture waiting" flag.
+ *                     Consumed by SectorPI_Commutate.
+ *   v4_lastCaptureHR — timestamp of that capture, in SCCP4 domain.
+ *
+ * NOT marked inline: called from two ISRs in different .o files.
+ * Out-of-line is correct. */
 void V4_ProcessBemfSample(void)
 {
     /* Same scaffold the ADC ISR used to host directly.  Original
@@ -683,6 +753,13 @@ void V4_ProcessBemfSample(void)
                         {
                             v4_lastCaptureHR = nowHR;
                             v4_captureValid  = true;
+#if FEATURE_V4_PTG_RESCHEDULE
+                            if (v4_timerPeriod >= V4_MIN_PERIOD) {
+                                HAL_ComTimer_ScheduleAbsolute(
+                                    V4_NextTargetHR(nowHR, v4_timerPeriod));
+                                v4_ptgRescheduleCount++;
+                            }
+#endif
                         }
                         v5_sawPreZc = 0u;
                     }
@@ -732,8 +809,38 @@ void V4_ProcessBemfSample(void)
                     }
                     if (feedPi)
                     {
+                        /* Publish the capture for Commutate to consume.
+                         * nowHR is the SCCP4 free-running tick at the
+                         * moment the deglitch sample passed. */
                         v4_lastCaptureHR = nowHR;
                         v4_captureValid = true;
+#if FEATURE_V4_PTG_RESCHEDULE
+                        /* Experimental (default OFF) — reschedule CCP3
+                         * from this PTG fire so the next Commutate
+                         * lands at the capture-anchored target instead
+                         * of waiting for the previously-armed fallback.
+                         *
+                         * Architecturally correct: kills the 2T:ε
+                         * ASAP-pair, gives 1:1 sector-to-Commutate
+                         * mapping, both polarities feed PI.
+                         *
+                         * Practically broken: V4 PI was tuned to the
+                         * 2T:ε scale; with 1:1 the measured period
+                         * doubles, PI sees a 2× speedup, slams
+                         * timerPeriod down by half, motor desyncs.
+                         * See docs/v4_ak_port_scheduler.md §7 and
+                         * memory/ak_v4_ptg_reschedule_2026_05_15.md.
+                         *
+                         * Floor at V4_MIN_PERIOD: skip the reschedule
+                         * during very first commutations of CL when
+                         * timerPeriod hasn't been seeded yet. The
+                         * pre-armed fallback fires safely. */
+                        if (v4_timerPeriod >= V4_MIN_PERIOD) {
+                            HAL_ComTimer_ScheduleAbsolute(
+                                V4_NextTargetHR(nowHR, v4_timerPeriod));
+                            v4_ptgRescheduleCount++;
+                        }
+#endif
                     }
                 }
 #endif

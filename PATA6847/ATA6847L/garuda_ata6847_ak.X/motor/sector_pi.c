@@ -871,25 +871,57 @@ void SectorPI_Commutate(void)
         HAL_PWM_SetSPFlag(v4_spActive);
     }
 
-    /* 3. Advance to next commutation step */
+    /* 3. Advance to next commutation step.
+     *
+     * THE PAIRING INVARIANT: the three per-sector globals
+     *   v4_currentSector  — software sector index 0..5
+     *   v4_floatingPhase  — which BEMF GPIO PTG should read (0=A 1=B 2=C)
+     *   v5_ptgExpectedComp — post-ZC comp state (0=rising, 1=falling sector)
+     * MUST be written back-to-back, in this same block. Reason:
+     *
+     * Commutate runs at IPL 6, PTG runs at IPL 5. PTG cannot preempt
+     * Commutate. BUT — Commutate can preempt PTG mid-flight. The PTG
+     * ISR reads these globals across several statements (probe → tally
+     * → deglitch → comp classification). If Commutate's writes were
+     * spread across many statements (as they were before 2026-05-15),
+     * PTG could see a mid-update snapshot:
+     *
+     *      PTG reads v4_currentSector (= old sector, e.g. 1=falling)
+     *      Commutate preempts and updates all three globals to N=2 (rising)
+     *      PTG resumes, reads v5_ptgExpectedComp (= NEW sector's parity, 0=rising)
+     *      → tally bins this sample as "sector 1 falling, expected rising"
+     *        which is incoherent
+     *
+     * Before this fix, the three writes lived ~60-100 lines apart.
+     * Bench observation: fpStale = 7%, and cR (rising-sector captures)
+     * stayed at 0 forever because stale v5_ptgExpectedComp from the
+     * previous (falling) sector misbinned rising captures as falling.
+     *
+     * After this fix: fpStale = ~4% (residual probe-side race that
+     * doesn't affect the deglitch later in the PTG ISR), and cR climbs
+     * during the first few CL frames before 2T:ε pacing locks in.
+     *
+     * If you add a new per-sector global that BOTH Commutate writes
+     * AND PTG reads, write it inside this same block. */
     position++;
     if (position > 5) position = 0;
     v4_sectorHits[position]++;
-    /* Pair v4_floatingPhase, v5_ptgExpectedComp with v4_currentSector
-     * inside the same statement block so any later ISR sees a coherent
-     * (sector, floatPhase, expectedComp) snapshot. Pre-2026-05-15c each
-     * one lived in a different place inside Commutate (~60-100 lines
-     * apart) — fpStale probe showed 7 % staleness, and rising captures
-     * (cR) stayed at 0 because stale v5_ptgExpectedComp from the prev
-     * sector's parity miscategorised rising-sector ZCs as falling →
-     * adcSetRising never incremented. */
     {
         extern volatile uint8_t v4_floatingPhase;
 #if FEATURE_V5_PTG_ZC || FEATURE_V5_POST_ZC_ACCEPT
         extern volatile uint8_t v5_ptgExpectedComp;
 #endif
+        /* Compute new values BEFORE writing any volatile global.
+         * If PTG preempts mid-compute we don't care — none of the
+         * globals have been updated yet, PTG sees the previous
+         * sector consistently. */
         uint8_t newFp       = commutationTable[position].floatingPhase;
         uint8_t newExpected = (uint8_t)(position & 1u);
+        /* Now publish all three. Compiler may reorder these three
+         * stores relative to each other (they're independent), which
+         * is fine — the only guarantee we need is that no other
+         * code runs in between, and that's guaranteed by being in
+         * the same ISR with PTG at lower priority. */
         v4_currentSector  = position;
         v4_floatingPhase  = newFp;
 #if FEATURE_V5_PTG_ZC || FEATURE_V5_POST_ZC_ACCEPT

@@ -1372,6 +1372,50 @@
 #error "FEATURE_V5_SCHEDULER builds on top of V4 scaffolding — keep V4 flag on"
 #endif
 
+/* FEATURE_V4_PTG_RESCHEDULE (2026-05-15) ─────────────────────────
+ * V4 scheduler 2T:ε pacing fix.
+ *
+ * Baseline V4 path: Commutate schedules the next CCP3 fire one
+ * full sector ahead (fallback). The PTG ISR sets v4_captureValid
+ * mid-sector but does NOT touch CCP3. By the time CCP3 fires,
+ * the capture-derived target (lastCapture + delayHR) is in the
+ * past, so HAL_ComTimer_ScheduleAbsolute takes its ASAP branch
+ * and fires CCT3IF immediately → position advances twice in ε
+ * wallclock. Result: measuredCommPeriod reads 2× the true sector
+ * period, and only every-other rising sector ever has an
+ * observation window (s2 sees post-ZC, s4 sees pre-ZC).
+ *
+ * Fix: at the moment PTG accepts a capture and sets
+ * v4_captureValid=true, immediately reschedule CCP3 for
+ * (captureHR + delayHR). The previously-armed fallback is
+ * replaced atomically by HAL_ComTimer_ScheduleAbsolute. CCP3
+ * then fires once at the correct moment — one Commutate per
+ * physical sector, no ASAP pair.
+ *
+ * Tradeoff: the OLD 2T:ε pattern produced ~T/2 of extra
+ * effective advance (software stayed one full sector ahead of
+ * rotor). 1:1 only stays T/2 ahead. Expect peak eRPM to regress
+ * from the 225 k baseline until the TAL bands are retuned with
+ * higher advance at the top end.
+ *
+ * Off by default until bench validation. 2026-05-15. */
+#ifndef FEATURE_V4_PTG_RESCHEDULE
+#define FEATURE_V4_PTG_RESCHEDULE  0   /* Bench 2026-05-15: experimental
+                                        * 1:1 scheduler works — rising
+                                        * captures flow (cR=7619 vs 4) —
+                                        * but PI cannot hold lock with
+                                        * the doubled measuredCommPeriod
+                                        * scale. Motor desyncs immediately
+                                        * at CL entry on bare 2810 @ 24V,
+                                        * recovers on a second attempt
+                                        * but caps at 109 k vs 225 k
+                                        * baseline. Reverted pending a
+                                        * PI retune or a measuredComm-
+                                        * Period compensator. Code path
+                                        * + helper kept compiled-but-off
+                                        * so the bisect stays clean. */
+#endif
+
 /* Default PTGT0LIM values. [AK PORT] At FCY=200 MHz with PTGDIV=0,
  * 1 PTG tick = 5 ns (was 10 ns on CK).
  * LOOPTIME_TCY is in PWM counter ticks (5 ns each on this CK device —
