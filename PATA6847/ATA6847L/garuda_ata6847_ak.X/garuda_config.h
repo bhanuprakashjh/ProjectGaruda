@@ -1150,6 +1150,30 @@
 #define PTG_TRIG_MID_OFF_POS       1U
 #define PTG_TRIG_MID_ON_POS        (LOOPTIME_TCY - 1U)
 
+/* Duty-adaptive sample position (2026-05-15):
+ * In center-aligned PWM, the OFF window width is (1-duty)*period and the
+ * ON window is duty*period. The two are equal at duty=50%; below that the
+ * OFF window is wider, above it the ON window is wider. Sample in
+ * whichever is wider so the read point stays maximally far from the
+ * switching edges and the 3-read deglitch doesn't straddle a transition.
+ *
+ * Bench evidence (2026-05-15 MID-OFF run):
+ *   - Low-speed currents at MID-OFF were ~5A vs ~12A at MID-ON (idle).
+ *   - pR/pF balance ~40/60 at MID-OFF vs 0-1/99 at MID-ON.
+ *   - Above ~80% duty, MID-OFF desyncs (OFF window <20% of cycle, sample
+ *     lands too near switching edge).
+ *
+ * 50% threshold with small hysteresis (avoid chatter at the boundary). */
+#ifndef PTG_DUTY_ADAPT_THRESHOLD_PCT
+#define PTG_DUTY_ADAPT_THRESHOLD_PCT   50U
+#endif
+#define PTG_DUTY_ADAPT_THRESHOLD \
+    ((uint16_t)(((uint32_t)LOOPTIME_TCY * PTG_DUTY_ADAPT_THRESHOLD_PCT) / 100U))
+/* Hysteresis: ±5% around threshold to avoid sample-position chatter when
+ * commanded duty hovers at exactly 50% (PI hunting in the boundary band). */
+#define PTG_DUTY_ADAPT_HYST \
+    ((uint16_t)(((uint32_t)LOOPTIME_TCY * 5U) / 100U))
+
 /* Phase 1 — Per-sector PTG trigger position (2026-05-13).
  * B2 result: mid-OFF works for rising sectors (pR=95%); mid-ON has real
  * signal for falling sectors (pF=47% raw, expected ~85% after blanking).

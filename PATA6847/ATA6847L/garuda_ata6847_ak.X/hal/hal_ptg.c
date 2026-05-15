@@ -183,27 +183,49 @@ void __attribute__((interrupt, no_auto_psv)) _PTG0Interrupt(void)
         v5_sampleAtMidOn = 1;
     }
   #elif FEATURE_PER_SECTOR_PTG
-    /* PER_SECTOR_PTG: sample ALL sectors at mid-ON.
+    /* 2026-05-15 — duty-adaptive sample position.
      *
-     * The "true" per-sector approach (mid-OFF for rising, mid-ON for
-     * falling) was tested 2026-05-14 in multiple variants:
-     *   - whole-register conditional ternary: pF=0%
-     *   - bitfield .TRIGB write: pF=0%
-     *   - with/without UPDREQ, write before/after V4_ProcessBemfSample
-     * All variants gave pF=0% (no falling-sector mid-ON sampling).
-     * Root cause unidentified — likely a buffer/timing interaction in
-     * the PG module that requires datasheet-level investigation.
+     * Center-aligned PWM: OFF window is (1-duty)·period wide, ON window
+     * is duty·period. Below 50% duty the OFF window is wider → MID-OFF
+     * is the cleanest spot, max distance from switching edges. Above
+     * 50% the ON window is wider → MID-ON is the cleanest spot.
      *
-     * The UNCONDITIONAL mid-ON write was proven to work:
-     *   pR=94% (rising at mid-ON past blanking — settled post-ZC state)
-     *   pF=53% (falling at mid-ON past blanking — clean signal)
-     * Both polarities sample at the same position. Rising sectors lose
-     * the mid-OFF window but past blanking the comp is in post-ZC
-     * state either way → still 94% accept. Falling sectors gain real
-     * signal where mid-OFF gave 5%. Net: more PI feedback available
-     * for Phase 2 (piFeedPolarity=0). */
+     * Empirical evidence (this commit's MID-OFF-only run):
+     *   - Idle currents at MID-OFF were ~5A vs ~12A at MID-ON (2.4× drop).
+     *   - pR/pF balance ~40/60 at MID-OFF vs 0-1/99 at MID-ON.
+     *   - MID-OFF desyncs above ~80% duty (OFF window too narrow for
+     *     PTG ISR latency + 3-read deglitch to stay inside).
+     *
+     * Picking position per fire based on the active duty:
+     *   below threshold → MID-OFF (low-duty regime)
+     *   above threshold → MID-ON  (high-duty regime, BC vicinity)
+     * Hysteresis band (±5% around 50%) prevents chatter when the PI
+     * has the duty hunting across the boundary. */
     V4_ProcessBemfSample();
-    PG1TRIGB = PTG_TRIG_MID_ON_POS;
+    {
+        extern volatile uint16_t g_pwmActualDuty;
+        static uint8_t lastWasMidOn = 0;   /* sticky for hysteresis */
+        uint16_t duty = g_pwmActualDuty;
+        if (lastWasMidOn) {
+            /* currently MID-ON — drop to MID-OFF only when duty falls
+             * well below threshold (50% - hyst) */
+            if (duty < (PTG_DUTY_ADAPT_THRESHOLD - PTG_DUTY_ADAPT_HYST)) {
+                PG1TRIGB = PTG_TRIG_MID_OFF_POS;
+                lastWasMidOn = 0;
+            } else {
+                PG1TRIGB = PTG_TRIG_MID_ON_POS;
+            }
+        } else {
+            /* currently MID-OFF — climb to MID-ON only when duty rises
+             * well above threshold (50% + hyst) */
+            if (duty > (PTG_DUTY_ADAPT_THRESHOLD + PTG_DUTY_ADAPT_HYST)) {
+                PG1TRIGB = PTG_TRIG_MID_ON_POS;
+                lastWasMidOn = 1;
+            } else {
+                PG1TRIGB = PTG_TRIG_MID_OFF_POS;
+            }
+        }
+    }
   #else
     V4_ProcessBemfSample();
   #endif
