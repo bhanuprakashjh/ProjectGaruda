@@ -543,6 +543,38 @@ void V4_ProcessBemfSample(void)
             }
             else
             {
+                /* 2026-05-15 — multi-phase tally probe.  Read ALL three
+                 * BEMF GPIOs once and tally per-sector comp=1 counts per
+                 * phase.  This runs BEFORE the deglitch and capture
+                 * logic, costs ~10 cycles, and tells us whether the
+                 * floatingPhase mapping points at the actually-floating
+                 * pin in each sector. */
+                {
+                    extern volatile uint8_t  v4_currentSector;
+                    extern volatile uint16_t v4_bemfTally[6][3];
+                    extern volatile uint16_t v4_bemfTallyTotal[6];
+                    extern volatile uint16_t v4_fpStaleCount;
+                    uint8_t sect = v4_currentSector;
+                    if (sect < 6u) {
+                        uint8_t bA = BEMF_A_GetValue();
+                        uint8_t bB = BEMF_B_GetValue();
+                        uint8_t bC = BEMF_C_GetValue();
+                        v4_bemfTallyTotal[sect]++;
+                        if (bA) v4_bemfTally[sect][0]++;
+                        if (bB) v4_bemfTally[sect][1]++;
+                        if (bC) v4_bemfTally[sect][2]++;
+
+                        /* Stale-fp probe: does v4_floatingPhase match the
+                         * table's belief for v4_currentSector? Both are
+                         * written by SectorPI_Commutate but at different
+                         * statements — drift here means the deglitch
+                         * (which uses v4_floatingPhase) is reading the
+                         * wrong pin. */
+                        uint8_t fp_table = commutationTable[sect].floatingPhase;
+                        if (fp_table != v4_floatingPhase) v4_fpStaleCount++;
+                    }
+                }
+
                 /* 3-read deglitch: reject single-sample GPIO bounce /
                  * comparator chatter near threshold. Majority vote of
                  * 3 reads with short gaps (~400 ns total). Tested
@@ -668,7 +700,20 @@ void V4_ProcessBemfSample(void)
                 extern volatile uint8_t v5_ptgExpectedComp;
                 bool sectorRising_v5 = (v5_ptgExpectedComp == 0u);
 
-                uint8_t expected = isRising ? 1 : 0;
+                /* 2026-05-15 — falling-only PI feed.
+                 *
+                 * `expected = 0` means: accept comp=0.  On inverted ATA6847
+                 * this is PRE-ZC of falling (BEMF still above neutral).
+                 * Rising sectors stay at comp=1 (preR=100% across the whole
+                 * speed range, idle → 226k BC) so rising never reaches the
+                 * gate.  Net effect: PI is fed from falling-sector captures
+                 * only, at every speed.
+                 *
+                 * Bench (2026-05-15): high-speed current improved slightly
+                 * vs the prior legacy gate (`isRising ? 1 : 0`).  Idle is
+                 * a touch higher in current/speed.  Keeping this until a
+                 * fix for the rising-sector floating-phase asymmetry lands. */
+                uint8_t expected = 0;
                 if (comp != expected)
                 {
                     v4_adcStateMismatch++;
@@ -809,6 +854,35 @@ static inline uint8_t ReadBEMFComp(void)
 volatile uint16_t v4_blankingEndHR = 0;
 /* Expected ZC HR timestamp (center of corridor for SP CCP ISR) */
 volatile uint16_t v4_expectedZcHR = 0;
+
+/* 2026-05-15 — Multi-phase BEMF tally probe.
+ *
+ * In every post-blanking PTG fire, read ALL three BEMF GPIOs (A,B,C)
+ * and count comp=1 occurrences per (sector, phase). Plus total
+ * post-blanking fires per sector. Goal: definitively answer whether
+ * `preR=100%` (rising sectors never show comp=0 on the floating phase)
+ * is a phase-mapping bug or true motor/comparator physics.
+ *
+ * Reading: in sector S where code thinks phase P floats, the floating
+ * phase should show a TRANSITION — its comp=1 ratio should fall in
+ * (10..90)%. A ratio at 0% or 100% means we're reading a driven phase.
+ * If the driven phase happens to be the one our floatingPhase index
+ * points at, the phase-mapping is bugged. */
+volatile uint16_t v4_bemfTally[6][3]  = {{0}};   /* [sector][phase] count of comp=1 */
+volatile uint16_t v4_bemfTallyTotal[6] = {0};    /* per-sector post-blanking fires */
+
+/* 2026-05-15 — stale-floatingPhase diagnostic.
+ *
+ * Counts PTG ISR fires (past blanking) where v4_floatingPhase doesn't
+ * match commutationTable[v4_currentSector].floatingPhase. Should be 0
+ * in steady state because the Commutate ISR (priority 6) atomically
+ * sets both v4_currentSector and v4_floatingPhase, and PTG (priority
+ * 5) can't preempt it. Non-zero = a write to one of those globals is
+ * being missed, which would explain why the deglitched comp (via
+ * v4_floatingPhase) reports 100% comp=1 on rising sectors while the
+ * raw multi-phase tally (via direct pin reads) reports 99% comp=0.
+ * Reset by the snapshot send so each ~50 ms frame shows the delta. */
+volatile uint16_t v4_fpStaleCount = 0;
 /* (v4_adc* counters declared earlier — used by ADC ISR above) */
 
 #if FEATURE_V4_CCP_DIAG

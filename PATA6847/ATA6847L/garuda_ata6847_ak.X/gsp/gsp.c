@@ -26,7 +26,10 @@
 #define GSP_TX_RING_SIZE      256
 #define GSP_RX_RING_MASK      (GSP_RX_RING_SIZE - 1)
 #define GSP_TX_RING_MASK      (GSP_TX_RING_SIZE - 1)
-#define GSP_MAX_PAYLOAD_LEN   249
+#define GSP_MAX_PAYLOAD_LEN   251  /* 2026-05-15: bumped from 249 for the
+                                      * 250-byte multi-phase BEMF tally
+                                      * snapshot.  LEN field is uint8 so
+                                      * any value ≤ 254 fits the wire. */
 #define GSP_PARSER_TIMEOUT_MS 100
 #define GSP_MAX_CMDS_PER_SVC  1
 

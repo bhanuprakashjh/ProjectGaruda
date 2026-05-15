@@ -790,7 +790,7 @@ void GSP_TelemTick(void)
     V4_TELEM_T t;
     SectorPI_TelemGet(&t);
 
-    uint8_t snap[178]; /* 2-byte seq + 64-byte snapshot + 8-byte off-mid
+    uint8_t snap[250]; /* 2-byte seq + 64-byte snapshot + 8-byte off-mid
                         * + 4-byte V5 PTG fire counter
                         * + 16-byte V5 PTG per-polarity counters
                         * + 16-byte V5.1 ADC post-ZC shadow counters
@@ -799,7 +799,10 @@ void GSP_TelemTick(void)
                         * + 32-byte phase-current peak block (2026-04-21)
                         * + 10-byte elapsed-snapshot probe (2026-05-14, d[146..155])
                         * + 16-byte capture-layer comp tally (2026-05-14, d[156..171])
-                        * + 4-byte PTG postscale skip counter (2026-05-15, d[172..175]) */
+                        * + 4-byte PTG postscale skip counter (2026-05-15, d[172..175])
+                        * + 24-byte per-sector hit counters (2026-05-15, d[176..199])
+                        * + 12-byte per-sector total fires (2026-05-15, d[200..211])
+                        * + 36-byte per-sector × per-phase BEMF comp=1 tally (2026-05-15, d[212..247]) */
     memset(snap, 0, sizeof(snap));
 
     /* Seq counter (2 bytes) */
@@ -995,6 +998,48 @@ void GSP_TelemTick(void)
     {
         extern volatile uint32_t v5_ptgSkipped;
         memcpy(&d[172], &v5_ptgSkipped, 4);
+    }
+
+    /* Per-sector hit counters (2026-05-15). 6 × uint32 at d[176..199].
+     * Tells whether all 6 commutation positions actually fire. If
+     * hits[0]/[2]/[4] stay at 0 while [1]/[3]/[5] climb, position is
+     * incrementing by 2 somewhere and explains why cR=0 / pR=0%. */
+    {
+        extern volatile uint32_t v4_sectorHits[6];
+        memcpy(&d[176], (const void *)v4_sectorHits, 24);
+    }
+
+    /* Multi-phase BEMF tally (2026-05-15).
+     *   d[200..211]: v4_bemfTallyTotal[6]     (6 × uint16)
+     *   d[212..247]: v4_bemfTally[6][3]       (6 × 3 × uint16)
+     * Host computes ratio comp=1 / total per (sector, phase) to spot
+     * phase-mapping bugs.  Ratio at 0% or 100% on the supposed floating
+     * phase = bug; ratio in (10..90)% = actually floating.
+     *
+     * 2026-05-15 (b): reset these tallies after copying so each frame
+     * is a fresh delta over the ~50 ms inter-snapshot window. uint16
+     * wraps at 65 536 and at 60 kHz PWM we hit the wrap inside one
+     * sector's post-blanking window — without the reset, ratios are
+     * meaningless. With the reset, max samples per window are well
+     * inside uint16 range. */
+    {
+        extern volatile uint16_t v4_bemfTally[6][3];
+        extern volatile uint16_t v4_bemfTallyTotal[6];
+        memcpy(&d[200], (const void *)v4_bemfTallyTotal, 12);
+        memcpy(&d[212], (const void *)v4_bemfTally,      36);
+        memset((void *)v4_bemfTallyTotal, 0, sizeof(v4_bemfTallyTotal));
+        memset((void *)v4_bemfTally,      0, sizeof(v4_bemfTally));
+    }
+
+    /* Stale-floatingPhase diagnostic (2026-05-15b). uint16 at d[248..249].
+     * Per-window count of PTG fires (past blanking) where v4_floatingPhase
+     * disagreed with commutationTable[v4_currentSector].floatingPhase.
+     * Resolves the contradiction between the multi-phase tally and the
+     * deglitched comp (preR≈100%). Reset alongside the tally. */
+    {
+        extern volatile uint16_t v4_fpStaleCount;
+        memcpy(&d[248], (const void *)&v4_fpStaleCount, 2);
+        v4_fpStaleCount = 0;
     }
 
     /* Reset rolling peaks for next 20 ms window. Seed with current

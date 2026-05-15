@@ -67,6 +67,18 @@ static volatile bool       running;
 static volatile uint16_t   statusEvents;
 static volatile uint32_t   sectorCount;
 
+/* Per-sector hit counter — written from BOTH Commutate paths to tell
+ * whether all 6 positions actually fire. Diagnostic for "snapshot only
+ * shows odd sectors" anomaly: if hits[0,2,4] stay at 0 while [1,3,5]
+ * climb, position is incrementing by 2 somewhere and rising-sector
+ * BEMF detection literally never runs. Exposed via GSP snapshot tail. */
+volatile uint32_t v4_sectorHits[6] = {0,0,0,0,0,0};
+
+/* Per-sector current position mirror — written from both Commutate paths
+ * to give the PTG/V4_ProcessBemfSample probe a sector index without
+ * exposing the static `position`. Read-only outside sector_pi.c. */
+volatile uint8_t v4_currentSector = 0;
+
 /* ── OL ramp state (Timer1 driven, matches V3 startup.c) ───────── */
 static volatile uint16_t   alignCounter;
 static volatile uint16_t   rampStepPeriod;  /* Timer1 ticks per step */
@@ -643,15 +655,28 @@ static void CommutateV5_3(void)
     /* 2. Advance position 1:1 with physical rotor. */
     position++;
     if (position > 5) position = 0;
+    v4_sectorHits[position]++;
+    /* Pair v4_floatingPhase, v5_ptgExpectedComp with v4_currentSector —
+     * see legacy path's comment for the race this closes. */
+    const COMMUTATION_STEP_T *step = &commutationTable[position];
+    extern volatile uint8_t v4_floatingPhase;
+#if FEATURE_V5_PTG_ZC || FEATURE_V5_POST_ZC_ACCEPT
+    extern volatile uint8_t v5_ptgExpectedComp;
+#endif
+    {
+        uint8_t newFp       = step->floatingPhase;
+        uint8_t newExpected = (uint8_t)(position & 1u);
+        v4_currentSector  = position;
+        v4_floatingPhase  = newFp;
+#if FEATURE_V5_PTG_ZC || FEATURE_V5_POST_ZC_ACCEPT
+        v5_ptgExpectedComp = newExpected;
+#endif
+    }
     HAL_PWM_SetCommutationStep(position);
 
     /* 3. Configure CCP for NEW sector's floating phase and ZC polarity. */
-    const COMMUTATION_STEP_T *step = &commutationTable[position];
     HAL_Capture_Configure(bemfRpPin[step->floatingPhase],
                           step->zcPolarity > 0);
-
-    extern volatile uint8_t v4_floatingPhase;
-    v4_floatingPhase = step->floatingPhase;
 
     /* 4. Flush FIFOs, clear flags, reset captureValid. */
     while (CCP2STATbits.ICBNE) (void)CCP2BUF;
@@ -666,20 +691,9 @@ static void CommutateV5_3(void)
     extern volatile uint16_t v4_blankingEndHR;
     v4_blankingEndHR = (uint16_t)(thisCommHR + blankHR);
 
-    /* 6. PTG ISR expected comp state (same position-parity logic). */
-#if FEATURE_V5_PTG_ZC || FEATURE_V5_POST_ZC_ACCEPT
-    {
-        extern volatile uint8_t v5_ptgExpectedComp;
-        uint8_t newExpected = (uint8_t)(position & 1u);
-        v5_ptgExpectedComp = newExpected;
-        /* PG1TRIGB switching moved to PTG ISR (per-PWM-cycle refresh)
-         * rather than per-sector in Commutate. UPDREQ-from-Commutate
-         * approach (2026-05-13) failed: pF=0% at all speeds + startup
-         * regression. Likely UPDREQ was forcing premature PG1DC transfers
-         * during OL→CL handoff. PTG-ISR-driven write matches the proven
-         * B2 architecture. */
-    }
-#endif
+    /* 6. (v5_ptgExpectedComp moved to step-2, atomic with v4_currentSector.
+     * PG1TRIGB switching still lives in PTG ISR — UPDREQ-from-Commutate
+     * approach failed in 2026-05-13.) */
 
     /* 7. Fallback schedule: if no capture arrives, re-fire at
      * thisCommHR + sched_Tsector so the motor keeps moving. The
@@ -860,6 +874,28 @@ void SectorPI_Commutate(void)
     /* 3. Advance to next commutation step */
     position++;
     if (position > 5) position = 0;
+    v4_sectorHits[position]++;
+    /* Pair v4_floatingPhase, v5_ptgExpectedComp with v4_currentSector
+     * inside the same statement block so any later ISR sees a coherent
+     * (sector, floatPhase, expectedComp) snapshot. Pre-2026-05-15c each
+     * one lived in a different place inside Commutate (~60-100 lines
+     * apart) — fpStale probe showed 7 % staleness, and rising captures
+     * (cR) stayed at 0 because stale v5_ptgExpectedComp from the prev
+     * sector's parity miscategorised rising-sector ZCs as falling →
+     * adcSetRising never incremented. */
+    {
+        extern volatile uint8_t v4_floatingPhase;
+#if FEATURE_V5_PTG_ZC || FEATURE_V5_POST_ZC_ACCEPT
+        extern volatile uint8_t v5_ptgExpectedComp;
+#endif
+        uint8_t newFp       = commutationTable[position].floatingPhase;
+        uint8_t newExpected = (uint8_t)(position & 1u);
+        v4_currentSector  = position;
+        v4_floatingPhase  = newFp;
+#if FEATURE_V5_PTG_ZC || FEATURE_V5_POST_ZC_ACCEPT
+        v5_ptgExpectedComp = newExpected;
+#endif
+    }
     HAL_PWM_SetCommutationStep(position);
 
     /* 4. Configure CCP for new phase, flush FIFOs */
@@ -873,11 +909,12 @@ void SectorPI_Commutate(void)
         _CCP5IF = 0;
     }
 
-    /* 5. Set blanking + floating phase + expected ZC for CCP ISR */
+    /* 5. Set blanking + floating phase + expected ZC for CCP ISR.
+     * v4_floatingPhase moved to step-3 (2026-05-15b) so it's no longer
+     * declared here. */
     {
         extern volatile uint16_t v4_blankingEndHR;
         extern volatile uint16_t v4_expectedZcHR;
-        extern volatile uint8_t v4_floatingPhase;
 
         /* Blanking: 25% of measured rotor sector. Always use
          * actualStepPeriodHR (truth) instead of timerPeriod (PI estimate
@@ -916,35 +953,16 @@ void SectorPI_Commutate(void)
         uint16_t advHR_exp  = (uint16_t)((sectorHR >> 3) * tal_exp);
         v4_expectedZcHR = (uint16_t)(thisCommHR + halfHR_exp + advHR_exp);
 
-        /* Floating phase for GPIO deglitch reads */
-        const COMMUTATION_STEP_T *step = &commutationTable[position];
-        v4_floatingPhase = step->floatingPhase;
+        /* v4_floatingPhase is now written at step-3 (atomic with
+         * v4_currentSector) — see comment there. The redundant write
+         * that used to live here was deleted 2026-05-15b along with
+         * the local `step` pointer that only fed it. */
 
-        /* Per-sector expected post-ZC comp state, written here so any
-         * ISR that samples BEMF can decide accept/reject without
-         * going through HAL_Capture_IsRisingZc() (which gets stuck at
-         * true via a mechanism we still don't fully understand — see
-         * Apr 18 investigation notes). Used by:
-         *   V5.0 PTG diagnostic ISR (when FEATURE_V5_PTG_ZC=1)
-         *   V5.1 ADC post-ZC shadow (when FEATURE_V5_POST_ZC_ACCEPT=1)
-         * Variable name is v5_ptgExpectedComp for historical reasons;
-         * semantics are "comp state expected AFTER ZC in this sector". */
-#if FEATURE_V5_PTG_ZC || FEATURE_V5_POST_ZC_ACCEPT
-        {
-            extern volatile uint8_t v5_ptgExpectedComp;
-            /* Expected post-ZC comp state from position parity
-             * (even steps 0,2,4 = rising sectors → comp drops to 0;
-             *  odd  steps 1,3,5 = falling sectors → comp rises to 1).
-             * NOTE: this value is biased 2T:ε in wallclock due to the
-             * V4 scheduler's ASAP+fallback pairing — see V5.3 scheduler
-             * rewrite proposal. The flag itself is correct per-sector;
-             * the software state just isn't 1:1 with physical rotor. */
-            uint8_t newExpected = (uint8_t)(position & 1u);
-            v5_ptgExpectedComp = newExpected;
-            /* PG1TRIGB switching moved to PTG ISR — see other Commutate
-             * path comment for rationale. */
-        }
-#endif
+        /* v5_ptgExpectedComp is now written at step-3 (atomic with
+         * v4_currentSector and v4_floatingPhase) — see comment there.
+         * The redundant write that used to live here was deleted on
+         * 2026-05-15c after fpStale = 4 % + cR = 0 showed the late
+         * write was miscategorising rising captures as falling. */
         /* HAL_PTG_SetDelay call intentionally removed for this test. */
     }
 

@@ -86,6 +86,8 @@ SNAPSHOT_FIELDS = [
     ('diagCaptures',      34, '<H', 1,     '',     'PI-fed captures (16-bit rolling)'),
     ('diagPiRuns',        36, '<H', 1,     '',     'PI run counter'),
     ('stallCnt',          38, 'B',  1,     '',     'stall counter (trip at V4_STALL_THRESHOLD)'),
+    # d[37] = bit0:spMode  bit1:spRequest  bit2:g_blockCommActive
+    ('spBcByte',          39, 'B',  1,     '',     'SP/BC packed flags (firmware d[37])'),
     ('erpmNow16',         40, '<H', 1,     '',     'erpmNow derived from timerPeriod'),
     ('systemTick',        42, '<I', 1,     '',     '50µs Timer1 tick'),
     ('uptime_s',          46, '<I', 1,     's',    'uptime seconds'),
@@ -130,6 +132,47 @@ SNAPSHOT_FIELDS = [
     # PTG postscale experiment: count of fires that bypassed
     # V4_ProcessBemfSample(). Effective sample rate = (ptgFires-ptgSkipped)/sec.
     ('ptgSkipped',       174, '<I', 1,     '',     'PTG postscaled-out fires'),
+    # 2026-05-15 — per-sector hit counters from sector_pi.c. Tell us
+    # whether all 6 commutation positions actually fire, or only half
+    # (s0/2/4 stuck at 0 → position++ is +2 somewhere → pR=0% explained).
+    ('sectHit0',         178, '<I', 1,     '',     'commutate hits at position 0'),
+    ('sectHit1',         182, '<I', 1,     '',     'commutate hits at position 1'),
+    ('sectHit2',         186, '<I', 1,     '',     'commutate hits at position 2'),
+    ('sectHit3',         190, '<I', 1,     '',     'commutate hits at position 3'),
+    ('sectHit4',         194, '<I', 1,     '',     'commutate hits at position 4'),
+    ('sectHit5',         198, '<I', 1,     '',     'commutate hits at position 5'),
+    # 2026-05-15 — multi-phase BEMF tally.
+    #   total[6]:           per-sector post-blanking fires
+    #   tally[6][3]:        per-sector × per-phase count of comp=1
+    # Ratio comp=1/total per (sector, phase) tells us if the phase the
+    # firmware *thinks* is floating in sector S matches what's actually
+    # transitioning.  0% or 100% = driven phase (likely bug); 10..90% =
+    # actually floating.
+    ('bTot0',            200, '<H', 1,     '',     'sector 0 post-blanking fires'),
+    ('bTot1',            202, '<H', 1,     '',     'sector 1 post-blanking fires'),
+    ('bTot2',            204, '<H', 1,     '',     'sector 2 post-blanking fires'),
+    ('bTot3',            206, '<H', 1,     '',     'sector 3 post-blanking fires'),
+    ('bTot4',            208, '<H', 1,     '',     'sector 4 post-blanking fires'),
+    ('bTot5',            210, '<H', 1,     '',     'sector 5 post-blanking fires'),
+    ('bS0A',             212, '<H', 1,     '',     'sector 0, phase A, comp=1 count'),
+    ('bS0B',             214, '<H', 1,     '',     'sector 0, phase B, comp=1 count'),
+    ('bS0C',             216, '<H', 1,     '',     'sector 0, phase C, comp=1 count'),
+    ('bS1A',             218, '<H', 1,     '',     'sector 1, phase A, comp=1 count'),
+    ('bS1B',             220, '<H', 1,     '',     'sector 1, phase B, comp=1 count'),
+    ('bS1C',             222, '<H', 1,     '',     'sector 1, phase C, comp=1 count'),
+    ('bS2A',             224, '<H', 1,     '',     'sector 2, phase A, comp=1 count'),
+    ('bS2B',             226, '<H', 1,     '',     'sector 2, phase B, comp=1 count'),
+    ('bS2C',             228, '<H', 1,     '',     'sector 2, phase C, comp=1 count'),
+    ('bS3A',             230, '<H', 1,     '',     'sector 3, phase A, comp=1 count'),
+    ('bS3B',             232, '<H', 1,     '',     'sector 3, phase B, comp=1 count'),
+    ('bS3C',             234, '<H', 1,     '',     'sector 3, phase C, comp=1 count'),
+    ('bS4A',             236, '<H', 1,     '',     'sector 4, phase A, comp=1 count'),
+    ('bS4B',             238, '<H', 1,     '',     'sector 4, phase B, comp=1 count'),
+    ('bS4C',             240, '<H', 1,     '',     'sector 4, phase C, comp=1 count'),
+    ('bS5A',             242, '<H', 1,     '',     'sector 5, phase A, comp=1 count'),
+    ('bS5B',             244, '<H', 1,     '',     'sector 5, phase B, comp=1 count'),
+    ('bS5C',             246, '<H', 1,     '',     'sector 5, phase C, comp=1 count'),
+    ('fpStale',          248, '<H', 1,     '',     'PTG fires where v4_floatingPhase != table'),
 ]
 
 
@@ -173,6 +216,11 @@ def parse_snapshot(buf: bytes) -> dict:
     cF_tot = out['cF_hi'] + out['cF_lo']
     out['preR_pct']  = (100 * out['cR_hi'] // cR_tot) if cR_tot else 0
     out['postF_pct'] = (100 * out['cF_hi'] // cF_tot) if cF_tot else 0
+    # Firmware flags from packed d[37]
+    sp_bc = out.get('spBcByte', 0)
+    out['spMode']     = bool(sp_bc & 0x01)
+    out['spRequest']  = bool(sp_bc & 0x02)
+    out['blockComm']  = bool(sp_bc & 0x04)
     return out
 
 
@@ -182,13 +230,17 @@ def decode_telem(buf: bytes) -> str:
         return f"short frame ({len(buf)}B)"
     s = parse_snapshot(buf)
     name = ESC_STATE.get(s['state'], f"S{s['state']}")
-    # Block-comm override: dutyPct field reads as 100 but actualAmp shows
-    # the upstream commanded value — print "BC" so it's obvious.
-    block_comm = (s['dutyPct'] == 100 and s['actualAmp_Q15'] < 32768)
-    duty_tag = " BC" if block_comm else "   "
+    # Block-comm tag: read the actual firmware flag (d[37] bit 2), not the
+    # old "dutyPct==100 and amp<32768" heuristic which missed BC at full-amp.
+    duty_tag = " BC" if s.get('blockComm', False) else "PWM"
     # Phase peak in this snapshot window (|max| or |min|, whichever bigger).
     iaPk_A = max(abs(s['iaPkMax_A']), abs(s['iaPkMin_A']))
     ibPk_A = max(abs(s['ibPkMax_A']), abs(s['ibPkMin_A']))
+    # Per-sector hit counters — diagnostic for "step always odd" anomaly.
+    # If even (0/2/4) stay at 0 while odd (1/3/5) climb, position is
+    # incrementing by 2 somewhere and rising-sector BEMF never runs.
+    sh = [s.get(f'sectHit{i}', 0) for i in range(6)]
+    sect_str = "/".join(_kfmt(x).strip() for x in sh)
     return (f"#{s['seq']:5d} {name} s{s['step']} "
             f"pot={s['potRaw']:4d} d={s['dutyPct']:3d}%{duty_tag} "
             f"amp={s['amp_pct']:5.1f}% "
@@ -203,7 +255,8 @@ def decode_telem(buf: bytes) -> str:
             f"rR{s['elapRejR']:5d} rF{s['elapRejF']:5d} "
             f"fH{s['filterHRLast']:5d} | "
             f"preR{s['preR_pct']:3d}% postF{s['postF_pct']:3d}% "
-            f"skip={_kfmt(s['ptgSkipped'])}")
+            f"skip={_kfmt(s['ptgSkipped'])} "
+            f"sect[{sect_str}]")
 
 def read_frames(ser, want_cmd: int, count: int, timeout_s: float = 3.0):
     """Read `count` frames matching want_cmd or until timeout. Yields (cmd, payload)."""
@@ -255,8 +308,21 @@ def live_monitor(port: str, baud: int, csv_path: str = None):
         'host_t_ms',
     ]
     t0 = time.time()
+    first_frame = True
     try:
         for cmd, payload in read_frames(s, want_cmd=0x80, count=10**9, timeout_s=10**9):
+            if first_frame:
+                # 178 = pre-2026-05-15 firmware (no per-sector counters)
+                # 202 = with per-sector hit probe at d[176..199]
+                # 250 = with multi-phase BEMF tally at d[200..247]
+                if len(payload) >= 250:
+                    tag = "(NEW — has multi-phase BEMF tally)"
+                elif len(payload) >= 202:
+                    tag = "(MID — sectHit probe but no multi-phase tally)"
+                else:
+                    tag = "(OLD — sectHit + tally fields will be 0)"
+                print(f"first frame: {len(payload)} bytes {tag}")
+                first_frame = False
             potRaw = payload[6] | (payload[7] << 8)
             pot_min = min(pot_min, potRaw); pot_max = max(pot_max, potRaw)
             # Parse all fields + display the compact line.
@@ -281,6 +347,57 @@ def live_monitor(port: str, baud: int, csv_path: str = None):
         except Exception as e:
             print(f"\nCSV write failed: {e}")
         print(f"final pot range: {pot_min}..{pot_max}")
+
+        # ── Multi-phase BEMF tally (2026-05-15) ───────────────────────
+        # For each (sector, phase), the firmware counts how often comp=1
+        # past the blanking gate.  The firmware resets the tally after
+        # every snapshot send, so each frame's bTot/bS values are a fresh
+        # ~50 ms delta (avoids uint16 wrap at 60 kHz PWM × ~30 % blanking
+        # — was hitting wrap inside a single sector before reset landed).
+        # We SUM across all frames here to recover the run-total ratios.
+        # The phase the code BELIEVES is floating (per commutationTable)
+        # is annotated with [F].
+        if rows:
+            totals = [0] * 6
+            cnts   = {f'bS{s}{p}': 0 for s in range(6) for p in 'ABC'}
+            for r in rows:
+                for s in range(6):
+                    totals[s] += r.get(f'bTot{s}', 0)
+                    for p in 'ABC':
+                        cnts[f'bS{s}{p}'] += r.get(f'bS{s}{p}', 0)
+            # Code's belief about which phase floats per sector — must
+            # match commutation.c.  0=A, 1=B, 2=C.
+            float_by_sector = {0: 2, 1: 0, 2: 1, 3: 2, 4: 0, 5: 1}
+            polarity        = {0: 'R', 1: 'F', 2: 'R', 3: 'F', 4: 'R', 5: 'F'}
+            print("\n=== Multi-phase BEMF tally — comp=1 ratios per (sector, phase) ===")
+            print("       │   phase A   │   phase B   │   phase C   │  total")
+            print("───────┼─────────────┼─────────────┼─────────────┼────────")
+            for s in range(6):
+                tot = totals[s] or 1
+                ratios = []
+                for p_idx, phase in enumerate('ABC'):
+                    cnt = cnts[f'bS{s}{phase}']
+                    pct = 100.0 * cnt / tot
+                    # Clamp to avoid format-width overflow if the firmware
+                    # ever produces cnt > tot (transient between reset and
+                    # snapshot read — increment can land after memcpy).
+                    if pct > 999.9: pct = 999.9
+                    mark = '[F]' if float_by_sector[s] == p_idx else '   '
+                    ratios.append(f"{pct:5.1f}% {mark}")
+                print(f"  s{s} {polarity[s]} │ {ratios[0]}  │ {ratios[1]}  │ {ratios[2]}  │ {totals[s]:8d}")
+            print("Reading: [F] = phase code BELIEVES floats.  Look for a [F]")
+            print("phase that's stuck at 0% or 100% — that's a phase-mapping bug.")
+
+            # Stale-floatingPhase summary.  Sum across all frames.
+            fp_stale_total = sum(r.get('fpStale', 0) for r in rows)
+            total_samples  = sum(totals)
+            stale_pct      = (100.0 * fp_stale_total / total_samples) if total_samples else 0.0
+            print(f"v4_floatingPhase stale count: {fp_stale_total} / {total_samples} "
+                  f"samples ({stale_pct:.2f}%)")
+            if fp_stale_total > 0:
+                print("  → v4_floatingPhase disagreed with commutationTable[v4_currentSector]")
+                print("    on at least one PTG fire.  Deglitched comp (via global) is reading")
+                print("    a different pin than the multi-phase tally (via direct A/B/C reads).")
 
 def ata_diag(port: str, baud: int):
     """Read ATA6847L gate-driver diagnostic registers and decode."""
