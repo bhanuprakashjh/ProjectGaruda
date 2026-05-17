@@ -220,7 +220,7 @@ void __attribute__((interrupt, auto_psv)) _T1Interrupt(void)
 }
 
 /* Forward declarations for ZC detection */
-static inline uint8_t ReadBEMFComp(uint8_t fp);
+static inline uint8_t ReadBEMFComp(void);
 extern volatile uint8_t floatingPhase;
 extern volatile uint16_t blankingEndHR;
 extern volatile uint16_t timerPeriod_g;  /* from sector_pi.c */
@@ -343,14 +343,6 @@ void ProcessBemfSample(void)
     {
         if (!captureValid)
         {
-            /* Atomic snapshot — single 16-bit load of all three
-             * per-sector globals. Commutate (IPL 6) cannot interleave a
-             * partial update with our reads after this point. */
-            uint16_t snap   = sectorSnap;
-            uint8_t  sect   = SECTOR_SNAP_SECT(snap);
-            uint8_t  fp     = SECTOR_SNAP_FP(snap);
-            uint8_t  exp    = SECTOR_SNAP_EXP(snap);
-
             uint16_t nowHR = CCP4TMRL;
             if ((int16_t)(nowHR - blankingEndHR) < 0)
             {
@@ -360,13 +352,14 @@ void ProcessBemfSample(void)
             {
                 /* Multi-phase tally probe — read all 3 BEMF GPIOs and
                  * tally per-sector comp=1 counts. Runs before deglitch,
-                 * costs ~10 cycles, validates whether the floating-phase
-                 * field of the snapshot points at the actually-floating
-                 * pin in each sector. */
+                 * costs ~10 cycles, validates whether floatingPhase
+                 * points at the actually-floating pin in each sector. */
                 {
+                    extern volatile uint8_t  currentSector;
                     extern volatile uint16_t bemfTally[6][3];
                     extern volatile uint16_t bemfTallyTotal[6];
                     extern volatile uint16_t fpStaleCount;
+                    uint8_t sect = currentSector;
                     if (sect < 6u) {
                         uint8_t bA = BEMF_A_GetValue();
                         uint8_t bB = BEMF_B_GetValue();
@@ -376,32 +369,25 @@ void ProcessBemfSample(void)
                         if (bB) bemfTally[sect][1]++;
                         if (bC) bemfTally[sect][2]++;
 
-                        /* Stale-fp probe: does the snapshot's fp match
-                         * the table's belief for sect? Non-zero means
-                         * the snapshot's three fields disagree internally,
-                         * which the atomic write should prevent. */
                         uint8_t fp_table = commutationTable[sect].floatingPhase;
-                        if (fp_table != fp) fpStaleCount++;
+                        if (fp_table != floatingPhase) fpStaleCount++;
                     }
                 }
 
-                /* 3-read deglitch with majority vote rejects single-
-                 * sample GPIO bounce + comparator chatter near threshold
-                 * (~400 ns total). Single-read regresses high-speed
-                 * peak — load-bearing for noise rejection. */
-                uint8_t r1 = ReadBEMFComp(fp);
+                /* 3-read deglitch — majority vote (~400 ns total). */
+                uint8_t r1 = ReadBEMFComp();
                 Nop(); Nop(); Nop(); Nop();
-                uint8_t r2 = ReadBEMFComp(fp);
+                uint8_t r2 = ReadBEMFComp();
                 Nop(); Nop(); Nop(); Nop();
-                uint8_t r3 = ReadBEMFComp(fp);
+                uint8_t r3 = ReadBEMFComp();
                 uint8_t comp = ((uint8_t)(r1 + r2 + r3) >= 2u) ? 1u : 0u;
 
-                /* Capture-layer probe — tally comp × sector polarity,
-                 * past blanking. Uses the snapshot's `exp` rather than
-                 * HAL_Capture_IsRisingZc(), which exhibits stuck-true
-                 * behavior in ISR context. */
+                /* Capture-layer probe — comp × sector polarity, past blanking.
+                 * Uses ptgExpectedComp (atomic per-sector flag) rather than
+                 * HAL_Capture_IsRisingZc() (stuck-true in ISR context). */
                 {
-                    bool sectorRising_probe = (exp == 0u);
+                    extern volatile uint8_t ptgExpectedComp;
+                    bool sectorRising_probe = (ptgExpectedComp == 0u);
                     if (sectorRising_probe) {
                         if (comp) compRising_High++;
                         else      compRising_Low++;
@@ -412,12 +398,12 @@ void ProcessBemfSample(void)
                 }
 
 #if FEATURE_POST_ZC_ACCEPT
-                /* Post-ZC shadow — count what the post-ZC accept logic
-                 * would do if it were live. Same `exp` source as the
-                 * probe above; sticky-free per-sample rate. */
+                /* Post-ZC shadow — diagnostic only. */
                 {
-                    bool sectorRising = (exp == 0u);
-                    if (comp == exp) {
+                    extern volatile uint8_t ptgExpectedComp;
+                    uint8_t expectedPostZc = ptgExpectedComp;
+                    bool    sectorRising   = (expectedPostZc == 0u);
+                    if (comp == expectedPostZc) {
                         if (sectorRising) postZcRisingAcc++;
                         else              postZcFallingAcc++;
                     } else {
@@ -427,8 +413,9 @@ void ProcessBemfSample(void)
                 }
 #endif
 
-                /* PRE-ZC detection. Polarity from the same snapshot. */
-                bool sectorRising_v5 = (exp == 0u);
+                /* PRE-ZC detection. Polarity from ptgExpectedComp. */
+                extern volatile uint8_t ptgExpectedComp;
+                bool sectorRising_v5 = (ptgExpectedComp == 0u);
 
                 /* Falling-only PI feed: expected=0 accepts comp=0, which
                  * on inverted ATA6847 is PRE-ZC of falling. Rising
@@ -490,12 +477,12 @@ void __attribute__((interrupt, no_auto_psv)) _CCT3Interrupt(void)
 /* Floating phase GPIO readers */
 volatile uint8_t floatingPhase = 0;
 
-static inline uint8_t ReadBEMFComp(uint8_t fp)
+static inline uint8_t ReadBEMFComp(void)
 {
-    /* BEMF GPIO routing — see port_config.c. fp is passed in (not read
-     * from the global) so the caller can use a single coherent snapshot
-     * of the per-sector state without race exposure. */
-    switch (fp) {
+    /* BEMF GPIO routing — see port_config.c. Reads the global
+     * floatingPhase, which Commutate writes atomically in step 3 of the
+     * commutation update. */
+    switch (floatingPhase) {
         case 0: return BEMF_A_GetValue();
         case 1: return BEMF_B_GetValue();
         case 2: return BEMF_C_GetValue();
