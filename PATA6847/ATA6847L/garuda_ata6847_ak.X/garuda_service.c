@@ -548,7 +548,7 @@ volatile uint8_t v4_floatingPhase = 0;
 
 static inline uint8_t ReadBEMFComp(void)
 {
-    /* [AK PORT] CK had BEMF on _RC6/_RC7/_RD10; AK routes the same
+    /* BEMF GPIO routing — see port_config.c for the actual
      * ATA6847L digital comparator outputs to RB9/RB8/RA10 (per AN6285
      * + DS70005527 DIM pin map). BEMF_x_GetValue() macros wrap the
      * board-specific GPIO so this code is identical across boards. */

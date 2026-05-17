@@ -15,37 +15,16 @@
  * the TRIS=0 in port_config.c.
  *
  * Center-aligned complementary mode, POLH=Active-low (ATA6847L expects
- * active-low high-side inputs), POLL=Active-high — same convention as
- * CK because the ATA6847L gate driver is unchanged.
+ * active-low high-side inputs), POLL=Active-high.
  *
  * PG1 = master (SOC update), PG2/PG3 = slaves (slaved SOC update).
  * MPER = LOOPTIME_TCY sets the switching period.
- *
- * [AK PORT] Verified against DS70005539 §14:
- *  - MPER/MDC/MPHASE are 16-bit programmable (in a 20-bit field where
- *    the bottom 4 bits are Reserved for AK's High-Resolution PWM mode).
- *    LOOPTIME_TCY @ uint16_t fits 60 kHz / 40 kHz / 20 kHz carriers.
- *  - PG1CONH = 0x4800 decodes correctly: MPERSEL=1 (use MPER), MSTEN=1
- *    (broadcast EOC to clients), UPDMOD=000 (SOC update).
- *  - PG2CONH = PG3CONH = 0x4200 decode correctly: MPERSEL=1,
- *    UPDMOD=010 (Client SOC — wait for master's broadcast).
- *  - PG1CONL/PG2CONL/PG3CONL = 0x000C: CLKSEL=01 (use clock per MCLKSEL),
- *    MODSEL=100 (Center-Aligned PWM).  Same on AK.
- *  - PCLKCON FIXED: AK is 1-bit MCLKSEL (was 2-bit on CK).  Now writes
- *    0x0001 to route CLKGEN5 (400 MHz) to PWM, instead of CK's 0x0002.
- *
- * [AK PORT] Still needs scope-time validation:
- *  1. PG1TRIGA midpoint trigger fires ADC ISR at correct PWM phase
- *     (register exists with same name; bit-field count may differ).
- *  2. OVRENH/OVRENL bypass duty compare in BLK mode.
- *  3. PGxIOCONL/H POLH/POLL pin polarities for ATA6847L (active-low HS).
- *  4. DTH/DTL dead-time register width (may be 20-bit on AK).
  */
 
 #include <xc.h>
 #include "hal_pwm.h"
 #include "port_config.h"
-#include "hal_ak_compat.h"        /* CK L/H → AK 32-bit SFR shims */
+#include "hal_ak_compat.h"        /* AK 32-bit SFR ↔ 16-bit L/H shims */
 #include "../garuda_config.h"
 
 /* Last duty written to PG[123]DC AFTER clamping. Telemetry reads this. */
@@ -112,13 +91,9 @@ static inline void ApplyPhaseState(volatile uint16_t *ioconl,
 
 void HAL_PWM_Init(void)
 {
-    /* [AK PORT] PCLKCON.MCLKSEL = 0 routes Standard Speed Peripheral Clock
-     * (FPB/2 = 100 MHz on AK) to the PWM master clock. We DON'T use the
-     * 400 MHz CLKGEN5 because at 400 MHz, PGxPER for 40 kHz / 20 kHz
-     * carriers overflows uint16_t — see garuda_config.h LOOPTIME_TCY
-     * comment. 100 MHz gives 10 ns PWM tick, fits all 20/40/60 kHz in
-     * uint16_t, leaves >13-bit duty resolution. */
-    PCLKCON = 0x0000;  /* MCLKSEL = 0 → Std Speed Periph Clock = 100 MHz */
+    /* PCLKCON.MCLKSEL = 0 routes 100 MHz Std Speed Periph Clock to PWM.
+     * 400 MHz CLKGEN5 would overflow uint16_t PGxPER below 60 kHz. */
+    PCLKCON = 0x0000;
 
     /* Master period, phase, DC */
     MPHASE = 0x00;
@@ -129,7 +104,7 @@ void HAL_PWM_Init(void)
     FSMINPER = 0x00;
 
     /* Combinatorial logic — all disabled */
-    CMBTRIG = 0x00;       /* AK: single 32-bit SFR (CK had L/H split) */
+    CMBTRIG = 0x00;
     LOGCONA = LOGCONB = LOGCONC = LOGCOND = LOGCONE = LOGCONF = 0x00;
     PWMEVTB = PWMEVTC = PWMEVTD = PWMEVTE = PWMEVTF = 0x00;
 
@@ -141,21 +116,12 @@ void HAL_PWM_Init(void)
     PG1STAT = 0x00;
     PG1IOCONL = 0x3000;     /* Start with overrides ON, OVRDAT=00 (float: H off, L off) */
     PG1IOCONH = 0x000E;     /* PENL=1, PENH=1, PMOD=complementary, POLH=active-low */
-    /* [AK PORT] On AK, PGxEVTL bit layout differs from CK:
-     *   bits 15:11 — ADTR1PS[4:0] (ADC Trigger 1 postscale)
-     *   bit  10   — ADTR1EN3 (PGxTRIGC as ADC trig source)
-     *   bit   9   — ADTR1EN2 (PGxTRIGB as ADC trig source)
-     *   bit   8   — ADTR1EN1 (PGxTRIGA as ADC trig source)
-     *   bits  7:5 — PWMPCI[2:0]
-     *   bits  4:3 — UPDTRG[1:0]
-     *   bits  2:0 — PGTRGSEL[2:0]
-     * Source: DS70005539 §14.3.13. Value 0x0118:
-     *   ADTR1PS = 0b00000  → 1:1 postscale (ADC ISR every PWM cycle —
-     *                       MATCHES V4 milestone: BEMF midpoint sampler
-     *                       needs every-cycle samples for >100k eRPM)
-     *   ADTR1EN1 = 1        → trigger ADC from PGxTRIGA
-     *   UPDTRG = 0b11       → write to TRIGA auto-sets UPDREQ
-     *   PGTRGSEL = 0b000    → trigger output = EOC */
+    /* PG1EVTL = 0x0118 (DS70005539 §14.3.13):
+     *   ADTR1PS=0      1:1 postscale (ADC every PWM cycle, needed for
+     *                  the BEMF midpoint sampler at >100k eRPM)
+     *   ADTR1EN1=1     trigger ADC from PGxTRIGA
+     *   UPDTRG=0b11    writing TRIGA auto-sets UPDREQ
+     *   PGTRGSEL=0b000 trigger output = EOC */
     PG1EVTL = 0x0118;
     PG1EVTH = 0x0040;       /* ADTR2EN1=enabled (Trigger2 from TRIGA for Vbus/pot) */
     PG1FPCIL = PG1FPCIH = 0x00;
@@ -168,37 +134,16 @@ void HAL_PWM_Init(void)
     PG1DC = (uint16_t)((LOOPTIME_TCY + 16U) / 2U);
     PG1DCA = 0x00;
     PG1PER = 0x10;
-    /* [AK PORT — DS70005539 §14.3.24, §14.4.2.2.4] AK center-aligned
-     * PWM uses TWO timer cycles per pulse:
-     *   - Cycle 1 (CAHALF=0): rising edge at Timer = PER - DC + 1,
-     *     output HIGH to end of cycle 1
-     *   - Cycle 2 (CAHALF=1): output HIGH from start of cycle 2,
-     *     falling edge at Timer = DC
-     * Pulse is geometrically centered on the cycle 1 → cycle 2 wrap.
+    /* AK center-aligned PWM uses two timer cycles per pulse (DS70005539
+     * §14.3.24, §14.4.2.2.4). PG1TRIGA[19:0] is the compare value and
+     * bit 31 = CAHALF selects which cycle the trigger fires in.
      *
-     * PG1TRIGA is a 32-bit SFR with TRIGA[19:0] at bits 0-19 and a
-     * CAHALF bit at bit 31 that selects which cycle the trigger
-     * fires in. The trigger fires ONCE per PWM period (in whichever
-     * cycle CAHALF selects), not twice.
-     *
-     * 2026-05-13: switched from MID-ON to MID-OFF sampling to match
-     * the proven CK port behaviour.
-     *
-     * CK uses Mode 4 (double-update center-aligned, MODSEL=100) with
-     * PG1TRIGA=0x00 / CAHALF=0 — that fires at counter=0 in cycle 1,
-     * which is the PERIOD BOUNDARY, geometrically midway between two
-     * adjacent PWM pulses = MID-OFF. In complementary mode, the LS
-     * FETs are conducting during OFF time, di/dt has settled, and the
-     * floating-phase voltage equals pure BEMF — comp output is a clean
-     * polarity indicator.
-     *
-     * Previous AK mid-ON position (CAHALF=1, TRIGA=0 = cycle 1/2
-     * boundary = pulse center) sampled in the middle of the ON pulse,
-     * where inductive coupling biased the comp output and we saw
-     * pR_pct=90% (POST state dominated, BEMF reading polluted). CK at
-     * the same scheduler / detection logic gets pR_pct~50% because it
-     * samples mid-OFF instead. Aligning AK to mid-OFF restores the CK
-     * behaviour. */
+     * Why CAHALF=0, TRIGA=0: that fires at counter=0 in cycle 1, the
+     * period boundary geometrically midway between adjacent PWM pulses
+     * = MID-OFF. In complementary mode the LS FETs are conducting and
+     * di/dt has settled — comp output is a clean polarity indicator.
+     * Mid-ON sampling polluted the BEMF read (pR_pct=90%, POST state
+     * dominated by inductive coupling). */
     PG1TRIGA = 0x00000000UL;   /* CAHALF=0, TRIGA=0 — period boundary = MID-OFF */
     PG1TRIGB = PTG_TRIG_MID_OFF_POS;  /* init at mid-OFF; PTG ISR flips per-fire based on duty */
     PG1TRIGC = 0x00;
@@ -247,8 +192,7 @@ void HAL_PWM_Init(void)
     PG3DTL = DEADTIME_TCY;
     PG3DTH = DEADTIME_TCY;
 
-    /* PWM interrupt on PG1 — [AK PORT] CK had PWM1IF in IFS4; AK keeps
-     * the PWM1IF name but in IFS1/IEC1 (per p33AK128MC106.h struct). */
+    /* PWM interrupt on PG1 (PWM1IF lives in IFS1/IEC1 on AK). */
     IFS1bits.PWM1IF = 0;
     IEC1bits.PWM1IE = 0;     /* Disabled — we use ADC ISR instead */
 

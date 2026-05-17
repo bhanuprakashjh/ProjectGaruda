@@ -45,12 +45,7 @@ void V4Params_InitDefaults(void)
     v4Params.phaseAdvanceDegX10 = (uint16_t)(V4_PHASE_ADVANCE_DEG * 10.0f + 0.5f);
     v4Params.piKpShift          = V4_KP_SHIFT;
     v4Params.piKiShift          = V4_KI_SHIFT;
-    v4Params.blankingPct        = 25;          /* matches CK reference. AK
-                                                * idle-bias phantoms are
-                                                * suppressed by the
-                                                * v5_sawPreZc edge gate in
-                                                * the V5_POST_ZC_OWN path
-                                                * (see garuda_service.c). */
+    v4Params.blankingPct        = 25;
     v4Params.piFeedPolarity     = 0;           /* 2026-05-14 diagnostic run: feed BOTH polarities.
                                                 * With OWN=0 (legacy V4 PRE-ZC), this routes both
                                                 * rising and falling captures through to the PI

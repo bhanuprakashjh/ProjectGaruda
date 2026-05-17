@@ -3,24 +3,12 @@
  * @brief Configuration for 6-step BLDC on dsPIC33AK + ATA6847L.
  *
  * Target: EV92R69A carrier (ATA6847L QFN48) + EV68M17A DIM (dsPIC33AK128MC106).
- * Forked from CK source-of-truth `../../garuda_6step_ck.X/garuda_config.h`
- * at commit 24703f6 (228k eRPM milestone). Bulk of file is hardware-
- * agnostic; only sections marked [AK PORT] differ from CK.
  *
  * Motor profiles:
  *   0 = Hurst DMB2424B10002 (5PP, 24V, 149KV, low-speed bench motor)
  *   1 = A2212 1400KV        (7PP, 12V, 1400KV, drone motor)
- *   2 = 2810 1350KV         (7PP, 24V, drone motor — 228k eRPM target)
+ *   2 = 2810 1350KV         (7PP, 24V, drone motor — 226k eRPM peak)
  *   3 = HiZ1460             (7PP, 30V, high-Z bench)
- *
- * [AK PORT] open items — re-tune after Phase 0 bring-up:
- *   - FOSC_PWM_MHZ may need adjustment for AK CLK5 (currently 400 MHz to
- *     match CK; AK supports up to 500 MHz on CLK5 — verify in clock.c).
- *   - ADC channel mapping (bottom of file) — EV68M17A wires POT/Vbus to
- *     different AN pins than EV43F54A; update once DIM info sheet
- *     (DS70005527) cross-referenced with EV92R69A schematic.
- *   - CCP5 references in CK code use SCCP4 on AK (AK has SCCP1-4 only);
- *     see `motor/sector_pi.c` port notes.
  */
 
 #ifndef GARUDA_CONFIG_H
@@ -31,77 +19,32 @@
 #define MOTOR_PROFILE   2   /* 0=Hurst, 1=A2212, 2=2810, 3=HiZ1460 */
 #endif
 
-/* ── Clock — [AK PORT] ─────────────────────────────────────────────── */
-/* dsPIC33AK128MC106 (verified against DS70005539 §12):
- *   Fosc = 200 MHz (PLL1 FOUT)
- *   Fcy  = 200 MHz — AK is 1-cycle-per-instruction, so Fcy == Fosc
- *                    (NOT Fosc/2 like CK). Datasheet line 130569 confirms:
- *                    "6 instruction cycles or 30 nS @ 200 MHz CPU clock"
- *                    → 5 ns/cycle → Fcy = 200 MHz.
+/* ── Clock ─────────────────────────────────────────────────────────── */
+/* dsPIC33AK128MC106 (DS70005539 §12):
+ *   Fosc = 200 MHz, Fcy = 200 MHz (AK is 1-cycle-per-instruction).
  *   CLK5 = 400 MHz (PWM clock — VCO_DIV=800 MHz, INTDIV=1 → /2 → 400 MHz)
- *
- * MPER / MDC / MPHASE are 20-bit registers but only the upper 16 bits
- * are programmable in standard PWM mode (datasheet §14.3.6: bits 3:0
- * are Reserved). The extra 4 bits are exposed by AK's High-Resolution
- * PWM mode for sub-Tcy fractional pulse-width control — not used by
- * us since 6-step doesn't need sub-2.5 ns timing precision. */
+ */
 #define FOSC                200000000UL  /* 200 MHz */
 #define FCY                 200000000UL  /* 200 MHz instruction clock (AK: 1 cyc/instr) */
 #define FOSC_PWM_MHZ        400U         /* CLK5 PWM clock (MHz) — see hal/clock.c */
 
 /* ── PWM ───────────────────────────────────────────────────────────── */
-/* Supported carriers: 20 kHz, 40 kHz, 60 kHz (compile-time selection).
- * LOOPTIME_TCY at FOSC_PWM=400 MHz fits in uint16_t for all three:
- *   20 kHz → 50 µs → MPER = 9999  ticks (DEADTIME 0x14 = 0.20% of period)
- *   40 kHz → 25 µs → MPER = 4999  ticks (DEADTIME 0x14 = 0.40% of period)
- *   60 kHz → 16 µs → MPER = 3199  ticks (DEADTIME 0x14 = 0.63% of period)
- *
- * CK-board bench data (228k eRPM milestone):
- *   - 40 kHz: peak 195k, walls early
- *   - 50 kHz: peak 220k (also with 2x ADC)
- *   - 60 kHz: peak 228k stable — 2026-04-29 milestone keeper
- *   - 20 kHz: quieter audible noise, more current ripple, lower ceiling
- *     (expected); useful for low-speed bench work + EMI debug.
- *
- * Win is current-ripple / BEMF cleanliness, not sampling rate (verified
- * 2026-04-29 with 2x ADC experiment at 50 kHz that gave no improvement).
- *
- * [AK PORT] 20 kHz has not been bench-validated on this firmware since
- * the V4 milestone — verify ADC ISR timing budget at 50 µs/tick still
- * leaves headroom for sector PI + GSP. */
-#define PWMFREQUENCY_HZ     60000U   /* 20000U | 40000U | 60000U
-                                      * 2026-05-15: tested 40 kHz — peak
-                                      * dropped 226k→166k with desync,
-                                      * currents *increased* at same speed.
-                                      * Definitive: AK gap is commutation
-                                      * accuracy, not switching loss. AK
-                                      * needs the 60 kHz BEMF sample rate
-                                      * to keep timing accurate at peak. */
+/* Why: 60 kHz is the proven peak on this AK port. Switching to 40 kHz
+ * regressed peak 226k→166k with desync, currents up at same speed —
+ * the gap is commutation accuracy (BEMF sample rate), not switching loss. */
+#define PWMFREQUENCY_HZ     60000U
 #define LOOPTIME_MICROSEC   (uint16_t)(1000000UL / PWMFREQUENCY_HZ)  /* 50 us */
 
-/* [AK PORT — CRITICAL] PWM period equation on dsPIC33AK is NOT the simple
- * CK model. Per DS70005539 Eq 14-1 (Center-Aligned, Push-Pull off):
- *     FPWM       = 8 × FPGx_clk / (PGxPER + 16)
- *     PGxPER     = (8 × FPGx_clk / FPWM) − 16
- * For PGx_clk = 400 MHz (CLKGEN5), PGxPER for 60 kHz = 53317 → overflows
- * uint16_t for 40/20 kHz. We instead route Std Speed Peripheral Clock
- * (100 MHz) to PWM via PCLKCON.MCLKSEL=0 (set in hal_pwm.c), so:
- *     20 kHz → PGxPER = 39984
- *     40 kHz → PGxPER = 19984
- *     60 kHz → PGxPER = 13317
- * All fit uint16_t. Trade-off: 10 ns PWM tick on AK vs 5 ns on CK; for
- * 6-step BLDC the >13-bit duty resolution at 60 kHz is still excessive. */
+/* PGxPER from DS70005539 Eq 14-1 (Center-Aligned): PGxPER = 8·FPGx/FPWM − 16.
+ * PGx clock is Std Speed Peripheral Clock (100 MHz) via PCLKCON.MCLKSEL=0
+ * in hal_pwm.c — routing 400 MHz CLK5 would overflow uint16_t below 60 kHz. */
 #define FPGX_CLK_HZ         100000000UL   /* PG clock — Std Speed Periph Clk */
 #define LOOPTIME_TCY        (uint16_t)((8UL * FPGX_CLK_HZ / PWMFREQUENCY_HZ) - 16U)
 
 #define MAX_DUTY            (LOOPTIME_TCY - 200U)  /* ~100% complementary */
 #define MIN_DUTY            200U
-/* Dead time: ATA6847L handles 700 ns CCPT internally, so MCU dead time
- * is minimal. [AK PORT] Per DS70005539 Eq 14-2:
- *     PGxDTy = 16 × FPGx_clk × DeadTime(s)
- * For 100 ns at FPGx_clk=100 MHz: 16 × 100e6 × 100e-9 = 160 ticks.
- * CK comment said "0x14 = 50 ns" but actual was 100 ns at 200 MHz CK
- * effective clock. Holding 100 ns on AK; raise if VDS transients leak. */
+/* Dead time: ATA6847L handles 700 ns CCPT internally → 100 ns MCU dead
+ * time is sufficient. PGxDTy = 16·FPGx·DeadTime per DS70005539 Eq 14-2. */
 #define DEADTIME_TCY        ((uint16_t)((uint32_t)16U * FPGX_CLK_HZ / 1000000UL / 10U))  /* 100 ns = 160 */
 
 /* ── Current Sensing (EV43F54A inverter board) ─────────────────────── */
@@ -123,9 +66,7 @@
                                          * directly through RC filter. */
 
 /* ── Timer1 (50 µs tick) ───────────────────────────────────────────── */
-/* On AK, Timer1 input is Standard Speed Peripheral Clock = FPB/2 = 100 MHz
- * (not FCY=200 MHz directly). This matches CK behaviour where FPB=FCY=100MHz.
- * Both MCUs produce the same Timer1 tick rate, so PR1 value is identical. */
+/* Timer1 input is Standard Speed Peripheral Clock = FPB/2 = 100 MHz. */
 #define TIMER1_INPUT_CLOCK  100000000UL  /* Hz — Std Speed Peripheral Clock */
 #define TIMER1_PRESCALE     8U
 #define TIMER1_FREQ_HZ      20000U       /* 50 µs period — matches ADC ISR rate */
@@ -490,20 +431,8 @@
 #define V4_STARTUP_CURRENT_MA   3000.0f
 #define V4_ALIGN_DURATION_MS    100U
 #define V4_MIN_AMPLITUDE_PROFILE 5000U     /* 15.3% — proven on 2810 @ 25V */
-#define V4_BLOCK_ENTER_ERPM     150000UL   /* 2810 @ 25V — matches CK GitHub
-                                            * baseline (CK peaks 235k with this
-                                            * threshold). 2026-05-15 reverted
-                                            * from AK-specific 100k after the
-                                            * PTG postscale experiment ruled out
-                                            * sample rate as the gap source.
-                                            * Testing whether the climb path
-                                            * (PWM modulation up to 150k vs to
-                                            * 100k on AK) accounts for the 9k
-                                            * gap to CK. */
-#define V4_BLOCK_EXIT_ERPM      130000UL   /* CK-matched hysteresis (~0.87×).
-                                            * Narrower than AK's old 80k; the
-                                            * wide-hysteresis rationale was
-                                            * untested at 150k entry. */
+#define V4_BLOCK_ENTER_ERPM     150000UL   /* 2810 @ 25V */
+#define V4_BLOCK_EXIT_ERPM      130000UL   /* ~0.87× entry hysteresis */
 #elif MOTOR_PROFILE == 3  /* HiZ1460 — Rs caps current at 1.87A */
 #define V4_STARTUP_SPEED_ERPM   500UL
 #define V4_STARTUP_CURRENT_MA   1500.0f
@@ -605,18 +534,10 @@
 #define V5_MEAS_PI_ALPHA_SHIFT  2
 #endif
 
-/* Default PTGT0LIM values. [AK PORT] At FCY=200 MHz with PTGDIV=0,
- * 1 PTG tick = 5 ns (was 10 ns on CK).
- * LOOPTIME_TCY is in PWM counter ticks (5 ns each on this CK device —
- * FOSC_PWM 400 MHz with internal /2 divider on the PWM counter).
- *
- *   Valley sample: PWM trigger itself fires at counter=0. A tiny delay
- *     covers ATA6847 comparator propagation (~500 ns) and signal settle.
- *   Peak sample:  Counter triangle 0 → MPER → 0 each PWM period.
- *     Valley to peak = MPER/2 PWM-cycle time.
- *     At 40 kHz, MPER=4999 → ~25 µs cycle → ~12.5 µs valley→peak.
- *     12.5 µs = 1250 PTG ticks. MPER * 5 ns / 2 / 10 ns = MPER/4.
- */
+/* Default PTGT0LIM values. At FCY=200 MHz with PTGDIV=0, 1 PTG tick = 5 ns.
+ * Valley delay covers ATA6847 comparator propagation (~500 ns) + settle.
+ * Peak delay = MPER/4 (PWM counter triangle: valley → peak = MPER/2 PWM-tick
+ * = MPER/4 PTG-tick since PWM-tick is 10 ns and PTG-tick is 5 ns). */
 #define V5_PTG_TICK_NS          10u
 #define V5_PTG_VALLEY_DELAY     60u        /* 600 ns settle after trigger */
 #define V5_PTG_PEAK_DELAY       ((uint16_t)(LOOPTIME_TCY / 4u))

@@ -1,21 +1,11 @@
 /**
  * @file hal_ak_compat.h
- * @brief CK→AK SFR compatibility shim.
+ * @brief AK 32-bit ↔ 16-bit L/H SFR aliases.
  *
- * dsPIC33CK split many 32-bit peripherals into `XxxL` (low 16) and
- * `XxxH` (high 16) sibling SFRs. dsPIC33AK exposes the same registers
- * as single 32-bit SFRs (no L/H split). The bit-field structs are
- * named `XxxLbits` on CK; on AK it's `Xxxbits`.
- *
- * To let the verbatim CK code (hal_pwm.c, hal_capture.c, etc.) compile
- * on AK without rewriting every line, this header maps the L/H half-
- * word names back onto the AK 32-bit register via pointer casts. Each
- * `XxxL` becomes the low 16 bits of `Xxx`, and `XxxH` becomes the high
- * 16 bits. Bit-field structs map similarly.
- *
- * Include this header from any source that touches PG/CCP/PCLKCON
- * SFRs and originated as a CK file.  No effect on AK-native code that
- * already uses the 32-bit names.
+ * dsPIC33AK exposes PG/CCP/PCLKCON peripherals as single 32-bit SFRs.
+ * This header maps `XxxL` / `XxxH` aliases onto the low/high halves so
+ * the 16-bit half-word access pattern works without rewriting call
+ * sites. Bit-field struct `XxxLbits` is aliased to `Xxxbits`.
  */
 #ifndef HAL_AK_COMPAT_H
 #define HAL_AK_COMPAT_H
@@ -23,20 +13,10 @@
 #include <xc.h>
 #include <stdint.h>
 
-/* [AK PORT RISK] These helpers pointer-cast a 32-bit SFR to a 16-bit
- * pointer to access half-words. Assumptions:
- *   1. Little-endian byte order — dsPIC33A is LE, so _AK_LO16 maps to
- *      bits [15:0] and _AK_HI16 maps to bits [31:16].  Confirmed by
- *      the SFR layout tables in DS70005539 (MPER, PG1CON etc.) which
- *      describe registers as `MPER[19:16] || [15:8] || [7:4] || rsvd`
- *      written left-to-right in low-address-first byte order.
- *   2. Hardware accepts independent 16-bit writes to the halves —
- *      true for memory-mapped SFRs on dsPIC. Read-modify-write of
- *      one half does NOT race with hardware updates of the other.
- *   3. Strict-aliasing — XC-DSC currently doesn't enforce TBAA over
- *      `volatile *` casts, but if a future toolchain version turns
- *      on `-fstrict-aliasing` aggressively, these casts could be
- *      optimised away. Defence in depth: keep the `volatile`. */
+/* Why volatile is load-bearing: if a future XC-DSC turns on aggressive
+ * `-fstrict-aliasing`, the 32-bit→16-bit pointer cast could be optimised
+ * away. The volatile blocks that. Little-endian layout assumed (dsPIC33A
+ * is LE, confirmed by DS70005539 SFR layout tables). */
 #define _AK_LO16(reg)   (*(volatile uint16_t*)&(reg))
 #define _AK_HI16(reg)   (*((volatile uint16_t*)&(reg) + 1))
 
@@ -76,8 +56,7 @@
 #define PG3LEBL     _AK_LO16(PG3LEB)
 #define PG3LEBH     _AK_HI16(PG3LEB)
 
-/* CCP1/2/3/4 register halves (CCP5 doesn't exist on AK — shimmed
- * separately as a dummy variable in motor/sector_pi.c). */
+/* CCP1/2/3/4 register halves (AK has SCCP1-4 only — no SCCP5). */
 #define CCP1CON1L   _AK_LO16(CCP1CON1)
 #define CCP1CON1H   _AK_HI16(CCP1CON1)
 #define CCP2CON1L   _AK_LO16(CCP2CON1)
@@ -117,10 +96,7 @@
 #define PG3SPCIL    _AK_LO16(PG3SPCI)
 #define PG3SPCIH    _AK_HI16(PG3SPCI)
 
-/* Dead-time registers — note: CK uses PG1DTL (low/rising) + PG1DTH
- * (high/falling) as two SEPARATE 16-bit registers. AK uses PG1DT as
- * one 32-bit register where bits [15:0] = DTL and bits [31:16] = DTH.
- * Same byte layout, so the half-word aliases work as drop-in. */
+/* Dead-time: bits [15:0] = DTL (low/rising), bits [31:16] = DTH (high/falling). */
 #define PG1DTL      _AK_LO16(PG1DT)
 #define PG1DTH      _AK_HI16(PG1DT)
 #define PG2DTL      _AK_LO16(PG2DT)

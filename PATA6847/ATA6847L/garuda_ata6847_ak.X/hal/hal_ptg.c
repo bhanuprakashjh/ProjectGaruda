@@ -12,8 +12,7 @@
  *   STEP3: (NOP, unreached) 0x00
  * Packed: PTGQUE0 = 0x00A07040.
  *
- * Opcode encoding verified against DS70005539 Table 26-5 (matches CK
- * DS70005349 Table 24-1 — same family encoding).
+ * Opcode encoding verified against DS70005539 Table 26-5.
  *
  * PTGCON:
  *   ON       = 1   peripheral enabled

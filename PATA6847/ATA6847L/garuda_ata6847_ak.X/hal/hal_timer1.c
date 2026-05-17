@@ -16,10 +16,10 @@
 
 void HAL_Timer1_Init(void)
 {
-    T1CONbits.ON = 0;       /* Stop timer (AK: ON, CK: TON) */
+    T1CONbits.ON = 0;       /* Stop timer */
     T1CONbits.SIDL = 0;     /* Continue in idle */
     T1CONbits.TGATE = 0;
-    T1CONbits.TCKPS = 0b01; /* Prescaler 1:8 (matches CK enum) */
+    T1CONbits.TCKPS = 0b01; /* Prescaler 1:8 */
     T1CONbits.TCS = 0;      /* Internal peripheral clock */
     T1CONbits.TSYNC = 0;
 
