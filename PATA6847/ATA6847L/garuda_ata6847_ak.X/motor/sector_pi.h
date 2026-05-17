@@ -84,5 +84,19 @@ void     SectorPI_GetCaptureLog(uint8_t *buf, uint8_t *entriesOut);
  * The ISR reads it for duty scaling with zero branch overhead. */
 extern volatile uint16_t g_pwmPer;
 
+/* ── Atomic per-sector snapshot (PTG ↔ Commutate race-safe) ─────
+ * Single 16-bit word written atomically by SectorPI_Commutate (IPL 6),
+ * read once at the top of ProcessBemfSample. PTG (IPL 4) cannot
+ * preempt itself, so a single 16-bit load yields a coherent triple.
+ *
+ *   bits 0..2  currentSector  (0..5)
+ *   bits 3..4  floatingPhase  (0..2)
+ *   bit  5     ptgExpectedComp (0..1) */
+extern volatile uint16_t sectorSnap;
+
+#define SECTOR_SNAP_SECT(w)  ((uint8_t)((w) & 0x7u))
+#define SECTOR_SNAP_FP(w)    ((uint8_t)(((w) >> 3) & 0x3u))
+#define SECTOR_SNAP_EXP(w)   ((uint8_t)(((w) >> 5) & 0x1u))
+
 #endif /* SECTOR_PI_H */
 

@@ -60,6 +60,16 @@ volatile uint32_t sectorHits[6] = {0,0,0,0,0,0};
  * exposing the static `position`. Read-only outside sector_pi.c. */
 volatile uint8_t currentSector = 0;
 
+/* Atomic per-sector snapshot read by the PTG ISR. Packs the same three
+ * fields written individually below (currentSector, floatingPhase,
+ * ptgExpectedComp) into a single uint16 so PTG can read them with one
+ * 16-bit load and avoid a torn snapshot if Commutate (IPL 6) preempts
+ * mid-read. Layout — see SECTOR_SNAP_* helpers in sector_pi.h:
+ *   bits 0..2 = currentSector (0..5)
+ *   bits 3..4 = floatingPhase (0..2)
+ *   bit  5    = ptgExpectedComp (0..1) */
+volatile uint16_t sectorSnap = 0;
+
 /* ── OL ramp state (Timer1 driven, matches V3 startup.c) ───────── */
 static volatile uint16_t   alignCounter;
 static volatile uint16_t   rampStepPeriod;  /* Timer1 ticks per step */
@@ -599,16 +609,19 @@ void SectorPI_Commutate(void)
          * sector consistently. */
         uint8_t newFp       = commutationTable[position].floatingPhase;
         uint8_t newExpected = (uint8_t)(position & 1u);
-        /* Now publish all three. Compiler may reorder these three
-         * stores relative to each other (they're independent), which
-         * is fine — the only guarantee we need is that no other
-         * code runs in between, and that's guaranteed by being in
-         * the same ISR with PTG at lower priority. */
+        uint16_t newSnap    = (uint16_t)(position
+                                       | ((uint16_t)newFp       << 3)
+                                       | ((uint16_t)newExpected << 5));
+        /* Publish all four. The single 16-bit sectorSnap write is the
+         * atomic one PTG actually reads. The three byte-wide globals
+         * are retained for callers that legitimately need just one
+         * (e.g. ReadBEMFComp's static-inline switch). */
         currentSector  = position;
         floatingPhase  = newFp;
 #if FEATURE_POST_ZC_ACCEPT
         ptgExpectedComp = newExpected;
 #endif
+        sectorSnap     = newSnap;
     }
     HAL_PWM_SetCommutationStep(position);
 

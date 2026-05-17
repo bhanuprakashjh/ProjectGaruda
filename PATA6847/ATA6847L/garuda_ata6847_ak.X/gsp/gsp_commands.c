@@ -303,11 +303,16 @@ void GSP_TelemTick(void)
     if ((now - telemLastTick) < 100) return;
     telemLastTick = now;
 
-    /* 250-byte telemetry snapshot consumed by pot_capture.py / GUI. */
+    /* 252-byte telemetry snapshot consumed by pot_capture.py / GUI.
+     * Wire layout (offsets are into `snap[]`, not `d[]`):
+     *   snap[0..1]   = seq
+     *   snap[2..249] = d[0..247] — fixed-offset diagnostic fields below
+     *   snap[250..251] = fpStaleCount (d[248..249])
+     * snap[252] would be OOB — keep this array sized strictly. */
     TELEM_T t;
     SectorPI_TelemGet(&t);
 
-    uint8_t snap[250]; /* See per-section offset comments below. */
+    uint8_t snap[252];
     memset(snap, 0, sizeof(snap));
 
     /* Seq counter (2 bytes) */

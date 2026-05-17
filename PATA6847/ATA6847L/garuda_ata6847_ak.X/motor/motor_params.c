@@ -21,8 +21,12 @@ volatile ESC_DERIVED_T escDerived;
 static const PARAM_DESC_T descTable[PARAM_COUNT] = {
     /* PI loop tuning */
     { PARAM_PHASE_ADVANCE_X10, TYPE_U16, GROUP_PI_LOOP,    0, 300 },
-    { PARAM_PI_KP_SHIFT,       TYPE_U8,  GROUP_PI_LOOP,    0,   8 },
-    { PARAM_PI_KI_SHIFT,       TYPE_U8,  GROUP_PI_LOOP,    0,   8 },
+    /* Kp/Ki shift floors at 1 — shift=0 collapses the gain to 1 (vs the
+     * calibrated 1/4 and 1/16), which combined with the ±25% delta clamp
+     * still allows large single-capture period jumps. Validated range
+     * is roughly 2..6 for both; widen at your own risk. */
+    { PARAM_PI_KP_SHIFT,       TYPE_U8,  GROUP_PI_LOOP,    1,   8 },
+    { PARAM_PI_KI_SHIFT,       TYPE_U8,  GROUP_PI_LOOP,    1,   8 },
 
     /* Capture / blanking */
     { PARAM_BLANKING_PCT,      TYPE_U8,  GROUP_CAPTURE,   10,  60 },

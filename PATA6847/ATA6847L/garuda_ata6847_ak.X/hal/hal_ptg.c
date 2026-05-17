@@ -45,10 +45,11 @@ volatile uint8_t  ptgExpectedComp = 0;
 #define PTG_OP_IRQ      (0x7u << 4)   /* 0x70 — generate IRQ (operand selects PTG0..3) */
 #define PTG_OP_JMP      (0xAu << 4)   /* 0xA0 — jump (operand = step index) */
 
-/* ISR priority 5 — above ADC (3), below CCP (5/6). CCP still preempts,
- * but PTG preempts ADC. */
+/* ISR priority sourced from PTG_ISR_PRIORITY (garuda_config.h). Default 4
+ * is above ADC (3) and below CCP (5/6) so CCP still preempts PTG.
+ * Tying with CCP (5) regressed peak speed — see PTG_ISR_PRIORITY note. */
 #ifndef HAL_PTG_ISR_PRIORITY
-#define HAL_PTG_ISR_PRIORITY    5U
+#define HAL_PTG_ISR_PRIORITY    PTG_ISR_PRIORITY
 #endif
 
 void HAL_PTG_Init(void)

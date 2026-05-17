@@ -148,31 +148,36 @@ SNAPSHOT_FIELDS = [
     # firmware *thinks* is floating in sector S matches what's actually
     # transitioning.  0% or 100% = driven phase (likely bug); 10..90% =
     # actually floating.
-    ('bTot0',            200, '<H', 1,     '',     'sector 0 post-blanking fires'),
-    ('bTot1',            202, '<H', 1,     '',     'sector 1 post-blanking fires'),
-    ('bTot2',            204, '<H', 1,     '',     'sector 2 post-blanking fires'),
-    ('bTot3',            206, '<H', 1,     '',     'sector 3 post-blanking fires'),
-    ('bTot4',            208, '<H', 1,     '',     'sector 4 post-blanking fires'),
-    ('bTot5',            210, '<H', 1,     '',     'sector 5 post-blanking fires'),
-    ('bS0A',             212, '<H', 1,     '',     'sector 0, phase A, comp=1 count'),
-    ('bS0B',             214, '<H', 1,     '',     'sector 0, phase B, comp=1 count'),
-    ('bS0C',             216, '<H', 1,     '',     'sector 0, phase C, comp=1 count'),
-    ('bS1A',             218, '<H', 1,     '',     'sector 1, phase A, comp=1 count'),
-    ('bS1B',             220, '<H', 1,     '',     'sector 1, phase B, comp=1 count'),
-    ('bS1C',             222, '<H', 1,     '',     'sector 1, phase C, comp=1 count'),
-    ('bS2A',             224, '<H', 1,     '',     'sector 2, phase A, comp=1 count'),
-    ('bS2B',             226, '<H', 1,     '',     'sector 2, phase B, comp=1 count'),
-    ('bS2C',             228, '<H', 1,     '',     'sector 2, phase C, comp=1 count'),
-    ('bS3A',             230, '<H', 1,     '',     'sector 3, phase A, comp=1 count'),
-    ('bS3B',             232, '<H', 1,     '',     'sector 3, phase B, comp=1 count'),
-    ('bS3C',             234, '<H', 1,     '',     'sector 3, phase C, comp=1 count'),
-    ('bS4A',             236, '<H', 1,     '',     'sector 4, phase A, comp=1 count'),
-    ('bS4B',             238, '<H', 1,     '',     'sector 4, phase B, comp=1 count'),
-    ('bS4C',             240, '<H', 1,     '',     'sector 4, phase C, comp=1 count'),
-    ('bS5A',             242, '<H', 1,     '',     'sector 5, phase A, comp=1 count'),
-    ('bS5B',             244, '<H', 1,     '',     'sector 5, phase B, comp=1 count'),
-    ('bS5C',             246, '<H', 1,     '',     'sector 5, phase C, comp=1 count'),
-    ('fpStale',          248, '<H', 1,     '',     'PTG fires where v4_floatingPhase != table'),
+    # bTot/bS offsets follow the firmware's d[200..247] = snap[202..249].
+    # The previous table had bTot0 at 200, which overlapped sectHit5's
+    # high half and shifted every bemf-tally field by 2 — see fix in
+    # gsp_commands.c that also extended snap[] to 252 to give fpStale a
+    # legal home at snap[250..251].
+    ('bTot0',            202, '<H', 1,     '',     'sector 0 post-blanking fires'),
+    ('bTot1',            204, '<H', 1,     '',     'sector 1 post-blanking fires'),
+    ('bTot2',            206, '<H', 1,     '',     'sector 2 post-blanking fires'),
+    ('bTot3',            208, '<H', 1,     '',     'sector 3 post-blanking fires'),
+    ('bTot4',            210, '<H', 1,     '',     'sector 4 post-blanking fires'),
+    ('bTot5',            212, '<H', 1,     '',     'sector 5 post-blanking fires'),
+    ('bS0A',             214, '<H', 1,     '',     'sector 0, phase A, comp=1 count'),
+    ('bS0B',             216, '<H', 1,     '',     'sector 0, phase B, comp=1 count'),
+    ('bS0C',             218, '<H', 1,     '',     'sector 0, phase C, comp=1 count'),
+    ('bS1A',             220, '<H', 1,     '',     'sector 1, phase A, comp=1 count'),
+    ('bS1B',             222, '<H', 1,     '',     'sector 1, phase B, comp=1 count'),
+    ('bS1C',             224, '<H', 1,     '',     'sector 1, phase C, comp=1 count'),
+    ('bS2A',             226, '<H', 1,     '',     'sector 2, phase A, comp=1 count'),
+    ('bS2B',             228, '<H', 1,     '',     'sector 2, phase B, comp=1 count'),
+    ('bS2C',             230, '<H', 1,     '',     'sector 2, phase C, comp=1 count'),
+    ('bS3A',             232, '<H', 1,     '',     'sector 3, phase A, comp=1 count'),
+    ('bS3B',             234, '<H', 1,     '',     'sector 3, phase B, comp=1 count'),
+    ('bS3C',             236, '<H', 1,     '',     'sector 3, phase C, comp=1 count'),
+    ('bS4A',             238, '<H', 1,     '',     'sector 4, phase A, comp=1 count'),
+    ('bS4B',             240, '<H', 1,     '',     'sector 4, phase B, comp=1 count'),
+    ('bS4C',             242, '<H', 1,     '',     'sector 4, phase C, comp=1 count'),
+    ('bS5A',             244, '<H', 1,     '',     'sector 5, phase A, comp=1 count'),
+    ('bS5B',             246, '<H', 1,     '',     'sector 5, phase B, comp=1 count'),
+    ('bS5C',             248, '<H', 1,     '',     'sector 5, phase C, comp=1 count'),
+    ('fpStale',          250, '<H', 1,     '',     'PTG fires where snapshot fp != table'),
 ]
 
 
@@ -312,11 +317,16 @@ def live_monitor(port: str, baud: int, csv_path: str = None):
     try:
         for cmd, payload in read_frames(s, want_cmd=0x80, count=10**9, timeout_s=10**9):
             if first_frame:
-                # 178 = pre-2026-05-15 firmware (no per-sector counters)
+                # 178 = pre per-sector counters
                 # 202 = with per-sector hit probe at d[176..199]
-                # 250 = with multi-phase BEMF tally at d[200..247]
-                if len(payload) >= 250:
-                    tag = "(NEW — has multi-phase BEMF tally)"
+                # 250 = multi-phase BEMF tally (firmware before the OOB fix
+                #       wrote fpStale OOB — that build was technically UB)
+                # 252 = current firmware: snap[] sized correctly, fpStale
+                #       lands at snap[250..251], bTot/bS offsets repaired
+                if len(payload) >= 252:
+                    tag = "(NEW — fpStale fixed, bTot/bS offsets repaired)"
+                elif len(payload) >= 250:
+                    tag = "(OLD-250 — fpStale may be torn, bTot misaligned)"
                 elif len(payload) >= 202:
                     tag = "(MID — sectHit probe but no multi-phase tally)"
                 else:
