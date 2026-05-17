@@ -28,8 +28,6 @@
 
 #include "hal_com_timer.h"
 
-#if FEATURE_IC_ZC || FEATURE_V4_SECTOR_PI
-
 #include <xc.h>
 
 void HAL_ComTimer_Init(void)
@@ -135,5 +133,3 @@ void HAL_ComTimer_Cancel(void)
     _CCT3IF = 0;
     CCP3PR = 0xFFFF;   /* Push next match ~42 ms out — effectively idle */
 }
-
-#endif /* FEATURE_IC_ZC || FEATURE_V4_SECTOR_PI */

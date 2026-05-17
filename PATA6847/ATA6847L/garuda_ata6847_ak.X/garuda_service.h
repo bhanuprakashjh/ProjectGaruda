@@ -8,9 +8,6 @@
 
 #include "garuda_types.h"
 
-#if !FEATURE_V4_SECTOR_PI
-extern volatile GARUDA_DATA_T gData;
-#endif
 extern volatile bool gStateChanged;
 
 void GarudaService_Init(void);

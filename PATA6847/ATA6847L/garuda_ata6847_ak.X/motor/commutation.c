@@ -1,6 +1,6 @@
 /**
  * @file commutation.c
- * @brief 6-step commutation table and step advance logic.
+ * @brief 6-step commutation table.
  *
  * Standard BLDC 6-step commutation sequence:
  *   Step 0: A=PWM,  B=LOW,   C=FLOAT  (A->B, sense C rising)
@@ -12,9 +12,7 @@
  */
 
 #include "commutation.h"
-#include "../hal/hal_pwm.h"
 
-/* 6-step commutation table */
 const COMMUTATION_STEP_T commutationTable[6] =
 {
     /* Step 0: A=PWM, B=LOW, C=FLOAT — floating=C, ZC rising */
@@ -30,29 +28,3 @@ const COMMUTATION_STEP_T commutationTable[6] =
     /* Step 5: A=PWM, B=FLOAT, C=LOW — floating=B, ZC falling */
     { PHASE_PWM_ACTIVE, PHASE_FLOAT,      PHASE_LOW,        1, -1 },
 };
-
-void COMMUTATION_AdvanceStep(volatile GARUDA_DATA_T *pData)
-{
-    if (pData->direction == 0)
-    {
-        pData->currentStep++;
-        if (pData->currentStep >= 6)
-            pData->currentStep = 0;
-    }
-    else
-    {
-        if (pData->currentStep == 0)
-            pData->currentStep = 5;
-        else
-            pData->currentStep--;
-    }
-
-    COMMUTATION_ApplyStep(pData, pData->currentStep);
-}
-
-void COMMUTATION_ApplyStep(volatile GARUDA_DATA_T *pData, uint8_t step)
-{
-    if (step >= 6) step %= 6;
-    pData->currentStep = step;
-    HAL_PWM_SetCommutationStep(step);
-}

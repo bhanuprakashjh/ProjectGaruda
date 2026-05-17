@@ -69,12 +69,8 @@ static PARSER_T parser;
 /* Access systemTick */
 #include "../garuda_service.h"
 #include "../garuda_config.h"
-#if FEATURE_V4_SECTOR_PI
 extern volatile uint32_t gV4SystemTick;
 #define GSP_SYSTEM_TICK  gV4SystemTick
-#else
-#define GSP_SYSTEM_TICK  gData.systemTick
-#endif
 
 /* ── CRC-16-CCITT ────────────────────────────────────────────────── */
 

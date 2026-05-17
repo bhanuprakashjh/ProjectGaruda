@@ -13,16 +13,12 @@
  * SCCP CLKSEL=000 routes Standard Speed Peripheral Clock (FPB/2 =
  * 100 MHz on AK; FPB = 100 MHz on CK — identical SCCP input rate
  * on both MCUs). TMRPS=0b11 (1:64) gives 640 ns tick.
- *
- * Enabled by FEATURE_V4_SECTOR_PI=1 (or legacy FEATURE_IC_ZC).
  */
 
 #ifndef HAL_COM_TIMER_H
 #define HAL_COM_TIMER_H
 
 #include "../garuda_config.h"
-
-#if FEATURE_IC_ZC || FEATURE_V4_SECTOR_PI
 
 #include <stdint.h>
 #include <xc.h>
@@ -73,5 +69,4 @@ void HAL_ComTimer_ScheduleAbsolute(uint16_t targetTick);
  */
 void HAL_ComTimer_Cancel(void);
 
-#endif /* FEATURE_IC_ZC || FEATURE_V4_SECTOR_PI */
 #endif /* HAL_COM_TIMER_H */

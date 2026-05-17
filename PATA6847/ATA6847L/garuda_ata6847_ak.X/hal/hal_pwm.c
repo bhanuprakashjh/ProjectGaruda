@@ -325,16 +325,6 @@ void HAL_PWM_SetDutyCycle(uint32_t duty)
     PG1DC = (uint16_t)duty;
     g_pwmActualDuty = (uint16_t)duty;
 
-#if FEATURE_PTG_ZC && !FEATURE_DUAL_POS_PROBE && !FEATURE_PER_SECTOR_PTG
-    /* Track switching edge for PTG edge-relative sampling.
-     * PG1TRIGB fires ADC Trigger 2 at counter=duty (ON→OFF edge).
-     * PTG waits for this trigger, delays, then samples BEMF.
-     *
-     * Disabled when FEATURE_DUAL_POS_PROBE or FEATURE_PER_SECTOR_PTG is
-     * on: PG1TRIGB is owned by the PTG ISR / Commutate respectively. */
-    PG1TRIGB = (uint16_t)duty;
-#endif
-
     /* Request buffer-to-active transfer at next SOC */
     PG1STATbits.UPDREQ = 1;
     PG2STATbits.UPDREQ = 1;
