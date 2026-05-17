@@ -60,7 +60,7 @@ typedef enum {
     GSP_CMD_ATA_DIAG        = 0x40,
     /* BEMF GPIO state inspection. Safe in any state — pure GPIO read.
      * Response: [BEMF_A, BEMF_B, BEMF_C, v4_floatingPhase,
-     *            v5_ptgExpectedComp, current_step, currentRisingZc]. */
+     *            ptgExpectedComp, current_step, currentRisingZc]. */
     GSP_CMD_BEMF_PROBE      = 0x41,
     GSP_CMD_TELEM_FRAME     = 0x80,
     GSP_CMD_ERROR           = 0xFF

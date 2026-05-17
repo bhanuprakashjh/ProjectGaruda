@@ -21,16 +21,16 @@
 #include <stdint.h>
 
 /* Heartbeat / fire counter — exposed via the snapshot for host diagnostics. */
-extern volatile uint32_t v5_ptgFires;
+extern volatile uint32_t ptgFires;
 
 /* Per-sector expected post-ZC comparator state. Written by Commutate
- * (sector_pi.c) when V5_POST_ZC_ACCEPT is enabled. Read in the BEMF ISR
+ * (sector_pi.c) when POST_ZC_ACCEPT is enabled. Read in the BEMF ISR
  * paths to classify accept vs reject. */
-extern volatile uint8_t  v5_ptgExpectedComp;
+extern volatile uint8_t  ptgExpectedComp;
 
 /* PTG postscaler skipped-fire count — gated fires that bypass
  * V4_ProcessBemfSample() (see PTG_POSTSCALE_N in garuda_config.h). */
-extern volatile uint32_t v5_ptgSkipped;
+extern volatile uint32_t ptgSkipped;
 
 void HAL_PTG_Init(void);
 void HAL_PTG_Start(void);

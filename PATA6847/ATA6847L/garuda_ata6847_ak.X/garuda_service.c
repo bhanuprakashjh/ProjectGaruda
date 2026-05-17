@@ -264,16 +264,16 @@ volatile uint32_t v4_compFalling_Low  = 0;  /* falling sector, comp=0 (pre-ZC st
 /* V5.1 post-ZC shadow counters. Incremented in _ADCInterrupt every
  * past-blanking sample (no v4_captureValid sticky gate, so per-sample
  * rate matches what the PTG diagnostic measured). When
- * FEATURE_V5_POST_ZC_ACCEPT=0 these stay at 0.
- *   v5_postZcRisingAcc  — rising sector + comp == 0 (post-ZC for rising)
- *   v5_postZcRisingRej  — rising sector + comp != 0
- *   v5_postZcFallingAcc — falling sector + comp == 1 (post-ZC for falling)
- *   v5_postZcFallingRej — falling sector + comp != 1
+ * FEATURE_POST_ZC_ACCEPT=0 these stay at 0.
+ *   postZcRisingAcc  — rising sector + comp == 0 (post-ZC for rising)
+ *   postZcRisingRej  — rising sector + comp != 0
+ *   postZcFallingAcc — falling sector + comp == 1 (post-ZC for falling)
+ *   postZcFallingRej — falling sector + comp != 1
  * Expected from PTG comparison: per-polarity Acc/(Acc+Rej) ≈ 67%. */
-volatile uint32_t v5_postZcRisingAcc  = 0;
-volatile uint32_t v5_postZcRisingRej  = 0;
-volatile uint32_t v5_postZcFallingAcc = 0;
-volatile uint32_t v5_postZcFallingRej = 0;
+volatile uint32_t postZcRisingAcc  = 0;
+volatile uint32_t postZcRisingRej  = 0;
+volatile uint32_t postZcFallingAcc = 0;
+volatile uint32_t postZcFallingRej = 0;
 
 /* ── V4 ADC ISR ───────────────────────────────────────────────────── */
 void __attribute__((interrupt, auto_psv)) _AD1CH4Interrupt(void)
@@ -416,11 +416,11 @@ void V4_ProcessBemfSample(void)
                  * sector polarity, past blanking. Runs in BOTH detection
                  * paths (V4 PRE-ZC and V5 POST_ZC_OWN) so the same probe
                  * can compare what mid-OFF vs mid-ON sees regardless of
-                 * which accept logic is active. Uses v5_ptgExpectedComp
+                 * which accept logic is active. Uses ptgExpectedComp
                  * (reliable per-sector flag) not isRising (stuck-true). */
                 {
-                    extern volatile uint8_t v5_ptgExpectedComp;
-                    bool sectorRising_probe = (v5_ptgExpectedComp == 0u);
+                    extern volatile uint8_t ptgExpectedComp;
+                    bool sectorRising_probe = (ptgExpectedComp == 0u);
                     if (sectorRising_probe) {
                         if (comp) v4_compRising_High++;
                         else      v4_compRising_Low++;
@@ -430,9 +430,9 @@ void V4_ProcessBemfSample(void)
                     }
                 }
 
-#if FEATURE_V5_POST_ZC_ACCEPT
+#if FEATURE_POST_ZC_ACCEPT
                 /* V5.1 shadow: count what post-ZC accept logic would do.
-                 * Reads v5_ptgExpectedComp (written by Commutate) instead
+                 * Reads ptgExpectedComp (written by Commutate) instead
                  * of HAL_Capture_IsRisingZc() — the function call exhibits
                  * a "stuck true" behavior in ISR context that the volatile
                  * global bypasses. First run of this shadow with the
@@ -441,30 +441,30 @@ void V4_ProcessBemfSample(void)
                  * No v4_captureValid sticky gate — per-sample rate matches
                  * the PTG diagnostic for direct comparison. */
                 {
-                    extern volatile uint8_t v5_ptgExpectedComp;
-                    uint8_t expectedPostZc = v5_ptgExpectedComp;
+                    extern volatile uint8_t ptgExpectedComp;
+                    uint8_t expectedPostZc = ptgExpectedComp;
                     bool    sectorRising   = (expectedPostZc == 0u);
                     if (comp == expectedPostZc) {
-                        if (sectorRising) v5_postZcRisingAcc++;
-                        else              v5_postZcFallingAcc++;
+                        if (sectorRising) postZcRisingAcc++;
+                        else              postZcFallingAcc++;
                     } else {
-                        if (sectorRising) v5_postZcRisingRej++;
-                        else              v5_postZcFallingRej++;
+                        if (sectorRising) postZcRisingRej++;
+                        else              postZcFallingRej++;
                     }
                 }
 #endif
 
                 /* V4 PRE-ZC detection.
                  *
-                 * Polarity gate uses v5_ptgExpectedComp (written by Commutate
+                 * Polarity gate uses ptgExpectedComp (written by Commutate
                  * per sector — reliable) instead of HAL_Capture_IsRisingZc()
                  * (function call exhibits "stuck-true" behavior in ISR context,
                  * see comments at ~line 535 and CCP2 ISR for history).
                  * `isRising` is still used for state-match counting because
                  * that's tied to the inverted-ATA6847 comp polarity rules
                  * and is independent of which sector flag we trust. */
-                extern volatile uint8_t v5_ptgExpectedComp;
-                bool sectorRising_v5 = (v5_ptgExpectedComp == 0u);
+                extern volatile uint8_t ptgExpectedComp;
+                bool sectorRising_v5 = (ptgExpectedComp == 0u);
 
                 /* 2026-05-15 — falling-only PI feed.
                  *

@@ -243,13 +243,13 @@ void GSP_DispatchCommand(uint8_t cmdId, const uint8_t *payload, uint8_t payloadL
              * use to diagnose phase-wiring and comparator polarity by hand-
              * rotating the motor and watching the three BEMF lines toggle. */
             extern volatile uint8_t v4_floatingPhase;
-            extern volatile uint8_t v5_ptgExpectedComp;
+            extern volatile uint8_t ptgExpectedComp;
             uint8_t probe[7];
             probe[0] = BEMF_A_GetValue();
             probe[1] = BEMF_B_GetValue();
             probe[2] = BEMF_C_GetValue();
             probe[3] = v4_floatingPhase;
-            probe[4] = v5_ptgExpectedComp;
+            probe[4] = ptgExpectedComp;
             probe[5] = (uint8_t)SectorPI_GetPhase();
             probe[6] = HAL_Capture_IsRisingZc() ? 1u : 0u;
             GSP_SendResponse(GSP_CMD_BEMF_PROBE, probe, sizeof(probe));
@@ -515,11 +515,11 @@ void GSP_TelemTick(void)
     }
 
     /* 2026-05-15 PTG postscale experiment: count of fires that bypassed
-     * V4_ProcessBemfSample(). v5_ptgFires is total fires; effective
+     * V4_ProcessBemfSample(). ptgFires is total fires; effective
      * BEMF-sample rate = (ptgFires - ptgSkipped) / window. */
     {
-        extern volatile uint32_t v5_ptgSkipped;
-        memcpy(&d[172], &v5_ptgSkipped, 4);
+        extern volatile uint32_t ptgSkipped;
+        memcpy(&d[172], &ptgSkipped, 4);
     }
 
     /* Per-sector hit counters (2026-05-15). 6 × uint32 at d[176..199].

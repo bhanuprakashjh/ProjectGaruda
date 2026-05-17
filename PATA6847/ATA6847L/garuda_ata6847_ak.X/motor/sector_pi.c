@@ -70,7 +70,7 @@ static volatile uint32_t   rampDuty;
  * Timer1 ticks (50µs each) before EnterCL. Lets the rotor physically
  * catch up to the commanded rate. Diagnosed 2026-05-12 on AK board:
  * without settle, rotor lags commanded speed, BEMF stuck on the wrong
- * side of neutral all sector, V5_POST_ZC_OWN edge gate never triggers,
+ * side of neutral all sector, post-ZC edge gate never triggers,
  * stall in 1s. */
 #ifndef OL_HANDOFF_SETTLE_MS
 #define OL_HANDOFF_SETTLE_MS  200U
@@ -118,14 +118,14 @@ static volatile uint16_t   measuredSpeed;
 static volatile uint16_t clSettleCounter = 0;
 
 /* V5.2 measurement-based period tracker.
- *   v5_tMeasHR       — raw halved measuredCommPeriod, written by Commutate ISR.
+ *   tMeasHR       — raw halved measuredCommPeriod, written by Commutate ISR.
  *                       Fast path: single write, no branches. Noisy.
- *   v5_tMeasHRSmooth — spike-filtered + EMA smoothed, written by TimeTick
+ *   tMeasHRSmooth — spike-filtered + EMA smoothed, written by TimeTick
  *                       (1 ms rate where cycles are cheap). Clean value
  *                       shipped in telemetry and used by MEAS_PI_OWN.
  * Both defined unconditionally so telemetry works with flag off. */
-volatile uint16_t v5_tMeasHR       = 0;
-volatile uint16_t v5_tMeasHRSmooth = 0;
+volatile uint16_t tMeasHR       = 0;
+volatile uint16_t tMeasHRSmooth = 0;
 
 /* ── Speed regulation (outer loop) ─────────────────────────────── */
 /* pot → targetSpeed, PI on (targetSpeed - measuredSpeed) → amplitude.
@@ -373,19 +373,19 @@ void SectorPI_Start(uint16_t vbusRaw)
     v4_adcCaptureSet = 0;
     v4_adcSetRising = 0;
     v4_adcAlreadySet = 0;
-    extern volatile uint32_t v5_postZcRisingAcc;
-    extern volatile uint32_t v5_postZcRisingRej;
-    extern volatile uint32_t v5_postZcFallingAcc;
-    extern volatile uint32_t v5_postZcFallingRej;
-    v5_postZcRisingAcc  = 0;
-    v5_postZcRisingRej  = 0;
-    v5_postZcFallingAcc = 0;
-    v5_postZcFallingRej = 0;
+    extern volatile uint32_t postZcRisingAcc;
+    extern volatile uint32_t postZcRisingRej;
+    extern volatile uint32_t postZcFallingAcc;
+    extern volatile uint32_t postZcFallingRej;
+    postZcRisingAcc  = 0;
+    postZcRisingRej  = 0;
+    postZcFallingAcc = 0;
+    postZcFallingRej = 0;
     /* V5.2: reset measurement tracker to unseeded. It seeds on first
      * valid commutation interval in Commutate. Smoothed companion is
      * seeded from the raw value in TimeTick. */
-    v5_tMeasHR       = 0;
-    v5_tMeasHRSmooth = 0;
+    tMeasHR       = 0;
+    tMeasHRSmooth = 0;
 
     /* Start alignment — Timer1 ISR drives via SectorPI_OlTick() */
     alignCounter = ALIGN_TIME_COUNTS;
@@ -548,12 +548,12 @@ void SectorPI_Commutate(void)
     if (measuredCommPeriod >= V4_MIN_PERIOD)
     {
         actualStepPeriodHR = measuredCommPeriod;
-#if FEATURE_V5_MEAS_PI
+#if FEATURE_MEAS_PI
         /* V5.2 tracker: halve measuredCommPeriod (raw reads 2× real sector
          * period, root cause unresolved). Minimal single write — any
          * additional ISR cycles destabilize the V4 Commutate timing. */
-        v5_tMeasHR = (uint16_t)(measuredCommPeriod >> 1);
-        if (v5_tMeasHR < V4_MIN_PERIOD) v5_tMeasHR = V4_MIN_PERIOD;
+        tMeasHR = (uint16_t)(measuredCommPeriod >> 1);
+        if (tMeasHR < V4_MIN_PERIOD) tMeasHR = V4_MIN_PERIOD;
 #endif
     }
     uint16_t capValue = CAP_SENTINEL;
@@ -603,7 +603,7 @@ void SectorPI_Commutate(void)
      * THE PAIRING INVARIANT: the three per-sector globals
      *   v4_currentSector  — software sector index 0..5
      *   v4_floatingPhase  — which BEMF GPIO PTG should read (0=A 1=B 2=C)
-     *   v5_ptgExpectedComp — post-ZC comp state (0=rising, 1=falling sector)
+     *   ptgExpectedComp — post-ZC comp state (0=rising, 1=falling sector)
      * MUST be written back-to-back, in this same block. Reason:
      *
      * Commutate runs at IPL 6, PTG runs at IPL 5. PTG cannot preempt
@@ -615,13 +615,13 @@ void SectorPI_Commutate(void)
      *
      *      PTG reads v4_currentSector (= old sector, e.g. 1=falling)
      *      Commutate preempts and updates all three globals to N=2 (rising)
-     *      PTG resumes, reads v5_ptgExpectedComp (= NEW sector's parity, 0=rising)
+     *      PTG resumes, reads ptgExpectedComp (= NEW sector's parity, 0=rising)
      *      → tally bins this sample as "sector 1 falling, expected rising"
      *        which is incoherent
      *
      * Before this fix, the three writes lived ~60-100 lines apart.
      * Bench observation: fpStale = 7%, and cR (rising-sector captures)
-     * stayed at 0 forever because stale v5_ptgExpectedComp from the
+     * stayed at 0 forever because stale ptgExpectedComp from the
      * previous (falling) sector misbinned rising captures as falling.
      *
      * After this fix: fpStale = ~4% (residual probe-side race that
@@ -635,8 +635,8 @@ void SectorPI_Commutate(void)
     v4_sectorHits[position]++;
     {
         extern volatile uint8_t v4_floatingPhase;
-#if FEATURE_V5_POST_ZC_ACCEPT
-        extern volatile uint8_t v5_ptgExpectedComp;
+#if FEATURE_POST_ZC_ACCEPT
+        extern volatile uint8_t ptgExpectedComp;
 #endif
         /* Compute new values BEFORE writing any volatile global.
          * If PTG preempts mid-compute we don't care — none of the
@@ -651,8 +651,8 @@ void SectorPI_Commutate(void)
          * the same ISR with PTG at lower priority. */
         v4_currentSector  = position;
         v4_floatingPhase  = newFp;
-#if FEATURE_V5_POST_ZC_ACCEPT
-        v5_ptgExpectedComp = newExpected;
+#if FEATURE_POST_ZC_ACCEPT
+        ptgExpectedComp = newExpected;
 #endif
     }
     HAL_PWM_SetCommutationStep(position);
@@ -708,7 +708,7 @@ void SectorPI_Commutate(void)
          * that used to live here was deleted 2026-05-15b along with
          * the local `step` pointer that only fed it. */
 
-        /* v5_ptgExpectedComp is now written at step-3 (atomic with
+        /* ptgExpectedComp is now written at step-3 (atomic with
          * v4_currentSector and v4_floatingPhase) — see comment there.
          * The redundant write that used to live here was deleted on
          * 2026-05-15c after fpStale = 4 % + cR = 0 showed the late
@@ -930,26 +930,26 @@ void SectorPI_TimeTick(void)
             commandEnabled = true;
     }
 
-#if FEATURE_V5_MEAS_PI
-    /* V5.2: spike-filter + EMA over v5_tMeasHR at 1 kHz. The Commutate
+#if FEATURE_MEAS_PI
+    /* V5.2: spike-filter + EMA over tMeasHR at 1 kHz. The Commutate
      * ISR writes raw halved period (noisy, occasional near-zero samples
      * from back-to-back fires). Filtering here keeps the hot path
      * minimal — TimeTick has microseconds of slack.
      * Reject any sample less than half the current smoother (the
      * back-to-back spike signature), and EMA-smooth the rest with
-     * α=1/4 (V5_MEAS_PI_ALPHA_SHIFT). MEAS_PI_OWN reads v5_tMeasHRSmooth. */
+     * α=1/4 (MEAS_PI_ALPHA_SHIFT). MEAS_PI_OWN reads tMeasHRSmooth. */
     {
-        uint16_t sample = v5_tMeasHR;
+        uint16_t sample = tMeasHR;
         if (sample >= V4_MIN_PERIOD) {
-            if (v5_tMeasHRSmooth < V4_MIN_PERIOD) {
-                v5_tMeasHRSmooth = sample;           /* seed */
-            } else if (sample >= (v5_tMeasHRSmooth >> 1)) {
-                int32_t err = (int32_t)sample - (int32_t)v5_tMeasHRSmooth;
-                int32_t nt  = (int32_t)v5_tMeasHRSmooth
-                              + (err >> V5_MEAS_PI_ALPHA_SHIFT);
+            if (tMeasHRSmooth < V4_MIN_PERIOD) {
+                tMeasHRSmooth = sample;           /* seed */
+            } else if (sample >= (tMeasHRSmooth >> 1)) {
+                int32_t err = (int32_t)sample - (int32_t)tMeasHRSmooth;
+                int32_t nt  = (int32_t)tMeasHRSmooth
+                              + (err >> MEAS_PI_ALPHA_SHIFT);
                 if (nt < V4_MIN_PERIOD) nt = V4_MIN_PERIOD;
                 if (nt > 0xFFFF)        nt = 0xFFFF;
-                v5_tMeasHRSmooth = (uint16_t)nt;
+                tMeasHRSmooth = (uint16_t)nt;
             }
             /* else: spike below half of smoother — drop sample */
         }
@@ -1128,21 +1128,21 @@ void SectorPI_TelemGet(V4_TELEM_T *out)
         out->adcSetRising       = v4_adcSetRising;
         out->adcAlreadySet      = v4_adcAlreadySet;
         out->commutateNoCapture = diagCommutateNoCapture;
-        extern volatile uint32_t v5_ptgFires;
-        out->ptgFires = v5_ptgFires;
+        extern volatile uint32_t ptgFires;
+        out->ptgFires = ptgFires;
         out->ptgRisingAcc  = 0;
         out->ptgRisingRej  = 0;
         out->ptgFallingAcc = 0;
         out->ptgFallingRej = 0;
-        extern volatile uint32_t v5_postZcRisingAcc;
-        extern volatile uint32_t v5_postZcRisingRej;
-        extern volatile uint32_t v5_postZcFallingAcc;
-        extern volatile uint32_t v5_postZcFallingRej;
-        out->postZcRisingAcc  = v5_postZcRisingAcc;   /* 0 when V5_POST_ZC=0 */
-        out->postZcRisingRej  = v5_postZcRisingRej;
-        out->postZcFallingAcc = v5_postZcFallingAcc;
-        out->postZcFallingRej = v5_postZcFallingRej;
-        out->tMeasHR          = v5_tMeasHRSmooth;      /* smoothed; 0 when V5_MEAS=0 */
+        extern volatile uint32_t postZcRisingAcc;
+        extern volatile uint32_t postZcRisingRej;
+        extern volatile uint32_t postZcFallingAcc;
+        extern volatile uint32_t postZcFallingRej;
+        out->postZcRisingAcc  = postZcRisingAcc;   /* 0 when POST_ZC_ACCEPT=0 */
+        out->postZcRisingRej  = postZcRisingRej;
+        out->postZcFallingAcc = postZcFallingAcc;
+        out->postZcFallingRej = postZcFallingRej;
+        out->tMeasHR          = tMeasHRSmooth;      /* smoothed; 0 when MEAS_PI=0 */
     }
 }
 

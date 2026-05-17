@@ -327,32 +327,32 @@
 
 /* PTG ISR priority 4: above ADC(3), below CCP(5). Tying with CCP(5)
  * regressed peak 107k→62k — CCP servicing got queued behind PTG. */
-#define V5_PTG_ISR_PRIORITY  4
+#define PTG_ISR_PRIORITY  4
 
 /* Post-ZC shadow counters (rising/falling Acc/Rej) populated by
  * V4_ProcessBemfSample. Reported via GSP snapshot — diagnostic only,
  * does not drive motor control. */
-#ifndef FEATURE_V5_POST_ZC_ACCEPT
-#define FEATURE_V5_POST_ZC_ACCEPT  1
+#ifndef FEATURE_POST_ZC_ACCEPT
+#define FEATURE_POST_ZC_ACCEPT  1
 #endif
 
-/* Measurement-domain shadow PI: smoothed period tracker v5_tMeasHRSmooth
+/* Measurement-domain shadow PI: smoothed period tracker tMeasHRSmooth
  * computed in parallel with the set-point PI. Telemetry-only — exposed as
  * the eTPm column. α = 1/4 (matches set-point Ki). */
-#ifndef FEATURE_V5_MEAS_PI
-#define FEATURE_V5_MEAS_PI  1
+#ifndef FEATURE_MEAS_PI
+#define FEATURE_MEAS_PI  1
 #endif
-#ifndef V5_MEAS_PI_ALPHA_SHIFT
-#define V5_MEAS_PI_ALPHA_SHIFT  2
+#ifndef MEAS_PI_ALPHA_SHIFT
+#define MEAS_PI_ALPHA_SHIFT  2
 #endif
 
 /* Default PTGT0LIM values. At FCY=200 MHz with PTGDIV=0, 1 PTG tick = 5 ns.
  * Valley delay covers ATA6847 comparator propagation (~500 ns) + settle.
  * Peak delay = MPER/4 (PWM counter triangle: valley → peak = MPER/2 PWM-tick
  * = MPER/4 PTG-tick since PWM-tick is 10 ns and PTG-tick is 5 ns). */
-#define V5_PTG_TICK_NS          10u
-#define V5_PTG_VALLEY_DELAY     60u        /* 600 ns settle after trigger */
-#define V5_PTG_PEAK_DELAY       ((uint16_t)(LOOPTIME_TCY / 4u))
+#define PTG_TICK_NS          10u
+#define PTG_VALLEY_DELAY     60u        /* 600 ns settle after trigger */
+#define PTG_PEAK_DELAY       ((uint16_t)(LOOPTIME_TCY / 4u))
 
 
 

@@ -30,13 +30,13 @@
 #include "../garuda_service.h"     /* V4_ProcessBemfSample() */
 
 /* ── Globals (defined here, externed from hal_ptg.h) ──────────────── */
-volatile uint32_t v5_ptgFires      = 0;
-volatile uint32_t v5_ptgSkipped    = 0;
+volatile uint32_t ptgFires      = 0;
+volatile uint32_t ptgSkipped    = 0;
 
 /* Per-sector expected post-ZC comparator state — written by Commutate
- * in sector_pi.c when V5_POST_ZC_ACCEPT is enabled.  Read in the BEMF
+ * in sector_pi.c when POST_ZC_ACCEPT is enabled.  Read in the BEMF
  * ISR paths to classify accept vs reject. */
-volatile uint8_t  v5_ptgExpectedComp = 0;
+volatile uint8_t  ptgExpectedComp = 0;
 
 /* ── PTG step-command opcodes (DS70005539 Table 26-5) ─────────────── */
 #define PTG_OP_CTRL     (0x0u << 4)   /* 0x00 — PTGCTRL  */
@@ -90,7 +90,7 @@ void HAL_PTG_Start(void)
     /* Re-init each start for clean post-desync state. */
     HAL_PTG_Init();
 
-    v5_ptgFires        = 0;
+    ptgFires        = 0;
 
     _PTG0IF = 0;
     _PTG0IE = 1;
@@ -111,19 +111,19 @@ void HAL_PTG_Stop(void)
  * Fires at every PG1TRIGB match (PWM mid-OFF, period boundary, by
  * default — same instant the BEMF GPIO is stable for sampling).
  *
- *  - v5_ptgFires++ runs always (heartbeat / Phase 1 diagnostic).
+ *  - ptgFires++ runs always (heartbeat / Phase 1 diagnostic).
  *  - V4_ProcessBemfSample() runs here (not in the ADC ISR). The ADC
  *    ISR retains POT/Vbus/current responsibilities only. Latency drops
  *    from ~1.5 µs (ADC scan complete) to ~50 ns (ISR vector). */
 void __attribute__((interrupt, no_auto_psv)) _PTG0Interrupt(void)
 {
     _PTG0IF = 0;
-    v5_ptgFires++;
+    ptgFires++;
 #if PTG_POSTSCALE_N > 1U
     /* Process 1 of every PTG_POSTSCALE_N fires (rate experiment). */
     static uint8_t postscaler = 0;
     if (++postscaler < PTG_POSTSCALE_N) {
-        v5_ptgSkipped++;
+        ptgSkipped++;
         PG1TRIGB = PTG_TRIG_MID_ON_POS;   /* keep next fire armed at MID-ON */
         return;
     }
