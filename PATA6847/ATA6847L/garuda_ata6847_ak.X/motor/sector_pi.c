@@ -373,10 +373,6 @@ void SectorPI_Start(uint16_t vbusRaw)
     v4_adcCaptureSet = 0;
     v4_adcSetRising = 0;
     v4_adcAlreadySet = 0;
-    extern volatile uint32_t v4_offMidCapture;
-    extern volatile uint32_t v4_offMidMismatch;
-    v4_offMidCapture = 0;
-    v4_offMidMismatch = 0;
     extern volatile uint32_t v5_postZcRisingAcc;
     extern volatile uint32_t v5_postZcRisingRej;
     extern volatile uint32_t v5_postZcFallingAcc;
@@ -1132,10 +1128,6 @@ void SectorPI_TelemGet(V4_TELEM_T *out)
         out->adcSetRising       = v4_adcSetRising;
         out->adcAlreadySet      = v4_adcAlreadySet;
         out->commutateNoCapture = diagCommutateNoCapture;
-        extern volatile uint32_t v4_offMidCapture;
-        extern volatile uint32_t v4_offMidMismatch;
-        out->offMidCapture  = v4_offMidCapture;
-        out->offMidMismatch = v4_offMidMismatch;
         extern volatile uint32_t v5_ptgFires;
         out->ptgFires = v5_ptgFires;
         out->ptgRisingAcc  = 0;

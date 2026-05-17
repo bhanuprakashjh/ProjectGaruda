@@ -421,8 +421,7 @@ void GSP_TelemTick(void)
     memcpy(&d[52], &t.adcStateMismatch, 4);
     memcpy(&d[56], &t.adcCaptureSet,    4);
     memcpy(&d[60], &t.adcSetRising,     4);
-    memcpy(&d[64], &t.offMidCapture,    4);
-    memcpy(&d[68], &t.offMidMismatch,   4);
+    { uint32_t zero = 0; memcpy(&d[64], &zero, 4); memcpy(&d[68], &zero, 4); }
     memcpy(&d[72], &t.ptgFires,         4);  /* V5.0 PTG ISR fire count */
     memcpy(&d[76], &t.ptgRisingAcc,     4);  /* V5.0 per-polarity shadow */
     memcpy(&d[80], &t.ptgRisingRej,     4);

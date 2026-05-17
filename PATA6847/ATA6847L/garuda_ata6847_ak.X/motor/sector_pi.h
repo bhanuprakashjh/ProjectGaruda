@@ -47,8 +47,6 @@ typedef struct {
     uint32_t adcSetRising;          /* subset of adcCaptureSet on rising-ZC sectors (0,2,4) */
     uint32_t adcAlreadySet;         /* skipped — already true */
     uint32_t commutateNoCapture;    /* Commutate found capValue == SENTINEL */
-    uint32_t offMidCapture;         /* falling ZC confirmed at PWM OFF-mid */
-    uint32_t offMidMismatch;        /* falling ZC wrong at PWM OFF-mid */
     uint32_t ptgFires;              /* V5.0: _PTG0Interrupt fire count */
     uint32_t ptgRisingAcc;          /* V5.0: rising-sector samples post-ZC */
     uint32_t ptgRisingRej;

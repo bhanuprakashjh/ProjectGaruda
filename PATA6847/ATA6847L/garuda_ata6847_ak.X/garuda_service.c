@@ -261,10 +261,6 @@ volatile uint32_t v4_compRising_Low   = 0;  /* rising sector,  comp=0 (post-ZC s
 volatile uint32_t v4_compFalling_High = 0;  /* falling sector, comp=1 (post-ZC state) */
 volatile uint32_t v4_compFalling_Low  = 0;  /* falling sector, comp=0 (pre-ZC state)  */
 
-/* SCCP1 off-mid falling ZC diagnostic (fires at PWM peak) */
-volatile uint32_t v4_offMidCapture   = 0;
-volatile uint32_t v4_offMidMismatch  = 0;
-
 /* V5.1 post-ZC shadow counters. Incremented in _ADCInterrupt every
  * past-blanking sample (no v4_captureValid sticky gate, so per-sample
  * rate matches what the PTG diagnostic measured). When
@@ -510,26 +506,6 @@ void V4_ProcessBemfSample(void)
                     }
                 }
             }
-        }
-    }
-}
-
-/* ── SCCP1 ISR: falling ZC level check at PWM OFF-mid ────────────
- * Fires at 40 kHz, phase-offset from ADC ISR by 12.5 µs (PWM peak).
- * Independent timer — no PWM trigger chain involvement. */
-void __attribute__((interrupt, no_auto_psv)) _CCT1Interrupt(void)
-{
-    _CCT1IF = 0;
-    if (SectorPI_IsRunning() && SectorPI_GetPhase() == 3
-        && !HAL_Capture_IsRisingZc())
-    {
-        uint16_t nowHR = CCP4TMRL;
-        if ((int16_t)(nowHR - v4_blankingEndHR) >= 0)
-        {
-            if (ReadBEMFComp() == 1)
-                v4_offMidCapture++;
-            else
-                v4_offMidMismatch++;
         }
     }
 }
