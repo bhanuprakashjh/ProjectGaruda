@@ -40,17 +40,10 @@ void     HAL_PWM_ExitSinglePulse(void);
 bool     HAL_PWM_IsSinglePulse(void);
 void     HAL_PWM_SetSPFlag(bool on);
 
-/* SP mode dormant — set above any reachable eRPM so SP never engages.
- * SP machinery (unipolar switch, actualStepPeriodHR, PI freeze, dynamic
- * blanking, CCP capture path) is preserved in the codebase for future
- * work. Pivoted to lower PWM carrier (20 kHz) instead — gives cleaner
- * BEMF at high speed without SP's hardware-coupling issues.
- *
- * [AK PORT] Bumped to 999999 per plan v6 §1 "SP out of scope for
- * milestone". SP would bypass the ADC-midpoint ZC path while CCP
- * diagnostics are off (FEATURE_V4_CCP_DIAG=0), leaving the motor
- * without a ZC source.  To re-enable SP after CCP path is ported,
- * lower threshold to 70000UL / 55000UL. */
+/* SP mode dormant — threshold above any reachable eRPM, never engages.
+ * Machinery (unipolar switch, actualStepPeriodHR, PI freeze, dynamic
+ * blanking) is preserved for future work but bypasses the ADC-midpoint
+ * ZC path; on AK there's no CCP capture fallback. */
 #define SP_ENTER_ERPM   999999UL
 #define SP_EXIT_ERPM    900000UL
 

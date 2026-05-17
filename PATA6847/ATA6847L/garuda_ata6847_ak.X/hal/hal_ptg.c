@@ -125,36 +125,6 @@ void HAL_PTG_Stop(void)
  *    runs here instead of inside the ADC ISR.  The ADC ISR retains
  *    POT/Vbus/current responsibilities only.  Latency drops from
  *    ~1.5 µs (ADC scan complete) to ~50 ns (ISR vector). */
-#if FEATURE_DUAL_POS_PROBE
-/* B2 dual-position probe: ISR-local toggle to know whether the current
- * fire is at MID-OFF (PG1TRIGB=1) or MID-ON (PG1TRIGB=MPER-1). After
- * processing the current sample, write the OTHER position into PG1TRIGB
- * so the next fire lands at the alternate point. */
-static volatile uint8_t v5_sampleAtMidOn = 0;
-extern volatile uint32_t v5_midOnFallingAcc;
-extern volatile uint32_t v5_midOnFallingRej;
-extern volatile uint8_t  v5_ptgExpectedComp;
-
-/* Tiny helper — single comp read on mid-ON fire, classify against the
- * sector's expected post-ZC state. Falling sectors only (rising path is
- * still served by the mid-OFF V4_ProcessBemfSample call). */
-extern volatile uint8_t v4_floatingPhase;
-static inline void DiagnosticMidOnFallingSample(void)
-{
-    uint8_t expectedPost = v5_ptgExpectedComp;
-    if (expectedPost != 0u) {  /* falling sector */
-        uint8_t comp;
-        switch (v4_floatingPhase) {
-            case 0:  comp = BEMF_A_GetValue(); break;
-            case 1:  comp = BEMF_B_GetValue(); break;
-            default: comp = BEMF_C_GetValue(); break;
-        }
-        if (comp == expectedPost) v5_midOnFallingAcc++;
-        else                      v5_midOnFallingRej++;
-    }
-}
-#endif
-
 void __attribute__((interrupt, no_auto_psv)) _PTG0Interrupt(void)
 {
     _PTG0IF = 0;
@@ -170,45 +140,23 @@ void __attribute__((interrupt, no_auto_psv)) _PTG0Interrupt(void)
     }
     postscaler = 0;
   #endif
-  #if FEATURE_DUAL_POS_PROBE
-    if (v5_sampleAtMidOn) {
-        /* This fire was at MID-ON — diagnostic only, no PI feed. */
-        DiagnosticMidOnFallingSample();
-        PG1TRIGB = PTG_TRIG_MID_OFF_POS;
-        v5_sampleAtMidOn = 0;
-    } else {
-        /* This fire was at MID-OFF — normal BEMF processing + PI feed. */
-        V4_ProcessBemfSample();
-        PG1TRIGB = PTG_TRIG_MID_ON_POS;
-        v5_sampleAtMidOn = 1;
-    }
-  #elif FEATURE_PER_SECTOR_PTG
-    /* 2026-05-15 — duty-adaptive sample position.
+  #if FEATURE_PER_SECTOR_PTG
+    /* Duty-adaptive sample position (2026-05-15).
      *
      * Center-aligned PWM: OFF window is (1-duty)·period wide, ON window
      * is duty·period. Below 50% duty the OFF window is wider → MID-OFF
-     * is the cleanest spot, max distance from switching edges. Above
-     * 50% the ON window is wider → MID-ON is the cleanest spot.
+     * is farthest from switching edges. Above 50% the ON window is
+     * wider → MID-ON is cleanest. Above ~80% duty MID-OFF desyncs (OFF
+     * window too narrow for PTG ISR latency + 3-read deglitch to fit).
      *
-     * Empirical evidence (this commit's MID-OFF-only run):
-     *   - Idle currents at MID-OFF were ~5A vs ~12A at MID-ON (2.4× drop).
-     *   - pR/pF balance ~40/60 at MID-OFF vs 0-1/99 at MID-ON.
-     *   - MID-OFF desyncs above ~80% duty (OFF window too narrow for
-     *     PTG ISR latency + 3-read deglitch to stay inside).
-     *
-     * Picking position per fire based on the active duty:
-     *   below threshold → MID-OFF (low-duty regime)
-     *   above threshold → MID-ON  (high-duty regime, BC vicinity)
-     * Hysteresis band (±5% around 50%) prevents chatter when the PI
-     * has the duty hunting across the boundary. */
+     * One position per fire (not both simultaneously). Hysteresis band
+     * ±5% around 50% to avoid chatter when PI hunts across the boundary. */
     V4_ProcessBemfSample();
     {
         extern volatile uint16_t g_pwmActualDuty;
         static uint8_t lastWasMidOn = 0;   /* sticky for hysteresis */
         uint16_t duty = g_pwmActualDuty;
         if (lastWasMidOn) {
-            /* currently MID-ON — drop to MID-OFF only when duty falls
-             * well below threshold (50% - hyst) */
             if (duty < (PTG_DUTY_ADAPT_THRESHOLD - PTG_DUTY_ADAPT_HYST)) {
                 PG1TRIGB = PTG_TRIG_MID_OFF_POS;
                 lastWasMidOn = 0;
@@ -216,8 +164,6 @@ void __attribute__((interrupt, no_auto_psv)) _PTG0Interrupt(void)
                 PG1TRIGB = PTG_TRIG_MID_ON_POS;
             }
         } else {
-            /* currently MID-OFF — climb to MID-ON only when duty rises
-             * well above threshold (50% + hyst) */
             if (duty > (PTG_DUTY_ADAPT_THRESHOLD + PTG_DUTY_ADAPT_HYST)) {
                 PG1TRIGB = PTG_TRIG_MID_ON_POS;
                 lastWasMidOn = 1;

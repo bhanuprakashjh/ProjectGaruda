@@ -417,13 +417,6 @@
 #define TIMING_ADVANCE_LEVEL  2U
 #endif
 
-/* Speed PD disabled globally — direct pot→duty + duty governor.
- * Current eRPM-based 1ms PD causes duty oscillation at high speed.
- * Needs AM32-style per-ZC interval-based PID before re-enabling. */
-#ifndef FEATURE_SPEED_PD
-#define FEATURE_SPEED_PD     0
-#endif
-
 /* Duty governor: limits max duty based on measured eRPM.
  * Prevents fast-pot desync. Full duty at threshold. */
 #ifndef DUTY_RAMP_ERPM
@@ -451,33 +444,13 @@
 
 /* ── V4 Sector PI Architecture ────────────────────────────────────────
  * Ground-up rewrite modeled on Microchip AVR high-speed motor control.
- * Two timers + one PI. No poll, no DMA, no reactive/predictive modes.
  * SCCP3 = sector timer (periodic, fires commutation ISR).
- * CCP2  = capture timer (IC mode, ISR drains FIFO, last edge wins).
+ * SCCP4 = HR free-running timer (640 ns/tick) for timestamps.
  * PI always owns commutation scheduling from startup onward.
- *
- * When FEATURE_V4_SECTOR_PI=1, ALL V3 motor control code is gated off:
- * FEATURE_IC_ZC, FEATURE_CLC_BLANKING, FEATURE_IC_DMA_SHADOW, etc.
- * are ignored. Only V4 files compile. V3 code remains for fallback
- * (set FEATURE_V4_SECTOR_PI=0 to restore V3). */
-/* Bring-up diagnostic: when set, the V4 ramp NEVER transitions to closed
- * loop. Motor stays in forced-commutation OL mode at MIN_STEP_PERIOD speed
- * with rampDuty = RAMP_DUTY_CAP. Lets the operator confirm the motor
- * physically rotates smoothly under pure 6-step commutation — if it does,
- * the bug is isolated to the BEMF/CL path. Revert to 0 for normal CL. */
-#ifndef FEATURE_DEBUG_OL_ONLY
-#define FEATURE_DEBUG_OL_ONLY   0
-#endif
+ * BEMF detection runs in the PTG ISR (mid-OFF / mid-ON per duty). */
 
 #ifndef FEATURE_V4_SECTOR_PI
 #define FEATURE_V4_SECTOR_PI    1
-#endif
-
-/* AK port: CCP capture path is diag-only (motor runs on ADC-ISR
- * midpoint sampler). Default OFF — turn on once hal_capture.c is
- * re-mapped to AK SCCP3 (no SCCP5 on this MCU). */
-#ifndef FEATURE_V4_CCP_DIAG
-#define FEATURE_V4_CCP_DIAG     0
 #endif
 
 #if FEATURE_V4_SECTOR_PI
@@ -624,40 +597,6 @@
  *     timestamp. Mask CCP after acceptance like AM32. Untested in V4. */
 #define FEATURE_V4_MIDPOINT_ZC  1
 
-/* ── V5 Symmetric Sensing (architecture gate, default off) ────────
- * V4 hits a wall because only rising sectors produce real captures.
- * V5 is the symmetric-sensing rewrite: both polarities feed the PI
- * with matching signal quality.
- *
- * FEATURE_V5_SYMMETRIC_SENSING=0 → byte-identical to V4 baseline.
- * FEATURE_V5_SYMMETRIC_SENSING=1 → V5 code paths active.
- *
- * V5.0 attempt 1 (2026-04-18): SCCP1 priority 2 → 5. Hypothesis was
- * that the OFF-mid diagnostic ISR was starved by CCP storm during
- * falling sectors. Bench result: NO measurable improvement in
- * offMidCapture / offMidMismatch counters between priority 2 and 5.
- * The bottleneck isn't CPU budget — SCCP1 was already firing ~10 kHz
- * at priority 2. The real issue is SCCP1's 24.96 µs clock aliasing
- * against the commutation cadence such that fires never land in
- * sector windows where currentRisingZc == false. Priority can't fix
- * that. The V5_SCCP1_ISR_PRIORITY knob is kept for reference only.
- *
- * V5.0 attempt 2 (active direction): PTG-based BEMF sampling. A
- * core-independent state machine fires ADC/GPIO samples at
- * programmable delays from the PWM trigger, one offset per sector
- * polarity, with hardware-exact timing and zero CPU jitter. This
- * is the right tool for per-sector sample timing — the sampling
- * problem can't be solved in software polling. */
-#ifndef FEATURE_V5_SYMMETRIC_SENSING
-#define FEATURE_V5_SYMMETRIC_SENSING  0
-#endif
-
-#if FEATURE_V5_SYMMETRIC_SENSING
-#define V5_SCCP1_ISR_PRIORITY   5  /* archived: tied with CCP, no effect */
-#else
-#define V5_SCCP1_ISR_PRIORITY   2  /* V4 baseline: below ADC */
-#endif
-
 /* ── V5.0-PTG: Peripheral Trigger Generator BEMF sampling ────────
  * Core-independent state machine triggers per-sector BEMF reads at
  * hardware-exact offsets from the PWM valley event. This is the real
@@ -714,51 +653,6 @@
 #define FEATURE_BEMF_VIA_PTG    1
 #endif
 
-/* B1 mid-ON diagnostic probe (2026-05-13).
- * When enabled, V4_ProcessBemfSample busy-waits ~half a PWM period after
- * its normal mid-OFF read, then takes a second comp read at mid-ON and
- * classifies it for FALLING sectors only. Counters expose via the
- * snapshot pF% slot (replaces post-ZC shadow when enabled).
- *
- * Tests whether mid-ON has a cleaner falling-sector BEMF signal than
- * mid-OFF. If pF% jumps from ~12% (current mid-OFF) to >70%, then a
- * proper PTG dual-trigger architecture (option A) is justified.
- *
- * COST: ~8µs busy-wait inside PTG ISR at 60kHz (~50% of PWM period
- * burned). Top-end performance will tank during the test. Run a low-
- * speed (60-80k) sweep with the prop off to read pF%. DISABLE for
- * normal operation by setting to 0. */
-/* B1 busy-wait probe — rejected 2026-05-13. The 8µs delay-after-PG1TRIGB
- * sample didn't actually land at mid-ON; PG1TRIGB fires at counter==duty
- * (duty-edge), and 8µs later put us at the next switching edge or in
- * deep OFF region. Not a fair test of mid-ON. Disabled. */
-#ifndef FEATURE_MIDON_DIAG_PROBE
-#define FEATURE_MIDON_DIAG_PROBE   0
-#endif
-
-/* B2 dual-position probe (2026-05-13).
- * Alternates PG1TRIGB between MID-OFF (counter=1, just past period
- * boundary) and MID-ON (counter=LOOPTIME_TCY-1, just before peak) on
- * each PTG ISR fire. This puts the diagnostic sample at the actual
- * peak of the ON pulse — independent of duty cycle.
- *
- * PTG fires alternate at MID-OFF and MID-ON positions. ISR uses a
- * toggle state to know which position the current sample is at. Mid-OFF
- * fires run normal V4_ProcessBemfSample (feeds the PI). Mid-ON fires
- * only increment the diagnostic counters — no PI feed, no PWM-cycle
- * dependent behavior change.
- *
- * Expected ISR rate: same as current (one fire per PWM cycle) if
- * PG1TRIGB shadow-updates on period boundary, OR double rate if
- * immediate-update. Both are fine for diagnosis.
- *
- * Compare pF% (= midOn falling acc from FEATURE_MIDON_DIAG_PROBE
- * snapshot wiring) against pre-experiment pF% (~5% at midOff via
- * V5_POST_ZC_ACCEPT shadow). Big jump = mid-ON is the right position. */
-#ifndef FEATURE_DUAL_POS_PROBE
-#define FEATURE_DUAL_POS_PROBE     0   /* superseded by FEATURE_PER_SECTOR_PTG */
-#endif
-
 #define PTG_TRIG_MID_OFF_POS       1U
 #define PTG_TRIG_MID_ON_POS        (LOOPTIME_TCY - 1U)
 
@@ -786,60 +680,17 @@
 #define PTG_DUTY_ADAPT_HYST \
     ((uint16_t)(((uint32_t)LOOPTIME_TCY * 5U) / 100U))
 
-/* Phase 1 — Per-sector PTG trigger position (2026-05-13).
- * B2 result: mid-OFF works for rising sectors (pR=95%); mid-ON has real
- * signal for falling sectors (pF=47% raw, expected ~85% after blanking).
- *
- * Per-sector adaptive sampling: Commutate ISR writes PG1TRIGB based on
- * the next sector's polarity. Rising sectors fire PTG at mid-OFF (works
- * with the proven V4 detection path). Falling sectors fire PTG at mid-ON
- * (new path — falling-sector BEMF is readable there but not at mid-OFF).
- *
- * Phase 1 keeps piFeedPolarity=1 (rising-only PI feed) — observation
- * mode. Watch pF via the diagnostic; should climb from 47% toward >80%
- * once blanking gates the pre-ZC half of falling-sector samples. */
-/* Phase 1 fix-pass 2026-05-13:
- *  (a) Commutate writes PG1TRIGB + sets PG1STATbits.UPDREQ → buffer
- *      transfers to active at next SOC (within ~1 PWM cycle), so the
- *      per-sector position takes effect before the sector ends even
- *      at 200k eRPM (3 PWM cycles per sector).
- *  (b) Legacy V4 detection polarity gate now reads v5_ptgExpectedComp
- *      instead of HAL_Capture_IsRisingZc() (stuck-true). With
- *      piFeedPolarity=1 falling sectors stay out of PI until we
- *      explicitly flip to piFeedPolarity=0 in Phase 2. */
+/* Per-sector PTG trigger position. Commutate ISR writes PG1TRIGB based on
+ * the next sector; the PTG ISR further refines per-fire based on duty
+ * (MID-OFF below 50%, MID-ON above 50%, ±5% hysteresis). */
 #ifndef FEATURE_PER_SECTOR_PTG
 #define FEATURE_PER_SECTOR_PTG     1
 #endif
 
-/* PTG ISR postscaler (2026-05-15 CK-rate experiment).
- * AK currently runs PTG at 60 kHz (every PWM cycle) while CK runs its
- * ADC ISR at ~15-20 kHz via PG1EVTL.ADTR1PS=0b00011 (1:4). CK peaks
- * 235k eRPM with that low rate; AK peaks 226k with 3-4x more data.
- * Hypothesis: extra samples either feed noise into the PI integrator,
- * or shift the elapsed-to-match distribution in a way the advance
- * constant can't fully absorb.
- *
- * N=1: every fire processed (current 60 kHz behaviour)
- * N=3: 1-in-3 fires processed → 20 kHz BEMF (closest to CK's
- *      source-comment claim)
- * N=4: 1-in-4 fires processed → 15 kHz BEMF (matches CK's actual
- *      postscaler math)
- *
- * Skipped ISR fires still execute the PG1TRIGB write so the trigger
- * stays armed — only V4_ProcessBemfSample() is gated. v5_ptgSkipped
- * counts gated fires for telemetry. */
+/* PTG ISR postscaler. N=1 (every fire processed) is the validated default;
+ * dropping to N=3 (20 kHz BEMF) regressed peak to 172k vs 226k baseline. */
 #ifndef PTG_POSTSCALE_N
-#define PTG_POSTSCALE_N            1U   /* 2026-05-15: tested N=3 (20kHz)
-                                          * → peak 172k vs 226k baseline.
-                                          * Lower rate actively hurts AK.
-                                          * Restored to 1 (60kHz). */
-#endif
-
-/* Spin-loop iteration count to delay ~half a PWM period.
- * FCY=200MHz (5 ns/cycle). Volatile-counter loop ~6 cyc/iter on XC-DSC.
- * 60kHz PWM half-period = 8.33µs = 1666 cycles / 6 ≈ 278 iter. */
-#ifndef MIDON_DIAG_LOOPS
-#define MIDON_DIAG_LOOPS           280U
+#define PTG_POSTSCALE_N            1U
 #endif
 
 /* PTG ISR priority — above ADC(3), tied with Timer1(4), below CCP(5).
@@ -849,183 +700,21 @@
  * preempt PTG so CCP processing isn't held up; PTG still preempts ADC. */
 #define V5_PTG_ISR_PRIORITY  4
 
-/* ── V5.1 Symmetric ADC accept (post-ZC convention) ──────────────
- * The V4 ADC ISR uses `expected = isRising ? 1 : 0` — this is the
- * pre-ZC state for both polarities (rising sector pre-ZC has comp=1,
- * falling sector pre-ZC has comp=0 on the inverted ATA6847 comp).
- * V4 only ever accepts captures in rising sectors because the
- * pre-ZC sample for falling sectors lands too late within the sector
- * and gets rejected by the half-period filter in Commutate.
- *
- * V5.1 flips the convention to post-ZC sampling: accept when
- *   rising  sector → comp == 0
- *   falling sector → comp == 1
- * The PTG diagnostic data showed both polarities have ~67% post-ZC
- * accept rate at PWM valley sampling — strong, observable signal on
- * both. With the convention flipped, the ADC ISR should accept on
- * both polarities and feed the PI ~2× more captures, hopefully
- * collapsing the 2× equilibrium offset (eTP ≈ eRpm/2) to truth.
- *
- * V5.1-step1 (FEATURE_V5_POST_ZC_ACCEPT=1, FEATURE_V5_POST_ZC_OWN=0):
- *   Shadow only — V4 convention still drives v4_captureValid; new
- *   counters report what post-ZC accept would do.
- * V5.1-step2 (FEATURE_V5_POST_ZC_OWN=1):
- *   Post-ZC accept actually drives v4_captureValid; PI sees both
- *   polarities. Bench-validate PI stability before this. */
-/* 2026-04-29 — Post-ZC ADC accept enabled.  Capture log on prop startup
- * showed the V4 pre-ZC convention feeding bimodal capValues (cluster A
- * around real ZC ~50% T, cluster B around first post-blanking sample
- * where pre-ZC state still held) → 2-step PI limit cycle → death
- * spiral. Post-ZC convention reads v5_ptgExpectedComp written cleanly
- * by Commutate, bypassing the stuck-TRUE HAL_Capture_IsRisingZc()
- * issue. Both polarities should now contribute single-cluster captures.
- * Verify high-speed (196k) baseline isn't regressed before declaring
- * this stable. */
+/* Post-ZC shadow counters (rising/falling Acc/Rej) populated by
+ * V4_ProcessBemfSample. Reported via GSP snapshot — diagnostic only,
+ * does not drive motor control. */
 #ifndef FEATURE_V5_POST_ZC_ACCEPT
 #define FEATURE_V5_POST_ZC_ACCEPT  1
 #endif
 
-#ifndef FEATURE_V5_POST_ZC_OWN
-#define FEATURE_V5_POST_ZC_OWN     0   /* 2026-05-14 reverted to V4 PRE-ZC after
-                                        * git diff revealed local CK V5_OWN
-                                        * changes are EXPERIMENTAL (commented
-                                        * "Verify high-speed baseline isn't
-                                        * regressed before declaring stable").
-                                        * GitHub CK working at 235k uses
-                                        * V5_POST_ZC_OWN=0 (V4 PRE-ZC). AK V5
-                                        * without edge gate causes cR cascade.
-                                        * Stay on legacy V4 path here too. */
-#endif
-
-#if FEATURE_V5_POST_ZC_OWN && !FEATURE_V5_POST_ZC_ACCEPT
-#error "FEATURE_V5_POST_ZC_OWN requires FEATURE_V5_POST_ZC_ACCEPT"
-#endif
-
-/* ── V5.2 Measurement-based PI ─────────────────────────────────
- * V4's set-point PI converges to a wrong equilibrium (eTP ≈ eRpm/2)
- * and collapses to its floor when capture timing semantics change
- * (e.g., PTG sampling, hardware edge captures). Root cause: the
- * setValue formula models a specific capture convention (first
- * pre-ZC sample after blanking), so any sensor that delivers data
- * with different statistics breaks the equilibrium search.
- *
- * V5.2 fix: replace `timerPeriod ← integrator + delta/4` with a
- * simple exponential smoother on the measured commutation interval:
- *   v5_tMeasHR += (actualStepPeriodHR - v5_tMeasHR) >> alpha_shift
- *
- * This tracks T_real directly and doesn't care about the capture
- * sample moment. The reactive scheduler still uses capture
- * timestamps for *when* to commutate; the period estimate becomes
- * truly independent of what the ZC sensor delivers.
- *
- * V5.2-step1 (FEATURE_V5_MEAS_PI=1, FEATURE_V5_MEAS_PI_OWN=0):
- *   Shadow only — v5_tMeasHR updates in parallel with the set-point
- *   PI, exposed via telemetry (eTPm column). Compare eTPm to eRpm:
- *   if eTPm tracks eRpm while eTP (set-point PI) shows half, the
- *   measurement tracker is correct.
- * V5.2-step2 (FEATURE_V5_MEAS_PI_OWN=1):
- *   v5_tMeasHR actually drives timerPeriod. Set-point PI bypassed.
- *   Reactive scheduling and everything downstream reads the new
- *   value. With OWN=1 + PTG, we finally get symmetric captures on a
- *   PI that tracks truth.
- *
- * Alpha shift 2 (= 1/4) mirrors V4's Ki choice. Higher shifts
- * smooth more (slower response to speed changes); lower shifts
- * track tighter but are noisier. */
+/* Measurement-domain shadow PI: smoothed period tracker v5_tMeasHRSmooth
+ * computed in parallel with the set-point PI. Telemetry-only — exposed as
+ * the eTPm column. α = 1/4 (matches set-point Ki). */
 #ifndef FEATURE_V5_MEAS_PI
 #define FEATURE_V5_MEAS_PI  1
 #endif
-
-#ifndef FEATURE_V5_MEAS_PI_OWN
-#define FEATURE_V5_MEAS_PI_OWN  0   /* requires FEATURE_V5_MEAS_PI */
-#endif
-
-#if FEATURE_V5_MEAS_PI_OWN && !FEATURE_V5_MEAS_PI
-#error "FEATURE_V5_MEAS_PI_OWN requires FEATURE_V5_MEAS_PI"
-#endif
-
 #ifndef V5_MEAS_PI_ALPHA_SHIFT
-#define V5_MEAS_PI_ALPHA_SHIFT  2    /* α = 1/4, matches V4 Ki shift */
-#endif
-
-/* ── V5.3 scheduler rewrite (AM32-style) ────────────────────────
- * Root cause of everything V5.0/V5.1/V5.2 hit: the V4 set-point PI
- * scheduler fires Commutates in PAIRS — one reactive (ASAP, because
- * lastCaptureHR + delayHR is always slightly past) and one fallback
- * (2T later). Over each 2T wallclock, it runs 2 Commutates and
- * advances position by 2. Software state isn't 1:1 with the
- * physical rotor sector, which breaks any per-sector reasoning
- * (eTP=eRpm/2, PTG bucket skew, can't use captures on falling
- * sectors).
- *
- * V5.3 architecture:
- *   - One Commutate per physical sector (6 per elec rev).
- *   - Commutate fires at lastCaptureHR + (T_sector/2 - advance).
- *   - T_sector = thisCaptureHR - prevCaptureHR (capture-to-capture,
- *     one sector apart — not 2x like V4's measuredCommPeriod).
- *   - Both CCP2 (rising) and CCP5 (falling) feed captures. PTG
- *     provides the back-up polarity discriminator.
- *   - position advances once per Commutate, tracking physical
- *     rotor sectors 1:1.
- *   - No ASAP pair firing: scheduler guarantees target is always
- *     at least N HR in the future before writing CCP3PRL.
- *
- * Flag-gated so V4 stays the fallback. V5_SCHEDULER=0 → V4 path
- * (current working 109k baseline). V5_SCHEDULER=1 → V5.3 path. */
-#ifndef FEATURE_V5_SCHEDULER
-#define FEATURE_V5_SCHEDULER  0   /* WIP — motor runs chaotically, needs deeper
-                                   * rework. V4 scheduler (flag=0) is the proven
-                                   * 109k baseline. V5.3 implementation lives in
-                                   * sector_pi.c:CommutateV5_3 + garuda_service.c
-                                   * :V5_AcceptCapture — all gated by this flag. */
-#endif
-
-#if FEATURE_V5_SCHEDULER && !FEATURE_V4_SECTOR_PI
-#error "FEATURE_V5_SCHEDULER builds on top of V4 scaffolding — keep V4 flag on"
-#endif
-
-/* FEATURE_V4_PTG_RESCHEDULE (2026-05-15) ─────────────────────────
- * V4 scheduler 2T:ε pacing fix.
- *
- * Baseline V4 path: Commutate schedules the next CCP3 fire one
- * full sector ahead (fallback). The PTG ISR sets v4_captureValid
- * mid-sector but does NOT touch CCP3. By the time CCP3 fires,
- * the capture-derived target (lastCapture + delayHR) is in the
- * past, so HAL_ComTimer_ScheduleAbsolute takes its ASAP branch
- * and fires CCT3IF immediately → position advances twice in ε
- * wallclock. Result: measuredCommPeriod reads 2× the true sector
- * period, and only every-other rising sector ever has an
- * observation window (s2 sees post-ZC, s4 sees pre-ZC).
- *
- * Fix: at the moment PTG accepts a capture and sets
- * v4_captureValid=true, immediately reschedule CCP3 for
- * (captureHR + delayHR). The previously-armed fallback is
- * replaced atomically by HAL_ComTimer_ScheduleAbsolute. CCP3
- * then fires once at the correct moment — one Commutate per
- * physical sector, no ASAP pair.
- *
- * Tradeoff: the OLD 2T:ε pattern produced ~T/2 of extra
- * effective advance (software stayed one full sector ahead of
- * rotor). 1:1 only stays T/2 ahead. Expect peak eRPM to regress
- * from the 225 k baseline until the TAL bands are retuned with
- * higher advance at the top end.
- *
- * Off by default until bench validation. 2026-05-15. */
-#ifndef FEATURE_V4_PTG_RESCHEDULE
-#define FEATURE_V4_PTG_RESCHEDULE  0   /* Bench 2026-05-15: experimental
-                                        * 1:1 scheduler works — rising
-                                        * captures flow (cR=7619 vs 4) —
-                                        * but PI cannot hold lock with
-                                        * the doubled measuredCommPeriod
-                                        * scale. Motor desyncs immediately
-                                        * at CL entry on bare 2810 @ 24V,
-                                        * recovers on a second attempt
-                                        * but caps at 109 k vs 225 k
-                                        * baseline. Reverted pending a
-                                        * PI retune or a measuredComm-
-                                        * Period compensator. Code path
-                                        * + helper kept compiled-but-off
-                                        * so the bisect stays clean. */
+#define V5_MEAS_PI_ALPHA_SHIFT  2
 #endif
 
 /* Default PTGT0LIM values. [AK PORT] At FCY=200 MHz with PTGDIV=0,

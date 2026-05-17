@@ -1,27 +1,10 @@
 /**
  * @file garuda_service.c
- * @brief Main ESC service (AK port — verbatim CK copy + ISR vector
- *        re-name pass pending).
+ * @brief Main ESC service — state machine, Timer1 + ADC + PTG ISRs.
  *
- * Forked from CK `../../garuda_6step_ck.X/garuda_service.c`.  ISR
- * vector names verified against DS70005539 §6 IRQ table:
- *
- *   _ADCAN5Interrupt   ✓ same on AK (verify exact ADCANn slot)
- *   _T1Interrupt       ✓ same on AK
- *   _CCP1..4Interrupt  ✓ same on AK (NO `_S` prefix — datasheet line
- *                        45565 ff. uses _CCP1Interrupt etc. despite
- *                        the module being called SCCP)
- *   _CCP5Interrupt     ✗ NOT on AK — only SCCP1-4 (datasheet line 4601).
- *                       Any CCP5 reference must be removed or re-mapped
- *                       to SCCP3 for falling-edge diag.
- *
- * `_CCP5Interrupt` references are gated behind FEATURE_V4_CCP_DIAG
- * (default off in garuda_config.h) so the AK build links.  Production
- * motor control runs entirely on the ADC ISR midpoint sampler, which
- * needs no CCP capture.
- *
- * State machine, ADC ISR (PWM-triggered midpoint sampler used for ZC)
- * and Timer1 ISR (50 µs system tick) — all algorithm-side, unchanged.
+ * Production motor control runs entirely on the ADC ISR midpoint sampler;
+ * the PTG ISR (hal_ptg.c) calls V4_ProcessBemfSample here for per-fire BEMF
+ * classification when FEATURE_BEMF_VIA_PTG=1.
  *
  * Timer1 ISR (20 kHz / 50 µs):
  *   - State machine: IDLE→ARMED→ALIGN→OL_RAMP→CLOSED_LOOP
@@ -29,13 +12,11 @@
  *   - Duty slew rate control
  *   - systemTick increment (1 ms from divide-by-20)
  *
- * ADC ISR (20 kHz, triggered by PWM):
+ * ADC ISR (20 kHz, PWM-triggered):
  *   - Read pot, Vbus, phase currents
- *   - BEMF ZC polling (digital comparator)
- *   - Commutation deadline checking (50 µs resolution)
  *   - Vbus fault checking
  *
- * Target: dsPIC33CK64MP205 on EV43F54A board.
+ * Target: dsPIC33AK128MC106 on EV92R69A (ATA6847L) + EV68M17A.
  */
 
 #include <xc.h>
@@ -245,93 +226,6 @@ extern volatile uint16_t v4_blankingEndHR;
 extern volatile uint16_t v4_timerPeriod;  /* from sector_pi.c */
 extern volatile bool     v4_spActive;     /* from sector_pi.c: SP mode flag */
 
-#if FEATURE_V5_SCHEDULER
-/* V5.3 scheduler state (from sector_pi.c). CCP ISRs update these
- * on ZC capture and schedule next Commutate. */
-extern volatile uint16_t sched_prevCaptureHR;
-extern volatile uint16_t sched_thisCaptureHR;
-extern volatile uint16_t sched_Tsector;
-extern volatile uint8_t  sched_captureSource;
-extern volatile uint32_t sched_diagRisingAcc;
-extern volatile uint32_t sched_diagFallingAcc;
-extern volatile uint32_t sched_diagScheduleLate;
-extern volatile uint32_t sched_diagScheduleOk;
-extern volatile uint32_t sched_diagImplausible;
-extern volatile bool     sched_firstCapture;
-#define V5_SCHED_FORWARD_MARGIN_HR  100u     /* min 64µs → >2 PWM cycles */
-
-/* Shared V5.3 capture accept helper — called from both CCP2 and CCP5
- * ISRs after polarity/deglitch validation. Handles first-capture seed,
- * dt plausibility, EMA update, and scheduling with forward margin. */
-static inline void V5_AcceptCapture(uint16_t hr, uint8_t source)
-{
-    if (sched_firstCapture) {
-        /* Bootstrap: use the ramp-seeded sched_Tsector for the first
-         * schedule. Skip dt computation (prev values are zero). */
-        sched_thisCaptureHR = hr;
-        sched_prevCaptureHR = hr;
-        sched_captureSource = source;
-        sched_firstCapture = false;
-    } else {
-        uint16_t dt = (uint16_t)(hr - sched_thisCaptureHR);
-        /* Plausibility: absolute noise floor only (100 HR = 64µs,
-         * above PWM switching settle). No upper bound from T — motor
-         * acceleration must be allowed (dt shrinking is legal).
-         * If dt > 4T we probably missed multiple sectors — reject and
-         * let fallback fire so we don't corrupt T upward. */
-        if (dt < 100u) {
-            sched_diagImplausible++;
-            return;        /* noise — no state update */
-        }
-        uint16_t hiLimit = (sched_Tsector < 0x4000u) ? (sched_Tsector << 2) : 0xFFFFu;
-        if (dt > hiLimit) {
-            sched_diagImplausible++;
-            return;        /* too slow — probably missed multiple sectors */
-        }
-        /* Accept — advance capture history, EMA T. If dt is much
-         * larger than T (1.5T-4T range) it may be a missed sector
-         * (dt = 2× real period); apply weaker EMA (α=1/8) so T doesn't
-         * balloon. Otherwise use α=1/4 for normal tracking. */
-        sched_prevCaptureHR = sched_thisCaptureHR;
-        sched_thisCaptureHR = hr;
-        sched_captureSource = source;
-        int32_t err = (int32_t)dt - (int32_t)sched_Tsector;
-        int32_t nt;
-        if (dt > (uint16_t)(sched_Tsector + (sched_Tsector >> 1))) {
-            nt = (int32_t)sched_Tsector + (err >> 3);   /* weak: might be 2×T */
-        } else {
-            nt = (int32_t)sched_Tsector + (err >> 2);   /* normal */
-        }
-        if (nt < 10)     nt = 10;
-        if (nt > 0xFFFF) nt = 0xFFFF;
-        sched_Tsector = (uint16_t)nt;
-    }
-    /* Compute target = hr + (T/2 - advance). */
-    uint16_t halfT = sched_Tsector >> 1;
-    uint16_t tal   = (sched_Tsector < 260u) ? 3u : 2u;
-    uint16_t advHR = (uint16_t)((sched_Tsector >> 3) * tal);
-    uint16_t delayHR = (halfT > advHR) ? (halfT - advHR) : V5_SCHED_FORWARD_MARGIN_HR;
-    uint16_t target = (uint16_t)(hr + delayHR);
-    /* Forward margin: max(100 HR, T/4). Never fire Commutate sooner
-     * than blanking-width after now — prevents chatter cascades. */
-    uint16_t minMargin = sched_Tsector >> 2;
-    if (minMargin < V5_SCHED_FORWARD_MARGIN_HR) minMargin = V5_SCHED_FORWARD_MARGIN_HR;
-    uint16_t nowHR = HAL_ComTimer_ReadTimer();
-    int16_t margin = (int16_t)(target - nowHR);
-    if (margin < (int16_t)minMargin) {
-        target = (uint16_t)(nowHR + minMargin);
-        sched_diagScheduleLate++;
-    } else {
-        sched_diagScheduleOk++;
-    }
-    HAL_ComTimer_ScheduleAbsolute(target);
-    v4_captureValid = true;
-    v4_lastCaptureHR = hr;
-    /* Disable CCP ISRs — next Commutate re-enables after reconfig. */
-    _CCP2IE = 0;
-    _CCP5IE = 0;
-}
-#endif
 
 /* ── ADC midpoint ZC diagnostic counters (Mode 1) ─────────────── */
 /* Used to diagnose why capture rate sits at ~50% at high speed.
@@ -385,33 +279,6 @@ volatile uint32_t v5_postZcRisingAcc  = 0;
 volatile uint32_t v5_postZcRisingRej  = 0;
 volatile uint32_t v5_postZcFallingAcc = 0;
 volatile uint32_t v5_postZcFallingRej = 0;
-
-/* B1 mid-ON diagnostic (FEATURE_MIDON_DIAG_PROBE).
- * Falling-sector second-read counters. PTG ISR fires at mid-OFF
- * (PG1TRIGB = duty match) and runs V4_ProcessBemfSample. When this
- * feature is on, the ISR busy-waits ~half a PWM period after the
- * normal mid-OFF read, takes a second comp read at mid-ON, and
- * classifies it for falling sectors only. Tests the hypothesis
- * that mid-ON has cleaner falling-sector BEMF than mid-OFF. */
-volatile uint32_t v5_midOnFallingAcc = 0;
-volatile uint32_t v5_midOnFallingRej = 0;
-
-/* Edge-detection state for FEATURE_V5_POST_ZC_OWN.
- *
- * AK bring-up showed that pure "comp == expectedPost" acceptance phantoms
- * out on this carrier: 3 of 6 sectors find the idle comparator state
- * already matching expectedPost the moment blanking ends, so they
- * phantom-accept before any actual rotor crossing. The CK board didn't
- * see this because its idle BEMF bias was different.
- *
- * Fix: require the comp to be observed in the PRE-ZC state at least once
- * after blanking before accepting the post-ZC state. Real rotor rotation
- * always sweeps comp through pre → ZC → post. Idle bias starts at post
- * and never produces a pre observation, so the gate stays armed forever
- * and no phantom accepts.
- *
- * Reset to 0 at every commutation (sector_pi.c Commutate). */
-volatile uint8_t  v5_sawPreZc = 0;
 
 #if FEATURE_V4_MIDPOINT_ZC >= 1
 /* (midpoint modes also need these) */
@@ -489,54 +356,6 @@ void __attribute__((interrupt, auto_psv)) _AD1CH4Interrupt(void)
 }
 
 #if FEATURE_V4_MIDPOINT_ZC == 1
-#if FEATURE_V4_PTG_RESCHEDULE
-/* ── V4_NextTargetHR — capture-anchored next-Commutate target ──────
- *
- * What it does:
- *   Given a fresh capture timestamp (in SCCP4 HR-tick domain) and the
- *   PI's current sector-period estimate, compute the HR time at which
- *   the next Commutate should fire to land the PWM step at the correct
- *   electrical advance relative to the rotor's physical ZC.
- *
- * The formula:
- *     halfHR  = T/2                    // half a sector
- *     tal     = speed-banded multiplier (2..5)
- *     advHR   = (T/8) * tal             // advance in HR ticks
- *     delayHR = max(halfHR - advHR, 2)  // time from capture to target
- *     target  = captureHR + delayHR
- *
- * The 2-tick clamp engages above ~156 k eRPM when advHR > T/2 — at
- * that point we fire essentially immediately after the capture. This
- * is part of the 2T:ε pacing the legacy V4 scheduler relies on; see
- * docs/v4_ak_port_scheduler.md §7.
- *
- * Two callers must agree on this formula:
- *   1. PTG ISR (this file, V4_ProcessBemfSample) — pulls CCP3 forward
- *      the instant a capture is accepted, so CCP3 fires at the
- *      capture-anchored target instead of the previously-armed
- *      fallback. ONLY when FEATURE_V4_PTG_RESCHEDULE=1.
- *   2. SectorPI_Commutate tail (sector_pi.c ~line 1094-1116) — when
- *      consuming the capture, computes the same target.
- *
- * Lifted into an inline so the two callers can never drift. */
-static inline uint16_t V4_NextTargetHR(uint16_t captureHR,
-                                       uint16_t schedPeriod)
-{
-    uint16_t halfHR = (uint16_t)(schedPeriod >> 1);
-    uint16_t tal    = (schedPeriod >= 260U) ? 2U   /* ≤60 k eRPM  → 15.0° */
-                    : (schedPeriod >= 130U) ? 3U   /* 60-120 k    → 22.5° */
-                    : (schedPeriod >= 100U) ? 4U   /* 120-156 k   → 30.0° */
-                    :                         5U;  /* >156 k      → 37.5° */
-    uint16_t advHR   = (uint16_t)((schedPeriod >> 3) * tal);
-    uint16_t delayHR = (halfHR > advHR) ? (uint16_t)(halfHR - advHR) : 2U;
-    return (uint16_t)(captureHR + delayHR);
-}
-
-/* Diagnostic counter — incremented every PTG fire that called
- * HAL_ComTimer_ScheduleAbsolute via the reschedule path. Useful to
- * confirm at the bench that the feature is actually engaged. */
-volatile uint32_t v4_ptgRescheduleCount = 0;
-#endif /* FEATURE_V4_PTG_RESCHEDULE */
 
 /* ── V4_ProcessBemfSample — runs once per PTG fire, decides ZC ─────
  *
@@ -559,9 +378,6 @@ volatile uint32_t v4_ptgRescheduleCount = 0;
  *                  hard-coded to 0 (catches comp=0 events). Sectors
  *                  matching → set captureValid + lastCaptureHR. Other
  *                  polarity → just count v4_adcStateMismatch.
- *   Optional reschedule (FEATURE_V4_PTG_RESCHEDULE): pull CCP3
- *                 forward to fire at captureHR+delayHR. OFF by default
- *                 on this branch — see config.h comment.
  *
  * The two key globals it writes:
  *   v4_captureValid — "there's a fresh capture waiting" flag.
@@ -681,70 +497,7 @@ void V4_ProcessBemfSample(void)
                 }
 #endif
 
-#if FEATURE_V5_POST_ZC_OWN
-                /* V5.1-step2 post-ZC convention.  Accept when comp matches
-                 * the POST-ZC state for this sector — the inverted ATA6847
-                 * settles to 0 after rising-BEMF ZC and to 1 after
-                 * falling-BEMF ZC, so v5_ptgExpectedComp (0 for even/rising,
-                 * 1 for odd/falling sectors) is exactly the post-ZC state.
-                 *
-                 * Reads v5_ptgExpectedComp instead of HAL_Capture_IsRisingZc
-                 * to avoid the stuck-TRUE behaviour the diagnostic ISRs
-                 * documented around 2026-04-18 — the volatile global is
-                 * written cleanly by the Commutate ISR and is the same
-                 * source the working PTG/post-ZC shadow paths use.
-                 *
-                 * Replaces the legacy V4 pre-ZC logic which only ever
-                 * caught one polarity and fed the PI bimodal capValues
-                 * (one cluster = real ZC at ~50% T, other = first
-                 * post-blanking sample where pre-ZC state still held). */
-                /* 2026-05-14 reverted to edge-gated form. CK-aligned version
-                 * (no edge gate, no piFeedPolarity) caused cR cascade on AK
-                 * — accepted-first-match-of-expectedPost is a positive-
-                 * feedback loop at CL entry on AK hardware (idle bias
-                 * matches expectedPost every PTG fire). The v5_sawPreZc
-                 * gate is an AK-specific cascade protection. CK GitHub
-                 * baseline uses V5_OWN=0 anyway, so V5_OWN=1 on AK is
-                 * untested even in concept. */
-                {
-                    extern volatile uint8_t v5_ptgExpectedComp;
-                    extern volatile uint8_t v5_sawPreZc;
-                    uint8_t expectedPost = v5_ptgExpectedComp;
-                    bool    sectorRising = (expectedPost == 0u);
-                    if (comp != expectedPost)
-                    {
-                        v5_sawPreZc = 1u;
-                        v4_adcStateMismatch++;
-                    }
-                    else if (v5_sawPreZc)
-                    {
-                        v4_adcCaptureSet++;
-                        if (sectorRising) v4_adcSetRising++;
-
-                        bool feedPi;
-                        switch (v4Params.piFeedPolarity)
-                        {
-                            case 1:  feedPi = sectorRising;   break;
-                            case 2:  feedPi = !sectorRising;  break;
-                            default: feedPi = true;           break;
-                        }
-                        if (feedPi)
-                        {
-                            v4_lastCaptureHR = nowHR;
-                            v4_captureValid  = true;
-#if FEATURE_V4_PTG_RESCHEDULE
-                            if (v4_timerPeriod >= V4_MIN_PERIOD) {
-                                HAL_ComTimer_ScheduleAbsolute(
-                                    V4_NextTargetHR(nowHR, v4_timerPeriod));
-                                v4_ptgRescheduleCount++;
-                            }
-#endif
-                        }
-                        v5_sawPreZc = 0u;
-                    }
-                }
-#else
-                /* Legacy V4 PRE-ZC detection.
+                /* V4 PRE-ZC detection.
                  *
                  * Polarity gate uses v5_ptgExpectedComp (written by Commutate
                  * per sector — reliable) instead of HAL_Capture_IsRisingZc()
@@ -793,65 +546,10 @@ void V4_ProcessBemfSample(void)
                          * moment the deglitch sample passed. */
                         v4_lastCaptureHR = nowHR;
                         v4_captureValid = true;
-#if FEATURE_V4_PTG_RESCHEDULE
-                        /* Experimental (default OFF) — reschedule CCP3
-                         * from this PTG fire so the next Commutate
-                         * lands at the capture-anchored target instead
-                         * of waiting for the previously-armed fallback.
-                         *
-                         * Architecturally correct: kills the 2T:ε
-                         * ASAP-pair, gives 1:1 sector-to-Commutate
-                         * mapping, both polarities feed PI.
-                         *
-                         * Practically broken: V4 PI was tuned to the
-                         * 2T:ε scale; with 1:1 the measured period
-                         * doubles, PI sees a 2× speedup, slams
-                         * timerPeriod down by half, motor desyncs.
-                         * See docs/v4_ak_port_scheduler.md §7 and
-                         * memory/ak_v4_ptg_reschedule_2026_05_15.md.
-                         *
-                         * Floor at V4_MIN_PERIOD: skip the reschedule
-                         * during very first commutations of CL when
-                         * timerPeriod hasn't been seeded yet. The
-                         * pre-armed fallback fires safely. */
-                        if (v4_timerPeriod >= V4_MIN_PERIOD) {
-                            HAL_ComTimer_ScheduleAbsolute(
-                                V4_NextTargetHR(nowHR, v4_timerPeriod));
-                            v4_ptgRescheduleCount++;
-                        }
-#endif
                     }
                 }
-#endif
             }
         }
-
-#if FEATURE_MIDON_DIAG_PROBE
-        /* B1 mid-ON diagnostic. Runs every time the PTG ISR enters with
-         * sector 3 + PI active, regardless of blanking or captureValid.
-         * Busy-waits ~half a PWM period, then re-reads the BEMF comp.
-         * Classifies falling-sector samples only — testing whether
-         * mid-ON has a cleaner signal than mid-OFF for falling sectors
-         * (where cF=0 / pF=0% under the normal mid-OFF read).
-         *
-         * Cost: ~MIDON_DIAG_LOOPS × 6 cycles inside the PTG ISR. At
-         * 60kHz PWM that's ~8µs busy-wait, ~50% of PWM period burned
-         * in ISR. Disable for normal operation — diagnostic only. */
-        {
-            extern volatile uint8_t v5_ptgExpectedComp;
-            uint8_t expectedPostZc = v5_ptgExpectedComp;
-            bool sectorRising = (expectedPostZc == 0u);
-            if (!sectorRising) {
-                volatile uint16_t spinIdx;
-                for (spinIdx = 0; spinIdx < MIDON_DIAG_LOOPS; spinIdx++) {
-                    /* spin */
-                }
-                uint8_t comp_midOn = ReadBEMFComp();
-                if (comp_midOn == expectedPostZc) v5_midOnFallingAcc++;
-                else                              v5_midOnFallingRej++;
-            }
-        }
-#endif
     }
 }
 #endif /* FEATURE_V4_MIDPOINT_ZC == 1 */
@@ -907,10 +605,6 @@ void __attribute__((interrupt, no_auto_psv)) _CCT3Interrupt(void)
  * This is V3's DMA cluster detection running in the ISR. */
 #define CLUSTER_GAP_HR  15u   /* ~10µs — wide enough for ZC burst,
                                * narrow enough to reject PWM noise */
-#if FEATURE_V4_CCP_DIAG
-uint16_t prevEdgeCCP2 = 0;
-uint16_t prevEdgeCCP5 = 0;
-#endif
 
 /* ── ZC detection with deglitch ──────────────────────────────── */
 /* CCP ISR fires on every comparator edge. After blanking, read
@@ -971,231 +665,6 @@ volatile uint16_t v4_bemfTallyTotal[6] = {0};    /* per-sector post-blanking fir
 volatile uint16_t v4_fpStaleCount = 0;
 /* (v4_adc* counters declared earlier — used by ADC ISR above) */
 
-#if FEATURE_V4_CCP_DIAG
-/* [AK PORT] CCP capture diagnostic path — off by default because:
- *  (a) V4 milestone drives motor from ADC-ISR midpoint sampler;
- *  (b) `_CCP5Interrupt` doesn't exist on AK (no SCCP5 — only SCCP1-4).
- * Re-enable only after re-targeting the CCP5 path to SCCP3 on AK and
- * verifying SCCP2 IC FIFO semantics. */
-
-void __attribute__((interrupt, no_auto_psv)) _CCP2Interrupt(void)
-{
-    uint16_t ts = 0;
-    bool got = false;
-    while (CCP2STATLbits.ICBNE) { ts = CCP2BUFL; got = true; }
-
-#if FEATURE_V5_SCHEDULER
-    /* V5.3 path: validate rising-ZC capture, hand off to shared helper. */
-    if (got && HAL_Capture_IsRisingZc() && !v4_captureValid) {
-        uint16_t hr = (uint16_t)(ts + HAL_Capture_GetCcp2Offset());
-        if ((int16_t)(hr - v4_blankingEndHR) >= 0) {
-            /* Rising ZC → comp settles at 0. Deglitch. */
-            uint8_t r1 = ReadBEMFComp();
-            bool accept;
-            if (sched_Tsector < 260) {
-                accept = (r1 == 0);
-            } else {
-                Nop(); Nop(); Nop(); Nop(); Nop();
-                uint8_t r2 = ReadBEMFComp();
-                Nop(); Nop(); Nop(); Nop(); Nop();
-                uint8_t r3 = ReadBEMFComp();
-                accept = (r1 == 0 && r2 == 0 && r3 == 0);
-            }
-            if (accept) {
-                sched_diagRisingAcc++;
-                V5_AcceptCapture(hr, 0);
-            }
-        }
-    }
-    _CCP2IF = 0;
-    return;
-#endif
-
-    /* SP mode: hardware comparator IC owns ZC. Dynamic blanking in the
-     * commutation ISR physically rejects the pulse turn-off edge
-     * (blanking extends past amp×T + settle). A single GPIO state read
-     * is the remaining discriminator — no ISR busy-wait. */
-    if (v4_spActive && got && HAL_Capture_IsRisingZc() && !v4_captureValid)
-    {
-        uint16_t hr = (uint16_t)(ts + HAL_Capture_GetCcp2Offset());
-        if ((int16_t)(hr - v4_blankingEndHR) >= 0
-            && ReadBEMFComp() == 1)
-        {
-            v4_lastCaptureHR = hr;
-            v4_captureValid = true;
-            _CCP2IE = 0;
-            _CCP5IE = 0;
-        }
-        _CCP2IF = 0;
-        return;
-    }
-
-#if FEATURE_V4_MIDPOINT_ZC == 0
-    if (got && HAL_Capture_IsRisingZc() && !v4_captureValid)
-    {
-        uint16_t hr = (uint16_t)(ts + HAL_Capture_GetCcp2Offset());
-        if ((int16_t)(hr - v4_blankingEndHR) >= 0)
-        {
-            /* CCP2 catches FALLING comp edges, which on the inverted
-             * ATA6847 = real rising-ZC (BEMF crosses neutral going UP →
-             * comp 1→0). After a real rising-ZC the comp settles at 0.
-             * Deglitch confirms post-edge state by reading 0; if the
-             * edge was a noise spike that bounced back to 1, the check
-             * fails and we reject.
-             *
-             * Bug fix 2026-04-16: original code checked `==1` here,
-             * which rejected every real ZC and only accepted noise
-             * bounces. Mode 0 R/F=0/100 + 49% Cap% confirmed the
-             * inversion. With the corrected `==0` check Mode 0 should
-             * capture both polarities at high rate. */
-            bool accept;
-            if (v4_timerPeriod < 260) {
-                /* High speed: single read */
-                accept = (ReadBEMFComp() == 0);
-            } else {
-                /* Low speed: 3-read deglitch */
-                uint8_t r1 = ReadBEMFComp();
-                Nop(); Nop(); Nop(); Nop(); Nop();
-                Nop(); Nop(); Nop(); Nop(); Nop();
-                uint8_t r2 = ReadBEMFComp();
-                Nop(); Nop(); Nop(); Nop(); Nop();
-                Nop(); Nop(); Nop(); Nop(); Nop();
-                uint8_t r3 = ReadBEMFComp();
-                accept = (r1 == 0 && r2 == 0 && r3 == 0);
-            }
-            if (accept)
-            {
-                v4_lastCaptureHR = hr;
-                v4_captureValid = true;
-                /* Polarity diagnostic — CCP2 fires on rising-ZC sectors. */
-                v4_adcCaptureSet++;
-                v4_adcSetRising++;
-                _CCP2IE = 0;
-                _CCP5IE = 0;
-            }
-        }
-    }
-#elif FEATURE_V4_MIDPOINT_ZC == 2
-    if (got && HAL_Capture_IsRisingZc() && !v4_captureValid && v4_zcConfirmed)
-    {
-        uint16_t hr = (uint16_t)(ts + HAL_Capture_GetCcp2Offset());
-        v4_lastCaptureHR = hr;
-        v4_captureValid = true;
-        v4_zcConfirmed = false;
-        _CCP2IE = 0;
-        _CCP5IE = 0;
-    }
-#endif
-    _CCP2IF = 0;
-}
-
-void __attribute__((interrupt, no_auto_psv)) _CCP5Interrupt(void)
-{
-    uint16_t ts = 0;
-    bool got = false;
-    while (CCP5STATLbits.ICBNE) { ts = CCP5BUFL; got = true; }
-
-#if FEATURE_V5_SCHEDULER
-    /* V5.3 path: validate falling-ZC capture, hand off to shared helper. */
-    if (got && !HAL_Capture_IsRisingZc() && !v4_captureValid) {
-        uint16_t hr = (uint16_t)(ts + HAL_Capture_GetCcp5Offset());
-        if ((int16_t)(hr - v4_blankingEndHR) >= 0) {
-            /* Falling ZC → comp settles at 1. Deglitch. */
-            uint8_t r1 = ReadBEMFComp();
-            bool accept;
-            if (sched_Tsector < 260) {
-                accept = (r1 == 1);
-            } else {
-                Nop(); Nop(); Nop(); Nop(); Nop();
-                uint8_t r2 = ReadBEMFComp();
-                Nop(); Nop(); Nop(); Nop(); Nop();
-                uint8_t r3 = ReadBEMFComp();
-                accept = (r1 == 1 && r2 == 1 && r3 == 1);
-            }
-            if (accept) {
-                sched_diagFallingAcc++;
-                V5_AcceptCapture(hr, 1);
-            }
-        }
-    }
-    _CCP5IF = 0;
-    return;
-#endif
-
-    /* SP mode: falling-ZC hardware capture. Dynamic blanking +
-     * single GPIO read. Mirror of CCP2 path. */
-    if (v4_spActive && got && !HAL_Capture_IsRisingZc() && !v4_captureValid)
-    {
-        uint16_t hr = (uint16_t)(ts + HAL_Capture_GetCcp5Offset());
-        if ((int16_t)(hr - v4_blankingEndHR) >= 0
-            && ReadBEMFComp() == 0)
-        {
-            v4_lastCaptureHR = hr;
-            v4_captureValid = true;
-            _CCP2IE = 0;
-            _CCP5IE = 0;
-        }
-        _CCP5IF = 0;
-        return;
-    }
-
-#if FEATURE_V4_MIDPOINT_ZC == 0
-    if (got && !HAL_Capture_IsRisingZc() && !v4_captureValid)
-    {
-        uint16_t hr = (uint16_t)(ts + HAL_Capture_GetCcp5Offset());
-        if ((int16_t)(hr - v4_blankingEndHR) >= 0)
-        {
-            /* CCP5 catches RISING comp edges, which on the inverted
-             * ATA6847 = real falling-ZC (BEMF crosses neutral going
-             * DOWN → comp 0→1). After a real falling-ZC the comp
-             * settles at 1. Deglitch confirms by reading 1.
-             * (See CCP2 comment for the inversion bug fix history.) */
-            bool accept;
-            if (v4_timerPeriod < 260) {
-                accept = (ReadBEMFComp() == 1);
-            } else {
-                uint8_t r1 = ReadBEMFComp();
-                Nop(); Nop(); Nop(); Nop(); Nop();
-                Nop(); Nop(); Nop(); Nop(); Nop();
-                uint8_t r2 = ReadBEMFComp();
-                Nop(); Nop(); Nop(); Nop(); Nop();
-                Nop(); Nop(); Nop(); Nop(); Nop();
-                uint8_t r3 = ReadBEMFComp();
-                accept = (r1 == 1 && r2 == 1 && r3 == 1);
-            }
-            if (accept)
-            {
-                /* EXPERIMENT 2026-04-16: Mode 0 with corrected deglitch
-                 * captured both polarities but PI desynced because rising
-                 * and falling have different relative capture timing.
-                 * Bench data showed sustained 200k+ eRPM peaks but no
-                 * stability. Disable falling-sector PI feeding by NOT
-                 * setting v4_captureValid here — falling captures still
-                 * count for diagnostics but don't drive the loop. PI sees
-                 * rising-only (like proven Mode 1) but with hardware-edge
-                 * precision instead of PWM-valley sample noise. */
-                v4_adcCaptureSet++;       /* diagnostic only */
-                /* v4_lastCaptureHR = hr;  // intentionally not set */
-                /* v4_captureValid = true; // intentionally not set */
-                /* _CCP2IE = 0; _CCP5IE = 0;  // keep ISRs running */
-            }
-        }
-    }
-#elif FEATURE_V4_MIDPOINT_ZC == 2
-    if (got && !HAL_Capture_IsRisingZc() && !v4_captureValid && v4_zcConfirmed)
-    {
-        uint16_t hr = (uint16_t)(ts + HAL_Capture_GetCcp5Offset());
-        v4_lastCaptureHR = hr;
-        v4_captureValid = true;
-        v4_zcConfirmed = false;
-        _CCP2IE = 0;
-        _CCP5IE = 0;
-    }
-#endif
-    _CCP5IF = 0;
-}
-
-#endif /* FEATURE_V4_CCP_DIAG */
 
 /* ── V4 service tick (called from main loop) ─────────────────── */
 void GarudaService_Tasks(void)

@@ -230,19 +230,13 @@ void HAL_PWM_Init(void)
      * samples mid-OFF instead. Aligning AK to mid-OFF restores the CK
      * behaviour. */
     PG1TRIGA = 0x00000000UL;   /* CAHALF=0, TRIGA=0 — period boundary = MID-OFF (CK-equivalent) */
-#if FEATURE_DUAL_POS_PROBE || FEATURE_PER_SECTOR_PTG
-    PG1TRIGB = PTG_TRIG_MID_OFF_POS;  /* B2/Phase 1: init at mid-OFF. Commutate
-                                       * (PER_SECTOR_PTG) or PTG ISR (DUAL_POS)
-                                       * writes this per-sector / per-fire.
+#if FEATURE_PER_SECTOR_PTG
+    PG1TRIGB = PTG_TRIG_MID_OFF_POS;  /* Phase 1: init at mid-OFF; PTG ISR
+                                       * flips per-fire based on duty.
                                        * HAL_PWM_SetDutyCycle does NOT update
-                                       * PG1TRIGB while either flag is on. */
+                                       * PG1TRIGB while PER_SECTOR_PTG is on. */
 #else
-    PG1TRIGB = 0x00;        /* 2x-ADC experiment (PG1TRIGB=200) on
-                             * 2026-04-29 produced no peak-eRPM gain at
-                             * 50 kHz PWM (220k → 220k), ruling out sample
-                             * rate as the limit. Reverted to single trigger;
-                             * the 60 kHz vs 50 kHz peak gap (228k vs 220k)
-                             * is current-ripple / float-phase cleanliness. */
+    PG1TRIGB = 0x00;
 #endif
     PG1TRIGC = 0x00;
     PG1DTL = DEADTIME_TCY;
