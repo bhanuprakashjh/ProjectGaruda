@@ -405,18 +405,13 @@ void GSP_TelemTick(void)
     uint32_t uptime = gV4SystemTick / 1000;
     memcpy(&d[44], &uptime, 4);              /* uptime */
 
-    /* V4 capture-rate diagnostics (offset 48-63). Reuse the V3 snapshot
-     * tail (zcLatencyPct etc.) which V4 doesn't populate.
-     *   adcBlankReject (uint32) : ADC fired pre-blanking-end
-     *   adcStateMismatch(uint32): past blanking, GPIO != expected post-ZC
-     *   adcCaptureSet  (uint32) : total captures (all 6 sectors)
-     *   adcSetRising   (uint32) : subset of adcCaptureSet on rising-ZC
-     *                             sectors (0,2,4). Falling = total - rising.
-     *                             Replaces adcAlreadySet, which was redundant
-     *                             given Set tracks every success 1:1.
-     * 32-bit is required: ADC fires at 40 kHz so uint16 wraps every ~1.6s.
-     * commutateNoCapture is no longer shipped; host computes it as
-     * (sectorCount - diagCaptures). */
+    /* Capture-rate diagnostics (offset 48-63). 32-bit because the BEMF
+     * ISR fires at ~60 kHz and uint16 would wrap every ~1.1 s.
+     *   adcBlankReject  : sample fired pre-blanking-end
+     *   adcStateMismatch: past blanking, GPIO != expected post-ZC
+     *   adcCaptureSet   : total captures (all 6 sectors)
+     *   adcSetRising    : subset on rising-ZC sectors (0,2,4)
+     * Wire slots d[64]/d[68] kept as zero pads for layout stability. */
     memcpy(&d[48], &t.adcBlankReject,   4);
     memcpy(&d[52], &t.adcStateMismatch, 4);
     memcpy(&d[56], &t.adcCaptureSet,    4);

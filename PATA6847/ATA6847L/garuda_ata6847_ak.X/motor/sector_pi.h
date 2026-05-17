@@ -45,7 +45,6 @@ typedef struct {
     uint32_t adcStateMismatch;      /* past blanking, GPIO != expected */
     uint32_t adcCaptureSet;         /* set v4_captureValid (candidate) */
     uint32_t adcSetRising;          /* subset of adcCaptureSet on rising-ZC sectors (0,2,4) */
-    uint32_t adcAlreadySet;         /* skipped — already true */
     uint32_t commutateNoCapture;    /* Commutate found capValue == SENTINEL */
     uint32_t ptgFires;              /* V5.0: _PTG0Interrupt fire count */
     uint32_t ptgRisingAcc;          /* V5.0: rising-sector samples post-ZC */

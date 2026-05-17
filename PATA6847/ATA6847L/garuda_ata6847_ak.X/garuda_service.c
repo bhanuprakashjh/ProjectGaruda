@@ -234,7 +234,6 @@ extern volatile uint16_t v4_timerPeriod;  /* from sector_pi.c */
 volatile uint32_t v4_adcBlankReject  = 0;  /* ADC fired pre-blanking-end */
 volatile uint32_t v4_adcStateMismatch = 0; /* past blanking, wrong GPIO  */
 volatile uint32_t v4_adcCaptureSet   = 0;  /* set v4_captureValid       */
-volatile uint32_t v4_adcAlreadySet   = 0;  /* skipped — already true    */
 /* Polarity split: sets that happened on rising-ZC sectors (0,2,4).
  * Falling portion is (v4_adcCaptureSet - v4_adcSetRising).
  * Uint32 data shows capture rate is a flat 49% across all speeds —
@@ -323,8 +322,8 @@ void __attribute__((interrupt, auto_psv)) _AD1CH4Interrupt(void)
  *
  * Decision flow:
  *   Gate 1: motor must be in CL  → else return.
- *   Gate 2: v4_captureValid already set this sector? → just bump
- *           v4_adcAlreadySet and return (one accepted ZC per sector).
+ *   Gate 2: v4_captureValid already set this sector? → return (one
+ *           accepted ZC per sector).
  *   Gate 3: are we past v4_blankingEndHR? → else v4_adcBlankReject++.
  *           Blanking rejects the post-Commutate ringing window.
  *   Probe: tally per-(sector,phase) comp=1 counts in v4_bemfTally[].
@@ -352,11 +351,7 @@ void V4_ProcessBemfSample(void)
      * stuck-true workarounds, PI-feed polarity rationale, etc). */
     if (SectorPI_IsRunning() && SectorPI_GetPhase() == 3)
     {
-        if (v4_captureValid)
-        {
-            v4_adcAlreadySet++;
-        }
-        else
+        if (!v4_captureValid)
         {
             uint16_t nowHR = CCP4TMRL;
             if ((int16_t)(nowHR - v4_blankingEndHR) < 0)

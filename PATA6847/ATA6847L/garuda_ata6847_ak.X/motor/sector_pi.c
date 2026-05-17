@@ -127,17 +127,6 @@ static volatile uint16_t clSettleCounter = 0;
 volatile uint16_t tMeasHR       = 0;
 volatile uint16_t tMeasHRSmooth = 0;
 
-/* ── Speed regulation (outer loop) ─────────────────────────────── */
-/* pot → targetSpeed, PI on (targetSpeed - measuredSpeed) → amplitude.
- * This is the AVR's __Speed_Control. Runs at 1ms in TimeTick.
- * Separate from the sector PI (inner loop) which tracks ZC phase. */
-static volatile uint16_t   targetSpeed;     /* in measuredSpeed units */
-static volatile int32_t    speedIntegrator; /* fixp16 amplitude integrator */
-#define SPEED_KP            1U              /* proportional gain */
-#define SPEED_KI_DT         3U              /* Ki * dt (integral step) */
-#define SPEED_MIN_RPM       4000UL          /* minimum target eRPM */
-#define SPEED_MAX_RPM       100000UL        /* maximum target eRPM */
-
 /* ── Diagnostics ────────────────────────────────────────────────── */
 volatile uint16_t diagCaptures;
 volatile uint16_t diagPiRuns;
@@ -367,12 +356,10 @@ void SectorPI_Start(uint16_t vbusRaw)
     extern volatile uint32_t v4_adcStateMismatch;
     extern volatile uint32_t v4_adcCaptureSet;
     extern volatile uint32_t v4_adcSetRising;
-    extern volatile uint32_t v4_adcAlreadySet;
     v4_adcBlankReject = 0;
     v4_adcStateMismatch = 0;
     v4_adcCaptureSet = 0;
     v4_adcSetRising = 0;
-    v4_adcAlreadySet = 0;
     extern volatile uint32_t postZcRisingAcc;
     extern volatile uint32_t postZcRisingRej;
     extern volatile uint32_t postZcFallingAcc;
@@ -1121,12 +1108,10 @@ void SectorPI_TelemGet(V4_TELEM_T *out)
         extern volatile uint32_t v4_adcStateMismatch;
         extern volatile uint32_t v4_adcCaptureSet;
         extern volatile uint32_t v4_adcSetRising;
-        extern volatile uint32_t v4_adcAlreadySet;
         out->adcBlankReject     = v4_adcBlankReject;
         out->adcStateMismatch   = v4_adcStateMismatch;
         out->adcCaptureSet      = v4_adcCaptureSet;
         out->adcSetRising       = v4_adcSetRising;
-        out->adcAlreadySet      = v4_adcAlreadySet;
         out->commutateNoCapture = diagCommutateNoCapture;
         extern volatile uint32_t ptgFires;
         out->ptgFires = ptgFires;
