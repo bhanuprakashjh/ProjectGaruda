@@ -285,7 +285,7 @@ static void EnterCL(void)
     v4_captureValid = false;
 
     HAL_Capture_Start();
-    HAL_PTG_Start();       /* V5.0 — no-op unless FEATURE_V5_PTG_ZC=1 */
+    HAL_PTG_Start();
 
     /* Seed lastCommHR for PI elapsed calculation */
     lastCommHR = HAL_ComTimer_ReadTimer();
@@ -328,7 +328,7 @@ void SectorPI_Init(void)
 
     HAL_ComTimer_Init();   /* SCCP3 one-shot + SCCP4 HR (proven V3 pattern) */
     HAL_Capture_Init();
-    HAL_PTG_Init();        /* V5.0 — no-op unless FEATURE_V5_PTG_ZC=1 */
+    HAL_PTG_Init();
     running = false;
     phase = V4_OFF;
     statusEvents = 0;
@@ -639,7 +639,7 @@ void SectorPI_Commutate(void)
     v4_sectorHits[position]++;
     {
         extern volatile uint8_t v4_floatingPhase;
-#if FEATURE_V5_PTG_ZC || FEATURE_V5_POST_ZC_ACCEPT
+#if FEATURE_V5_POST_ZC_ACCEPT
         extern volatile uint8_t v5_ptgExpectedComp;
 #endif
         /* Compute new values BEFORE writing any volatile global.
@@ -655,7 +655,7 @@ void SectorPI_Commutate(void)
          * the same ISR with PTG at lower priority. */
         v4_currentSector  = position;
         v4_floatingPhase  = newFp;
-#if FEATURE_V5_PTG_ZC || FEATURE_V5_POST_ZC_ACCEPT
+#if FEATURE_V5_POST_ZC_ACCEPT
         v5_ptgExpectedComp = newExpected;
 #endif
     }
@@ -1136,18 +1136,12 @@ void SectorPI_TelemGet(V4_TELEM_T *out)
         extern volatile uint32_t v4_offMidMismatch;
         out->offMidCapture  = v4_offMidCapture;
         out->offMidMismatch = v4_offMidMismatch;
-#if FEATURE_V5_PTG_ZC
-        extern volatile uint32_t v5_ptgFires, v5_ptgRisingAcc, v5_ptgRisingRej;
-        extern volatile uint32_t v5_ptgFallingAcc, v5_ptgFallingRej;
-        out->ptgFires       = v5_ptgFires;
-        out->ptgRisingAcc   = v5_ptgRisingAcc;
-        out->ptgRisingRej   = v5_ptgRisingRej;
-        out->ptgFallingAcc  = v5_ptgFallingAcc;
-        out->ptgFallingRej  = v5_ptgFallingRej;
-#else
-        out->ptgFires = out->ptgRisingAcc = out->ptgRisingRej =
-            out->ptgFallingAcc = out->ptgFallingRej = 0;
-#endif
+        extern volatile uint32_t v5_ptgFires;
+        out->ptgFires = v5_ptgFires;
+        out->ptgRisingAcc  = 0;
+        out->ptgRisingRej  = 0;
+        out->ptgFallingAcc = 0;
+        out->ptgFallingRej = 0;
         extern volatile uint32_t v5_postZcRisingAcc;
         extern volatile uint32_t v5_postZcRisingRej;
         extern volatile uint32_t v5_postZcFallingAcc;

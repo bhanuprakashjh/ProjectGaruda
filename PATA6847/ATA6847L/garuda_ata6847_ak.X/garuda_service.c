@@ -2,9 +2,9 @@
  * @file garuda_service.c
  * @brief Main ESC service — state machine, Timer1 + ADC + PTG ISRs.
  *
- * Production motor control runs entirely on the ADC ISR midpoint sampler;
- * the PTG ISR (hal_ptg.c) calls V4_ProcessBemfSample here for per-fire BEMF
- * classification when FEATURE_BEMF_VIA_PTG=1.
+ * BEMF sampling runs in the PTG ISR (hal_ptg.c), which calls
+ * V4_ProcessBemfSample here once per fire for per-fire classification.
+ * The ADC ISR retains POT/Vbus/current responsibilities only.
  *
  * Timer1 ISR (20 kHz / 50 µs):
  *   - State machine: IDLE→ARMED→ALIGN→OL_RAMP→CLOSED_LOOP
@@ -322,9 +322,8 @@ void __attribute__((interrupt, auto_psv)) _AD1CH4Interrupt(void)
 
 /* ── V4_ProcessBemfSample — runs once per PTG fire, decides ZC ─────
  *
- * Called from _PTG0Interrupt (hal_ptg.c) when FEATURE_BEMF_VIA_PTG=1.
- * Historically also called from the ADC ISR — hence the `v4_adc*`
- * counter names. Active path is PTG.
+ * Called from _PTG0Interrupt (hal_ptg.c). The `v4_adc*` counter names
+ * are historical — they aren't tied to the ADC peripheral anymore.
  *
  * Decision flow:
  *   Gate 1: motor must be in CL  → else return.

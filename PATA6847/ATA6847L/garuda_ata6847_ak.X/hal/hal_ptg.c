@@ -32,15 +32,11 @@
 
 /* ── Globals (defined here, externed from hal_ptg.h) ──────────────── */
 volatile uint32_t v5_ptgFires      = 0;
-volatile uint32_t v5_ptgRisingAcc  = 0;
-volatile uint32_t v5_ptgRisingRej  = 0;
-volatile uint32_t v5_ptgFallingAcc = 0;
-volatile uint32_t v5_ptgFallingRej = 0;
 volatile uint32_t v5_ptgSkipped    = 0;
 
 /* Per-sector expected post-ZC comparator state — written by Commutate
- * in sector_pi.c when V5_POST_ZC_ACCEPT is enabled.  Read by Phase 2
- * BEMF ISR to classify accept vs reject. */
+ * in sector_pi.c when V5_POST_ZC_ACCEPT is enabled.  Read in the BEMF
+ * ISR paths to classify accept vs reject. */
 volatile uint8_t  v5_ptgExpectedComp = 0;
 
 /* ── PTG step-command opcodes (DS70005539 Table 26-5) ─────────────── */
@@ -96,10 +92,6 @@ void HAL_PTG_Start(void)
     HAL_PTG_Init();
 
     v5_ptgFires        = 0;
-    v5_ptgRisingAcc    = 0;
-    v5_ptgRisingRej    = 0;
-    v5_ptgFallingAcc   = 0;
-    v5_ptgFallingRej   = 0;
 
     _PTG0IF = 0;
     _PTG0IE = 1;
@@ -121,10 +113,9 @@ void HAL_PTG_Stop(void)
  * default — same instant the BEMF GPIO is stable for sampling).
  *
  *  - v5_ptgFires++ runs always (heartbeat / Phase 1 diagnostic).
- *  - When FEATURE_BEMF_VIA_PTG=1 (Phase 2), V4_ProcessBemfSample()
- *    runs here instead of inside the ADC ISR.  The ADC ISR retains
- *    POT/Vbus/current responsibilities only.  Latency drops from
- *    ~1.5 µs (ADC scan complete) to ~50 ns (ISR vector). */
+ *  - V4_ProcessBemfSample() runs here (not in the ADC ISR). The ADC
+ *    ISR retains POT/Vbus/current responsibilities only. Latency drops
+ *    from ~1.5 µs (ADC scan complete) to ~50 ns (ISR vector). */
 void __attribute__((interrupt, no_auto_psv)) _PTG0Interrupt(void)
 {
     _PTG0IF = 0;
