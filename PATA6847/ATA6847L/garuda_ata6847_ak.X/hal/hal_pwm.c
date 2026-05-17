@@ -1,15 +1,12 @@
 /**
  * @file hal_pwm.c
- * @brief PWM initialization and 6-step commutation (AK port).
+ * @brief PWM initialization and 6-step commutation.
  *
- * Forked from CK `../../garuda_6step_ck.X/hal/hal_pwm.c` VERBATIM.
- * dsPIC33AK128MC106 inherits the same PWM Generator peripheral SFR set
- * (MPER, MDC, MPHASE, PGxCONL/H, PGxIOCONL/H, PGxDC, PGxPER, PGxTRIG*)
- * from the same IP block as dsPIC33CK — the bit fields used here are
- * documented in DS70005527 and were spot-checked against the AK FOC
- * sibling `../../dspic33AKESC/hal/hal_pwm.c`.
+ * dsPIC33AK128MC106 PWM Generator (MPER, MDC, MPHASE, PGxCONL/H,
+ * PGxIOCONL/H, PGxDC, PGxPER, PGxTRIG*). Bit fields documented in
+ * DS70005527.
  *
- * EV92R69A + EV68M17A PWM pin mapping (different from CK EV43F54A):
+ * EV92R69A + EV68M17A PWM pin mapping:
  *   PG1: RD2(PWM1H) / RD3(PWM1L) — Phase A     (DIM 1 / DIM 3)
  *   PG2: RD0(PWM2H) / RD1(PWM2L) — Phase B     (DIM 5 / DIM 7)
  *   PG3: RC3(PWM3H) / RC4(PWM3L) — Phase C     (DIM 2 / DIM 4)

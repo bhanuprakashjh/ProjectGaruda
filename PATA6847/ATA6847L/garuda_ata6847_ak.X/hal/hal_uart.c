@@ -2,10 +2,7 @@
  * @file hal_uart.c
  * @brief UART1 driver for dsPIC33AK128MC106 — debug output + GSP transport.
  *
- * Forked from CK `../../garuda_6step_ck.X/hal/hal_uart.c`. AK has a
- * newer UART peripheral (U1CON + U1STAT + U1TXB/U1RXB layout) — the
- * CK U1MODE/U1MODEH/U1STA/U1STAH/U1TXREG/U1RXREG names DO NOT exist
- * on AK so this file is a real port, not a verbatim copy.
+ * AK UART peripheral: U1CON + U1STAT + U1TXB/U1RXB layout.
  *
  * Clock: AK CLK8 (UART clock domain) is configured to 100 MHz in
  * clock.c. With CLKSEL=01 (Clock Gen 8) and BRGS=0 (low-speed div-16):

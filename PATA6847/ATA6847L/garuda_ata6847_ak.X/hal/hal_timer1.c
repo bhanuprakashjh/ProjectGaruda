@@ -2,19 +2,10 @@
  * @file hal_timer1.c
  * @brief Timer1 init for 50 µs (20 kHz) periodic interrupt on dsPIC33AK.
  *
- * Forked from CK `../../garuda_6step_ck.X/hal/hal_timer1.c`. AK uses the
- * same T1CON layout for prescaler / clock-source bits, but the ON bit
- * is named `T1CONbits.ON` (not `T1CONbits.TON` like CK).  TCKPS enum
- * matches CK: 0b01 = 1:8 prescaler.
- *
- * Clock chain on AK:
- *   FCY = 200 MHz, Timer1 input = FPB (FCY in TCS=0 mode) = 200 MHz.
- *   With TCKPS=1:8 → 25 MHz Timer1 clock.
- *   PR1 = TIMER1_PR = 25M / 20k - 1 = 1249  (auto from TIMER1_PR macro).
- *
- * Note CK has FCY=100 MHz → 12.5 MHz Timer1 clock → PR1=624. Same
- * 50 µs tick produced on both MCUs because the TIMER1_PR macro derives
- * from FCY.
+ * Clock chain:
+ *   FCY = 200 MHz, Timer1 input = FPB (TCS=0) = 200 MHz.
+ *   TCKPS=1:8 → 25 MHz Timer1 clock.
+ *   PR1 = TIMER1_PR = 25M / 20k - 1 = 1249 (auto from TIMER1_PR macro).
  *
  * The Timer1 ISR is in garuda_service.c.
  */

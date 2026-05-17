@@ -1,6 +1,6 @@
 /**
  * @file hal_pwm.h
- * @brief PWM HAL for dsPIC33CK 6-step commutation.
+ * @brief PWM HAL for dsPIC33AK 6-step commutation.
  */
 #ifndef HAL_PWM_H
 #define HAL_PWM_H

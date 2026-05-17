@@ -2,16 +2,12 @@
  * @file hal_trap.c
  * @brief Trap/exception handlers for dsPIC33AK128MC106.
  *
- * Forked from CK `../../garuda_6step_ck.X/hal/hal_trap.c`. Trap vector
- * names differ on dsPIC33AK — XC-DSC uses `_BusErrorTrap`,
- * `_IllegalInstructionTrap`, `_AddressErrorTrap`, `_StackErrorTrap`,
- * `_MathErrorTrap`, `_GeneralTrap`, `_DefaultInterrupt`. The legacy
- * dsPIC33CK vector `_OscillatorFail` is replaced by clock-loss handling
- * inside `_BusErrorTrap` on AK.
+ * XC-DSC trap vectors: _BusErrorTrap, _IllegalInstructionTrap,
+ * _AddressErrorTrap, _StackErrorTrap, _MathErrorTrap, _GeneralTrap,
+ * _DefaultInterrupt. Clock-loss is handled inside _BusErrorTrap.
  *
- * Without these, any CPU trap silently resets the MCU — looks like a
- * mysterious "hard fault" with no diagnostic info.  Each handler kills
- * PWM, reports the trap on UART, then blinks LED_FAULT forever.
+ * Without these, any CPU trap silently resets the MCU. Each handler
+ * kills PWM, reports the trap on UART, then blinks LED_FAULT forever.
  */
 
 #include <xc.h>

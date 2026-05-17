@@ -1,11 +1,6 @@
 /**
  * @file hal_ata6847.c
- * @brief ATA6847L gate driver SPI interface and initialization (AK port).
- *
- * Forked from CK `../../garuda_6step_ck.X/hal/hal_ata6847.c`. ATA6847L
- * register layout matches ATA6847 for every field used here; the L's
- * three extra protection bits (DOPMCR.VdIOOVSD, GDUCR4.VDHOVSD,
- * WDCR1.WDSLP) and 2-bit MLDRR.DIAG fields are unused by this driver.
+ * @brief ATA6847L gate driver SPI interface and initialization.
  *
  * SPI protocol: 16-bit word
  *   [15:9] = 7-bit register address
@@ -17,10 +12,6 @@
  *   2. Configure all protection/control registers
  *   3. Write all registers to chip
  *   4. On motor start: enable CSA → GDU Standby → GDU Normal → poll DSR1.GDUS
- *
- * [AK PORT] libpic30.h `__delay_us/__delay_ms` work on dsPIC33AK with
- * XC-DSC v3.30+ provided FCY is defined before include — same pattern
- * as CK.  Verified in dspic33AKESC sibling project.
  */
 
 #include <xc.h>

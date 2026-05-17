@@ -2,11 +2,6 @@
  * @file hal_spi.c
  * @brief SPI driver for dsPIC33AK128MC106 — ATA6847L communication.
  *
- * Forked from CK `../../garuda_6step_ck.X/hal/hal_spi.c`. SFR layout on
- * dsPIC33AK matches dsPIC33CK for the SPI peripheral (SPIxCON1L/H,
- * SPIxSTATL, SPIxBUFL, SPIxBRGL, SPIxIMSKL/H), so the byte values
- * carry over unchanged.  Only the PPS routing in port_config.c differs.
- *
  * Peripheral choice (see ATA6847L+DIM evaluation board user guide
  * appendix A.3 + plan §4 pin map):
  *   SPI1 or SPI3 — DO NOT use SPI2, because its native SDI input

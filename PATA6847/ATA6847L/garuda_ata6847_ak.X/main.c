@@ -1,21 +1,15 @@
 /**
  * @file main.c
- * @brief Entry point for 6-step BLDC ESC on dsPIC33AK + ATA6847L (AK port).
+ * @brief Entry point for 6-step BLDC ESC on dsPIC33AK + ATA6847L.
  *
- * Forked from CK `../../garuda_6step_ck.X/main.c`.  The init order is
- * preserved (clock → GPIO → UART → SPI → ATA6847L → PWM/ADC/Timer1 →
- * IRQ enable) because each step depends on the previous.
+ * Init order (each step depends on the previous):
+ *   clock → GPIO → UART → SPI → ATA6847L → PWM/ADC/Timer1 → IRQ enable.
  *
  * Target: EV92R69A (ATA6847L) + EV68M17A (dsPIC33AK128MC106).
  * Motor:  Selected by MOTOR_PROFILE in garuda_config.h
- *         0=Hurst, 1=A2212, 2=2810 (228k milestone), 3=HiZ1460.
+ *         0=Hurst, 1=A2212, 2=2810, 3=HiZ1460.
  *
  * Debug UART: 115200 baud on RC11(RX)/RC10(TX) via USB-UART converter.
- *
- * [AK PORT] this file is byte-identical to the CK source.  ISR vector
- * names referenced in garuda_service.c are likely AK-different (e.g.
- * `_ADCAN5Interrupt`, `_CCT3Interrupt` etc.) — those changes live in
- * garuda_service.c, not here.
  */
 
 #include <xc.h>
@@ -69,7 +63,7 @@ int main(void)
     HAL_UART_NewLine();
     HAL_UART_WriteString("Garuda 6-Step CK v1.0");
     HAL_UART_NewLine();
-    HAL_UART_WriteString("dsPIC33CK64MP205 + ATA6847");
+    HAL_UART_WriteString("dsPIC33AK128MC106 + ATA6847L");
     HAL_UART_NewLine();
     HAL_UART_WriteString("=============================");
     HAL_UART_NewLine();
@@ -145,8 +139,8 @@ int main(void)
     HAL_UART_WriteU16(V4_ERPM_TO_PERIOD(V4_STARTUP_SPEED_ERPM));
     HAL_UART_NewLine();
 
-    /* [AK PORT] CK OSCCONbits.LOCK/COSC don't exist on AK — clock status
-     * lives in PLL1CONbits / CLK1CONbits. Print PLL1.CLKRDY + CLK1 NOSC. */
+    /* AK clock status lives in PLL1CONbits / CLK1CONbits (no OSCCONbits
+     * .LOCK/COSC on this MCU). Print PLL1.CLKRDY + CLK1 NOSC. */
     HAL_UART_WriteString("PLL RDY=");
     HAL_UART_WriteByte(PLL1CONbits.CLKRDY ? '1' : '0');
     HAL_UART_WriteString(" NOSC=");

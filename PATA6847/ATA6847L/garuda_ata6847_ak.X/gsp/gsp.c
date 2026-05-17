@@ -1,8 +1,7 @@
 /**
  * @file gsp.c
- * @brief GSP v2 protocol engine for dsPIC33CK — ring buffers, parser, CRC.
+ * @brief GSP v2 protocol engine — ring buffers, parser, CRC.
  *
- * Adapted from dsPIC33AK GSP for dsPIC33CK64MP205 UART1 registers.
  * Packet format: [0x02] [LEN] [CMD_ID] [PAYLOAD...] [CRC16_H] [CRC16_L]
  * All RX/TX is polled from main loop (no ISR-driven UART).
  */
@@ -142,9 +141,9 @@ static inline void UART1_RxOverflowClear(void)
 
 static void PumpRx(void)
 {
-    /* On dsPIC33CK, OERR halts the receiver. Must clear OERR and drain
-     * any stale bytes before normal operation resumes. Without the drain,
-     * URXBE can stay deasserted (not empty) indefinitely → infinite loop. */
+    /* OERR halts the receiver — clear OERR and drain any stale bytes
+     * before normal operation resumes. Without the drain, URXBE can
+     * stay deasserted (not empty) indefinitely → infinite loop. */
     if (UART1_RxOverflow()) {
         UART1_RxOverflowClear();
         /* Drain stale bytes (max 4 in HW FIFO) */

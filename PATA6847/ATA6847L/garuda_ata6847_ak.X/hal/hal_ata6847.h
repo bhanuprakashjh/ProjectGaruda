@@ -1,17 +1,12 @@
 /**
  * @file hal_ata6847.h
- * @brief ATA6847L gate driver interface (AK port).
+ * @brief ATA6847L gate driver interface.
  *
- * Forked from CK `../../garuda_6step_ck.X/hal/hal_ata6847.h` — register
- * map and constants are identical between ATA6847 and ATA6847L for the
- * fields this driver uses.  ATA6847L-only additions (DS50003904):
+ * ATA6847L additions vs ATA6847 (DS50003904) — unused except where noted:
  *   - DOPMCR.VdIOOVSD  (bit 6) — VDD I/O over-voltage shutdown enable
- *   - GDUCR4.VDHOVSD   (bit 6) — VDH over-voltage shutdown enable
- *                                Already set in Init (matches AN6285)
+ *   - GDUCR4.VDHOVSD   (bit 6) — VDH over-voltage shutdown enable (set in Init)
  *   - WDCR1.WDSLP      (bit 5) — watchdog active in sleep
- *                                Don't-care: WDT is disabled in Init
  *   - MLDRR.DIAGn      (2-bit) — 3-level motor-line diagnosis
- *                                Use only if hall-less line diag added
  */
 #ifndef HAL_ATA6847_H
 #define HAL_ATA6847_H
