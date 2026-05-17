@@ -9,7 +9,7 @@
 
 #include "../garuda_config.h"
 
-#if FEATURE_GSP && FEATURE_V4_SECTOR_PI
+#if FEATURE_GSP
 #include <stdint.h>
 #include <string.h>
 #include "gsp_commands.h"

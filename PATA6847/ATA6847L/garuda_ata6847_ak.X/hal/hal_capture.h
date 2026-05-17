@@ -1,14 +1,10 @@
 /**
  * @file hal_capture.h
- * @brief V4 Capture HAL — CCP2/CCP5 with CPU ISR + blanking.
+ * @brief Per-sector capture state for the V4 ADC-ISR midpoint sampler.
  */
 
 #ifndef HAL_CAPTURE_H
 #define HAL_CAPTURE_H
-
-#include "../garuda_config.h"
-
-#if FEATURE_V4_SECTOR_PI
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -31,5 +27,4 @@ uint16_t HAL_Capture_GetCcp2Offset(void);
 uint16_t HAL_Capture_GetCcp5Offset(void);
 uint16_t HAL_Capture_GetBlankingEnd(void);
 
-#endif
 #endif

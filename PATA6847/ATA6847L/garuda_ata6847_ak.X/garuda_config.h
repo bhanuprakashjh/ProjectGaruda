@@ -93,32 +93,9 @@
  * 6-step BLDC the >13-bit duty resolution at 60 kHz is still excessive. */
 #define FPGX_CLK_HZ         100000000UL   /* PG clock — Std Speed Periph Clk */
 #define LOOPTIME_TCY        (uint16_t)((8UL * FPGX_CLK_HZ / PWMFREQUENCY_HZ) - 16U)
-/* PWM drive mode: complementary vs unipolar.
- * 0 = Complementary (H+L alternate): active braking, more switching noise
- * 1 = Unipolar (H-PWM, L-OFF): no braking, half switching noise.
- *     34x fewer ZC timeouts, 99.96% success rate.
- *     Needs lower MAX_DUTY (25%) since no braking. */
-#ifndef PWM_DRIVE_UNIPOLAR
-#define PWM_DRIVE_UNIPOLAR  0   /* Complementary + CLC AND filter.
-                                 * CLC gates BEMF with PWM-ON window →
-                                 * switching noise hardware-blocked.
-                                 * Proper braking + clean ZC. */
-#endif
 
-#if PWM_DRIVE_UNIPOLAR
-#define MAX_DUTY            (LOOPTIME_TCY - 200U)  /* Full range. Previous 97% duty test
-                                                    * had zero ZC timeouts at 100k eRPM.
-                                                    * Governor (DUTY_RAMP_ERPM) limits
-                                                    * acceleration. No-load self-limits
-                                                    * via back-EMF. Prop needs full range. */
-#else
-#define MAX_DUTY            (LOOPTIME_TCY - 200U)  /* ~100% for complementary */
-#endif
-#if PWM_DRIVE_UNIPOLAR
-#define MIN_DUTY            30U          /* Unipolar: minimum for 1% idle */
-#else
-#define MIN_DUTY            200U         /* Complementary: normal min */
-#endif
+#define MAX_DUTY            (LOOPTIME_TCY - 200U)  /* ~100% complementary */
+#define MIN_DUTY            200U
 /* Dead time: ATA6847L handles 700 ns CCPT internally, so MCU dead time
  * is minimal. [AK PORT] Per DS70005539 Eq 14-2:
  *     PGxDTy = 16 × FPGx_clk × DeadTime(s)
@@ -398,12 +375,7 @@
 
 #define ALIGN_TIME_COUNTS   ((uint16_t)((uint32_t)ALIGN_TIME_MS * TIMER1_FREQ_HZ / 1000))
 #ifndef CL_IDLE_DUTY_PERCENT
-#if PWM_DRIVE_UNIPOLAR
-#define CL_IDLE_DUTY_PERCENT 6U    /* Unipolar: 3% had constant ZC timeouts
-                                    * at idle. 6% sustains prop + clean ZC. */
-#else
 #define CL_IDLE_DUTY_PERCENT 10U   /* Complementary: braking needs higher idle */
-#endif
 #endif
 #define CL_IDLE_DUTY         (((uint32_t)CL_IDLE_DUTY_PERCENT * LOOPTIME_TCY) / 100)
 
@@ -420,13 +392,7 @@
 /* Duty governor: limits max duty based on measured eRPM.
  * Prevents fast-pot desync. Full duty at threshold. */
 #ifndef DUTY_RAMP_ERPM
-#if PWM_DRIVE_UNIPOLAR
-#define DUTY_RAMP_ERPM  60000U  /* Unipolar: full duty at 60k. Governor prevents
-                                 * fast-pot desync. With 50% MAX_DUTY, governor
-                                 * effectively allows 50% at 60k eRPM. */
-#else
-#define DUTY_RAMP_ERPM  60000U  /* Complementary: braking assists at low speed */
-#endif
+#define DUTY_RAMP_ERPM  60000U
 #endif
 #ifndef MIN_TARGET_ERPM
 #define MIN_TARGET_ERPM   1000U
@@ -448,12 +414,6 @@
  * SCCP4 = HR free-running timer (640 ns/tick) for timestamps.
  * PI always owns commutation scheduling from startup onward.
  * BEMF detection runs in the PTG ISR (mid-OFF / mid-ON per duty). */
-
-#ifndef FEATURE_V4_SECTOR_PI
-#define FEATURE_V4_SECTOR_PI    1
-#endif
-
-#if FEATURE_V4_SECTOR_PI
 
 /* Motor phase advance (electrical degrees, 0..30).
  *
@@ -582,76 +542,11 @@
 #define V4_SECTOR_ISR_PRIORITY  6       /* Commutation — highest motor ISR */
 #define V4_CAPTURE_ISR_PRIORITY 5       /* ZC edge capture — below sector */
 
-/* ZC detection method:
- * 0 = CCP edge capture + 3-read deglitch. Tested 2026-04-16: same 49%
- *     Cap% as Mode 1, but motor desynced at ~110k eRPM. The deglitch
- *     state-check convention in CCP2/CCP5 ISRs (garuda_service.c) is
- *     suspect — appears to be checking pre-edge state instead of
- *     post-edge state, which would mean the only Sets that fire are on
- *     comparator noise spikes rather than real ZCs.
- * 1 = PWM-midpoint sampling in ADC ISR. Reaches 196k eRPM stably with
- *     49% Cap% (rising sectors only — falling sectors past blanking
- *     never see a stable comp state, ATA6847 has no hysteresis and
- *     falling-sector BEMF hovers near neutral). PROVEN BASELINE.
- * 2 = Hybrid: ADC midpoint confirms ZC state, CCP provides accurate
- *     timestamp. Mask CCP after acceptance like AM32. Untested in V4. */
-#define FEATURE_V4_MIDPOINT_ZC  1
-
-/* ── V5.0-PTG: Peripheral Trigger Generator BEMF sampling ────────
- * Core-independent state machine triggers per-sector BEMF reads at
- * hardware-exact offsets from the PWM valley event. This is the real
- * V5.0 approach — the SCCP1 priority experiment is archived.
- *
- * PTG command queue (FEATURE_V5_PTG_ZC=1):
- *   STEP0: PTGWHI | 0x1         wait for PWM trigger input
- *   STEP1: PTGCTRL| 0x8         start PTGT0, wait for timeout
- *   STEP2: PTGIRQ | 0x0         generate PTG0 interrupt (_PTG0Interrupt)
- *   STEP3: PTGJMP | 0x0         loop back to STEP0
- *
- * PTG clock = FCY / PTGDIV. On AK FCY=200 MHz so PTGDIV=0 → 200 MHz,
- * 5 ns/tick (was 10 ns/tick on CK). PTG_PEAK_DELAY uses LOOPTIME_TCY
- * which is in PWM-counter ticks (2.5 ns), so PTG ticks at 5 ns map to
- * LOOPTIME_TCY/2 not LOOPTIME_TCY/4 like on CK — update V5_PTG_PEAK_DELAY
- * before turning FEATURE_V5_PTG_ZC on. (PTG diag-only, off by default.)
- * PTGT0LIM sets the delay-from-PWM-trigger in PTG ticks.
- *
- * Per-sector sample offset (rewritten by Commutate ISR):
- *   rising sector → PTGT0LIM = 0         (sample at valley, ~existing behavior)
- *   falling sector → PTGT0LIM = MPER/2*N (sample at PWM peak / OFF-mid)
- *
- * When FEATURE_V5_PTG_ZC=0: byte-identical to V4 baseline.
- * When =1: PTG init runs at motor start, ISR counts samples (shadow
- *          only in V5.0-step1 — does NOT set v4_captureValid). */
-#ifndef FEATURE_V5_PTG_ZC
-#define FEATURE_V5_PTG_ZC  1   /* AK PTG phase-1 heartbeat (2026-05-13).
-                                * hal_ptg.c provides a real implementation
-                                * for the dsPIC33AK128MC106 — PTG fires
-                                * _PTG0Interrupt at every PG1TRIGB match
-                                * (mid-OFF), ISR increments v5_ptgFires.
-                                * Flag flipped on so the existing
-                                * snapshot path at sector_pi.c:1347
-                                * exposes the heartbeat count to the host.
-                                * NOTE: this does NOT compile any V5 BEMF
-                                * logic on AK — there's no equivalent of
-                                * the CK V5 ISR.  Phase 2 will add real
-                                * BEMF + PI handling inside
-                                * _PTG0Interrupt. */
-#endif
-
-/* PTG-driven BEMF detection master flag.
- *   0 — ADC ISR reads BEMF GPIO + runs V4 ZC detection
- *       (original/CK-style path; Phase 1 default).
- *   1 — PTG ISR reads BEMF + runs V4 ZC detection; ADC ISR keeps
- *       current/Vbus only (Phase 2).  Latency to BEMF read drops
- *       from ~1.5 µs to ~50 ns.
- *
- * If enabling Phase 2 and the motor walls below the previous milestone,
- * try LOWERING V4_PHASE_ADVANCE_DEG (currently 10°) — that constant
- * compensates for the old ADC-ISR latency and is now too large for the
- * PTG path.  Sweep 10 → 5 → 2 → 1 to find the new optimum. */
-#ifndef FEATURE_BEMF_VIA_PTG
-#define FEATURE_BEMF_VIA_PTG    1
-#endif
+/* ZC detection: PWM-midpoint sampling. PTG ISR runs V4_ProcessBemfSample,
+ * reads the floating-phase comparator, classifies pre/post-ZC and feeds
+ * the sector PI. Reaches 226k eRPM stably on 2810 @ 25V (rising sectors
+ * contribute the captures, falling sectors return CAP_SENTINEL — ATA6847
+ * has no hysteresis so falling-sector BEMF hovers near neutral). */
 
 #define PTG_TRIG_MID_OFF_POS       1U
 #define PTG_TRIG_MID_ON_POS        (LOOPTIME_TCY - 1U)
@@ -679,13 +574,6 @@
  * commanded duty hovers at exactly 50% (PI hunting in the boundary band). */
 #define PTG_DUTY_ADAPT_HYST \
     ((uint16_t)(((uint32_t)LOOPTIME_TCY * 5U) / 100U))
-
-/* Per-sector PTG trigger position. Commutate ISR writes PG1TRIGB based on
- * the next sector; the PTG ISR further refines per-fire based on duty
- * (MID-OFF below 50%, MID-ON above 50%, ±5% hysteresis). */
-#ifndef FEATURE_PER_SECTOR_PTG
-#define FEATURE_PER_SECTOR_PTG     1
-#endif
 
 /* PTG ISR postscaler. N=1 (every fire processed) is the validated default;
  * dropping to N=3 (20 kHz BEMF) regressed peak to 172k vs 226k baseline. */
@@ -733,7 +621,6 @@
 #define V5_PTG_VALLEY_DELAY     60u        /* 600 ns settle after trigger */
 #define V5_PTG_PEAK_DELAY       ((uint16_t)(LOOPTIME_TCY / 4u))
 
-#endif /* FEATURE_V4_SECTOR_PI */
 
 
 /* ── ARM ───────────────────────────────────────────────────────────── */

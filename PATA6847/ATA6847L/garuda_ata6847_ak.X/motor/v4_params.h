@@ -21,7 +21,6 @@
 
 #include "../garuda_config.h"
 
-#if FEATURE_V4_SECTOR_PI
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -126,6 +125,5 @@ const V4_PARAM_DESC_T* V4Params_GetDescriptorTable(uint8_t *count);
 }
 #endif
 
-#endif /* FEATURE_V4_SECTOR_PI */
 
 #endif /* V4_PARAMS_H */

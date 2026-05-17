@@ -12,7 +12,6 @@
 
 #include "sector_pi.h"
 
-#if FEATURE_V4_SECTOR_PI
 
 #include <xc.h>
 #include "../garuda_config.h"
@@ -97,21 +96,6 @@ static volatile uint16_t   integrator;
 static volatile uint16_t   seedIntegrator;
 static          uint8_t    stallCounter;
 static volatile bool       commandEnabled;
-/* SP mode flags.
- *   v4_spRequest: set in TimeTick based on eRPM threshold + hysteresis.
- *   v4_spActive : set in Commutate ISR when transition is actually applied
- *                 (MPER write + capture flush). Read by CCP ISRs in
- *                 garuda_service.c to switch ZC source from ADC midpoint
- *                 (invalid when MPER=0xFFFF) to hardware comparator IC.
- *                 Decoupling prevents mid-sector MPER changes that can
- *                 drop the transition sector's ZC. */
-static volatile bool       v4_spRequest = false;
-volatile bool              v4_spActive  = false;
-
-/* ── Single-pulse mode: effective PWM period for duty scaling ─ */
-/* HR tick = 640ns = 128 PWM ticks (Fosc/2=200MHz, 5ns/tick).   */
-/* SP mode: per = timerPeriod << 7 (pulse width = amp × per).    */
-/* Normal:  per = LOOPTIME_TCY (fixed 40kHz).                    */
 /* Updated in Commutate ISR; exposed for telemetry.              */
 volatile uint16_t g_pwmPer = LOOPTIME_TCY;
 static volatile uint16_t   actualAmplitude;
@@ -242,23 +226,8 @@ static inline uint16_t FixpMulU16(uint16_t a, uint16_t b)
 static void ShutOff(void)
 {
     HAL_Capture_Stop();
-    HAL_PTG_Stop();        /* V5.0 — no-op unless FEATURE_V5_PTG_ZC=1 */
+    HAL_PTG_Stop();
     HAL_ComTimer_Cancel();
-    /* Exit SP mode if active — restores MPER = LOOPTIME_TCY. Reset
-     * BOTH v4_spRequest and v4_spActive so the next start doesn't
-     * inherit a latched request from the previous run. */
-    if (v4_spActive)
-    {
-        MPER = LOOPTIME_TCY;
-        PG1TRIGA = 0x00000000UL;    /* CAHALF=0, TRIGA=0 — period boundary = MID-OFF (CK-equivalent) */
-        PG1STATbits.UPDREQ = 1;
-        PG2STATbits.UPDREQ = 1;
-        PG3STATbits.UPDREQ = 1;
-        g_pwmPer = LOOPTIME_TCY;
-    }
-    v4_spRequest = false;
-    v4_spActive = false;
-    HAL_PWM_SetSPFlag(false);
     HAL_PWM_ForceAllFloat();
     HAL_PWM_SetDutyCycle(0);
     running = false;
@@ -387,11 +356,6 @@ void SectorPI_Start(uint16_t vbusRaw)
     speedCounter = 0;
     speedBase = 0;
     measuredSpeed = 0;
-    /* Reset SP state so a previous run's latched request doesn't
-     * carry over into the next start. */
-    v4_spRequest = false;
-    v4_spActive = false;
-    HAL_PWM_SetSPFlag(false);
 
     /* Reset capture-rate diagnostic counters (defined in garuda_service.c
      * for the ADC ISR side, sector_pi.c for the Commutate side). Lets us
@@ -638,33 +602,6 @@ void SectorPI_Commutate(void)
     }
     lastCommHR = thisCommHR;
 
-    /* 2.5. SP mode transition — applied at sector boundary so the
-     * previous sector's ZC (consumed above) isn't dropped by a
-     * mid-sector MPER swap. ZC source switches between ADC midpoint
-     * (normal) and CCP hardware capture (SP) via v4_spActive. */
-    if (v4_spActive != v4_spRequest)
-    {
-        while (CCP2STATbits.ICBNE) (void)CCP2BUF;
-        _CCP2IF = 0;
-        /* v4_captureValid already cleared above after consumption */
-
-        if (v4_spRequest)
-        {
-            MPER = 0xFFFFU;
-        }
-        else
-        {
-            MPER = LOOPTIME_TCY;
-            PG1TRIGA = 0x00000000UL;    /* CAHALF=0, TRIGA=0 — period boundary = MID-OFF (CK-equivalent) */
-            g_pwmPer = LOOPTIME_TCY;
-        }
-        PG1STATbits.UPDREQ = 1;
-        PG2STATbits.UPDREQ = 1;
-        PG3STATbits.UPDREQ = 1;
-        v4_spActive = v4_spRequest;
-        HAL_PWM_SetSPFlag(v4_spActive);
-    }
-
     /* 3. Advance to next commutation step.
      *
      * THE PAIRING INVARIANT: the three per-sector globals
@@ -759,13 +696,6 @@ void SectorPI_Commutate(void)
         } else {
             blankHR = (uint16_t)(((uint32_t)sectorHR * blankPct) / 100U);
         }
-        if (v4_spActive)
-        {
-            uint16_t dutyHR = (uint16_t)(((uint32_t)actualAmplitude
-                                          * sectorHR) >> 15);
-            uint16_t spBlankHR = dutyHR + 16U;   /* +10.2µs settle */
-            if (spBlankHR > blankHR) blankHR = spBlankHR;
-        }
         v4_blankingEndHR = (uint16_t)(thisCommHR + blankHR);
 
         /* Expected ZC = prev_comm + T/2 + advance (physical ZC position).
@@ -790,14 +720,7 @@ void SectorPI_Commutate(void)
         /* HAL_PTG_SetDelay call intentionally removed for this test. */
     }
 
-    /* 6. Re-enable CCP ISRs (always).
-     *
-     * Phase C attempt (2026-04-21) gated this on v4_spActive —
-     * tripped at ~100k eRPM even with Phase A inline drain in place.
-     * The CCP ISR preemption (pri 4 preempts ADC ISR pri 3, fires
-     * on every edge, not batched to PWM center) is load-bearing in
-     * a way inline drain can't replicate. Reverted; CCP ISRs stay
-     * always-on. */
+    /* 6. Re-enable CCP ISRs. */
     _CCP2IE = 1;
 
     /* Track good-capture streak for diagnostics, and consecutive-miss
@@ -836,11 +759,7 @@ void SectorPI_Commutate(void)
          * fixed-point equilibrium (CSV evidence: timerPeriod cycled
          * 224→270→253 indefinitely at 120k eRPM). Set-point PI converges
          * to a single value, removing the limit-cycle jitter that was
-         * destabilizing high-speed operation.
-         *
-         * SP gate kept: SP mode freezes timerPeriod since CCP captures
-         * have different timing semantics than midpoint-ADC. */
-        if (!v4_spActive)
+         * destabilizing high-speed operation. */
         {
             /* Snapshot runtime params once per cycle. They're written by
              * the GSP set-param path on a low-priority code path; reading
@@ -914,7 +833,7 @@ void SectorPI_Commutate(void)
          * for both PI and scheduler) removed this ramp and motor walled
          * at 130k.  Restored: PI's setValue stays at fixed 15° (its own
          * model); scheduler keeps speed-adaptive ramp. */
-        uint16_t schedPeriod = v4_spActive ? actualStepPeriodHR : timerPeriod;
+        uint16_t schedPeriod = timerPeriod;
         uint16_t halfHR = schedPeriod >> 1;
         /* Speed-adaptive TAL ramp:
          *   schedPeriod >= 260 HR (≤60k eRPM):  TAL=2 → 15°
@@ -948,7 +867,7 @@ void SectorPI_Commutate(void)
          * period in SP. `timerPeriod` is a detector model in normal mode
          * and can be ~2x actual sector near 70k, which immediately
          * desyncs SP if used as the fallback period. */
-        uint16_t schedPeriod = v4_spActive ? actualStepPeriodHR : timerPeriod;
+        uint16_t schedPeriod = timerPeriod;
         diagDelta = 0;
         HAL_ComTimer_ScheduleAbsolute(thisCommHR + schedPeriod);
     }
@@ -989,18 +908,8 @@ void SectorPI_Commutate(void)
      * SP sector. Otherwise the newly active phase can wait for the long
      * master frame before producing torque. */
     uint16_t per = LOOPTIME_TCY;
-    if (v4_spActive)
-    {
-        uint32_t spPer = (uint32_t)actualStepPeriodHR << 7;
-        if (spPer > 0xFFFFU) spPer = 0xFFFFU;
-        per = (uint16_t)spPer;
-    }
     g_pwmPer = per;
     HAL_PWM_SetDutyCyclePeriod((uint32_t)FixpMulU16(actualAmplitude, per), per);
-    if (v4_spActive)
-    {
-        PG1STATbits.TRSET = 1;
-    }
 
     /* 7. Speed counting */
     speedCounter++;
@@ -1059,19 +968,7 @@ void SectorPI_TimeTick(void)
         speedCounter = 0;
         speedBase = 0;
 
-        /* SP mode request — hysteresis based on measured eRPM.
-         * Actual transition (MPER write, capture flush) happens in
-         * Commutate ISR at a sector boundary, so the transition sector
-         * consumes its ZC before the ZC source changes. */
         uint32_t erpm = (uint32_t)measuredSpeed * 500UL;
-        if (!v4_spRequest && erpm >= SP_ENTER_ERPM)
-        {
-            v4_spRequest = true;
-        }
-        else if (v4_spRequest && erpm <= SP_EXIT_ERPM)
-        {
-            v4_spRequest = false;
-        }
 
         /* Block-commutation auto-engagement (Option A: duty saturation).
          * At ≥95% Q15 the PWM is already clipping near the period cap,
@@ -1113,7 +1010,6 @@ void SectorPI_TimeTick(void)
                 && erpm >= V4_BLOCK_ENTER_ERPM
                 && blockCommStableTicks >= 10U           /* ≥ 200 ms above enter eRPM */
                 && commandEnabled
-                && !v4_spActive
                 && blockExitCooldown == 0U)
             {
                 g_blockCommActive = true;
@@ -1214,8 +1110,8 @@ void SectorPI_TelemGet(V4_TELEM_T *out)
     out->diagPiRuns      = diagPiRuns;
     out->diagLastCapValue = diagLastCapValue;
     out->diagDelta       = diagDelta;
-    out->spMode          = v4_spActive;
-    out->spRequest       = v4_spRequest;
+    out->spMode          = false;
+    out->spRequest       = false;
     {
         uint16_t erpmPeriod = actualStepPeriodHR ? actualStepPeriodHR : timerPeriod;
         out->erpmNow = (erpmPeriod > 0) ?
@@ -1264,4 +1160,3 @@ void SectorPI_TelemGet(V4_TELEM_T *out)
     }
 }
 
-#endif /* FEATURE_V4_SECTOR_PI */

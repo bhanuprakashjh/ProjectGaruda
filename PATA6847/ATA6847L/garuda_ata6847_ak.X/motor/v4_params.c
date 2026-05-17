@@ -5,7 +5,6 @@
 
 #include "v4_params.h"
 
-#if FEATURE_V4_SECTOR_PI
 
 #include <stddef.h>
 #include <stdint.h>
@@ -145,4 +144,3 @@ const V4_PARAM_DESC_T* V4Params_GetDescriptorTable(uint8_t *count)
     return descTable;
 }
 
-#endif /* FEATURE_V4_SECTOR_PI */

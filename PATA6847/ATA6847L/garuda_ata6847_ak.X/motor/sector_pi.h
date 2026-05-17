@@ -11,7 +11,6 @@
 
 #include "../garuda_config.h"
 
-#if FEATURE_V4_SECTOR_PI
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -80,7 +79,6 @@ uint8_t  SectorPI_GetPhase(void);     /* 0=OFF, 1=ALIGN, 2=OL_RAMP, 3=CL */
  * count copied. Caller must size buf >= 30*8 = 240 bytes. */
 void     SectorPI_GetCaptureLog(uint8_t *buf, uint8_t *entriesOut);
 
-#endif /* FEATURE_V4_SECTOR_PI */
 
 /* ── Single-Pulse mode shared state ────────────────────────────── */
 /* g_pwmPer: current PWM period in TCY units.

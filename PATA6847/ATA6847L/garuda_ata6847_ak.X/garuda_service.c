@@ -224,7 +224,6 @@ static inline uint8_t ReadBEMFComp(void);
 extern volatile uint8_t v4_floatingPhase;
 extern volatile uint16_t v4_blankingEndHR;
 extern volatile uint16_t v4_timerPeriod;  /* from sector_pi.c */
-extern volatile bool     v4_spActive;     /* from sector_pi.c: SP mode flag */
 
 
 /* ── ADC midpoint ZC diagnostic counters (Mode 1) ─────────────── */
@@ -280,15 +279,6 @@ volatile uint32_t v5_postZcRisingRej  = 0;
 volatile uint32_t v5_postZcFallingAcc = 0;
 volatile uint32_t v5_postZcFallingRej = 0;
 
-#if FEATURE_V4_MIDPOINT_ZC >= 1
-/* (midpoint modes also need these) */
-#endif
-
-/* Mode 2 hybrid: midpoint confirms ZC state, CCP provides timestamp */
-#if FEATURE_V4_MIDPOINT_ZC == 2
-static volatile bool v4_zcConfirmed = false;  /* Set by ADC ISR, consumed by CCP ISR */
-#endif
-
 /* ── V4 ADC ISR ───────────────────────────────────────────────────── */
 void __attribute__((interrupt, auto_psv)) _AD1CH4Interrupt(void)
 {
@@ -324,38 +314,11 @@ void __attribute__((interrupt, auto_psv)) _AD1CH4Interrupt(void)
     if (gV4Ibus_mA > gV4IbusPkMax) gV4IbusPkMax = gV4Ibus_mA;
     if (gV4Ibus_mA < gV4IbusPkMin) gV4IbusPkMin = gV4Ibus_mA;
 
-#if FEATURE_V4_MIDPOINT_ZC == 1
-#if !FEATURE_BEMF_VIA_PTG
-    /* Default path: BEMF detection runs inside the ADC ISR, right after
-     * the current/Vbus reads.  When FEATURE_BEMF_VIA_PTG=1 the same body
-     * runs from the PTG ISR instead, ~1.5 µs earlier and decoupled from
-     * the ADC scan.  See V4_ProcessBemfSample() below for the actual
-     * logic — kept as one function so both call sites stay byte-equal. */
-    V4_ProcessBemfSample();
-#endif
-#elif FEATURE_V4_MIDPOINT_ZC == 2
-    if (SectorPI_IsRunning() && SectorPI_GetPhase() == 3
-        && !v4_captureValid && !v4_zcConfirmed)
-    {
-        uint16_t nowHR = CCP4TMRL;
-        if ((int16_t)(nowHR - v4_blankingEndHR) >= 0)
-        {
-            uint8_t comp = ReadBEMFComp();
-            uint8_t expected = HAL_Capture_IsRisingZc() ? 1 : 0;
-            if (comp == expected)
-            {
-                v4_zcConfirmed = true;
-            }
-        }
-    }
-#endif
-
-    /* [AK PORT] CK had a shared ADCIF; AK uses per-channel flags.
-     * Clear AD1CH4 (VBUS) since it triggered this ISR. */
+    /* AK ADC uses per-channel flags. Clear AD1CH4 (VBUS) since it
+     * triggered this ISR. BEMF detection runs in V4_ProcessBemfSample
+     * (called from the PTG ISR), not here. */
     _AD1CH4IF = 0;
 }
-
-#if FEATURE_V4_MIDPOINT_ZC == 1
 
 /* ── V4_ProcessBemfSample — runs once per PTG fire, decides ZC ─────
  *
@@ -392,8 +355,7 @@ void V4_ProcessBemfSample(void)
      * comments preserved verbatim because they document hard-won
      * tuning history (single-read vs 3-read regression, isRising
      * stuck-true workarounds, PI-feed polarity rationale, etc). */
-    if (!v4_spActive
-        && SectorPI_IsRunning() && SectorPI_GetPhase() == 3)
+    if (SectorPI_IsRunning() && SectorPI_GetPhase() == 3)
     {
         if (v4_captureValid)
         {
@@ -552,7 +514,6 @@ void V4_ProcessBemfSample(void)
         }
     }
 }
-#endif /* FEATURE_V4_MIDPOINT_ZC == 1 */
 
 /* ── SCCP1 ISR: falling ZC level check at PWM OFF-mid ────────────
  * Fires at 40 kHz, phase-offset from ADC ISR by 12.5 µs (PWM peak).
@@ -560,9 +521,7 @@ void V4_ProcessBemfSample(void)
 void __attribute__((interrupt, no_auto_psv)) _CCT1Interrupt(void)
 {
     _CCT1IF = 0;
-#if FEATURE_V4_MIDPOINT_ZC == 1
-    if (!v4_spActive
-        && SectorPI_IsRunning() && SectorPI_GetPhase() == 3
+    if (SectorPI_IsRunning() && SectorPI_GetPhase() == 3
         && !HAL_Capture_IsRisingZc())
     {
         uint16_t nowHR = CCP4TMRL;
@@ -574,15 +533,11 @@ void __attribute__((interrupt, no_auto_psv)) _CCT1Interrupt(void)
                 v4_offMidMismatch++;
         }
     }
-#endif
 }
 
 /* ── V4 Commutation ISR (SCCP3 sector timer period match) ─────── */
 void __attribute__((interrupt, no_auto_psv)) _CCT3Interrupt(void)
 {
-#if FEATURE_V4_MIDPOINT_ZC == 2
-    v4_zcConfirmed = false;  /* Reset for new sector */
-#endif
     /* One-shot guard: disable interrupt + push PRL to prevent
      * stray re-trigger while SectorPI_Commutate runs.
      * Commutate will call ScheduleAbsolute to arm the next one. */

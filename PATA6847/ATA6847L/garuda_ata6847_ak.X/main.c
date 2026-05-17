@@ -25,9 +25,7 @@
 #include "hal/hal_opa.h"
 #include "hal/hal_pwm.h"
 #include "hal/hal_timer1.h"
-#if FEATURE_V5_PTG_ZC
 #include "hal/hal_ptg.h"
-#endif
 #include "hal/board_service.h"
 #include "motor/sector_pi.h"
 extern volatile ESC_STATE_T gV4State;
@@ -110,16 +108,12 @@ int main(void)
     /* V4: sector timer + capture timer init happens in SectorPI_Init() */
     HAL_UART_WriteString("V4.");
 
-#if FEATURE_V5_PTG_ZC
-    /* PTG heartbeat — fires _PTG0Interrupt at every PG1TRIGB match
-     * (mid-OFF).  Phase 1: just increments v5_ptgFires for the host to
-     * verify the path is live.  Started here once and left running for
-     * the lifetime of the firmware — SectorPI_Start/Stop still call
-     * HAL_PTG_Start/Stop too, which just resets counters. */
+    /* PTG: fires _PTG0Interrupt at every PG1TRIGB match. Started here
+     * once and left running for the lifetime of the firmware —
+     * SectorPI_Start/Stop call HAL_PTG_Start/Stop which just reset counters. */
     HAL_PTG_Init();
     HAL_PTG_Start();
     HAL_UART_WriteString("PTG.");
-#endif
 
     /* 9. Board service + ESC service */
     BoardServiceInit();

@@ -129,9 +129,8 @@ void __attribute__((interrupt, no_auto_psv)) _PTG0Interrupt(void)
 {
     _PTG0IF = 0;
     v5_ptgFires++;
-#if FEATURE_BEMF_VIA_PTG && FEATURE_V4_MIDPOINT_ZC == 1
-  #if PTG_POSTSCALE_N > 1U
-    /* CK-rate experiment: process 1 of every PTG_POSTSCALE_N fires. */
+#if PTG_POSTSCALE_N > 1U
+    /* Process 1 of every PTG_POSTSCALE_N fires (rate experiment). */
     static uint8_t postscaler = 0;
     if (++postscaler < PTG_POSTSCALE_N) {
         v5_ptgSkipped++;
@@ -139,9 +138,8 @@ void __attribute__((interrupt, no_auto_psv)) _PTG0Interrupt(void)
         return;
     }
     postscaler = 0;
-  #endif
-  #if FEATURE_PER_SECTOR_PTG
-    /* Duty-adaptive sample position (2026-05-15).
+#endif
+    /* Duty-adaptive sample position.
      *
      * Center-aligned PWM: OFF window is (1-duty)·period wide, ON window
      * is duty·period. Below 50% duty the OFF window is wider → MID-OFF
@@ -172,8 +170,4 @@ void __attribute__((interrupt, no_auto_psv)) _PTG0Interrupt(void)
             }
         }
     }
-  #else
-    V4_ProcessBemfSample();
-  #endif
-#endif
 }
