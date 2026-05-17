@@ -1,6 +1,6 @@
 /**
  * @file hal_capture.h
- * @brief Per-sector capture state for the V4 ADC-ISR midpoint sampler.
+ * @brief Per-sector capture state for the BEMF midpoint sampler.
  */
 
 #ifndef HAL_CAPTURE_H
@@ -14,8 +14,8 @@
 #define BEMF_B_RP   0x0037U
 #define BEMF_C_RP   0x004AU
 
-extern volatile uint16_t v4_lastCaptureHR;
-extern volatile bool     v4_captureValid;
+extern volatile uint16_t lastCaptureHR_g;
+extern volatile bool     captureValid;
 
 void     HAL_Capture_Init(void);
 void     HAL_Capture_Start(void);

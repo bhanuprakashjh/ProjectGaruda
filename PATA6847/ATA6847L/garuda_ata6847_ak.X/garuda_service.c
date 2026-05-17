@@ -3,7 +3,7 @@
  * @brief Main ESC service — state machine, Timer1 + ADC + PTG ISRs.
  *
  * BEMF sampling runs in the PTG ISR (hal_ptg.c), which calls
- * V4_ProcessBemfSample here once per fire for per-fire classification.
+ * ProcessBemfSample here once per fire for per-fire classification.
  * The ADC ISR retains POT/Vbus/current responsibilities only.
  *
  * Timer1 ISR (20 kHz / 50 µs):
@@ -33,78 +33,78 @@
 #include "motor/commutation.h"
 
 #include "motor/sector_pi.h"
-#include "motor/v4_params.h"
+#include "motor/motor_params.h"
 #include "hal/hal_com_timer.h"
 #include "hal/hal_capture.h"
 
 /* ====================================================================
- * V4 SECTOR PI ARCHITECTURE
+ * SECTOR PI ARCHITECTURE
  * ==================================================================== */
 
-/* Minimal state for V4 (sector_pi.c owns motor state) */
-volatile ESC_STATE_T gV4State = ESC_IDLE;
+/* Minimal global state (sector_pi.c owns motor state) */
+volatile ESC_STATE_T gEscState = ESC_IDLE;
 volatile bool gStateChanged = false;
 volatile ESC_STATE_T gPrevState = ESC_IDLE;
-volatile uint16_t gV4PotRaw = 0;
-volatile uint16_t gV4VbusRaw = 0;
-volatile int16_t  gV4IaRaw = 0;
-volatile int16_t  gV4IbRaw = 0;
-volatile int16_t  gV4IbusRaw = 0;       /* direct DC-bus shunt read (OA3OUT) */
+volatile uint16_t gPotRaw = 0;
+volatile uint16_t gVbusRaw = 0;
+volatile int16_t  gIaRaw = 0;
+volatile int16_t  gIbRaw = 0;
+volatile int16_t  gIbusRaw = 0;       /* direct DC-bus shunt read (OA3OUT) */
 
 /* Calibrated electrical values — produced in the ADC ISR by applying the
  * board-specific scale factors from garuda_config.h.  These are what the
  * GSP telemetry ships to the host, so the Python tool only has to display
  * them; it never knows the shunt/gain/divider numbers itself. */
-volatile int16_t  gV4Ia_mA   = 0;       /* signed milliamps */
-volatile int16_t  gV4Ib_mA   = 0;
-volatile int16_t  gV4Ibus_mA = 0;
-volatile uint16_t gV4Vbus_mV = 0;       /* unsigned millivolts */
+volatile int16_t  gIa_mA   = 0;       /* signed milliamps */
+volatile int16_t  gIb_mA   = 0;
+volatile int16_t  gIbus_mA = 0;
+volatile uint16_t gVbus_mV = 0;       /* unsigned millivolts */
 
 /* Current peak tracking (rolling window, reset on snapshot read).
  * Units: SIGNED MILLIAMPS, written by the ADC ISR after the count→mA
  * conversion.  Previously these held raw ADC counts; switched to mA so
  * the host doesn't need to know the shunt/gain calibration.  Range is
  * ±32 A in int16, well above the ±22 A ADC hardware ceiling. */
-volatile int16_t  gV4IaPkMax   = 0, gV4IaPkMin   = 0;   /* mA */
-volatile int16_t  gV4IbPkMax   = 0, gV4IbPkMin   = 0;   /* mA */
-volatile int16_t  gV4IbusPkMax = 0, gV4IbusPkMin = 0;   /* mA */
+volatile int16_t  gIaPkMax   = 0, gIaPkMin   = 0;   /* mA */
+volatile int16_t  gIbPkMax   = 0, gIbPkMin   = 0;   /* mA */
+volatile int16_t  gIbusPkMax = 0, gIbusPkMin = 0;   /* mA */
 
-/* At-fault frozen snapshot — populated when V4 enters FAULT, preserved
+/* At-fault frozen snapshot — populated when ESC enters FAULT, preserved
  * until motor restart. Captures exact peaks at the moment of trip.
  * Units: milliamps (same as the live peaks above). */
-volatile int16_t  gV4IaAtFaultMax = 0, gV4IaAtFaultMin = 0;
-volatile int16_t  gV4IbAtFaultMax = 0, gV4IbAtFaultMin = 0;
-volatile int16_t  gV4IbusAtFaultMax = 0, gV4IbusAtFaultMin = 0;
-volatile int16_t  gV4IaAtFaultInst = 0, gV4IbAtFaultInst = 0, gV4IbusAtFaultInst = 0;
-volatile uint8_t  gV4FaultSnapshotValid = 0;
+volatile int16_t  gIaAtFaultMax = 0, gIaAtFaultMin = 0;
+volatile int16_t  gIbAtFaultMax = 0, gIbAtFaultMin = 0;
+volatile int16_t  gIbusAtFaultMax = 0, gIbusAtFaultMin = 0;
+volatile int16_t  gIaAtFaultInst = 0, gIbAtFaultInst = 0, gIbusAtFaultInst = 0;
+volatile uint8_t  gFaultSnapshotValid = 0;
 
-static inline void V4FreezeAtFaultPeaks(void)
+static inline void FreezeAtFaultPeaks(void)
 {
-    gV4IaAtFaultMax   = gV4IaPkMax;   gV4IaAtFaultMin   = gV4IaPkMin;
-    gV4IbAtFaultMax   = gV4IbPkMax;   gV4IbAtFaultMin   = gV4IbPkMin;
-    gV4IbusAtFaultMax = gV4IbusPkMax; gV4IbusAtFaultMin = gV4IbusPkMin;
-    gV4IaAtFaultInst   = gV4Ia_mA;
-    gV4IbAtFaultInst   = gV4Ib_mA;
-    gV4IbusAtFaultInst = gV4Ibus_mA;
-    gV4FaultSnapshotValid = 1;
+    gIaAtFaultMax   = gIaPkMax;   gIaAtFaultMin   = gIaPkMin;
+    gIbAtFaultMax   = gIbPkMax;   gIbAtFaultMin   = gIbPkMin;
+    gIbusAtFaultMax = gIbusPkMax; gIbusAtFaultMin = gIbusPkMin;
+    gIaAtFaultInst   = gIa_mA;
+    gIbAtFaultInst   = gIb_mA;
+    gIbusAtFaultInst = gIbus_mA;
+    gFaultSnapshotValid = 1;
 }
-static volatile uint8_t  gV4TickDiv = 0;
-volatile uint32_t gV4SystemTick = 0;
+static volatile uint8_t  gTickDiv = 0;
+volatile uint32_t gSystemTick = 0;
 
 /* ATA6847 fault check interval */
-static volatile uint8_t gV4AtaCheckDiv = 0;
-static volatile uint32_t gV4StartTick = 0;  /* systemTick when motor started */
+static volatile uint8_t gAtaCheckDiv = 0;
+static volatile uint32_t gStartTick = 0;  /* systemTick when motor started */
 
 void GarudaService_Init(void)
 {
-    gV4State = ESC_IDLE;
+    gEscState = ESC_IDLE;
     SectorPI_Init();
     HAL_Timer1_Start();
 }
 
 void GarudaService_StartMotor(void)
 {
-    if (gV4State != ESC_IDLE) return;
+    if (gEscState != ESC_IDLE) return;
 
     HAL_UART_WriteString("V4:clr ");
     HAL_ATA6847_ClearFaults();
@@ -121,7 +121,7 @@ void GarudaService_StartMotor(void)
     if (!HAL_ATA6847_EnterGduNormal())
     {
         HAL_UART_WriteString("FAIL!\r\n");
-        gV4State = ESC_FAULT;
+        gEscState = ESC_FAULT;
         return;
     }
 
@@ -150,13 +150,13 @@ void GarudaService_StartMotor(void)
     /* SectorPI_Start is NON-BLOCKING. It sets up alignment state.
      * Timer1 ISR drives ALIGN + OL_RAMP via SectorPI_OlTick().
      * When ramp completes, sector_pi.c starts SCCP3 + CCP2 for CL. */
-    SectorPI_Start(gV4VbusRaw);
+    SectorPI_Start(gVbusRaw);
 
-    gV4State = ESC_OL_RAMP;  /* V3-style state during ramp */
+    gEscState = ESC_OL_RAMP;  /* V3-style state during ramp */
     gStateChanged = true;
     gPrevState = ESC_IDLE;
-    gV4AtaCheckDiv = 0;
-    gV4StartTick = gV4SystemTick;
+    gAtaCheckDiv = 0;
+    gStartTick = gSystemTick;
 }
 
 void GarudaService_StopMotor(void)
@@ -166,12 +166,12 @@ void GarudaService_StopMotor(void)
     HAL_ADC_InterruptDisable();
     HAL_OPA_Disable();
     HAL_ATA6847_EnterGduStandby();
-    gV4State = ESC_IDLE;
+    gEscState = ESC_IDLE;
     gStateChanged = true;
     LED_RUN = 0;
 }
 
-/* ── V4 Timer1 ISR ────────────────────────────────────────────────── */
+/* ── Timer1 ISR ────────────────────────────────────────────────── */
 void __attribute__((interrupt, auto_psv)) _T1Interrupt(void)
 {
     _T1IF = 0;
@@ -183,10 +183,10 @@ void __attribute__((interrupt, auto_psv)) _T1Interrupt(void)
         SectorPI_OlTick();
 
     /* 1ms tick (divide 20kHz by 20) */
-    if (++gV4TickDiv >= 20)
+    if (++gTickDiv >= 20)
     {
-        gV4TickDiv = 0;
-        gV4SystemTick++;
+        gTickDiv = 0;
+        gSystemTick++;
 
         if (SectorPI_IsRunning())
         {
@@ -194,19 +194,19 @@ void __attribute__((interrupt, auto_psv)) _T1Interrupt(void)
 
             /* Throttle — scale 12-bit pot (0..4095) to Q15 amplitude
              * (0..32768). Original code did `>> 1` which capped at 2047
-             * — always below V4_MIN_AMPLITUDE=5000 floor, so pot had no
+             * — always below MIN_AMPLITUDE=5000 floor, so pot had no
              * effect. `<< 3` maps potRaw=0..4095 to amp=0..32760, full
              * Q15 range. Dead-zone at potRaw < 200 (~5% pot) → amp=0 →
              * SectorPI_CommandSet floors to MIN_AMPLITUDE (15% idle). */
-            uint16_t amp = (gV4PotRaw < 200u) ? 0u
-                                              : (uint16_t)(gV4PotRaw << 3);
+            uint16_t amp = (gPotRaw < 200u) ? 0u
+                                              : (uint16_t)(gPotRaw << 3);
             SectorPI_CommandSet(amp);
 
             /* Track phase transitions for telemetry state */
-            if (gV4State == ESC_OL_RAMP && SectorPI_GetPhase() == 3)
+            if (gEscState == ESC_OL_RAMP && SectorPI_GetPhase() == 3)
             {
-                gV4State = ESC_CLOSED_LOOP;
-                gV4StartTick = gV4SystemTick;
+                gEscState = ESC_CLOSED_LOOP;
+                gStartTick = gSystemTick;
                 gStateChanged = true;
             }
         }
@@ -221,9 +221,9 @@ void __attribute__((interrupt, auto_psv)) _T1Interrupt(void)
 
 /* Forward declarations for ZC detection */
 static inline uint8_t ReadBEMFComp(void);
-extern volatile uint8_t v4_floatingPhase;
-extern volatile uint16_t v4_blankingEndHR;
-extern volatile uint16_t v4_timerPeriod;  /* from sector_pi.c */
+extern volatile uint8_t floatingPhase;
+extern volatile uint16_t blankingEndHR;
+extern volatile uint16_t timerPeriod_g;  /* from sector_pi.c */
 
 
 /* ── ADC midpoint ZC diagnostic counters (Mode 1) ─────────────── */
@@ -231,15 +231,15 @@ extern volatile uint16_t v4_timerPeriod;  /* from sector_pi.c */
  * Reset on motor start in SectorPI_Start().
  * 32-bit — at 40kHz ADC rate, uint16 wraps every ~1.6s making
  * multi-second tests unusable. */
-volatile uint32_t v4_adcBlankReject  = 0;  /* ADC fired pre-blanking-end */
-volatile uint32_t v4_adcStateMismatch = 0; /* past blanking, wrong GPIO  */
-volatile uint32_t v4_adcCaptureSet   = 0;  /* set v4_captureValid       */
+volatile uint32_t adcBlankReject  = 0;  /* ADC fired pre-blanking-end */
+volatile uint32_t adcStateMismatch = 0; /* past blanking, wrong GPIO  */
+volatile uint32_t adcCaptureSet   = 0;  /* set captureValid       */
 /* Polarity split: sets that happened on rising-ZC sectors (0,2,4).
- * Falling portion is (v4_adcCaptureSet - v4_adcSetRising).
+ * Falling portion is (adcCaptureSet - adcSetRising).
  * Uint32 data shows capture rate is a flat 49% across all speeds —
  * structural, not speed-dependent. This counter tests the hypothesis
  * that one polarity class (rising vs falling) misses every time. */
-volatile uint32_t v4_adcSetRising    = 0;
+volatile uint32_t adcSetRising    = 0;
 
 /* Capture-layer probe — tally comp value × sector polarity, past
  * blanking. Distinguishes a physics asymmetry (BEMF never reaches
@@ -249,10 +249,10 @@ volatile uint32_t v4_adcSetRising    = 0;
  *   falling-BEMF sector: pre-ZC comp=0, post-ZC comp=1
  * compRising_High >> compRising_Low means rising-sector BEMF never
  * crosses virtual neutral at the sample point. */
-volatile uint32_t v4_compRising_High  = 0;  /* rising sector,  comp=1 (pre-ZC state)  */
-volatile uint32_t v4_compRising_Low   = 0;  /* rising sector,  comp=0 (post-ZC state) */
-volatile uint32_t v4_compFalling_High = 0;  /* falling sector, comp=1 (post-ZC state) */
-volatile uint32_t v4_compFalling_Low  = 0;  /* falling sector, comp=0 (pre-ZC state)  */
+volatile uint32_t compRising_High  = 0;  /* rising sector,  comp=1 (pre-ZC state)  */
+volatile uint32_t compRising_Low   = 0;  /* rising sector,  comp=0 (post-ZC state) */
+volatile uint32_t compFalling_High = 0;  /* falling sector, comp=1 (post-ZC state) */
+volatile uint32_t compFalling_Low  = 0;  /* falling sector, comp=0 (pre-ZC state)  */
 
 /* Post-ZC shadow counters — per-sample (no captureValid sticky gate),
  * gated by FEATURE_POST_ZC_ACCEPT. Diagnostic only, doesn't drive
@@ -264,18 +264,18 @@ volatile uint32_t postZcRisingRej  = 0;
 volatile uint32_t postZcFallingAcc = 0;
 volatile uint32_t postZcFallingRej = 0;
 
-/* ── V4 ADC ISR ───────────────────────────────────────────────────── */
+/* ── ADC ISR ───────────────────────────────────────────────────── */
 void __attribute__((interrupt, auto_psv)) _AD1CH4Interrupt(void)
 {
-    gV4PotRaw  = ADCBUF_POT;
-    gV4VbusRaw = ADCBUF_VBUS;
+    gPotRaw  = ADCBUF_POT;
+    gVbusRaw = ADCBUF_VBUS;
     /* Phase + bus currents: unsigned 12-bit ADC reads, zero-current bias
      * subtracted to give a signed int16 swing around 0.  Raw counts are
      * kept for internal use; the host-facing values are converted to
      * milliamps below using the calibration constants from garuda_config.h. */
-    gV4IaRaw   = (int16_t)((int16_t)ADCBUF_IA   - ADC_CURRENT_BIAS);
-    gV4IbRaw   = (int16_t)((int16_t)ADCBUF_IB   - ADC_CURRENT_BIAS);
-    gV4IbusRaw = (int16_t)((int16_t)ADCBUF_IBUS - ADC_CURRENT_BIAS);
+    gIaRaw   = (int16_t)((int16_t)ADCBUF_IA   - ADC_CURRENT_BIAS);
+    gIbRaw   = (int16_t)((int16_t)ADCBUF_IB   - ADC_CURRENT_BIAS);
+    gIbusRaw = (int16_t)((int16_t)ADCBUF_IBUS - ADC_CURRENT_BIAS);
 
     /* Convert ADC counts → physical units once, at the source.  All
      * downstream consumers (snapshot builder, fault snapshot, peak
@@ -283,40 +283,40 @@ void __attribute__((interrupt, auto_psv)) _AD1CH4Interrupt(void)
      * that swapping the DIM gain resistors only requires updating the
      * two _Q8 constants in garuda_config.h.  Q8 fixed-point keeps the
      * multiply in int32 and the result in int16 with no FP. */
-    gV4Vbus_mV = (uint16_t)(((uint32_t)gV4VbusRaw * ADC_VBUS_MV_PER_COUNT_Q8) >> 8);
-    gV4Ia_mA   = (int16_t)(((int32_t)gV4IaRaw   * ADC_MA_PER_COUNT_Q8) >> 8);
-    gV4Ib_mA   = (int16_t)(((int32_t)gV4IbRaw   * ADC_MA_PER_COUNT_Q8) >> 8);
-    gV4Ibus_mA = (int16_t)(((int32_t)gV4IbusRaw * ADC_MA_PER_COUNT_Q8) >> 8);
+    gVbus_mV = (uint16_t)(((uint32_t)gVbusRaw * ADC_VBUS_MV_PER_COUNT_Q8) >> 8);
+    gIa_mA   = (int16_t)(((int32_t)gIaRaw   * ADC_MA_PER_COUNT_Q8) >> 8);
+    gIb_mA   = (int16_t)(((int32_t)gIbRaw   * ADC_MA_PER_COUNT_Q8) >> 8);
+    gIbus_mA = (int16_t)(((int32_t)gIbusRaw * ADC_MA_PER_COUNT_Q8) >> 8);
 
     /* Peak tracking in milliamps (rolling window reset on snapshot read).
-     * Direct OA3 read of the DC-bus shunt → ibusPk straight from gV4Ibus_mA
+     * Direct OA3 read of the DC-bus shunt → ibusPk straight from gIbus_mA
      * instead of being host-reconstructed from |Ia|/|Ib| extrema (which
      * underestimated by √3 in C-PWM sectors). */
-    if (gV4Ia_mA   > gV4IaPkMax)   gV4IaPkMax   = gV4Ia_mA;
-    if (gV4Ia_mA   < gV4IaPkMin)   gV4IaPkMin   = gV4Ia_mA;
-    if (gV4Ib_mA   > gV4IbPkMax)   gV4IbPkMax   = gV4Ib_mA;
-    if (gV4Ib_mA   < gV4IbPkMin)   gV4IbPkMin   = gV4Ib_mA;
-    if (gV4Ibus_mA > gV4IbusPkMax) gV4IbusPkMax = gV4Ibus_mA;
-    if (gV4Ibus_mA < gV4IbusPkMin) gV4IbusPkMin = gV4Ibus_mA;
+    if (gIa_mA   > gIaPkMax)   gIaPkMax   = gIa_mA;
+    if (gIa_mA   < gIaPkMin)   gIaPkMin   = gIa_mA;
+    if (gIb_mA   > gIbPkMax)   gIbPkMax   = gIb_mA;
+    if (gIb_mA   < gIbPkMin)   gIbPkMin   = gIb_mA;
+    if (gIbus_mA > gIbusPkMax) gIbusPkMax = gIbus_mA;
+    if (gIbus_mA < gIbusPkMin) gIbusPkMin = gIbus_mA;
 
     /* AK ADC uses per-channel flags. Clear AD1CH4 (VBUS) since it
-     * triggered this ISR. BEMF detection runs in V4_ProcessBemfSample
+     * triggered this ISR. BEMF detection runs in ProcessBemfSample
      * (called from the PTG ISR), not here. */
     _AD1CH4IF = 0;
 }
 
-/* ── V4_ProcessBemfSample — runs once per PTG fire, decides ZC ─────
+/* ── ProcessBemfSample — runs once per PTG fire, decides ZC ─────
  *
- * Called from _PTG0Interrupt (hal_ptg.c). The `v4_adc*` counter names
+ * Called from _PTG0Interrupt (hal_ptg.c). The `adc*` counter names
  * are historical — they aren't tied to the ADC peripheral anymore.
  *
  * Decision flow:
  *   Gate 1: motor must be in CL  → else return.
- *   Gate 2: v4_captureValid already set this sector? → return (one
+ *   Gate 2: captureValid already set this sector? → return (one
  *           accepted ZC per sector).
- *   Gate 3: are we past v4_blankingEndHR? → else v4_adcBlankReject++.
+ *   Gate 3: are we past blankingEndHR? → else adcBlankReject++.
  *           Blanking rejects the post-Commutate ringing window.
- *   Probe: tally per-(sector,phase) comp=1 counts in v4_bemfTally[].
+ *   Probe: tally per-(sector,phase) comp=1 counts in bemfTally[].
  *          Tally is reset on each telemetry snapshot send so the
  *          ratios are a fresh ~50 ms window.
  *   Deglitch: read the comparator 3 times with NOPs between (~400 ns
@@ -324,16 +324,16 @@ void __attribute__((interrupt, auto_psv)) _AD1CH4Interrupt(void)
  *   Polarity gate: compare `comp` to `expected`. Expected is currently
  *                  hard-coded to 0 (catches comp=0 events). Sectors
  *                  matching → set captureValid + lastCaptureHR. Other
- *                  polarity → just count v4_adcStateMismatch.
+ *                  polarity → just count adcStateMismatch.
  *
  * The two key globals it writes:
- *   v4_captureValid — "there's a fresh capture waiting" flag.
+ *   captureValid — "there's a fresh capture waiting" flag.
  *                     Consumed by SectorPI_Commutate.
- *   v4_lastCaptureHR — timestamp of that capture, in SCCP4 domain.
+ *   lastCaptureHR_g — timestamp of that capture, in SCCP4 domain.
  *
  * NOT marked inline: called from two ISRs in different .o files.
  * Out-of-line is correct. */
-void V4_ProcessBemfSample(void)
+void ProcessBemfSample(void)
 {
     /* Same scaffold the ADC ISR used to host directly.  Original
      * comments preserved verbatim because they document hard-won
@@ -341,12 +341,12 @@ void V4_ProcessBemfSample(void)
      * stuck-true workarounds, PI-feed polarity rationale, etc). */
     if (SectorPI_IsRunning() && SectorPI_GetPhase() == 3)
     {
-        if (!v4_captureValid)
+        if (!captureValid)
         {
             uint16_t nowHR = CCP4TMRL;
-            if ((int16_t)(nowHR - v4_blankingEndHR) < 0)
+            if ((int16_t)(nowHR - blankingEndHR) < 0)
             {
-                v4_adcBlankReject++;
+                adcBlankReject++;
             }
             else
             {
@@ -355,28 +355,28 @@ void V4_ProcessBemfSample(void)
                  * costs ~10 cycles, validates whether floatingPhase
                  * points at the actually-floating pin in each sector. */
                 {
-                    extern volatile uint8_t  v4_currentSector;
-                    extern volatile uint16_t v4_bemfTally[6][3];
-                    extern volatile uint16_t v4_bemfTallyTotal[6];
-                    extern volatile uint16_t v4_fpStaleCount;
-                    uint8_t sect = v4_currentSector;
+                    extern volatile uint8_t  currentSector;
+                    extern volatile uint16_t bemfTally[6][3];
+                    extern volatile uint16_t bemfTallyTotal[6];
+                    extern volatile uint16_t fpStaleCount;
+                    uint8_t sect = currentSector;
                     if (sect < 6u) {
                         uint8_t bA = BEMF_A_GetValue();
                         uint8_t bB = BEMF_B_GetValue();
                         uint8_t bC = BEMF_C_GetValue();
-                        v4_bemfTallyTotal[sect]++;
-                        if (bA) v4_bemfTally[sect][0]++;
-                        if (bB) v4_bemfTally[sect][1]++;
-                        if (bC) v4_bemfTally[sect][2]++;
+                        bemfTallyTotal[sect]++;
+                        if (bA) bemfTally[sect][0]++;
+                        if (bB) bemfTally[sect][1]++;
+                        if (bC) bemfTally[sect][2]++;
 
-                        /* Stale-fp probe: does v4_floatingPhase match the
-                         * table's belief for v4_currentSector? Both are
+                        /* Stale-fp probe: does floatingPhase match the
+                         * table's belief for currentSector? Both are
                          * written by SectorPI_Commutate but at different
                          * statements — drift here means the deglitch
-                         * (which uses v4_floatingPhase) is reading the
+                         * (which uses floatingPhase) is reading the
                          * wrong pin. */
                         uint8_t fp_table = commutationTable[sect].floatingPhase;
-                        if (fp_table != v4_floatingPhase) v4_fpStaleCount++;
+                        if (fp_table != floatingPhase) fpStaleCount++;
                     }
                 }
 
@@ -402,11 +402,11 @@ void V4_ProcessBemfSample(void)
                     extern volatile uint8_t ptgExpectedComp;
                     bool sectorRising_probe = (ptgExpectedComp == 0u);
                     if (sectorRising_probe) {
-                        if (comp) v4_compRising_High++;
-                        else      v4_compRising_Low++;
+                        if (comp) compRising_High++;
+                        else      compRising_Low++;
                     } else {
-                        if (comp) v4_compFalling_High++;
-                        else      v4_compFalling_Low++;
+                        if (comp) compFalling_High++;
+                        else      compFalling_Low++;
                     }
                 }
 
@@ -446,15 +446,15 @@ void V4_ProcessBemfSample(void)
                 uint8_t expected = 0;
                 if (comp != expected)
                 {
-                    v4_adcStateMismatch++;
+                    adcStateMismatch++;
                 }
                 else
                 {
-                    v4_adcCaptureSet++;
-                    if (sectorRising_v5) v4_adcSetRising++;
+                    adcCaptureSet++;
+                    if (sectorRising_v5) adcSetRising++;
 
                     bool feedPi;
-                    switch (v4Params.piFeedPolarity)
+                    switch (escParams.piFeedPolarity)
                     {
                         case 1:  feedPi = sectorRising_v5;   break;
                         case 2:  feedPi = !sectorRising_v5;  break;
@@ -465,8 +465,8 @@ void V4_ProcessBemfSample(void)
                         /* Publish the capture for Commutate to consume.
                          * nowHR is the SCCP4 free-running tick at the
                          * moment the deglitch sample passed. */
-                        v4_lastCaptureHR = nowHR;
-                        v4_captureValid = true;
+                        lastCaptureHR_g = nowHR;
+                        captureValid = true;
                     }
                 }
             }
@@ -474,7 +474,7 @@ void V4_ProcessBemfSample(void)
     }
 }
 
-/* ── V4 Commutation ISR (SCCP3 sector timer period match) ─────── */
+/* ── Commutation ISR (SCCP3 sector timer period match) ─────── */
 void __attribute__((interrupt, no_auto_psv)) _CCT3Interrupt(void)
 {
     /* One-shot guard: disable interrupt + push PRL to prevent
@@ -496,7 +496,7 @@ void __attribute__((interrupt, no_auto_psv)) _CCT3Interrupt(void)
 #define CLUSTER_GAP_HR  15u   /* ~10µs — covers ZC burst, rejects PWM noise */
 
 /* Floating phase GPIO readers */
-volatile uint8_t v4_floatingPhase = 0;
+volatile uint8_t floatingPhase = 0;
 
 static inline uint8_t ReadBEMFComp(void)
 {
@@ -504,7 +504,7 @@ static inline uint8_t ReadBEMFComp(void)
      * ATA6847L digital comparator outputs to RB9/RB8/RA10 (per AN6285
      * + DS70005527 DIM pin map). BEMF_x_GetValue() macros wrap the
      * board-specific GPIO so this code is identical across boards. */
-    switch (v4_floatingPhase) {
+    switch (floatingPhase) {
         case 0: return BEMF_A_GetValue();
         case 1: return BEMF_B_GetValue();
         case 2: return BEMF_C_GetValue();
@@ -513,33 +513,33 @@ static inline uint8_t ReadBEMFComp(void)
 }
 
 /* Blanking state */
-volatile uint16_t v4_blankingEndHR = 0;
+volatile uint16_t blankingEndHR = 0;
 /* Expected ZC HR timestamp (center of corridor for SP CCP ISR) */
-volatile uint16_t v4_expectedZcHR = 0;
+volatile uint16_t expectedZcHR = 0;
 
 /* Multi-phase BEMF tally — every post-blanking PTG fire reads all 3
  * BEMF GPIOs and counts comp=1 per (sector, phase). In sector S, the
  * floating phase should transition (comp=1 ratio in 10..90%); a ratio
  * stuck at 0% or 100% means we're reading a driven phase, indicating
  * a floatingPhase-mapping bug. */
-volatile uint16_t v4_bemfTally[6][3]  = {{0}};   /* [sector][phase] count of comp=1 */
-volatile uint16_t v4_bemfTallyTotal[6] = {0};    /* per-sector post-blanking fires */
+volatile uint16_t bemfTally[6][3]  = {{0}};   /* [sector][phase] count of comp=1 */
+volatile uint16_t bemfTallyTotal[6] = {0};    /* per-sector post-blanking fires */
 
 /* Stale-floatingPhase diagnostic — counts post-blanking PTG fires
- * where v4_floatingPhase doesn't match commutationTable[v4_currentSector].
+ * where floatingPhase doesn't match commutationTable[currentSector].
  * Should be 0 in steady state since Commutate (IPL 6) atomically writes
  * both globals and PTG (IPL 5) can't preempt. Non-zero indicates one
  * write is being missed. Reset on snapshot send so each frame shows
  * a fresh delta. */
-volatile uint16_t v4_fpStaleCount = 0;
-/* (v4_adc* counters declared earlier — used by ADC ISR above) */
+volatile uint16_t fpStaleCount = 0;
+/* (adc* counters declared earlier — used by ADC ISR above) */
 
 
-/* ── V4 service tick (called from main loop) ─────────────────── */
+/* ── Service tick (called from main loop) ─────────────────── */
 void GarudaService_Tasks(void)
 {
     /* Check for stall → restart */
-    if (gV4State == ESC_CLOSED_LOOP && !SectorPI_IsRunning())
+    if (gEscState == ESC_CLOSED_LOOP && !SectorPI_IsRunning())
     {
         HAL_UART_WriteString("V4:STALL\r\n");
         GarudaService_StopMotor();
@@ -548,19 +548,19 @@ void GarudaService_Tasks(void)
 
 void GarudaService_ClearFault(void)
 {
-    if (gV4State == ESC_FAULT)
+    if (gEscState == ESC_FAULT)
     {
-        gV4State = ESC_IDLE;
+        gEscState = ESC_IDLE;
         LED_FAULT = 0;
     }
 }
 
 void GarudaService_MainLoop(void)
 {
-    if (gV4State != gPrevState)
+    if (gEscState != gPrevState)
     {
         gStateChanged = true;
-        gPrevState = gV4State;
+        gPrevState = gEscState;
     }
     GarudaService_Tasks();
 }

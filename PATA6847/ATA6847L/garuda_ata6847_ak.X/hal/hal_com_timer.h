@@ -2,7 +2,7 @@
  * @file hal_com_timer.h
  * @brief SCCP4 free-running HR timer + SCCP3 commutation scheduler.
  *
- * Current architecture (V4 sector PI):
+ * Current architecture (sector PI):
  *   SCCP4 — Free-running 16-bit timer at 1.5625 MHz (640 ns/tick).
  *           Provides timestamps to the ADC ISR midpoint sampler and
  *           the sector PI scheduler.

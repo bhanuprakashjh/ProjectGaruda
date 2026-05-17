@@ -1,19 +1,19 @@
 /**
  * @file hal_capture.c
- * @brief Per-sector capture state used by the V4 ADC-ISR midpoint sampler.
+ * @brief Per-sector capture state used by the BEMF midpoint sampler.
  *
  * No SCCP hardware capture on AK — commutation is driven by the ADC-ISR
- * midpoint sampler in V4_ProcessBemfSample. This file holds the shared
+ * midpoint sampler in ProcessBemfSample. This file holds the shared
  * state (last capture HR, per-sector polarity flag) the sampler reads.
  * The Init/Start/Stop/RouteForSector entry points are empty stubs kept
  * so existing sector_pi call sites don't need to change shape.
  */
 
 #include "hal_capture.h"
-#include "../motor/v4_params.h"
+#include "../motor/motor_params.h"
 
-volatile uint16_t v4_lastCaptureHR = 0;
-volatile bool     v4_captureValid  = false;
+volatile uint16_t lastCaptureHR_g = 0;
+volatile bool     captureValid  = false;
 
 static bool currentRisingZc = true;
 

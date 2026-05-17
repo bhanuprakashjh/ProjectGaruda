@@ -1,6 +1,6 @@
 /**
  * @file garuda_types.h
- * @brief Core types for 6-step BLDC on dsPIC33AK + ATA6847 (V4).
+ * @brief Core types for 6-step BLDC on dsPIC33AK + ATA6847.
  */
 
 #ifndef GARUDA_TYPES_H

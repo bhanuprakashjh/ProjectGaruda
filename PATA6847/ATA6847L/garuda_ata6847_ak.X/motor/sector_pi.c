@@ -1,6 +1,6 @@
 /**
  * @file sector_pi.c
- * @brief V4 Sector PI motor control.
+ * @brief Sector PI motor control.
  *
  * Startup: V3-style Timer1 countdown for ALIGN + OL_RAMP (proven).
  * Closed-loop: AVR-style PI synchronizer on SCCP3 + CCP2 capture.
@@ -22,7 +22,7 @@
 #include "../hal/hal_ptg.h"
 #include "../hal/port_config.h"
 #include "commutation.h"
-#include "v4_params.h"
+#include "motor_params.h"
 
 /* ── Sentinel for "no comparator edge this sector" ──────────────── */
 #define CAP_SENTINEL    0xFFFFU
@@ -36,13 +36,13 @@ static const uint8_t bemfRpPin[3] = {
 
 /* ── State ──────────────────────────────────────────────────────── */
 typedef enum {
-    V4_OFF = 0,
-    V4_ALIGN,
-    V4_OL_RAMP,
-    V4_CLOSED_LOOP
-} V4_PHASE_T;
+    SECTOR_PHASE_OFF = 0,
+    SECTOR_PHASE_ALIGN,
+    SECTOR_PHASE_OL_RAMP,
+    SECTOR_PHASE_CL
+} SECTOR_PHASE_T;
 
-static volatile V4_PHASE_T phase;
+static volatile SECTOR_PHASE_T phase;
 static          uint8_t    position;        /* 0..5 */
 static volatile bool       running;
 static volatile uint16_t   statusEvents;
@@ -53,12 +53,12 @@ static volatile uint32_t   sectorCount;
  * shows odd sectors" anomaly: if hits[0,2,4] stay at 0 while [1,3,5]
  * climb, position is incrementing by 2 somewhere and rising-sector
  * BEMF detection literally never runs. Exposed via GSP snapshot tail. */
-volatile uint32_t v4_sectorHits[6] = {0,0,0,0,0,0};
+volatile uint32_t sectorHits[6] = {0,0,0,0,0,0};
 
 /* Per-sector current position mirror — written from both Commutate paths
- * to give the PTG/V4_ProcessBemfSample probe a sector index without
+ * to give the PTG/ProcessBemfSample probe a sector index without
  * exposing the static `position`. Read-only outside sector_pi.c. */
-volatile uint8_t v4_currentSector = 0;
+volatile uint8_t currentSector = 0;
 
 /* ── OL ramp state (Timer1 driven, matches V3 startup.c) ───────── */
 static volatile uint16_t   alignCounter;
@@ -79,7 +79,7 @@ static volatile uint16_t   olHandoffCounter;
 
 /* ── PI state (SCCP3 driven, active in CL only) ────────────────── */
 static volatile uint16_t   timerPeriod;     /* sector period (PI output) */
-volatile uint16_t v4_timerPeriod;           /* exposed for CCP ISR speed check */
+volatile uint16_t timerPeriod_g;           /* exposed for CCP ISR speed check */
 static volatile uint16_t   integrator;
 /* PI integrator floor — set in EnterCL() to the OL handoff seed value.
  * Until commandEnabled goes true (rotor has had CL_SETTLE_MS to lock),
@@ -204,7 +204,7 @@ static void ShutOff(void)
     HAL_PWM_ForceAllFloat();
     HAL_PWM_SetDutyCycle(0);
     running = false;
-    phase = V4_OFF;
+    phase = SECTOR_PHASE_OFF;
     commandEnabled = false;
     actualAmplitude = 0;
     position = 0;
@@ -221,7 +221,7 @@ static void EnterCL(void)
      * T1 tick = 50µs = 78.125 SCCP ticks. */
     uint32_t hrPeriod = (uint32_t)rampStepPeriod * 625UL / 8UL;
     if (hrPeriod > 0xFFFF) hrPeriod = 0xFFFF;
-    if (hrPeriod < v4Params.minPeriodHr) hrPeriod = v4Params.minPeriodHr;
+    if (hrPeriod < escParams.minPeriodHr) hrPeriod = escParams.minPeriodHr;
 
     timerPeriod = (uint16_t)hrPeriod;
     integrator  = timerPeriod;
@@ -246,7 +246,7 @@ static void EnterCL(void)
 
     /* Configure CCP2 for current floating phase.
      * Flush FIFOs and clear flags BEFORE enabling ISRs to prevent
-     * stale noise edges from setting v4_captureValid. */
+     * stale noise edges from setting captureValid. */
     const COMMUTATION_STEP_T *step = &commutationTable[position];
     HAL_Capture_Configure(bemfRpPin[step->floatingPhase],
                           step->zcPolarity > 0);
@@ -255,7 +255,7 @@ static void EnterCL(void)
     /* Flush any accumulated edges before enabling capture ISRs */
     while (CCP2STATbits.ICBNE) (void)CCP2BUF;
     _CCP2IF = 0;
-    v4_captureValid = false;
+    captureValid = false;
 
     HAL_Capture_Start();
     HAL_PTG_Start();
@@ -263,27 +263,27 @@ static void EnterCL(void)
     /* Seed lastCommHR for PI elapsed calculation */
     lastCommHR = HAL_ComTimer_ReadTimer();
 
-    /* Seed v4_blankingEndHR so the ADC ISR's blanking gate is sane
+    /* Seed blankingEndHR so the ADC ISR's blanking gate is sane
      * during the first CL sector — before Commutate has a chance to
      * write it.  Without this, a stale 0 from init lets every ADC
      * sample past the gate. */
     {
-        extern volatile uint16_t v4_blankingEndHR;
-        uint8_t  pct      = v4Params.blankingPct;
+        extern volatile uint16_t blankingEndHR;
+        uint8_t  pct      = escParams.blankingPct;
         uint16_t blankHR;
         if (pct == 0U || pct > 100U) {
             blankHR = timerPeriod >> 2;
         } else {
             blankHR = (uint16_t)(((uint32_t)timerPeriod * pct) / 100U);
         }
-        v4_blankingEndHR = (uint16_t)(lastCommHR + blankHR);
+        blankingEndHR = (uint16_t)(lastCommHR + blankHR);
     }
 
 
     /* Schedule first CL commutation via one-shot SCCP3 */
     HAL_ComTimer_ScheduleAbsolute(lastCommHR + timerPeriod);
 
-    phase = V4_CLOSED_LOOP;
+    phase = SECTOR_PHASE_CL;
 
     /* Enable throttle after a short delay (handled in TimeTick) */
 }
@@ -296,14 +296,14 @@ void SectorPI_Init(void)
 {
     /* Load runtime tunables from compile-time defaults BEFORE the HAL
      * inits run — HAL_Capture_SetBlanking and the PI loop both consume
-     * v4Params on first use. */
-    V4Params_InitDefaults();
+     * escParams on first use. */
+    Params_InitDefaults();
 
     HAL_ComTimer_Init();   /* SCCP3 one-shot + SCCP4 HR (proven V3 pattern) */
     HAL_Capture_Init();
     HAL_PTG_Init();
     running = false;
-    phase = V4_OFF;
+    phase = SECTOR_PHASE_OFF;
     statusEvents = 0;
     sectorCount = 0;
 }
@@ -336,14 +336,14 @@ void SectorPI_Start(uint16_t vbusRaw)
     diagCaptures = 0;
     diagPiRuns = 0;
     diagCommutateNoCapture = 0;
-    extern volatile uint32_t v4_adcBlankReject;
-    extern volatile uint32_t v4_adcStateMismatch;
-    extern volatile uint32_t v4_adcCaptureSet;
-    extern volatile uint32_t v4_adcSetRising;
-    v4_adcBlankReject = 0;
-    v4_adcStateMismatch = 0;
-    v4_adcCaptureSet = 0;
-    v4_adcSetRising = 0;
+    extern volatile uint32_t adcBlankReject;
+    extern volatile uint32_t adcStateMismatch;
+    extern volatile uint32_t adcCaptureSet;
+    extern volatile uint32_t adcSetRising;
+    adcBlankReject = 0;
+    adcStateMismatch = 0;
+    adcCaptureSet = 0;
+    adcSetRising = 0;
     extern volatile uint32_t postZcRisingAcc;
     extern volatile uint32_t postZcRisingRej;
     extern volatile uint32_t postZcFallingAcc;
@@ -368,7 +368,7 @@ void SectorPI_Start(uint16_t vbusRaw)
     HAL_PWM_SetCommutationStep(0);
     HAL_PWM_SetDutyCycle(MIN_DUTY);
 
-    phase = V4_ALIGN;
+    phase = SECTOR_PHASE_ALIGN;
 }
 
 void SectorPI_Stop(void)
@@ -381,7 +381,7 @@ void SectorPI_OlTick(void)
 {
     if (!running) return;
 
-    if (phase == V4_ALIGN)
+    if (phase == SECTOR_PHASE_ALIGN)
     {
         if (alignCounter > 0)
         {
@@ -404,12 +404,12 @@ void SectorPI_OlTick(void)
         else
         {
             /* Alignment done → start OL ramp */
-            phase = V4_OL_RAMP;
+            phase = SECTOR_PHASE_OL_RAMP;
         }
         return;
     }
 
-    if (phase == V4_OL_RAMP)
+    if (phase == SECTOR_PHASE_OL_RAMP)
     {
         if (rampCounter > 0)
             rampCounter--;
@@ -482,7 +482,7 @@ void SectorPI_OlTick(void)
 /* ── Called from SCCP3 ISR (sector timer match) — CL only ───────── */
 void SectorPI_Commutate(void)
 {
-    if (phase != V4_CLOSED_LOOP) return;
+    if (phase != SECTOR_PHASE_CL) return;
 
     /* 1. Disable CCP ISRs during critical section */
     _CCP2IE = 0;
@@ -492,7 +492,7 @@ void SectorPI_Commutate(void)
     uint16_t prevCommHR = lastCommHR;
 
     /* 2.0 Close the cross-sector ADC race.  The ADC ISR (40 kHz, not
-     * disabled here) can fire between `v4_captureValid = false` below
+     * disabled here) can fire between `captureValid = false` below
      * and the new-sector blanking write further down.  With OLD
      * blankingEnd in the past, its `(now - blankingEnd) >= 0` gate
      * always passes → it captures the start of the new sector and
@@ -503,20 +503,20 @@ void SectorPI_Commutate(void)
      * blanking expires.  Width re-uses actualStepPeriodHR (sector
      * width is independent of position parity). */
     {
-        extern volatile uint16_t v4_blankingEndHR;
-        uint16_t guardSectorHR = (actualStepPeriodHR >= V4_MIN_PERIOD)
+        extern volatile uint16_t blankingEndHR;
+        uint16_t guardSectorHR = (actualStepPeriodHR >= MIN_PERIOD_HR)
                                  ? actualStepPeriodHR : timerPeriod;
-        uint8_t  guardPct      = v4Params.blankingPct;
+        uint8_t  guardPct      = escParams.blankingPct;
         uint16_t guardBlankHR;
         if (guardPct == 0U || guardPct > 100U) {
             guardBlankHR = guardSectorHR >> 2;
         } else {
             guardBlankHR = (uint16_t)(((uint32_t)guardSectorHR * guardPct) / 100U);
         }
-        v4_blankingEndHR = (uint16_t)(thisCommHR + guardBlankHR);
+        blankingEndHR = (uint16_t)(thisCommHR + guardBlankHR);
     }
     uint16_t measuredCommPeriod = (uint16_t)(thisCommHR - prevCommHR);
-    if (measuredCommPeriod >= V4_MIN_PERIOD)
+    if (measuredCommPeriod >= MIN_PERIOD_HR)
     {
         actualStepPeriodHR = measuredCommPeriod;
 #if FEATURE_MEAS_PI
@@ -524,7 +524,7 @@ void SectorPI_Commutate(void)
          * period (root cause unresolved). Single write only: extra
          * ISR cycles here destabilize Commutate timing. */
         tMeasHR = (uint16_t)(measuredCommPeriod >> 1);
-        if (tMeasHR < V4_MIN_PERIOD) tMeasHR = V4_MIN_PERIOD;
+        if (tMeasHR < MIN_PERIOD_HR) tMeasHR = MIN_PERIOD_HR;
 #endif
     }
     uint16_t capValue = CAP_SENTINEL;
@@ -534,16 +534,16 @@ void SectorPI_Commutate(void)
      * odd = falling. */
     bool sectorWasRising = ((position & 1u) == 0u);
 
-    if (v4_captureValid)
+    if (captureValid)
     {
-        uint16_t elapsed = (uint16_t)(v4_lastCaptureHR - prevCommHR);
+        uint16_t elapsed = (uint16_t)(lastCaptureHR_g - prevCommHR);
         /* Filter against the actual measured rotor sector, not the PI
          * estimate. timerPeriod can settle ~2× T_rotor, which lets cross-
          * sector captures pass and locks the system into an every-other-
          * sector miss pattern. Use the truth: actualStepPeriodHR. Fall
          * back to timerPeriod only on the very first commutation when
          * actualStepPeriodHR isn't initialized yet. */
-        uint16_t filterHR = (actualStepPeriodHR >= V4_MIN_PERIOD)
+        uint16_t filterHR = (actualStepPeriodHR >= MIN_PERIOD_HR)
                             ? actualStepPeriodHR : timerPeriod;
         diagFilterHRLast = filterHR;
         if (elapsed < filterHR)
@@ -559,7 +559,7 @@ void SectorPI_Commutate(void)
             if (sectorWasRising) { diagPiMissRising++;  diagElapsedRejectRising  = elapsed; }
             else                 { diagPiMissFalling++; diagElapsedRejectFalling = elapsed; }
         }
-        v4_captureValid = false;
+        captureValid = false;
     }
     else
     {
@@ -572,8 +572,8 @@ void SectorPI_Commutate(void)
     /* 3. Advance to next commutation step.
      *
      * INVARIANT: the three per-sector globals
-     *   v4_currentSector  — software sector index 0..5
-     *   v4_floatingPhase  — which BEMF GPIO PTG should read (0=A 1=B 2=C)
+     *   currentSector  — software sector index 0..5
+     *   floatingPhase  — which BEMF GPIO PTG should read (0=A 1=B 2=C)
      *   ptgExpectedComp   — post-ZC comp state (0=rising, 1=falling)
      * MUST be written back-to-back inside this block.
      *
@@ -587,9 +587,9 @@ void SectorPI_Commutate(void)
      * by PTG, write it inside this same block. */
     position++;
     if (position > 5) position = 0;
-    v4_sectorHits[position]++;
+    sectorHits[position]++;
     {
-        extern volatile uint8_t v4_floatingPhase;
+        extern volatile uint8_t floatingPhase;
 #if FEATURE_POST_ZC_ACCEPT
         extern volatile uint8_t ptgExpectedComp;
 #endif
@@ -604,8 +604,8 @@ void SectorPI_Commutate(void)
          * is fine — the only guarantee we need is that no other
          * code runs in between, and that's guaranteed by being in
          * the same ISR with PTG at lower priority. */
-        v4_currentSector  = position;
-        v4_floatingPhase  = newFp;
+        currentSector  = position;
+        floatingPhase  = newFp;
 #if FEATURE_POST_ZC_ACCEPT
         ptgExpectedComp = newExpected;
 #endif
@@ -622,10 +622,10 @@ void SectorPI_Commutate(void)
     }
 
     /* 5. Set blanking + expected ZC for CCP ISR.
-     * v4_floatingPhase is written atomically in step-3 above. */
+     * floatingPhase is written atomically in step-3 above. */
     {
-        extern volatile uint16_t v4_blankingEndHR;
-        extern volatile uint16_t v4_expectedZcHR;
+        extern volatile uint16_t blankingEndHR;
+        extern volatile uint16_t expectedZcHR;
 
         /* Blanking: 25% of measured rotor sector. Always use
          * actualStepPeriodHR (truth) instead of timerPeriod (PI estimate
@@ -633,18 +633,18 @@ void SectorPI_Commutate(void)
          * Fall back to timerPeriod only on first commutation before
          * actualStepPeriodHR is initialized.
          * In SP mode, extend past pulse turn-off + 10µs settle. */
-        uint16_t sectorHR = (actualStepPeriodHR >= V4_MIN_PERIOD)
+        uint16_t sectorHR = (actualStepPeriodHR >= MIN_PERIOD_HR)
                             ? actualStepPeriodHR : timerPeriod;
-        /* Runtime blanking — read v4Params.blankingPct (GUI-tunable
+        /* Runtime blanking — read escParams.blankingPct (GUI-tunable
          * via SET_PARAM 0xF3). Fallback to 25% if pct is invalid. */
-        uint8_t  blankPct = v4Params.blankingPct;
+        uint8_t  blankPct = escParams.blankingPct;
         uint16_t blankHR;
         if (blankPct == 0U || blankPct > 100U) {
             blankHR = sectorHR >> 2;   /* safe fallback */
         } else {
             blankHR = (uint16_t)(((uint32_t)sectorHR * blankPct) / 100U);
         }
-        v4_blankingEndHR = (uint16_t)(thisCommHR + blankHR);
+        blankingEndHR = (uint16_t)(thisCommHR + blankHR);
 
         /* Expected ZC = prev_comm + T/2 + advance (physical ZC position).
          * Matches the reactive scheduler: targetHR = ZC + (T/2 - advance),
@@ -653,7 +653,7 @@ void SectorPI_Commutate(void)
         uint16_t halfHR_exp = sectorHR >> 1;
         uint16_t tal_exp    = (sectorHR < 260) ? 3U : 2U;
         uint16_t advHR_exp  = (uint16_t)((sectorHR >> 3) * tal_exp);
-        v4_expectedZcHR = (uint16_t)(thisCommHR + halfHR_exp + advHR_exp);
+        expectedZcHR = (uint16_t)(thisCommHR + halfHR_exp + advHR_exp);
 
     }
 
@@ -702,13 +702,13 @@ void SectorPI_Commutate(void)
              * the GSP set-param path on a low-priority code path; reading
              * to locals here keeps the ISR consistent within a cycle even
              * if the GUI changes a value mid-update. */
-            uint16_t advFp8     = v4Derived.advancePlus30Fp8;
-            uint8_t  kpShift    = v4Params.piKpShift;
-            uint8_t  kiShift    = v4Params.piKiShift;
-            uint16_t minPeriod  = v4Params.minPeriodHr;
+            uint16_t advFp8     = escDerived.advancePlus30Fp8;
+            uint8_t  kpShift    = escParams.piKpShift;
+            uint8_t  kiShift    = escParams.piKiShift;
+            uint16_t minPeriod  = escParams.minPeriodHr;
 
             uint16_t setValue = (uint16_t)(((uint32_t)advFp8 * timerPeriod) >> 8)
-                                + V4_RC_DELAY_HR;
+                                + RC_DELAY_HR;
             int32_t delta = (int32_t)capValue - (int32_t)setValue;
 
             /* Per-capture delta clamp at ±25% of timerPeriod prevents
@@ -751,7 +751,7 @@ void SectorPI_Commutate(void)
                 newPer = (int32_t)seedIntegrator;
             if (newPer > 0xFFFF) newPer = 0xFFFF;
             timerPeriod = (uint16_t)newPer;
-            v4_timerPeriod = timerPeriod;  /* expose for CCP ISR */
+            timerPeriod_g = timerPeriod;  /* expose for CCP ISR */
         }
 
         /* Reactive target: ZC timestamp + delay-to-next-commutation.
@@ -771,7 +771,7 @@ void SectorPI_Commutate(void)
         else                          tal = 5U;     /* >156k:   37.5° */
         uint16_t advHR  = (uint16_t)((schedPeriod >> 3) * tal);
         uint16_t delayHR = (halfHR > advHR) ? (uint16_t)(halfHR - advHR) : 2U;
-        uint16_t targetHR = (uint16_t)(v4_lastCaptureHR + delayHR);
+        uint16_t targetHR = (uint16_t)(lastCaptureHR_g + delayHR);
 
         diagDelta = (int16_t)(targetHR - thisCommHR);  /* margin */
         HAL_ComTimer_ScheduleAbsolute(targetHR);
@@ -798,10 +798,10 @@ void SectorPI_Commutate(void)
         if (capValue == CAP_SENTINEL)
         {
             stallCounter++;
-            if (stallCounter > V4_STALL_THRESHOLD)
+            if (stallCounter > STALL_THRESHOLD)
             {
                 ShutOff();
-                statusEvents |= V4_EVENT_STALL;
+                statusEvents |= EVENT_STALL;
             }
         }
         else
@@ -839,7 +839,7 @@ void SectorPI_TimeTick(void)
 
     /* CL settle: hold ramp duty for 2s after CL entry before
      * allowing pot to take over. Lets PI stabilize. */
-    if (phase == V4_CLOSED_LOOP && !commandEnabled)
+    if (phase == SECTOR_PHASE_CL && !commandEnabled)
     {
         if (clSettleCounter < CL_SETTLE_MS)
             clSettleCounter++;
@@ -855,14 +855,14 @@ void SectorPI_TimeTick(void)
      * signature), EMA-smooth the rest with α=1/4. */
     {
         uint16_t sample = tMeasHR;
-        if (sample >= V4_MIN_PERIOD) {
-            if (tMeasHRSmooth < V4_MIN_PERIOD) {
+        if (sample >= MIN_PERIOD_HR) {
+            if (tMeasHRSmooth < MIN_PERIOD_HR) {
                 tMeasHRSmooth = sample;           /* seed */
             } else if (sample >= (tMeasHRSmooth >> 1)) {
                 int32_t err = (int32_t)sample - (int32_t)tMeasHRSmooth;
                 int32_t nt  = (int32_t)tMeasHRSmooth
                               + (err >> MEAS_PI_ALPHA_SHIFT);
-                if (nt < V4_MIN_PERIOD) nt = V4_MIN_PERIOD;
+                if (nt < MIN_PERIOD_HR) nt = MIN_PERIOD_HR;
                 if (nt > 0xFFFF)        nt = 0xFFFF;
                 tMeasHRSmooth = (uint16_t)nt;
             }
@@ -887,14 +887,14 @@ void SectorPI_TimeTick(void)
          * active phase H gate solid-ON for the whole sector — no PWM
          * chopping. Equivalent to infinite switching frequency.
          *
-         * V4 captures rising-edge sectors only — falling sectors return
+         * We capture rising-edge sectors only — falling sectors return
          * CAP_SENTINEL by design — so corridorGoodStreak alternates near
          * 1 even at perfect lock. The first version gated entry on
          * `goodStreak > 50`, which was unreachable. Replaced with a
          * "stable at speed" gauge (10 speed-windows × 20 ms = 200 ms
          * above 150k) for entry, and the inverse `corridorMissStreak`
          * (consecutive sentinels) for the exit lock-loss check. */
-        if (erpm >= V4_BLOCK_ENTER_ERPM)
+        if (erpm >= BLOCK_ENTER_ERPM)
         {
             if (blockCommStableTicks < 0xFFFFu) blockCommStableTicks++;
         }
@@ -908,7 +908,7 @@ void SectorPI_TimeTick(void)
         if (g_blockCommActive)
         {
             if (actualAmplitude < 29490U                 /* < 90% Q15 */
-                || erpm < V4_BLOCK_EXIT_ERPM
+                || erpm < BLOCK_EXIT_ERPM
                 || corridorMissStreak > 5U)
             {
                 g_blockCommActive = false;
@@ -918,7 +918,7 @@ void SectorPI_TimeTick(void)
         else
         {
             if (actualAmplitude >= 31130U                /* ≥ 95% Q15 */
-                && erpm >= V4_BLOCK_ENTER_ERPM
+                && erpm >= BLOCK_ENTER_ERPM
                 && blockCommStableTicks >= 10U           /* ≥ 200 ms above enter eRPM */
                 && commandEnabled
                 && blockExitCooldown == 0U)
@@ -948,10 +948,10 @@ void SectorPI_TimeTick(void)
     }
 }
 
-#ifdef V4_MIN_AMPLITUDE_PROFILE
-#define V4_MIN_AMPLITUDE  V4_MIN_AMPLITUDE_PROFILE   /* per-profile override (e.g. HiZ1460) */
+#ifdef MIN_AMPLITUDE_PROFILE
+#define MIN_AMPLITUDE  MIN_AMPLITUDE_PROFILE   /* per-profile override (e.g. HiZ1460) */
 #else
-#define V4_MIN_AMPLITUDE  5000U  /* ~15.3% Q15. At 60 kHz the per-cycle
+#define MIN_AMPLITUDE  5000U  /* ~15.3% Q15. At 60 kHz the per-cycle
                                   * switching overhead eats more of the
                                   * 16.7µs cycle, so 12.2% Q15 only
                                   * delivers ~10% effective duty — below
@@ -962,8 +962,8 @@ void SectorPI_CommandSet(uint16_t amplitude)
 {
     if (commandEnabled)
     {
-        if (amplitude < V4_MIN_AMPLITUDE)
-            amplitude = V4_MIN_AMPLITUDE;
+        if (amplitude < MIN_AMPLITUDE)
+            amplitude = MIN_AMPLITUDE;
         targetAmplitude = amplitude;
     }
 }
@@ -1003,11 +1003,11 @@ void SectorPI_GetCaptureLog(uint8_t *buf, uint8_t *entriesOut)
     *entriesOut = n;
 }
 
-void SectorPI_TelemGet(V4_TELEM_T *out)
+void SectorPI_TelemGet(TELEM_T *out)
 {
     out->timerPeriod     = timerPeriod;
     out->integrator      = integrator;
-    out->lastCapValue    = v4_lastCaptureHR;
+    out->lastCapValue    = lastCaptureHR_g;
     out->actualAmplitude = actualAmplitude;
     out->measuredSpeed   = measuredSpeed;
     out->position        = position;
@@ -1025,20 +1025,20 @@ void SectorPI_TelemGet(V4_TELEM_T *out)
     {
         uint16_t erpmPeriod = actualStepPeriodHR ? actualStepPeriodHR : timerPeriod;
         out->erpmNow = (erpmPeriod > 0) ?
-            (60UL * V4_TIMER_FREQ_HZ / (6UL * (uint32_t)erpmPeriod)) : 0;
+            (60UL * SECTOR_TIMER_FREQ_HZ / (6UL * (uint32_t)erpmPeriod)) : 0;
     }
     /* Capture-rate diagnostics — pull from garuda_service.c (ADC ISR side)
      * and the local Commutate counter. Lets the GUI/CSV diagnose where the
      * 50% capture loss is happening. */
     {
-        extern volatile uint32_t v4_adcBlankReject;
-        extern volatile uint32_t v4_adcStateMismatch;
-        extern volatile uint32_t v4_adcCaptureSet;
-        extern volatile uint32_t v4_adcSetRising;
-        out->adcBlankReject     = v4_adcBlankReject;
-        out->adcStateMismatch   = v4_adcStateMismatch;
-        out->adcCaptureSet      = v4_adcCaptureSet;
-        out->adcSetRising       = v4_adcSetRising;
+        extern volatile uint32_t adcBlankReject;
+        extern volatile uint32_t adcStateMismatch;
+        extern volatile uint32_t adcCaptureSet;
+        extern volatile uint32_t adcSetRising;
+        out->adcBlankReject     = adcBlankReject;
+        out->adcStateMismatch   = adcStateMismatch;
+        out->adcCaptureSet      = adcCaptureSet;
+        out->adcSetRising       = adcSetRising;
         out->commutateNoCapture = diagCommutateNoCapture;
         extern volatile uint32_t ptgFires;
         out->ptgFires = ptgFires;

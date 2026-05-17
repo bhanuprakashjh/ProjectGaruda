@@ -231,7 +231,7 @@
                                      * Set to 1 when using GUI or gsp_ck_test.py */
 #endif
 
-/* ── V4 Sector PI Architecture ────────────────────────────────────────
+/* ── Sector PI Architecture ────────────────────────────────────────
  * Ground-up rewrite modeled on Microchip AVR high-speed motor control.
  * SCCP3 = sector timer (periodic, fires commutation ISR).
  * SCCP4 = HR free-running timer (640 ns/tick) for timestamps.
@@ -241,67 +241,67 @@
 /* Motor phase advance (electrical degrees, 0..30). Tunable live via
  * GSP SET_PARAM 0xF0. PTG sweep validated 12.5°; 5° hurt more than
  * 10°, so this is partly torque advance, not pure latency compensation. */
-#define V4_PHASE_ADVANCE_DEG    12.5f
+#define PHASE_ADVANCE_DEG    12.5f
 
 /* ATA6847 comparator propagation. EV92R69A has no RC filter on BEMF. */
-#define V4_RC_DELAY_US          2.0f
+#define RC_DELAY_US          2.0f
 
 /* Pre-computed constants (compile-time, no float in hot path) */
-#define V4_ADVANCE_PLUS_30_FP8  ((uint16_t)((V4_PHASE_ADVANCE_DEG + 30.0f) * 256.0f / 60.0f + 0.5f))
-#define V4_RC_DELAY_HR          ((uint16_t)(V4_RC_DELAY_US * 1.5625f + 0.5f))
+#define ADVANCE_PLUS_30_FP8  ((uint16_t)((PHASE_ADVANCE_DEG + 30.0f) * 256.0f / 60.0f + 0.5f))
+#define RC_DELAY_HR          ((uint16_t)(RC_DELAY_US * 1.5625f + 0.5f))
 
 /* PI gains (bit shifts). Matches Microchip AVR motor.c:444,448. */
-#define V4_KP_SHIFT             2       /* Kp = 1/4 */
-#define V4_KI_SHIFT             4       /* Ki = 1/16 */
+#define PI_KP_SHIFT             2       /* Kp = 1/4 */
+#define PI_KI_SHIFT             4       /* Ki = 1/16 */
 
-/* Startup + V4_MIN_AMPLITUDE + block-comm thresholds (per-profile).
- *   V4_MIN_AMPLITUDE_PROFILE  Q15 idle floor — must push past BEMF-blind
+/* Startup + MIN_AMPLITUDE + block-comm thresholds (per-profile).
+ *   MIN_AMPLITUDE_PROFILE  Q15 idle floor — must push past BEMF-blind
  *                             low-speed regime so CL doesn't stall at idle.
- *   V4_BLOCK_ENTER_ERPM       Just below duty-saturation eRPM at Vbus.
- *   V4_BLOCK_EXIT_ERPM        Re-entry hysteresis (~0.87× enter). */
+ *   BLOCK_ENTER_ERPM       Just below duty-saturation eRPM at Vbus.
+ *   BLOCK_EXIT_ERPM        Re-entry hysteresis (~0.87× enter). */
 #if MOTOR_PROFILE == 0   /* Hurst */
-#define V4_STARTUP_SPEED_ERPM   3000UL
-#define V4_STARTUP_CURRENT_MA   2000.0f
-#define V4_ALIGN_DURATION_MS    200U
-#define V4_MIN_AMPLITUDE_PROFILE 5000U     /* 15.3% Q15 — Hurst is high-Rs, idles fine */
-#define V4_BLOCK_ENTER_ERPM     30000UL    /* Hurst peaks ~25-30k, mostly out of range */
-#define V4_BLOCK_EXIT_ERPM      25000UL
+#define STARTUP_SPEED_ERPM   3000UL
+#define STARTUP_CURRENT_MA   2000.0f
+#define ALIGN_DURATION_MS    200U
+#define MIN_AMPLITUDE_PROFILE 5000U     /* 15.3% Q15 — Hurst is high-Rs, idles fine */
+#define BLOCK_ENTER_ERPM     30000UL    /* Hurst peaks ~25-30k, mostly out of range */
+#define BLOCK_EXIT_ERPM      25000UL
 #elif MOTOR_PROFILE == 1  /* A2212 @ 12V */
-#define V4_STARTUP_SPEED_ERPM   500UL
-#define V4_STARTUP_CURRENT_MA   3000.0f
-#define V4_ALIGN_DURATION_MS    100U
-#define V4_MIN_AMPLITUDE_PROFILE 5000U     /* 15.3% Q15 — bench-safe (12V/65mΩ) */
-#define V4_BLOCK_ENTER_ERPM     100000UL
-#define V4_BLOCK_EXIT_ERPM      85000UL
+#define STARTUP_SPEED_ERPM   500UL
+#define STARTUP_CURRENT_MA   3000.0f
+#define ALIGN_DURATION_MS    100U
+#define MIN_AMPLITUDE_PROFILE 5000U     /* 15.3% Q15 — bench-safe (12V/65mΩ) */
+#define BLOCK_ENTER_ERPM     100000UL
+#define BLOCK_EXIT_ERPM      85000UL
 #elif MOTOR_PROFILE == 2  /* 2810 @ 25V */
-#define V4_STARTUP_SPEED_ERPM   500UL
-#define V4_STARTUP_CURRENT_MA   3000.0f
-#define V4_ALIGN_DURATION_MS    100U
-#define V4_MIN_AMPLITUDE_PROFILE 5000U
-#define V4_BLOCK_ENTER_ERPM     150000UL
-#define V4_BLOCK_EXIT_ERPM      130000UL
+#define STARTUP_SPEED_ERPM   500UL
+#define STARTUP_CURRENT_MA   3000.0f
+#define ALIGN_DURATION_MS    100U
+#define MIN_AMPLITUDE_PROFILE 5000U
+#define BLOCK_ENTER_ERPM     150000UL
+#define BLOCK_EXIT_ERPM      130000UL
 #elif MOTOR_PROFILE == 3  /* HiZ1460 */
-#define V4_STARTUP_SPEED_ERPM   500UL
-#define V4_STARTUP_CURRENT_MA   1500.0f
-#define V4_ALIGN_DURATION_MS    200U
-#define V4_MIN_AMPLITUDE_PROFILE 5000U
-#define V4_BLOCK_ENTER_ERPM     250000UL
-#define V4_BLOCK_EXIT_ERPM      220000UL
+#define STARTUP_SPEED_ERPM   500UL
+#define STARTUP_CURRENT_MA   1500.0f
+#define ALIGN_DURATION_MS    200U
+#define MIN_AMPLITUDE_PROFILE 5000U
+#define BLOCK_ENTER_ERPM     250000UL
+#define BLOCK_EXIT_ERPM      220000UL
 #endif
 
-#define V4_STARTUP_TIME_MS      1000U
-#define V4_STALL_THRESHOLD      200U
-#define V4_MIN_PERIOD           10U     /* Timer period floor (~1.5M eRPM safety) */
+#define STARTUP_TIME_MS      1000U
+#define STALL_THRESHOLD      200U
+#define MIN_PERIOD_HR           10U     /* Timer period floor (~1.5M eRPM safety) */
 
 /* SCCP4 HR timer: CLKSEL=000 (Std Speed Periph Clock = 100 MHz),
- * TMRPS=0b11 (/64) → 1.5625 MHz = 640 ns/tick. V4 PI scaling is tuned
+ * TMRPS=0b11 (/64) → 1.5625 MHz = 640 ns/tick. PI scaling is tuned
  * against this clock — change it and re-tune Kp/Ki shifts. */
-#define V4_TIMER_FREQ_HZ        1562500UL
-#define V4_ERPM_TO_PERIOD(e)    (uint16_t)(60UL * V4_TIMER_FREQ_HZ / (6UL * (e)))
+#define SECTOR_TIMER_FREQ_HZ        1562500UL
+#define ERPM_TO_PERIOD(e)    (uint16_t)(60UL * SECTOR_TIMER_FREQ_HZ / (6UL * (e)))
 
 /* ISR priorities */
-#define V4_SECTOR_ISR_PRIORITY  6       /* Commutation — highest motor ISR */
-#define V4_CAPTURE_ISR_PRIORITY 5       /* ZC edge capture — below sector */
+#define SECTOR_ISR_PRIORITY  6       /* Commutation — highest motor ISR */
+#define CAPTURE_ISR_PRIORITY 5       /* ZC edge capture — below sector */
 
 /* PWM-midpoint BEMF sampling. PTG ISR samples in whichever of the OFF
  * or ON window is wider (below/above 50% duty) so the 3-read deglitch
@@ -330,7 +330,7 @@
 #define PTG_ISR_PRIORITY  4
 
 /* Post-ZC shadow counters (rising/falling Acc/Rej) populated by
- * V4_ProcessBemfSample. Reported via GSP snapshot — diagnostic only,
+ * ProcessBemfSample. Reported via GSP snapshot — diagnostic only,
  * does not drive motor control. */
 #ifndef FEATURE_POST_ZC_ACCEPT
 #define FEATURE_POST_ZC_ACCEPT  1

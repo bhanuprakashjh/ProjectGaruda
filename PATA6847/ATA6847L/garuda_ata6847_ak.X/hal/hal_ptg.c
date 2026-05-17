@@ -27,7 +27,7 @@
 #include "hal_ptg.h"
 #include "port_config.h"           /* BEMF_x_GetValue() macros */
 #include "../garuda_config.h"
-#include "../garuda_service.h"     /* V4_ProcessBemfSample() */
+#include "../garuda_service.h"     /* ProcessBemfSample() */
 
 /* ── Globals (defined here, externed from hal_ptg.h) ──────────────── */
 volatile uint32_t ptgFires      = 0;
@@ -111,7 +111,7 @@ void HAL_PTG_Stop(void)
  * default — same instant the BEMF GPIO is stable for sampling).
  *
  *  - ptgFires++ runs every fire (heartbeat counter for diagnostics).
- *  - V4_ProcessBemfSample() runs here (not in the ADC ISR). The ADC
+ *  - ProcessBemfSample() runs here (not in the ADC ISR). The ADC
  *    ISR retains POT/Vbus/current responsibilities only. Latency drops
  *    from ~1.5 µs (ADC scan complete) to ~50 ns (ISR vector). */
 void __attribute__((interrupt, no_auto_psv)) _PTG0Interrupt(void)
@@ -138,7 +138,7 @@ void __attribute__((interrupt, no_auto_psv)) _PTG0Interrupt(void)
      *
      * One position per fire (not both simultaneously). Hysteresis band
      * ±5% around 50% to avoid chatter when PI hunts across the boundary. */
-    V4_ProcessBemfSample();
+    ProcessBemfSample();
     {
         extern volatile uint16_t g_pwmActualDuty;
         static uint8_t lastWasMidOn = 0;   /* sticky for hysteresis */

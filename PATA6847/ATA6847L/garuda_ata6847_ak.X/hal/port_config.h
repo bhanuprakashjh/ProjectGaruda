@@ -63,7 +63,7 @@
 #define BEMF_B_GetValue()   _RB8
 #define BEMF_C_GetValue()   _RA10
 
-/* RP numbers for PPS routing of BEMF GPIO → CCPx IC input (V4 CCP
+/* RP numbers for PPS routing of BEMF GPIO → CCPx IC input (CCP
  * diag path; off by default but sector_pi.c references the constants). */
 #define BEMF_A_RP           26U
 #define BEMF_B_RP           25U

@@ -13,21 +13,21 @@
 #include "../garuda_service.h"
 #include "../garuda_config.h"
 #include "../motor/sector_pi.h"
-#include "../motor/v4_params.h"
+#include "../motor/motor_params.h"
 #include "../hal/hal_ata6847.h"
 #include "../hal/hal_capture.h"
 #include "../hal/port_config.h"
 
-extern volatile ESC_STATE_T gV4State;
-extern volatile uint32_t gV4SystemTick;
-extern volatile uint16_t gV4PotRaw;
-extern volatile uint16_t gV4VbusRaw;
-extern volatile int16_t  gV4IaRaw;
-extern volatile int16_t  gV4IbRaw;
+extern volatile ESC_STATE_T gEscState;
+extern volatile uint32_t gSystemTick;
+extern volatile uint16_t gPotRaw;
+extern volatile uint16_t gVbusRaw;
+extern volatile int16_t  gIaRaw;
+extern volatile int16_t  gIbRaw;
 
-static bool     v4_telemActive = false;
-static uint16_t v4_telemSeq = 0;
-static uint32_t v4_telemLastTick = 0;
+static bool     telemActive = false;
+static uint16_t telemSeq = 0;
+static uint32_t telemLastTick = 0;
 
 void GSP_DispatchCommand(uint8_t cmdId, const uint8_t *payload, uint8_t payloadLen)
 {
@@ -56,14 +56,14 @@ void GSP_DispatchCommand(uint8_t cmdId, const uint8_t *payload, uint8_t payloadL
             uint8_t info[20];
             memset(info, 0, sizeof(info));
             info[0] = GSP_PROTOCOL_VERSION;
-            info[1] = 4;                    /* fwMajor — V4 */
+            info[1] = 4;                    /* fwMajor */
             info[2] = 0;                    /* fwMinor */
             info[3] = 0;                    /* fwPatch */
             uint16_t boardId = GSP_BOARD_EV43F54A;
             memcpy(&info[4], &boardId, 2);
             info[6] = MOTOR_PROFILE;
             info[7] = 7;                    /* polePairs (placeholder) */
-            uint32_t f = 0x80000000UL;      /* bit 31 = V4 marker */
+            uint32_t f = 0x80000000UL;      /* bit 31 = sector-PI marker */
             memcpy(&info[8],  &f, 4);
             uint32_t pwmHz = PWMFREQUENCY_HZ;
             memcpy(&info[12], &pwmHz, 4);
@@ -78,14 +78,14 @@ void GSP_DispatchCommand(uint8_t cmdId, const uint8_t *payload, uint8_t payloadL
         case GSP_CMD_TELEM_STOP:
             /* Handled below in TelemTick */
             if (cmdId == GSP_CMD_TELEM_START)
-                v4_telemActive = true;
+                telemActive = true;
             else if (cmdId == GSP_CMD_TELEM_STOP)
-                v4_telemActive = false;
+                telemActive = false;
             GSP_SendResponse(cmdId, NULL, 0);
             break;
 
         case GSP_CMD_START_MOTOR:
-            if (gV4State == ESC_IDLE)
+            if (gEscState == ESC_IDLE)
                 GarudaService_StartMotor();
             GSP_SendResponse(GSP_CMD_START_MOTOR, NULL, 0);
             break;
@@ -102,14 +102,14 @@ void GSP_DispatchCommand(uint8_t cmdId, const uint8_t *payload, uint8_t payloadL
 
         case GSP_CMD_HEARTBEAT:
             /* GUI sends HEARTBEAT every 200ms while telemetry is active
-             * to keep the connection alive. V4 has no watchdog action —
+             * to keep the connection alive. firmware has no watchdog action —
              * just acknowledge so the GUI doesn't spam unknown-command
              * error toasts. */
             GSP_SendResponse(GSP_CMD_HEARTBEAT, NULL, 0);
             break;
 
         case GSP_CMD_SET_THROTTLE:
-            /* V4 reads pot directly via ADC; ignore GUI throttle commands
+            /* firmware reads pot directly via ADC; ignore GUI throttle commands
              * silently rather than spam unknown-command errors. */
             GSP_SendResponse(GSP_CMD_SET_THROTTLE, NULL, 0);
             break;
@@ -125,7 +125,7 @@ void GSP_DispatchCommand(uint8_t cmdId, const uint8_t *payload, uint8_t payloadL
             }
             uint16_t id = (uint16_t)payload[0] | ((uint16_t)payload[1] << 8);
             bool ok;
-            uint32_t val = V4Params_Get(id, &ok);
+            uint32_t val = Params_Get(id, &ok);
             if (!ok) {
                 uint8_t err = GSP_ERR_UNKNOWN_PARAM;
                 GSP_SendResponse(GSP_CMD_ERROR, &err, 1);
@@ -145,7 +145,7 @@ void GSP_DispatchCommand(uint8_t cmdId, const uint8_t *payload, uint8_t payloadL
         case GSP_CMD_SET_PARAM:
         {
             /* Payload: 2-byte ID + 4-byte value (LE).
-             * V4 HOT params are change-while-running — no IDLE check.
+             * HOT params are change-while-running — no IDLE check.
              * Response: echo the 6-byte payload on success. */
             if (payloadLen < 6) {
                 uint8_t err = GSP_ERR_BAD_LENGTH;
@@ -157,7 +157,7 @@ void GSP_DispatchCommand(uint8_t cmdId, const uint8_t *payload, uint8_t payloadL
                          | ((uint32_t)payload[3] << 8)
                          | ((uint32_t)payload[4] << 16)
                          | ((uint32_t)payload[5] << 24);
-            if (!V4Params_Set(id, val)) {
+            if (!Params_Set(id, val)) {
                 uint8_t err = GSP_ERR_OUT_OF_RANGE;
                 GSP_SendResponse(GSP_CMD_ERROR, &err, 1);
                 break;
@@ -174,7 +174,7 @@ void GSP_DispatchCommand(uint8_t cmdId, const uint8_t *payload, uint8_t payloadL
              * Page sized to fit GSP max payload (249 - 3 header = 246, /12 = 20). */
             uint8_t startIndex = (payloadLen >= 1) ? payload[0] : 0;
             uint8_t totalCount;
-            const V4_PARAM_DESC_T *table = V4Params_GetDescriptorTable(&totalCount);
+            const PARAM_DESC_T *table = Params_GetDescriptorTable(&totalCount);
 
             if (startIndex >= totalCount) {
                 /* Tell GUI "no more pages" by returning empty page header
@@ -192,7 +192,7 @@ void GSP_DispatchCommand(uint8_t cmdId, const uint8_t *payload, uint8_t payloadL
             buf[2] = pageSize;
             uint8_t i;
             for (i = 0; i < pageSize; i++) {
-                const V4_PARAM_DESC_T *d = &table[startIndex + i];
+                const PARAM_DESC_T *d = &table[startIndex + i];
                 uint8_t off = 3 + i * 12;
                 buf[off + 0]  = (uint8_t)(d->id & 0xFF);
                 buf[off + 1]  = (uint8_t)(d->id >> 8);
@@ -217,7 +217,7 @@ void GSP_DispatchCommand(uint8_t cmdId, const uint8_t *payload, uint8_t payloadL
             break;
 
         case GSP_CMD_LOAD_DEFAULTS:
-            V4Params_InitDefaults();
+            Params_InitDefaults();
             GSP_SendResponse(GSP_CMD_LOAD_DEFAULTS, NULL, 0);
             break;
 
@@ -238,13 +238,13 @@ void GSP_DispatchCommand(uint8_t cmdId, const uint8_t *payload, uint8_t payloadL
             /* Real-time BEMF GPIO read + sector context. Safe in all states;
              * use to diagnose phase-wiring and comparator polarity by hand-
              * rotating the motor and watching the three BEMF lines toggle. */
-            extern volatile uint8_t v4_floatingPhase;
+            extern volatile uint8_t floatingPhase;
             extern volatile uint8_t ptgExpectedComp;
             uint8_t probe[7];
             probe[0] = BEMF_A_GetValue();
             probe[1] = BEMF_B_GetValue();
             probe[2] = BEMF_C_GetValue();
-            probe[3] = v4_floatingPhase;
+            probe[3] = floatingPhase;
             probe[4] = ptgExpectedComp;
             probe[5] = (uint8_t)SectorPI_GetPhase();
             probe[6] = HAL_Capture_IsRisingZc() ? 1u : 0u;
@@ -270,7 +270,7 @@ void GSP_DispatchCommand(uint8_t cmdId, const uint8_t *payload, uint8_t payloadL
             extern volatile uint8_t  gAta_LastGduResult;
 
             uint8_t diag[12];
-            if (gV4State != ESC_IDLE && gV4State != ESC_FAULT) {
+            if (gEscState != ESC_IDLE && gEscState != ESC_FAULT) {
                 uint8_t err = GSP_ERR_WRONG_STATE;
                 GSP_SendResponse(GSP_CMD_ERROR, &err, 1);
             } else {
@@ -296,34 +296,34 @@ void GSP_DispatchCommand(uint8_t cmdId, const uint8_t *payload, uint8_t payloadL
 
 void GSP_TelemTick(void)
 {
-    if (!v4_telemActive) return;
+    if (!telemActive) return;
 
     /* Rate limit: ~10 Hz (every 100ms) */
-    uint32_t now = gV4SystemTick;
-    if ((now - v4_telemLastTick) < 100) return;
-    v4_telemLastTick = now;
+    uint32_t now = gSystemTick;
+    if ((now - telemLastTick) < 100) return;
+    telemLastTick = now;
 
     /* 250-byte telemetry snapshot consumed by pot_capture.py / GUI. */
-    V4_TELEM_T t;
+    TELEM_T t;
     SectorPI_TelemGet(&t);
 
     uint8_t snap[250]; /* See per-section offset comments below. */
     memset(snap, 0, sizeof(snap));
 
     /* Seq counter (2 bytes) */
-    snap[0] = (uint8_t)(v4_telemSeq & 0xFF);
-    snap[1] = (uint8_t)(v4_telemSeq >> 8);
-    v4_telemSeq++;
+    snap[0] = (uint8_t)(telemSeq & 0xFF);
+    snap[1] = (uint8_t)(telemSeq >> 8);
+    telemSeq++;
 
     uint8_t *d = &snap[2];  /* snapshot starts at offset 2 */
 
     /* Core state (offset 0-7) */
-    d[0] = (uint8_t)gV4State;               /* state */
+    d[0] = (uint8_t)gEscState;               /* state */
     d[1] = 0;                                /* fault */
     d[2] = t.position;                       /* step */
     d[3] = 0;                                /* ataStatus */
-    d[4] = (uint8_t)(gV4PotRaw & 0xFF);     /* potRaw L */
-    d[5] = (uint8_t)(gV4PotRaw >> 8);       /* potRaw H */
+    d[4] = (uint8_t)(gPotRaw & 0xFF);     /* potRaw L */
+    d[5] = (uint8_t)(gPotRaw >> 8);       /* potRaw H */
     /* Duty% from the value the hardware actually wrote, not the upstream
      * commanded amplitude. g_pwmActualDuty is the post-clamp PG[123]DC
      * value and g_pwmPer is its denominator (LOOPTIME_TCY in normal mode,
@@ -350,12 +350,12 @@ void GSP_TelemTick(void)
      * garuda_config.h.  The host only divides by 1000 to display volts/amps;
      * it doesn't know the shunt, gain, or divider values. */
     {
-        extern volatile uint16_t gV4Vbus_mV;
-        extern volatile int16_t  gV4Ia_mA, gV4Ib_mA, gV4Ibus_mA;
-        memcpy(&d[8],  &gV4Vbus_mV, 2);
-        memcpy(&d[10], &gV4Ia_mA,   2);
-        memcpy(&d[12], &gV4Ib_mA,   2);
-        memcpy(&d[14], &gV4Ibus_mA, 2);
+        extern volatile uint16_t gVbus_mV;
+        extern volatile int16_t  gIa_mA, gIb_mA, gIbus_mA;
+        memcpy(&d[8],  &gVbus_mV, 2);
+        memcpy(&d[10], &gIa_mA,   2);
+        memcpy(&d[12], &gIb_mA,   2);
+        memcpy(&d[14], &gIbus_mA, 2);
     }
     memcpy(&d[16], &t.actualAmplitude, 2);   /* duty (raw) */
 
@@ -367,7 +367,7 @@ void GSP_TelemTick(void)
     memcpy(&d[26], &t.sectorCount, 2);      /* goodZc → sectorCount low */
     /* zcInterval, prevZcInterval = 0 */
 
-    /* ZC diagnostics (offset 28-39) — repurposed for V4 diag */
+    /* ZC diagnostics (offset 28-39) — sector-PI diagnostics */
     memcpy(&d[28], &t.diagLastCapValue, 2);  /* zcInterval → lastCapValue */
     memcpy(&d[30], &t.diagDelta, 2);         /* prevZcInterval → PI delta (signed) */
     memcpy(&d[32], &t.diagCaptures, 2);      /* icAccepted → captures accepted */
@@ -383,8 +383,8 @@ void GSP_TelemTick(void)
       memcpy(&d[38], &erpm16, 2); }          /* erpmNow from timerPeriod */
 
     /* System (offset 40-47) */
-    memcpy(&d[40], &gV4SystemTick, 4);       /* systemTick */
-    uint32_t uptime = gV4SystemTick / 1000;
+    memcpy(&d[40], &gSystemTick, 4);       /* systemTick */
+    uint32_t uptime = gSystemTick / 1000;
     memcpy(&d[44], &uptime, 4);              /* uptime */
 
     /* Capture-rate diagnostics (offset 48-63). 32-bit because the BEMF
@@ -428,32 +428,32 @@ void GSP_TelemTick(void)
     /* Phase + bus current peaks. Rolling window reset on snapshot read.
      * At-fault fields preserved across snapshots until motor restart
      * (valid==1). ibus reads OA3 shunt directly. */
-    extern volatile int16_t gV4IaPkMax, gV4IaPkMin;
-    extern volatile int16_t gV4IbPkMax, gV4IbPkMin;
-    extern volatile int16_t gV4IbusPkMax, gV4IbusPkMin;
-    extern volatile int16_t gV4IaAtFaultMax, gV4IaAtFaultMin;
-    extern volatile int16_t gV4IbAtFaultMax, gV4IbAtFaultMin;
-    extern volatile int16_t gV4IbusAtFaultMax, gV4IbusAtFaultMin;
-    extern volatile int16_t gV4IaAtFaultInst, gV4IbAtFaultInst, gV4IbusAtFaultInst;
-    extern volatile uint8_t gV4FaultSnapshotValid;
-    extern volatile int16_t gV4IaRaw, gV4IbRaw, gV4IbusRaw;
+    extern volatile int16_t gIaPkMax, gIaPkMin;
+    extern volatile int16_t gIbPkMax, gIbPkMin;
+    extern volatile int16_t gIbusPkMax, gIbusPkMin;
+    extern volatile int16_t gIaAtFaultMax, gIaAtFaultMin;
+    extern volatile int16_t gIbAtFaultMax, gIbAtFaultMin;
+    extern volatile int16_t gIbusAtFaultMax, gIbusAtFaultMin;
+    extern volatile int16_t gIaAtFaultInst, gIbAtFaultInst, gIbusAtFaultInst;
+    extern volatile uint8_t gFaultSnapshotValid;
+    extern volatile int16_t gIaRaw, gIbRaw, gIbusRaw;
 
-    memcpy(&d[114], &gV4IaPkMax,        2);
-    memcpy(&d[116], &gV4IaPkMin,        2);
-    memcpy(&d[118], &gV4IbPkMax,        2);
-    memcpy(&d[120], &gV4IbPkMin,        2);
-    memcpy(&d[122], &gV4IbusPkMax,      2);
-    memcpy(&d[124], &gV4IbusPkMin,      2);
-    memcpy(&d[126], &gV4IaAtFaultMax,   2);
-    memcpy(&d[128], &gV4IaAtFaultMin,   2);
-    memcpy(&d[130], &gV4IbAtFaultMax,   2);
-    memcpy(&d[132], &gV4IbAtFaultMin,   2);
-    memcpy(&d[134], &gV4IbusAtFaultMax, 2);
-    memcpy(&d[136], &gV4IbusAtFaultMin, 2);
-    memcpy(&d[138], &gV4IaAtFaultInst,   2);
-    memcpy(&d[140], &gV4IbAtFaultInst,   2);
-    memcpy(&d[142], &gV4IbusAtFaultInst, 2);
-    d[144] = gV4FaultSnapshotValid;
+    memcpy(&d[114], &gIaPkMax,        2);
+    memcpy(&d[116], &gIaPkMin,        2);
+    memcpy(&d[118], &gIbPkMax,        2);
+    memcpy(&d[120], &gIbPkMin,        2);
+    memcpy(&d[122], &gIbusPkMax,      2);
+    memcpy(&d[124], &gIbusPkMin,      2);
+    memcpy(&d[126], &gIaAtFaultMax,   2);
+    memcpy(&d[128], &gIaAtFaultMin,   2);
+    memcpy(&d[130], &gIbAtFaultMax,   2);
+    memcpy(&d[132], &gIbAtFaultMin,   2);
+    memcpy(&d[134], &gIbusAtFaultMax, 2);
+    memcpy(&d[136], &gIbusAtFaultMin, 2);
+    memcpy(&d[138], &gIaAtFaultInst,   2);
+    memcpy(&d[140], &gIbAtFaultInst,   2);
+    memcpy(&d[142], &gIbusAtFaultInst, 2);
+    d[144] = gFaultSnapshotValid;
     d[145] = 0;  /* pad */
 
     /* Mechanism probe — per-polarity elapsed snapshots (10 bytes).
@@ -478,15 +478,15 @@ void GSP_TelemTick(void)
      * Distinguishes physics asymmetry (comp never leaves pre-ZC state)
      * from a software bug (accept logic discards a valid post-ZC sample). */
     {
-        extern volatile uint32_t v4_compRising_High,  v4_compRising_Low;
-        extern volatile uint32_t v4_compFalling_High, v4_compFalling_Low;
-        memcpy(&d[156], &v4_compRising_High,  4);
-        memcpy(&d[160], &v4_compRising_Low,   4);
-        memcpy(&d[164], &v4_compFalling_High, 4);
-        memcpy(&d[168], &v4_compFalling_Low,  4);
+        extern volatile uint32_t compRising_High,  compRising_Low;
+        extern volatile uint32_t compFalling_High, compFalling_Low;
+        memcpy(&d[156], &compRising_High,  4);
+        memcpy(&d[160], &compRising_Low,   4);
+        memcpy(&d[164], &compFalling_High, 4);
+        memcpy(&d[168], &compFalling_Low,  4);
     }
 
-    /* PTG postscale: count of fires that bypassed V4_ProcessBemfSample().
+    /* PTG postscale: count of fires that bypassed ProcessBemfSample().
      * Effective BEMF-sample rate = (ptgFires - ptgSkipped) / window. */
     {
         extern volatile uint32_t ptgSkipped;
@@ -497,13 +497,13 @@ void GSP_TelemTick(void)
      * commutation positions actually fire (an even/odd-only pattern
      * would mean position is incrementing by 2 somewhere). */
     {
-        extern volatile uint32_t v4_sectorHits[6];
-        memcpy(&d[176], (const void *)v4_sectorHits, 24);
+        extern volatile uint32_t sectorHits[6];
+        memcpy(&d[176], (const void *)sectorHits, 24);
     }
 
     /* Multi-phase BEMF tally:
-     *   d[200..211]: v4_bemfTallyTotal[6]    (6 × uint16)
-     *   d[212..247]: v4_bemfTally[6][3]      (6 × 3 × uint16)
+     *   d[200..211]: bemfTallyTotal[6]    (6 × uint16)
+     *   d[212..247]: bemfTally[6][3]      (6 × 3 × uint16)
      * Host computes comp=1/total ratio per (sector, phase) to detect
      * phase-mapping bugs (ratio at 0% or 100% on the supposed floating
      * phase = bug; (10..90)% = actually floating).
@@ -512,32 +512,32 @@ void GSP_TelemTick(void)
      * the ~50 ms inter-snapshot window. Without the reset, uint16 wraps
      * before one window completes at 60 kHz PWM. */
     {
-        extern volatile uint16_t v4_bemfTally[6][3];
-        extern volatile uint16_t v4_bemfTallyTotal[6];
-        memcpy(&d[200], (const void *)v4_bemfTallyTotal, 12);
-        memcpy(&d[212], (const void *)v4_bemfTally,      36);
-        memset((void *)v4_bemfTallyTotal, 0, sizeof(v4_bemfTallyTotal));
-        memset((void *)v4_bemfTally,      0, sizeof(v4_bemfTally));
+        extern volatile uint16_t bemfTally[6][3];
+        extern volatile uint16_t bemfTallyTotal[6];
+        memcpy(&d[200], (const void *)bemfTallyTotal, 12);
+        memcpy(&d[212], (const void *)bemfTally,      36);
+        memset((void *)bemfTallyTotal, 0, sizeof(bemfTallyTotal));
+        memset((void *)bemfTally,      0, sizeof(bemfTally));
     }
 
     /* Stale-floatingPhase diagnostic — uint16 at d[248..249], per-window
-     * count of PTG fires (past blanking) where v4_floatingPhase disagreed
-     * with commutationTable[v4_currentSector].floatingPhase. Reset
+     * count of PTG fires (past blanking) where floatingPhase disagreed
+     * with commutationTable[currentSector].floatingPhase. Reset
      * alongside the tally. */
     {
-        extern volatile uint16_t v4_fpStaleCount;
-        memcpy(&d[248], (const void *)&v4_fpStaleCount, 2);
-        v4_fpStaleCount = 0;
+        extern volatile uint16_t fpStaleCount;
+        memcpy(&d[248], (const void *)&fpStaleCount, 2);
+        fpStaleCount = 0;
     }
 
     /* Reset rolling peaks for next 20 ms window. Seed with current
      * instantaneous sample so the window doesn't start at stale extrema.
      * Peaks track milliamps (same scale as the live mA values). */
     {
-        extern volatile int16_t gV4Ia_mA, gV4Ib_mA, gV4Ibus_mA;
-        gV4IaPkMax   = gV4IaPkMin   = gV4Ia_mA;
-        gV4IbPkMax   = gV4IbPkMin   = gV4Ib_mA;
-        gV4IbusPkMax = gV4IbusPkMin = gV4Ibus_mA;
+        extern volatile int16_t gIa_mA, gIb_mA, gIbus_mA;
+        gIaPkMax   = gIaPkMin   = gIa_mA;
+        gIbPkMax   = gIbPkMin   = gIb_mA;
+        gIbusPkMax = gIbusPkMin = gIbus_mA;
     }
 
     GSP_SendResponse(GSP_CMD_TELEM_FRAME, snap, sizeof(snap));

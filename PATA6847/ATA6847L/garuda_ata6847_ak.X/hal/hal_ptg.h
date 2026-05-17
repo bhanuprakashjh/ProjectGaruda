@@ -4,7 +4,7 @@
  *
  * _PTG0Interrupt fires at every PG1TRIGB match (PWM mid-OFF or mid-ON,
  * selected per-fire by the duty-adaptive sampler in hal_ptg.c) and calls
- * V4_ProcessBemfSample() for BEMF GPIO read + sector-PI update.
+ * ProcessBemfSample() for BEMF GPIO read + sector-PI update.
  *
  * PTG input wiring on dsPIC33AK128MC106 (DS70005539 Table 26-2):
  *   PTG Trigger Input 0 = PWM1 ADC Trigger 2  (= PG1TRIGB match).
@@ -29,7 +29,7 @@ extern volatile uint32_t ptgFires;
 extern volatile uint8_t  ptgExpectedComp;
 
 /* PTG postscaler skipped-fire count — gated fires that bypass
- * V4_ProcessBemfSample() (see PTG_POSTSCALE_N in garuda_config.h). */
+ * ProcessBemfSample() (see PTG_POSTSCALE_N in garuda_config.h). */
 extern volatile uint32_t ptgSkipped;
 
 void HAL_PTG_Init(void);

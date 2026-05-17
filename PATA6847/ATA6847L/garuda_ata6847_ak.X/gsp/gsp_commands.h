@@ -50,7 +50,7 @@ typedef enum {
     GSP_CMD_BURST_ARM       = 0x20,   /* arm the burst; no payload */
     GSP_CMD_BURST_STATUS    = 0x21,   /* response: {state, count} 2 bytes */
     GSP_CMD_BURST_GET_STEP  = 0x22,   /* payload: {stepIdx}; response: DMA_BURST_STEP_T */
-    /* V4 PI capture-log: first 30 PI runs after CL entry, frozen.
+    /* PI capture-log: first 30 PI runs after CL entry, frozen.
      * Response: [count(u8)][entries 8B each: timerPeriod, setValue,
      * capValue, delta_clamped — all LE]. */
     GSP_CMD_PI_LOG          = 0x30,
@@ -59,7 +59,7 @@ typedef enum {
      * shared with motor-start path). */
     GSP_CMD_ATA_DIAG        = 0x40,
     /* BEMF GPIO state inspection. Safe in any state — pure GPIO read.
-     * Response: [BEMF_A, BEMF_B, BEMF_C, v4_floatingPhase,
+     * Response: [BEMF_A, BEMF_B, BEMF_C, floatingPhase,
      *            ptgExpectedComp, current_step, currentRisingZc]. */
     GSP_CMD_BEMF_PROBE      = 0x41,
     GSP_CMD_TELEM_FRAME     = 0x80,
@@ -92,7 +92,7 @@ typedef struct __attribute__((packed)) {
     uint32_t pwmFrequency;
     uint32_t maxErpm;
     uint32_t buildHash;         /* djb2 hash of __DATE__ " " __TIME__ +
-                                 * folded V4 tunables (advance, blanking,
+                                 * folded tunables (advance, blanking,
                                  * Kp/Ki shifts).  Bumps every recompile. */
 } GSP_INFO_T;
 

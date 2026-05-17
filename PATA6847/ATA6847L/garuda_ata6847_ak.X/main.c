@@ -28,7 +28,7 @@
 #include "hal/hal_ptg.h"
 #include "hal/board_service.h"
 #include "motor/sector_pi.h"
-extern volatile ESC_STATE_T gV4State;
+extern volatile ESC_STATE_T gEscState;
 #if FEATURE_GSP
 #include "gsp/gsp.h"
 #include "gsp/gsp_params.h"
@@ -127,10 +127,10 @@ int main(void)
     HAL_UART_WriteString("OK");
     HAL_UART_NewLine();
 
-    HAL_UART_WriteString("V4 Sector PI — MPER=");
+    HAL_UART_WriteString("ESC — MPER=");
     HAL_UART_WriteU16(LOOPTIME_TCY);
     HAL_UART_WriteString(" InitSector=");
-    HAL_UART_WriteU16(V4_ERPM_TO_PERIOD(V4_STARTUP_SPEED_ERPM));
+    HAL_UART_WriteU16(ERPM_TO_PERIOD(STARTUP_SPEED_ERPM));
     HAL_UART_NewLine();
 
     /* AK clock status lives in PLL1CONbits / CLK1CONbits (no OSCCONbits
@@ -168,7 +168,7 @@ int main(void)
 
         if (IsPressed_Button1())
         {
-            if (gV4State == ESC_IDLE)
+            if (gEscState == ESC_IDLE)
                 GarudaService_StartMotor();
         }
         if (IsPressed_Button2())
@@ -178,7 +178,7 @@ int main(void)
         if (heartbeatCounter >= HEARTBEAT_PERIOD)
         {
             heartbeatCounter = 0;
-            if (gV4State == ESC_IDLE)
+            if (gEscState == ESC_IDLE)
                 LED_RUN ^= 1;
         }
 
