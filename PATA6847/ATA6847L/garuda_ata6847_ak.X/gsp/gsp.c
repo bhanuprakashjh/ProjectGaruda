@@ -37,8 +37,16 @@
 
 /* ── Ring buffer types ───────────────────────────────────────────── */
 
+/* RX and TX rings share the same RING_T but have different MASK values
+ * (GSP_RX_RING_MASK = 255, GSP_TX_RING_MASK = 511). The buffer MUST be
+ * sized to the *larger* of the two, otherwise RingPut on txRing wraps
+ * head at 512 against a 256-byte buffer and writes 256..511 land in
+ * adjacent BSS (the `parser` struct), corrupting parser.state /
+ * pktBuf / pktLen and producing apparent "memory corruption, PC jumps
+ * somewhere" symptoms. rxRing wastes 256 bytes of unused space; cheap. */
+#define GSP_RING_BUF_SIZE     GSP_TX_RING_SIZE
 typedef struct {
-    uint8_t  buf[GSP_RX_RING_SIZE];
+    uint8_t  buf[GSP_RING_BUF_SIZE];
     uint16_t head;
     uint16_t tail;
 } RING_T;

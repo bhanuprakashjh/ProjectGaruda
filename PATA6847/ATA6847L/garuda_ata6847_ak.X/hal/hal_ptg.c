@@ -45,11 +45,16 @@ volatile uint8_t  ptgExpectedComp = 0;
 #define PTG_OP_IRQ      (0x7u << 4)   /* 0x70 — generate IRQ (operand selects PTG0..3) */
 #define PTG_OP_JMP      (0xAu << 4)   /* 0xA0 — jump (operand = step index) */
 
-/* ISR priority sourced from PTG_ISR_PRIORITY (garuda_config.h). Default 4
- * is above ADC (3) and below CCP (5/6) so CCP still preempts PTG.
- * Tying with CCP (5) regressed peak speed — see PTG_ISR_PRIORITY note. */
+/* ISR priority 5 — above ADC (3) and Timer1 (4), below CCT3 (6).
+ * Codex review flagged the hardcoded 5 as ignoring PTG_ISR_PRIORITY=4 in
+ * garuda_config.h, but lowering PTG to 4 puts it at the SAME level as
+ * Timer1 — they then serialize via natural-vector priority instead of
+ * preempting. Under any meaningful motor load this causes PTG to miss
+ * fires while Timer1 is mid-ISR, and the MCU goes silent (no trap, no
+ * LED) shortly after entering CL. Keep this at 5; the garuda_config.h
+ * value is unused for PTG (left in place only for documentation). */
 #ifndef HAL_PTG_ISR_PRIORITY
-#define HAL_PTG_ISR_PRIORITY    PTG_ISR_PRIORITY
+#define HAL_PTG_ISR_PRIORITY    5U
 #endif
 
 void HAL_PTG_Init(void)
