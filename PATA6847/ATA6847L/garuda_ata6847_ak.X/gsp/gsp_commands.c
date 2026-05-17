@@ -1,6 +1,6 @@
 /**
  * @file gsp_commands.c
- * @brief GSP v2 command handlers for CK board.
+ * @brief GSP v2 command handlers.
  *
  * Phase 0: PING, GET_INFO, GET_SNAPSHOT
  * Phase 1: Motor control (START/STOP/CLEAR_FAULT/HEARTBEAT)
@@ -49,7 +49,7 @@ void GSP_DispatchCommand(uint8_t cmdId, const uint8_t *payload, uint8_t payloadL
             /* GUI's decodeInfo expects 20 bytes (matches GSP_INFO_T):
              *   [0]    protocolVersion (u8)
              *   [1..3] fwMajor, fwMinor, fwPatch (u8 each)
-             *   [4..5] boardId (u16 LE) — 0x0002 for CK board
+             *   [4..5] boardId (u16 LE) — 0x0002 (was CK board, retained for GUI compat)
              *   [6]    motorProfile (u8)
              *   [7]    motorPolePairs (u8)
              *   [8..11]  featureFlags (u32 LE)

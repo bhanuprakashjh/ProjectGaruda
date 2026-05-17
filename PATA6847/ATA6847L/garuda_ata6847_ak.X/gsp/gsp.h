@@ -1,6 +1,6 @@
 /**
  * @file gsp.h
- * @brief Garuda Serial Protocol (GSP) v2 — public API for CK board.
+ * @brief Garuda Serial Protocol (GSP) v2 — public API.
  *
  * Same protocol as dsPIC33AK board (binary framed, CRC16-CCITT).
  * Mutually exclusive with debug UART (both use UART1).

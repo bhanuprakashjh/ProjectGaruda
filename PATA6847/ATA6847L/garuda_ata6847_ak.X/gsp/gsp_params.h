@@ -1,6 +1,6 @@
 /**
- * @file gsp_ck_params.h
- * @brief CK board runtime parameters — struct, derived values, API.
+ * @file gsp_params.h
+ * @brief Runtime parameters — struct, derived values, API.
  *
  * All motor, ATA6847, and ZC settings that were compile-time macros are
  * now runtime-adjustable via GSP GET_PARAM/SET_PARAM commands.
@@ -11,8 +11,8 @@
  * to change them. When FEATURE_GSP=1, GUI can modify via GSP commands.
  */
 
-#ifndef GSP_CK_PARAMS_H
-#define GSP_CK_PARAMS_H
+#ifndef GSP_PARAMS_H
+#define GSP_PARAMS_H
 
 #include <stdint.h>
 #include <stdbool.h>
@@ -218,4 +218,4 @@ const CK_PARAM_DESC_T* CK_GetDescriptorTable(uint8_t *count);
 }
 #endif
 
-#endif /* GSP_CK_PARAMS_H */
+#endif /* GSP_PARAMS_H */

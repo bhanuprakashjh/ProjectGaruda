@@ -31,7 +31,7 @@
 extern volatile ESC_STATE_T gV4State;
 #if FEATURE_GSP
 #include "gsp/gsp.h"
-#include "gsp/gsp_ck_params.h"
+#include "gsp/gsp_params.h"
 #endif
 
 /* Debug print rate limiter */

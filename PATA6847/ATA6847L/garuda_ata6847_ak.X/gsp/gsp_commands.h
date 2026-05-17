@@ -1,6 +1,6 @@
 /**
  * @file gsp_commands.h
- * @brief GSP v2 command IDs and CK board wire-format structures.
+ * @brief GSP v2 command IDs and wire-format structures.
  *
  * Protocol-compatible with dsPIC33AK board. Same packet format, CRC,
  * and command IDs. Different snapshot struct (CK 6-step vs AK FOC).
@@ -85,7 +85,7 @@ typedef struct __attribute__((packed)) {
     uint8_t  fwMajor;
     uint8_t  fwMinor;
     uint8_t  fwPatch;
-    uint16_t boardId;           /* 0x0002 for CK board */
+    uint16_t boardId;           /* 0x0002 (was CK board, retained for GUI compat) */
     uint8_t  motorProfile;      /* 0=Hurst, 1=A2212, 2=2810 */
     uint8_t  motorPolePairs;
     uint32_t featureFlags;      /* CK-specific feature bits */
@@ -108,7 +108,7 @@ typedef struct __attribute__((packed)) {
 #define GSP_FEATURE_GSP         (1UL << 16)  /* GSP protocol active */
 
 /**
- * GSP_CK_SNAPSHOT_T — 64 bytes, CK board telemetry snapshot.
+ * GSP_SNAPSHOT_T — 64 bytes, telemetry snapshot.
  *
  * V1: 48 bytes (core + electrical + speed + ZC diag + system)
  * V2: 52 bytes (+zcLatencyPct, zcBlankPct, zcBypassCount)
@@ -296,10 +296,10 @@ typedef struct __attribute__((packed)) {
     int16_t  iaAtFaultInst, ibAtFaultInst, ibusAtFaultInst;
     uint8_t  faultSnapshotValid;
     uint8_t  _padPeaks;               /* align to 2 bytes */
-} GSP_CK_SNAPSHOT_T;
+} GSP_SNAPSHOT_T;
 
 /* XC16 doesn't support _Static_assert. Verify size at compile time:
- * sizeof(GSP_CK_SNAPSHOT_T) should be 48 bytes. */
+ * sizeof(GSP_SNAPSHOT_T) should be 48 bytes. */
 
 /* Command handler prototype */
 typedef void (*GSP_CMD_HANDLER_T)(const uint8_t *payload, uint8_t payloadLen);

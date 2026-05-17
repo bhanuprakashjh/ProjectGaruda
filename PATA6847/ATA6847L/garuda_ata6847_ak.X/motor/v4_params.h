@@ -2,7 +2,7 @@
  * @file v4_params.h
  * @brief V4 sector-PI runtime tunable parameters.
  *
- * Architecture (mirrors gsp_ck_params for V3):
+ * Architecture (mirrors gsp_params for V3):
  *   - Always-allocate single global struct `v4Params`
  *   - Reads from struct happen everywhere V4 code used to read #defines
  *   - GSP GET_PARAM/SET_PARAM/GET_PARAM_LIST handlers read/write the struct

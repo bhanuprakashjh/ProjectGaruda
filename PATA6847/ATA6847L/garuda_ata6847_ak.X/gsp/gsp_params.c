@@ -1,10 +1,10 @@
 /**
- * @file gsp_ck_params.c
- * @brief CK board runtime parameters — profiles, descriptors, get/set, derived.
+ * @file gsp_params.c
+ * @brief Runtime parameters — profiles, descriptors, get/set, derived.
  */
 
 #include "../garuda_config.h"
-#include "gsp_ck_params.h"
+#include "gsp_params.h"
 
 /* ── Global instances ── */
 CK_PARAMS_T  ckParams;
