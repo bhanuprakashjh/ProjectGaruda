@@ -22,7 +22,10 @@
 
 #define GSP_START_BYTE        0x02
 #define GSP_RX_RING_SIZE      256
-#define GSP_TX_RING_SIZE      256
+#define GSP_TX_RING_SIZE      512  /* Telemetry frame is 257 bytes
+                                    * (STX + LEN + CMD + 252-byte payload
+                                    * + CRC×2). 256-byte ring rejects a
+                                    * 257-byte frame at the txFree check. */
 #define GSP_RX_RING_MASK      (GSP_RX_RING_SIZE - 1)
 #define GSP_TX_RING_MASK      (GSP_TX_RING_SIZE - 1)
 #define GSP_MAX_PAYLOAD_LEN   253  /* Sized for the 252-byte telemetry
