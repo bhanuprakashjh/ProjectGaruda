@@ -1,6 +1,6 @@
 /**
  * @file hal_ptg.c
- * @brief PTG implementation — Phase 1 heartbeat (AK port).
+ * @brief PTG implementation — drives the BEMF midpoint sampler.
  *
  * See hal_ptg.h for the architectural overview.
  *
@@ -45,9 +45,8 @@ volatile uint8_t  ptgExpectedComp = 0;
 #define PTG_OP_IRQ      (0x7u << 4)   /* 0x70 — generate IRQ (operand selects PTG0..3) */
 #define PTG_OP_JMP      (0xAu << 4)   /* 0xA0 — jump (operand = step index) */
 
-/* ISR priority — sits between ADC (3) and CCP (5/6 on CK; AK uses
- * Timer1=4, CCP=5 typically).  Setting PTG to 5 means CCP still
- * preempts, but PTG preempts ADC.  Phase 2 may need to raise this. */
+/* ISR priority 5 — above ADC (3), below CCP (5/6). CCP still preempts,
+ * but PTG preempts ADC. */
 #ifndef HAL_PTG_ISR_PRIORITY
 #define HAL_PTG_ISR_PRIORITY    5U
 #endif
@@ -111,7 +110,7 @@ void HAL_PTG_Stop(void)
  * Fires at every PG1TRIGB match (PWM mid-OFF, period boundary, by
  * default — same instant the BEMF GPIO is stable for sampling).
  *
- *  - ptgFires++ runs always (heartbeat / Phase 1 diagnostic).
+ *  - ptgFires++ runs every fire (heartbeat counter for diagnostics).
  *  - V4_ProcessBemfSample() runs here (not in the ADC ISR). The ADC
  *    ISR retains POT/Vbus/current responsibilities only. Latency drops
  *    from ~1.5 µs (ADC scan complete) to ~50 ns (ISR vector). */

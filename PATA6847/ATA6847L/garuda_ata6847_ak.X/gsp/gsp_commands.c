@@ -1,10 +1,6 @@
 /**
  * @file gsp_commands.c
- * @brief GSP v2 command handlers.
- *
- * Phase 0: PING, GET_INFO, GET_SNAPSHOT
- * Phase 1: Motor control (START/STOP/CLEAR_FAULT/HEARTBEAT)
- * Phase 1: Telemetry streaming (TELEM_START/STOP/FRAME)
+ * @brief GSP v2 command handlers — info, motor control, telemetry.
  */
 
 #include "../garuda_config.h"
@@ -307,25 +303,11 @@ void GSP_TelemTick(void)
     if ((now - v4_telemLastTick) < 100) return;
     v4_telemLastTick = now;
 
-    /* Build a V3-compatible 64-byte snapshot so pot_capture.py and the
-     * GUI can decode it. Slots 0-47 carry V3-mapped fields; 48-63 are
-     * V4 capture-rate diagnostic counters. */
+    /* 250-byte telemetry snapshot consumed by pot_capture.py / GUI. */
     V4_TELEM_T t;
     SectorPI_TelemGet(&t);
 
-    uint8_t snap[250]; /* 2-byte seq + 64-byte snapshot + 8-byte off-mid
-                        * + 4-byte V5 PTG fire counter
-                        * + 16-byte V5 PTG per-polarity counters
-                        * + 16-byte V5.1 ADC post-ZC shadow counters
-                        * + 2-byte V5.2 measurement-PI tracker (tMeasHR)
-                        * + 4-byte sectorCount (full 32-bit, for rate diag)
-                        * + 32-byte phase-current peak block (2026-04-21)
-                        * + 10-byte elapsed-snapshot probe (2026-05-14, d[146..155])
-                        * + 16-byte capture-layer comp tally (2026-05-14, d[156..171])
-                        * + 4-byte PTG postscale skip counter (2026-05-15, d[172..175])
-                        * + 24-byte per-sector hit counters (2026-05-15, d[176..199])
-                        * + 12-byte per-sector total fires (2026-05-15, d[200..211])
-                        * + 36-byte per-sector × per-phase BEMF comp=1 tally (2026-05-15, d[212..247]) */
+    uint8_t snap[250]; /* See per-section offset comments below. */
     memset(snap, 0, sizeof(snap));
 
     /* Seq counter (2 bytes) */
@@ -417,20 +399,17 @@ void GSP_TelemTick(void)
     memcpy(&d[56], &t.adcCaptureSet,    4);
     memcpy(&d[60], &t.adcSetRising,     4);
     { uint32_t zero = 0; memcpy(&d[64], &zero, 4); memcpy(&d[68], &zero, 4); }
-    memcpy(&d[72], &t.ptgFires,         4);  /* V5.0 PTG ISR fire count */
-    memcpy(&d[76], &t.ptgRisingAcc,     4);  /* V5.0 per-polarity shadow */
+    memcpy(&d[72], &t.ptgFires,         4);  /* PTG ISR fire count */
+    memcpy(&d[76], &t.ptgRisingAcc,     4);  /* per-polarity shadow (unused) */
     memcpy(&d[80], &t.ptgRisingRej,     4);
     memcpy(&d[84], &t.ptgFallingAcc,    4);
     memcpy(&d[88], &t.ptgFallingRej,    4);
 
-    /* 2026-05-14: slots repurposed from V5 post-ZC shadow counters to the
-     * per-polarity PI-feed accounting from sector_pi.c. Host pR%/pF% now
-     * reflects the actual PI-feed success rate (not ISR-level matches).
+    /* Per-polarity PI-feed accounting (host computes pR/pF % from these).
      *   d[92]  = diagPiFedRising  (rising sector accepted into PI)
      *   d[96]  = diagPiMissRising (rising sector dropped/no-capture)
      *   d[100] = diagPiFedFalling (falling sector accepted into PI)
-     *   d[104] = diagPiMissFalling(falling sector dropped/no-capture)
-     * Host computes pR = fed/(fed+miss) per polarity. */
+     *   d[104] = diagPiMissFalling(falling sector dropped/no-capture) */
     {
         extern volatile uint32_t diagPiFedRising, diagPiFedFalling;
         extern volatile uint32_t diagPiMissRising, diagPiMissFalling;
@@ -440,16 +419,15 @@ void GSP_TelemTick(void)
         memcpy(&d[104], &diagPiMissFalling, 4);
     }
 
-    /* V5.2 measurement-PI tracker. */
+    /* Measurement-PI tracker (smoothed tMeasHR). */
     memcpy(&d[108], &t.tMeasHR, 2);
 
     /* Full 32-bit sectorCount for host-side rate computation. */
     memcpy(&d[110], &t.sectorCount, 4);
 
-    /* Phase + bus current peaks. Rolling window reset on snapshot read;
-     * at-fault fields preserved across snapshots until motor restart
-     * (valid==1). ibus is now a direct OA3 shunt read (see hal_adc.c)
-     * — previously zero with a host-side max(|Ia|,|Ib|) fallback. */
+    /* Phase + bus current peaks. Rolling window reset on snapshot read.
+     * At-fault fields preserved across snapshots until motor restart
+     * (valid==1). ibus reads OA3 shunt directly. */
     extern volatile int16_t gV4IaPkMax, gV4IaPkMin;
     extern volatile int16_t gV4IbPkMax, gV4IbPkMin;
     extern volatile int16_t gV4IbusPkMax, gV4IbusPkMin;
@@ -478,13 +456,13 @@ void GSP_TelemTick(void)
     d[144] = gV4FaultSnapshotValid;
     d[145] = 0;  /* pad */
 
-    /* 2026-05-14 mechanism probe: elapsed-snapshot per polarity (10 bytes).
-     * Read by pot_capture.py when len(data) >= 156 to gate parsing.
-     *   d[146] = diagElapsedAcceptRising  (last accepted elapsed, rising)
-     *   d[148] = diagElapsedAcceptFalling (last accepted elapsed, falling)
-     *   d[150] = diagElapsedRejectRising  (last rejected elapsed, rising)
-     *   d[152] = diagElapsedRejectFalling (last rejected elapsed, falling)
-     *   d[154] = diagFilterHRLast         (filterHR at last decision) */
+    /* Mechanism probe — per-polarity elapsed snapshots (10 bytes).
+     * Read by pot_capture.py when len(data) >= 156.
+     *   d[146] = diagElapsedAcceptRising
+     *   d[148] = diagElapsedAcceptFalling
+     *   d[150] = diagElapsedRejectRising
+     *   d[152] = diagElapsedRejectFalling
+     *   d[154] = diagFilterHRLast */
     {
         extern volatile uint16_t diagElapsedAcceptRising,  diagElapsedAcceptFalling;
         extern volatile uint16_t diagElapsedRejectRising,  diagElapsedRejectFalling;
@@ -496,10 +474,9 @@ void GSP_TelemTick(void)
         memcpy(&d[154], &diagFilterHRLast,         2);
     }
 
-    /* 2026-05-14 capture-layer probe: comp value × sector polarity, past
-     * blanking. Tells us if rising-sector captures fail because comp
-     * never leaves the pre-ZC state (physics asymmetry) or because the
-     * accept logic discards a valid post-ZC sample (software bug). */
+    /* Capture-layer probe — comp value × sector polarity, past blanking.
+     * Distinguishes physics asymmetry (comp never leaves pre-ZC state)
+     * from a software bug (accept logic discards a valid post-ZC sample). */
     {
         extern volatile uint32_t v4_compRising_High,  v4_compRising_Low;
         extern volatile uint32_t v4_compFalling_High, v4_compFalling_Low;
@@ -509,36 +486,31 @@ void GSP_TelemTick(void)
         memcpy(&d[168], &v4_compFalling_Low,  4);
     }
 
-    /* 2026-05-15 PTG postscale experiment: count of fires that bypassed
-     * V4_ProcessBemfSample(). ptgFires is total fires; effective
-     * BEMF-sample rate = (ptgFires - ptgSkipped) / window. */
+    /* PTG postscale: count of fires that bypassed V4_ProcessBemfSample().
+     * Effective BEMF-sample rate = (ptgFires - ptgSkipped) / window. */
     {
         extern volatile uint32_t ptgSkipped;
         memcpy(&d[172], &ptgSkipped, 4);
     }
 
-    /* Per-sector hit counters (2026-05-15). 6 × uint32 at d[176..199].
-     * Tells whether all 6 commutation positions actually fire. If
-     * hits[0]/[2]/[4] stay at 0 while [1]/[3]/[5] climb, position is
-     * incrementing by 2 somewhere and explains why cR=0 / pR=0%. */
+    /* Per-sector hit counters — 6 × uint32. Validates that all 6
+     * commutation positions actually fire (an even/odd-only pattern
+     * would mean position is incrementing by 2 somewhere). */
     {
         extern volatile uint32_t v4_sectorHits[6];
         memcpy(&d[176], (const void *)v4_sectorHits, 24);
     }
 
-    /* Multi-phase BEMF tally (2026-05-15).
-     *   d[200..211]: v4_bemfTallyTotal[6]     (6 × uint16)
-     *   d[212..247]: v4_bemfTally[6][3]       (6 × 3 × uint16)
-     * Host computes ratio comp=1 / total per (sector, phase) to spot
-     * phase-mapping bugs.  Ratio at 0% or 100% on the supposed floating
-     * phase = bug; ratio in (10..90)% = actually floating.
+    /* Multi-phase BEMF tally:
+     *   d[200..211]: v4_bemfTallyTotal[6]    (6 × uint16)
+     *   d[212..247]: v4_bemfTally[6][3]      (6 × 3 × uint16)
+     * Host computes comp=1/total ratio per (sector, phase) to detect
+     * phase-mapping bugs (ratio at 0% or 100% on the supposed floating
+     * phase = bug; (10..90)% = actually floating).
      *
-     * 2026-05-15 (b): reset these tallies after copying so each frame
-     * is a fresh delta over the ~50 ms inter-snapshot window. uint16
-     * wraps at 65 536 and at 60 kHz PWM we hit the wrap inside one
-     * sector's post-blanking window — without the reset, ratios are
-     * meaningless. With the reset, max samples per window are well
-     * inside uint16 range. */
+     * Tallies are reset after copy so each frame is a fresh delta over
+     * the ~50 ms inter-snapshot window. Without the reset, uint16 wraps
+     * before one window completes at 60 kHz PWM. */
     {
         extern volatile uint16_t v4_bemfTally[6][3];
         extern volatile uint16_t v4_bemfTallyTotal[6];
@@ -548,11 +520,10 @@ void GSP_TelemTick(void)
         memset((void *)v4_bemfTally,      0, sizeof(v4_bemfTally));
     }
 
-    /* Stale-floatingPhase diagnostic (2026-05-15b). uint16 at d[248..249].
-     * Per-window count of PTG fires (past blanking) where v4_floatingPhase
-     * disagreed with commutationTable[v4_currentSector].floatingPhase.
-     * Resolves the contradiction between the multi-phase tally and the
-     * deglitched comp (preR≈100%). Reset alongside the tally. */
+    /* Stale-floatingPhase diagnostic — uint16 at d[248..249], per-window
+     * count of PTG fires (past blanking) where v4_floatingPhase disagreed
+     * with commutationTable[v4_currentSector].floatingPhase. Reset
+     * alongside the tally. */
     {
         extern volatile uint16_t v4_fpStaleCount;
         memcpy(&d[248], (const void *)&v4_fpStaleCount, 2);

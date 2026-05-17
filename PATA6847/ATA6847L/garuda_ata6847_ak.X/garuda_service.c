@@ -241,34 +241,24 @@ volatile uint32_t v4_adcCaptureSet   = 0;  /* set v4_captureValid       */
  * that one polarity class (rising vs falling) misses every time. */
 volatile uint32_t v4_adcSetRising    = 0;
 
-/* 2026-05-14 capture-layer probe: tally what the PTG sample finds at the
- * mid-ON instant, binned by sector polarity. Used to decide if
- * rising-sector misses are a *physics asymmetry* (comp stuck in pre-state
- * at the sample point — no transition ever observed) or a *software*
- * problem (comp shows post-state but accept logic discards it).
- *
- * On the inverted ATA6847:
- *   rising-BEMF sector: pre-ZC comp=1, post-ZC comp=0
+/* Capture-layer probe — tally comp value × sector polarity, past
+ * blanking. Distinguishes a physics asymmetry (BEMF never reaches
+ * virtual neutral on one polarity) from a software bug (accept logic
+ * discards a valid post-ZC sample). On the inverted ATA6847:
+ *   rising-BEMF sector:  pre-ZC comp=1, post-ZC comp=0
  *   falling-BEMF sector: pre-ZC comp=0, post-ZC comp=1
- *
- * Healthy capture requires comp == post-ZC by the time we sample. If
- * compRising_High >> compRising_Low across the run, the rising-sector
- * BEMF isn't reaching the (mid-ON-shifted) virtual neutral and the
- * capture layer can never see the transition. */
+ * compRising_High >> compRising_Low means rising-sector BEMF never
+ * crosses virtual neutral at the sample point. */
 volatile uint32_t v4_compRising_High  = 0;  /* rising sector,  comp=1 (pre-ZC state)  */
 volatile uint32_t v4_compRising_Low   = 0;  /* rising sector,  comp=0 (post-ZC state) */
 volatile uint32_t v4_compFalling_High = 0;  /* falling sector, comp=1 (post-ZC state) */
 volatile uint32_t v4_compFalling_Low  = 0;  /* falling sector, comp=0 (pre-ZC state)  */
 
-/* V5.1 post-ZC shadow counters. Incremented in _ADCInterrupt every
- * past-blanking sample (no v4_captureValid sticky gate, so per-sample
- * rate matches what the PTG diagnostic measured). When
- * FEATURE_POST_ZC_ACCEPT=0 these stay at 0.
- *   postZcRisingAcc  — rising sector + comp == 0 (post-ZC for rising)
- *   postZcRisingRej  — rising sector + comp != 0
- *   postZcFallingAcc — falling sector + comp == 1 (post-ZC for falling)
- *   postZcFallingRej — falling sector + comp != 1
- * Expected from PTG comparison: per-polarity Acc/(Acc+Rej) ≈ 67%. */
+/* Post-ZC shadow counters — per-sample (no captureValid sticky gate),
+ * gated by FEATURE_POST_ZC_ACCEPT. Diagnostic only, doesn't drive
+ * commutation.
+ *   postZcRisingAcc/Rej  — rising sector, comp == / != 0
+ *   postZcFallingAcc/Rej — falling sector, comp == / != 1 */
 volatile uint32_t postZcRisingAcc  = 0;
 volatile uint32_t postZcRisingRej  = 0;
 volatile uint32_t postZcFallingAcc = 0;
@@ -360,12 +350,10 @@ void V4_ProcessBemfSample(void)
             }
             else
             {
-                /* 2026-05-15 — multi-phase tally probe.  Read ALL three
-                 * BEMF GPIOs once and tally per-sector comp=1 counts per
-                 * phase.  This runs BEFORE the deglitch and capture
-                 * logic, costs ~10 cycles, and tells us whether the
-                 * floatingPhase mapping points at the actually-floating
-                 * pin in each sector. */
+                /* Multi-phase tally probe — read all 3 BEMF GPIOs and
+                 * tally per-sector comp=1 counts. Runs before deglitch,
+                 * costs ~10 cycles, validates whether floatingPhase
+                 * points at the actually-floating pin in each sector. */
                 {
                     extern volatile uint8_t  v4_currentSector;
                     extern volatile uint16_t v4_bemfTally[6][3];
@@ -392,12 +380,10 @@ void V4_ProcessBemfSample(void)
                     }
                 }
 
-                /* 3-read deglitch: reject single-sample GPIO bounce /
-                 * comparator chatter near threshold. Majority vote of
-                 * 3 reads with short gaps (~400 ns total). Tested
-                 * single-read above 150k 2026-04-28 — regressed peak
-                 * 195k→178k, so 3-read is load-bearing for noise
-                 * rejection at all speeds. */
+                /* 3-read deglitch with majority vote rejects single-
+                 * sample GPIO bounce + comparator chatter near threshold
+                 * (~400 ns total). Single-read regresses high-speed
+                 * peak — load-bearing for noise rejection. */
                 uint8_t r1 = ReadBEMFComp();
                 Nop(); Nop(); Nop(); Nop();
                 uint8_t r2 = ReadBEMFComp();
@@ -407,12 +393,11 @@ void V4_ProcessBemfSample(void)
 
                 bool isRising = HAL_Capture_IsRisingZc();
 
-                /* Capture-layer probe (2026-05-14): tally comp value per
-                 * sector polarity, past blanking. Runs in BOTH detection
-                 * paths (V4 PRE-ZC and V5 POST_ZC_OWN) so the same probe
-                 * can compare what mid-OFF vs mid-ON sees regardless of
-                 * which accept logic is active. Uses ptgExpectedComp
-                 * (reliable per-sector flag) not isRising (stuck-true). */
+                /* Capture-layer probe — tally comp × sector polarity,
+                 * past blanking. Uses ptgExpectedComp (reliable per-
+                 * sector flag) rather than HAL_Capture_IsRisingZc() —
+                 * the latter exhibits stuck-true behavior in ISR
+                 * context. The probe is detection-path-agnostic. */
                 {
                     extern volatile uint8_t ptgExpectedComp;
                     bool sectorRising_probe = (ptgExpectedComp == 0u);
@@ -426,15 +411,11 @@ void V4_ProcessBemfSample(void)
                 }
 
 #if FEATURE_POST_ZC_ACCEPT
-                /* V5.1 shadow: count what post-ZC accept logic would do.
-                 * Reads ptgExpectedComp (written by Commutate) instead
-                 * of HAL_Capture_IsRisingZc() — the function call exhibits
-                 * a "stuck true" behavior in ISR context that the volatile
-                 * global bypasses. First run of this shadow with the
-                 * function call showed p2F=0% (impossible); this read
-                 * is what PTG ISR successfully used to get pR/pF ≈ 67/67.
-                 * No v4_captureValid sticky gate — per-sample rate matches
-                 * the PTG diagnostic for direct comparison. */
+                /* Post-ZC shadow — count what the post-ZC accept logic
+                 * would do if it were live. Reads ptgExpectedComp (the
+                 * per-sector flag written atomically by Commutate); the
+                 * sticky-free per-sample rate matches the PTG diagnostic
+                 * for direct A/B comparison. */
                 {
                     extern volatile uint8_t ptgExpectedComp;
                     uint8_t expectedPostZc = ptgExpectedComp;
@@ -449,31 +430,19 @@ void V4_ProcessBemfSample(void)
                 }
 #endif
 
-                /* V4 PRE-ZC detection.
-                 *
-                 * Polarity gate uses ptgExpectedComp (written by Commutate
-                 * per sector — reliable) instead of HAL_Capture_IsRisingZc()
-                 * (function call exhibits "stuck-true" behavior in ISR context,
-                 * see comments at ~line 535 and CCP2 ISR for history).
-                 * `isRising` is still used for state-match counting because
-                 * that's tied to the inverted-ATA6847 comp polarity rules
-                 * and is independent of which sector flag we trust. */
+                /* PRE-ZC detection. Polarity gate uses ptgExpectedComp
+                 * (written atomically by Commutate); HAL_Capture_IsRisingZc()
+                 * exhibits stuck-true behavior in ISR context. isRising
+                 * is still used for state-match counting since that
+                 * follows inverted-ATA6847 comp polarity rules. */
                 extern volatile uint8_t ptgExpectedComp;
                 bool sectorRising_v5 = (ptgExpectedComp == 0u);
 
-                /* 2026-05-15 — falling-only PI feed.
-                 *
-                 * `expected = 0` means: accept comp=0.  On inverted ATA6847
-                 * this is PRE-ZC of falling (BEMF still above neutral).
-                 * Rising sectors stay at comp=1 (preR=100% across the whole
-                 * speed range, idle → 226k BC) so rising never reaches the
-                 * gate.  Net effect: PI is fed from falling-sector captures
-                 * only, at every speed.
-                 *
-                 * Bench (2026-05-15): high-speed current improved slightly
-                 * vs the prior legacy gate (`isRising ? 1 : 0`).  Idle is
-                 * a touch higher in current/speed.  Keeping this until a
-                 * fix for the rising-sector floating-phase asymmetry lands. */
+                /* Falling-only PI feed: expected=0 accepts comp=0, which
+                 * on inverted ATA6847 is PRE-ZC of falling. Rising
+                 * sectors stay at comp=1 (preR=100% across full speed
+                 * range) so rising never reaches the gate — net effect
+                 * is the PI is fed from falling-sector captures only. */
                 uint8_t expected = 0;
                 if (comp != expected)
                 {
@@ -517,26 +486,14 @@ void __attribute__((interrupt, no_auto_psv)) _CCT3Interrupt(void)
     SectorPI_Commutate();
 }
 
-/* ── V4 CCP ISRs — drain FIFO, store last edge unconditionally ── */
-/* No blanking here — blanking is in the commutation ISR.
- * These ISRs prevent FIFO overflow (4-deep FIFO loses new
- * captures when full). By draining on every edge, the real
- * ZC capture survives instead of being discarded. */
+/* CCP ISRs drain the FIFO unconditionally — blanking lives in the
+ * commutation ISR. Draining on every edge prevents FIFO overflow
+ * (the 4-deep FIFO drops new captures when full). */
 
-/* ── Cluster detection state (per-polarity) ──────────────────── */
-/* A ZC produces a burst of 2+ comparator edges within ~10 HR ticks.
- * Single PWM noise edges are spaced ~25µs (39 HR ticks) apart.
- * Detect cluster: current edge within CLUSTER_GAP of previous → ZC.
- * This is V3's DMA cluster detection running in the ISR. */
-#define CLUSTER_GAP_HR  15u   /* ~10µs — wide enough for ZC burst,
-                               * narrow enough to reject PWM noise */
-
-/* ── ZC detection with deglitch ──────────────────────────────── */
-/* CCP ISR fires on every comparator edge. After blanking, read
- * the comparator GPIO 3 times with ~500ns delays. All 3 must
- * match the expected post-ZC state. This rejects PWM ringing
- * (brief pulses that bounce back) and detects real ZC (sustained
- * state change). Once detected, lock v4_captureValid. */
+/* Cluster detection: a real ZC produces a burst of 2+ comparator
+ * edges within ~10 HR ticks; PWM noise edges are spaced ~25µs (39 HR
+ * ticks) apart. Current edge within CLUSTER_GAP of previous = ZC. */
+#define CLUSTER_GAP_HR  15u   /* ~10µs — covers ZC burst, rejects PWM noise */
 
 /* Floating phase GPIO readers */
 volatile uint8_t v4_floatingPhase = 0;
@@ -560,33 +517,20 @@ volatile uint16_t v4_blankingEndHR = 0;
 /* Expected ZC HR timestamp (center of corridor for SP CCP ISR) */
 volatile uint16_t v4_expectedZcHR = 0;
 
-/* 2026-05-15 — Multi-phase BEMF tally probe.
- *
- * In every post-blanking PTG fire, read ALL three BEMF GPIOs (A,B,C)
- * and count comp=1 occurrences per (sector, phase). Plus total
- * post-blanking fires per sector. Goal: definitively answer whether
- * `preR=100%` (rising sectors never show comp=0 on the floating phase)
- * is a phase-mapping bug or true motor/comparator physics.
- *
- * Reading: in sector S where code thinks phase P floats, the floating
- * phase should show a TRANSITION — its comp=1 ratio should fall in
- * (10..90)%. A ratio at 0% or 100% means we're reading a driven phase.
- * If the driven phase happens to be the one our floatingPhase index
- * points at, the phase-mapping is bugged. */
+/* Multi-phase BEMF tally — every post-blanking PTG fire reads all 3
+ * BEMF GPIOs and counts comp=1 per (sector, phase). In sector S, the
+ * floating phase should transition (comp=1 ratio in 10..90%); a ratio
+ * stuck at 0% or 100% means we're reading a driven phase, indicating
+ * a floatingPhase-mapping bug. */
 volatile uint16_t v4_bemfTally[6][3]  = {{0}};   /* [sector][phase] count of comp=1 */
 volatile uint16_t v4_bemfTallyTotal[6] = {0};    /* per-sector post-blanking fires */
 
-/* 2026-05-15 — stale-floatingPhase diagnostic.
- *
- * Counts PTG ISR fires (past blanking) where v4_floatingPhase doesn't
- * match commutationTable[v4_currentSector].floatingPhase. Should be 0
- * in steady state because the Commutate ISR (priority 6) atomically
- * sets both v4_currentSector and v4_floatingPhase, and PTG (priority
- * 5) can't preempt it. Non-zero = a write to one of those globals is
- * being missed, which would explain why the deglitched comp (via
- * v4_floatingPhase) reports 100% comp=1 on rising sectors while the
- * raw multi-phase tally (via direct pin reads) reports 99% comp=0.
- * Reset by the snapshot send so each ~50 ms frame shows the delta. */
+/* Stale-floatingPhase diagnostic — counts post-blanking PTG fires
+ * where v4_floatingPhase doesn't match commutationTable[v4_currentSector].
+ * Should be 0 in steady state since Commutate (IPL 6) atomically writes
+ * both globals and PTG (IPL 5) can't preempt. Non-zero indicates one
+ * write is being missed. Reset on snapshot send so each frame shows
+ * a fresh delta. */
 volatile uint16_t v4_fpStaleCount = 0;
 /* (v4_adc* counters declared earlier — used by ADC ISR above) */
 
