@@ -33,7 +33,7 @@ export type PacketCallback = (cmdId: number, payload: Uint8Array) => void;
 
 export class GspParser {
   private state: 'WAIT_START' | 'GOT_START' | 'COLLECTING' = 'WAIT_START';
-  private pktBuf = new Uint8Array(254);
+  private pktBuf = new Uint8Array(256);
   private pktLen = 0;
   private pktIdx = 0;
   private crcBuf = [0, 0];
@@ -60,7 +60,10 @@ export class GspParser {
           if (b === START_BYTE) this.state = 'GOT_START';
           break;
         case 'GOT_START':
-          if (b >= 1 && b <= 249) {
+          /* Match firmware's GSP_MAX_PAYLOAD_LEN (251). pktLen = 1 + payload,
+           * so cap is 252. AK port's V4 TELEM_FRAME ships a 250-byte payload
+           * (pktLen=251); the old 249 cap silently dropped every frame. */
+          if (b >= 1 && b <= 252) {
             this.pktLen = b;
             this.pktIdx = 0;
             this.crcIdx = 0;

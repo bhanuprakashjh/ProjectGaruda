@@ -26,6 +26,10 @@
  * delays.
  */
 
+#include "../garuda_config.h"
+
+#if !FEATURE_FOC_AN1078
+
 #include "hal_com_timer.h"
 
 #include <xc.h>
@@ -133,3 +137,5 @@ void HAL_ComTimer_Cancel(void)
     _CCT3IF = 0;
     CCP3PR = 0xFFFF;   /* Push next match ~42 ms out — effectively idle */
 }
+
+#endif /* !FEATURE_FOC_AN1078 */

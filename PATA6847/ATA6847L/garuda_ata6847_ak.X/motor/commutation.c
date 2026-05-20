@@ -11,6 +11,10 @@
  *   Step 5: A=PWM,   B=FLOAT, C=LOW   (A->C, sense B falling)
  */
 
+#include "../garuda_config.h"
+
+#if !FEATURE_FOC_AN1078
+
 #include "commutation.h"
 
 const COMMUTATION_STEP_T commutationTable[6] =
@@ -28,3 +32,5 @@ const COMMUTATION_STEP_T commutationTable[6] =
     /* Step 5: A=PWM, B=FLOAT, C=LOW — floating=B, ZC falling */
     { PHASE_PWM_ACTIVE, PHASE_FLOAT,      PHASE_LOW,        1, -1 },
 };
+
+#endif /* !FEATURE_FOC_AN1078 */

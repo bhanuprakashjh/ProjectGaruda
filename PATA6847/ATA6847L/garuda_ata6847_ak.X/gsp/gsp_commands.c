@@ -6,6 +6,7 @@
 #include "../garuda_config.h"
 
 #if FEATURE_GSP
+#include <xc.h>             /* PG1DC, MPER SFRs for telemetry snapshot */
 #include <stdint.h>
 #include <string.h>
 #include "gsp_commands.h"
@@ -15,7 +16,12 @@
 #include "../motor/sector_pi.h"
 #include "../motor/motor_params.h"
 #include "../hal/hal_ata6847.h"
+#include "../hal/hal_ptg.h"      /* g_ptgSampleMode for snapshot */
 #include "../hal/port_config.h"
+#if FEATURE_FOC_AN1078
+#include "../foc/foc_runtime.h"   /* FOC_StartMotor / FOC_StopMotor */
+#include "../foc/an1078_motor.h"  /* AN_Motor_T (for snapshot fields) */
+#endif
 
 extern volatile ESC_STATE_T gEscState;
 extern volatile uint32_t gSystemTick;
@@ -27,6 +33,53 @@ extern volatile int16_t  gIbRaw;
 static bool     telemActive = false;
 static uint16_t telemSeq = 0;
 static uint32_t telemLastTick = 0;
+
+#if FEATURE_FOC_AN1078
+/* Build the 114-byte FOC snapshot at *snap. Layout matches dspic33AKESC's
+ * GSP_SNAPSHOT_T so the existing GUI decode.ts handles it directly. */
+static void BuildFocSnapshot(uint8_t *snap)
+{
+    extern AN_Motor_T s_foc_an;
+    extern volatile int16_t gIa_mA, gIb_mA, gIbus_mA;
+    memset(snap, 0, 114);
+
+    snap[0] = (uint8_t)gEscState;
+    snap[1] = (uint8_t)s_foc_an.faultCode;
+    snap[2] = (uint8_t)s_foc_an.mode;
+    uint16_t throttle = (uint16_t)s_foc_an.throttle;
+    memcpy(&snap[4], &throttle, 2);
+    uint32_t pg1dc = (uint32_t)PG1DC;
+    uint32_t mper  = (uint32_t)MPER;
+    snap[6] = (uint8_t)((pg1dc * 100UL) / (mper ? mper : 1));
+
+    memcpy(&snap[8],  (const uint16_t*)&gVbusRaw, 2);
+    int16_t ibus = gIbus_mA;
+    memcpy(&snap[10], &ibus, 2);
+    memcpy(&snap[12], &ibus, 2);
+
+    uint32_t st = gSystemTick;
+    memcpy(&snap[60], &st, 4);
+    uint32_t uptime = st / 1000U;
+    memcpy(&snap[64], &uptime, 4);
+
+    memcpy(&snap[68], &s_foc_an.id_meas,          4);
+    memcpy(&snap[72], &s_foc_an.iq_meas,          4);
+    memcpy(&snap[76], &s_foc_an.theta_drive,      4);
+    memcpy(&snap[80], &s_foc_an.smc.OmegaFltred,  4);
+    memcpy(&snap[84], &s_foc_an.vbus,             4);
+    memcpy(&snap[88], &s_foc_an.ia,               4);
+    memcpy(&snap[92], &s_foc_an.ib,               4);
+    memcpy(&snap[96], &s_foc_an.smc.Theta,        4);
+    memcpy(&snap[100],&s_foc_an.vd,               4);
+    memcpy(&snap[104],&s_foc_an.vq,               4);
+    snap[108] = (uint8_t)s_foc_an.mode;
+    snap[109] = s_foc_an.cal_done ? 1u : 0u;
+    uint16_t offIa = (uint16_t)(s_foc_an.ia_offset * 1000.0f);
+    uint16_t offIb = (uint16_t)(s_foc_an.ib_offset * 1000.0f);
+    memcpy(&snap[110], &offIa, 2);
+    memcpy(&snap[112], &offIb, 2);
+}
+#endif
 
 void GSP_DispatchCommand(uint8_t cmdId, const uint8_t *payload, uint8_t payloadLen)
 {
@@ -58,11 +111,22 @@ void GSP_DispatchCommand(uint8_t cmdId, const uint8_t *payload, uint8_t payloadL
             info[1] = 4;                    /* fwMajor */
             info[2] = 0;                    /* fwMinor */
             info[3] = 0;                    /* fwPatch */
-            uint16_t boardId = GSP_BOARD_EV43F54A;
+            /* boardId: report 0x0001 (MCLV/AK) in FOC mode so the GUI uses
+             * the FOC-aware decoder + AK board UI. In 6-step mode report
+             * 0x0002 (CK/EV43F54A) so the GUI uses the legacy ck-snapshot
+             * decoder that matches our existing 186-byte 6-step layout. */
+#if FEATURE_FOC_AN1078
+            uint16_t boardId = GSP_BOARD_MCLV48V300W;   /* 0x0001 — GUI FOC decoder */
+#else
+            uint16_t boardId = GSP_BOARD_EV43F54A;      /* 0x0002 — GUI CK decoder */
+#endif
             memcpy(&info[4], &boardId, 2);
             info[6] = MOTOR_PROFILE;
             info[7] = 7;                    /* polePairs (placeholder) */
             uint32_t f = 0x80000000UL;      /* bit 31 = sector-PI marker */
+#if FEATURE_FOC_AN1078
+            f |= GSP_FEATURE_FOC_AN1078;    /* bit 23 — host switches to FOC decoder */
+#endif
             memcpy(&info[8],  &f, 4);
             uint32_t pwmHz = PWMFREQUENCY_HZ;
             memcpy(&info[12], &pwmHz, 4);
@@ -73,24 +137,47 @@ void GSP_DispatchCommand(uint8_t cmdId, const uint8_t *payload, uint8_t payloadL
         }
 
         case GSP_CMD_GET_SNAPSHOT:
+#if FEATURE_FOC_AN1078
+        {
+            /* GUI calls decodeSnapshot(payload) directly (no seq slice)
+             * — so respond with raw 114-byte FOC snapshot. */
+            uint8_t snap[114];
+            BuildFocSnapshot(snap);
+            GSP_SendResponse(GSP_CMD_GET_SNAPSHOT, snap, sizeof(snap));
+        }
+#else
+            /* 6-step: legacy ACK; the 186-byte 6-step frame is sent only
+             * via the TELEM_FRAME stream. */
+            GSP_SendResponse(GSP_CMD_GET_SNAPSHOT, NULL, 0);
+#endif
+            break;
+
         case GSP_CMD_TELEM_START:
         case GSP_CMD_TELEM_STOP:
-            /* Handled below in TelemTick */
             if (cmdId == GSP_CMD_TELEM_START)
                 telemActive = true;
-            else if (cmdId == GSP_CMD_TELEM_STOP)
+            else
                 telemActive = false;
             GSP_SendResponse(cmdId, NULL, 0);
             break;
 
         case GSP_CMD_START_MOTOR:
-            if (gEscState == ESC_IDLE)
+            if (gEscState == ESC_IDLE) {
+#if FEATURE_FOC_AN1078
+                FOC_StartMotor();
+#else
                 GarudaService_StartMotor();
+#endif
+            }
             GSP_SendResponse(GSP_CMD_START_MOTOR, NULL, 0);
             break;
 
         case GSP_CMD_STOP_MOTOR:
+#if FEATURE_FOC_AN1078
+            FOC_StopMotor();
+#else
             GarudaService_StopMotor();
+#endif
             GSP_SendResponse(GSP_CMD_STOP_MOTOR, NULL, 0);
             break;
 
@@ -220,6 +307,7 @@ void GSP_DispatchCommand(uint8_t cmdId, const uint8_t *payload, uint8_t payloadL
             GSP_SendResponse(GSP_CMD_LOAD_DEFAULTS, NULL, 0);
             break;
 
+#if !FEATURE_FOC_AN1078
         case GSP_CMD_PI_LOG:
         {
             /* Diagnostic dump of first PI runs after CL entry.
@@ -253,6 +341,7 @@ void GSP_DispatchCommand(uint8_t cmdId, const uint8_t *payload, uint8_t payloadL
             GSP_SendResponse(GSP_CMD_BEMF_PROBE, probe, sizeof(probe));
             break;
         }
+#endif /* !FEATURE_FOC_AN1078 — CMD_PI_LOG + CMD_BEMF_PROBE are 6-step only */
 
         case GSP_CMD_ATA_DIAG:
         {
@@ -305,23 +394,52 @@ void GSP_TelemTick(void)
     if ((now - telemLastTick) < 100) return;
     telemLastTick = now;
 
-    /* 180-byte telemetry snapshot consumed by pot_capture.py / GUI.
+#if FEATURE_FOC_AN1078
+    /* FOC snapshot — layout matches dspic33AKESC source board's
+     * GSP_SNAPSHOT_T so the existing GUI / decode.ts decodeSnapshot()
+     * works without changes. 114 bytes covers up through focVq (the
+     * hasFocVdVq check in decode.ts:22). Fields not relevant to our
+     * AK ATA6847L port (hwzc/morph/clpci) stay zero. */
+    {
+        /* TELEM_FRAME = [seq u16 LE][114B snapshot]. GUI strips the seq
+         * via payload.slice(2) before decoding. */
+        uint8_t frame[2 + 114];
+        frame[0] = (uint8_t)(telemSeq & 0xFF);
+        frame[1] = (uint8_t)(telemSeq >> 8);
+        telemSeq++;
+        BuildFocSnapshot(&frame[2]);
+        GSP_SendResponse(GSP_CMD_TELEM_FRAME, frame, sizeof(frame));
+        return;
+    }
+#else
+
+    /* 182-byte telemetry snapshot consumed by pot_capture.py / GUI.
      * Trimmed 2026-05-19 from 254 → 180 bytes to reduce UART congestion
      * (was 258-byte frames at 115200 baud → 22ms/frame, contributing to
      * dropped frames at high CPU load). Dropped fields: sectHit[6] (24B),
      * bemfTallyTotal (12B), bemfTally (36B), fpStaleCount (2B). The
      * dropped fields were only consumed in the end-of-run summary table,
-     * not the per-frame live decode line.
+     * not the per-frame live decode line. Bumped 180 → 182 on 2026-05-20
+     * to expose the PTG sample mode byte at snap[180].
      *
      * Wire layout (offsets are into `snap[]`, not `d[]`):
      *   snap[0..1]    = seq
      *   snap[2..175]  = d[0..173] — live-decode diagnostic fields
-     *   snap[176..177] = d[174..175] — ptgSkipped low 16 (was uint32)
-     *   snap[178..179] = d[176..177] — gMainLoopHb low16 (heartbeat) */
+     *   snap[176..177] = d[174..175] — ptgSkipped (low 16 of u32)
+     *   snap[178..179] = d[176..177] — gMainLoopHb low16 (heartbeat)
+     *   snap[180]     = d[178]     — g_ptgSampleMode (PTG dual-sample state)
+     *   snap[181]     = d[179]     — pad / reserved
+     *   snap[182..183] = d[180..181] — PG1DC (high-side compare register)
+     *   snap[184..185] = d[182..183] — MPER  (PWM master period register)
+     *
+     * Frame size grew 180 → 182 on 2026-05-20 to expose the PTG sample
+     * mode byte, then 182 → 186 to expose PG1DC/MPER for verifying that
+     * the gate sees the duty% the firmware reports. Hosts auto-detect
+     * frame size from STX/LEN. */
     TELEM_T t;
     SectorPI_TelemGet(&t);
 
-    uint8_t snap[180];
+    uint8_t snap[186];
     memset(snap, 0, sizeof(snap));
 
     /* Seq counter (2 bytes) */
@@ -516,6 +634,29 @@ void GSP_TelemTick(void)
         memcpy(&d[176], &hbLow, 2);
     }
 
+    /* PTG sample-mode byte at d[178]. Codes match PTG_SAMPLE_MODE_*
+     * in garuda_config.h:
+     *   0 = SINGLE_OFF (low duty, one fire/PWM cycle at MID-OFF)
+     *   1 = DUAL       (mid duty, two fires/PWM cycle)
+     *   2 = SINGLE_ON  (high duty, one fire/PWM cycle at MID-ON)
+     * Host needs this to scale the BEMF counter rates (ptgFires,
+     * adcCaptureSet, etc.) — DUAL doubles the per-PWM-cycle count. */
+    d[178] = g_ptgSampleMode;
+    d[179] = 0;     /* pad — reserved */
+
+    /* PG1DC + MPER at d[180..183]. Read DIRECTLY from the PWM peripheral
+     * registers (not the firmware-side g_pwmActualDuty/g_pwmPer mirrors)
+     * so we see what the hardware is actually using. Lets the host
+     * compute the true gate duty% = PG1DC / MPER and confirm it matches
+     * the displayed amp%. Both are u16 — PG1DC in PG-clock ticks (800 MHz
+     * → 1.25 ns/tick), MPER in the same ticks defining the PWM period. */
+    {
+        uint16_t pg1dc = PG1DC;
+        uint16_t mper  = MPER;
+        memcpy(&d[180], &pg1dc, 2);
+        memcpy(&d[182], &mper,  2);
+    }
+
     /* Reset rolling peaks for next 20 ms window. Seed with current
      * instantaneous sample so the window doesn't start at stale extrema.
      * Peaks track milliamps (same scale as the live mA values). */
@@ -527,5 +668,6 @@ void GSP_TelemTick(void)
     }
 
     GSP_SendResponse(GSP_CMD_TELEM_FRAME, snap, sizeof(snap));
+#endif /* !FEATURE_FOC_AN1078 — closes the 6-step telemetry block */
 }
-#endif
+#endif /* FEATURE_GSP */

@@ -14,6 +14,12 @@
 #ifndef GARUDA_CONFIG_H
 #define GARUDA_CONFIG_H
 
+/* ── Mode select (needs to come BEFORE the PWM block, since
+ *      PWMFREQUENCY_HZ is mode-dependent) ───────────────────────── */
+#ifndef FEATURE_FOC_AN1078
+#define FEATURE_FOC_AN1078  0
+#endif
+
 /* ── Motor Profile Selection ──────────────────────────────────────── */
 #ifndef MOTOR_PROFILE
 #define MOTOR_PROFILE   2   /* 0=Hurst, 1=A2212, 2=2810, 3=HiZ1460 */
@@ -29,12 +35,36 @@
 #define FOSC_PWM_MHZ        400U         /* CLK5 PWM clock (MHz) — see hal/clock.c */
 
 /* ── PWM ───────────────────────────────────────────────────────────── */
-/* 40 kHz debug session (2026-05-19): investigating why commutation
- * timing fails at lower PWM. Latency-compensation hypothesis disproved
- * (more advance regressed 138k→84k → commutation already fires too early).
- * Goal: find the actual mechanism, then test 20 kHz too. */
-#define PWMFREQUENCY_HZ     60000U
-#define LOOPTIME_MICROSEC   (uint16_t)(1000000UL / PWMFREQUENCY_HZ)  /* 50 us */
+/* Mode-specific PWM rates. 6-step has a narrow window of working PWM
+ * frequencies because BEMF sampling is locked to PWM edges (40 kHz proven
+ * dead-end on this hardware — see ak_40khz_floating_coupling memory note).
+ * FOC's SMO is not coupled to PWM edges, so it can use whatever rate gives
+ * the best observer resolution + acceptable switching losses.
+ *
+ * Override either at compile time:
+ *   make MP_EXTRA_CC_PRE="-DPWMFREQUENCY_HZ_FOC=60000"
+ */
+#ifndef PWMFREQUENCY_HZ_6STEP
+#define PWMFREQUENCY_HZ_6STEP   60000U   /* 6-step: 60 kHz known-working
+                                          * (CK 225k milestone + AK port).
+                                          * 30 kHz also valid; 40 kHz dead-end. */
+#endif
+#ifndef PWMFREQUENCY_HZ_FOC
+#define PWMFREQUENCY_HZ_FOC     30000U   /* FOC first-light at 30 kHz; bump
+                                          * to 60000 to match source board's
+                                          * 200k+ tuning (an1078_200k milestone). */
+#endif
+
+/* Active PWM rate selected by FEATURE_FOC_AN1078 — all downstream
+ * derivations (LOOPTIME_TCY, MIN/MAX_DUTY, AN_FS_HZ, AN_TS, …) hang off
+ * this single symbol so the two paths can't drift apart. */
+#if FEATURE_FOC_AN1078
+#define PWMFREQUENCY_HZ     PWMFREQUENCY_HZ_FOC
+#else
+#define PWMFREQUENCY_HZ     PWMFREQUENCY_HZ_6STEP
+#endif
+
+#define LOOPTIME_MICROSEC   (uint16_t)(1000000UL / PWMFREQUENCY_HZ)  /* 50 us @ 30 kHz */
 
 /* PGxPER from DS70005539 Eq 14-1 (Center-Aligned): PGxPER = 8·FPGx/FPWM − 16.
  * PGx clock is Std Speed Peripheral Clock (100 MHz) via PCLKCON.MCLKSEL=0
@@ -227,9 +257,13 @@
 
 
 #ifndef FEATURE_GSP
-#define FEATURE_GSP             1   /* 1 = GSP binary protocol on UART1 (disables debug prints)
-                                     * 0 = debug UART text output (default for development)
-                                     * Set to 1 when using GUI or gsp_ck_test.py */
+#define FEATURE_GSP             1   /* Back to 1 for 6-step testing — re-enables pot_capture.py
+                                     * and the GUI binary protocol on UART1. Set to 0 only when
+                                     * doing FOC bring-up text debug (HAL_UART_WriteString
+                                     * is stubbed when GSP=1, so the FOC debug prints don't
+                                     * appear; that's fine for 6-step since it uses GSP).
+                                     * 1 = GSP binary protocol on UART1 (disables debug prints)
+                                     * 0 = debug UART text output */
 #endif
 
 /* ── Sector PI Architecture ────────────────────────────────────────
@@ -331,23 +365,35 @@
 #define PTG_TRIG_MID_ON_POS \
     ((uint32_t)0x80000000UL | 400U)
 
-/* Switch from MID-OFF to MID-ON sampling at 25% duty (was 50%).
- * Reason: under prop load at 30% duty, freewheel current through the
+/* Single-sample-per-PWM-cycle, duty-adaptive position.
+ *
+ * Reason: under prop load at low duty, freewheel current through the
  * low-side body diodes during OFF time couples large transient voltages
  * onto the active phases. That noise rides on the floating-phase pin
  * and the MID-OFF sample lands in this corrupted region — ProcessBemfSample
  * sees post-comm chatter (lE ≈ 19 HR) instead of the real BEMF ZC at ~T/2.
- * MID-ON sampling at 25-50% duty avoids the freewheel ringing because
+ * MID-ON sampling above ~25% duty avoids the freewheel ringing because
  * the active phase is hard-driven and the floating phase sees clean
- * BEMF + a stable level shift the comparator threshold tolerates. */
+ * BEMF + a stable level shift the comparator threshold tolerates.
+ *
+ * Below 25%-5% duty: MID-OFF (OFF window is wide enough, ON is too narrow).
+ * Above 25%+5% duty: MID-ON  (clean signal away from freewheel ringing).
+ * ±5% hysteresis prevents sample-position chatter when PI hunts at the
+ * threshold. */
 #ifndef PTG_DUTY_ADAPT_THRESHOLD_PCT
 #define PTG_DUTY_ADAPT_THRESHOLD_PCT   25U
 #endif
 #define PTG_DUTY_ADAPT_THRESHOLD \
     ((uint16_t)(((uint32_t)LOOPTIME_TCY * PTG_DUTY_ADAPT_THRESHOLD_PCT) / 100U))
-/* ±5% around threshold prevents sample-position chatter when PI hunts at 50%. */
 #define PTG_DUTY_ADAPT_HYST \
     ((uint16_t)(((uint32_t)LOOPTIME_TCY * 5U) / 100U))
+
+/* Sample-mode enum, exported via telemetry. Only SINGLE_OFF and
+ * SINGLE_ON are used at runtime now; DUAL (1) is reserved for hosts
+ * that still parse it from older builds. */
+#define PTG_SAMPLE_MODE_SINGLE_OFF  0U
+#define PTG_SAMPLE_MODE_DUAL        1U
+#define PTG_SAMPLE_MODE_SINGLE_ON   2U
 
 /* PTG ISR postscaler. N=3 (20 kHz BEMF) regressed peak to 172k vs 226k. */
 #ifndef PTG_POSTSCALE_N
@@ -374,6 +420,9 @@
 #ifndef MEAS_PI_ALPHA_SHIFT
 #define MEAS_PI_ALPHA_SHIFT  2
 #endif
+
+/* (FEATURE_FOC_AN1078 default lives at the top of this file because
+ *  PWMFREQUENCY_HZ depends on it. See the "Mode select" block.) */
 
 /* Default PTGT0LIM values. At FCY=200 MHz with PTGDIV=0, 1 PTG tick = 5 ns.
  * Valley delay covers ATA6847 comparator propagation (~500 ns) + settle.

@@ -33,6 +33,9 @@ extern volatile ESC_STATE_T gEscState;
 #include "gsp/gsp.h"
 #include "gsp/gsp_params.h"
 #endif
+#if FEATURE_FOC_AN1078
+#include "foc/foc_runtime.h"
+#endif
 
 /* Debug print rate limiter */
 static volatile uint32_t lastDebugTick = 0;
@@ -118,14 +121,24 @@ int main(void)
 
     /* PTG: fires _PTG0Interrupt at every PG1TRIGB match. Started here
      * once and left running for the lifetime of the firmware —
-     * SectorPI_Start/Stop call HAL_PTG_Start/Stop which just reset counters. */
+     * SectorPI_Start/Stop call HAL_PTG_Start/Stop which just reset counters.
+     *
+     * Skipped in FOC mode — PTG drives the 6-step BEMF sampler that the
+     * AN1078 path doesn't need. */
+#if !FEATURE_FOC_AN1078
     HAL_PTG_Init();
     HAL_PTG_Start();
     HAL_UART_WriteString("PTG.");
+#endif
 
     /* 9. Board service + ESC service */
     BoardServiceInit();
     GarudaService_Init();
+
+#if FEATURE_FOC_AN1078
+    FOC_Init();
+    HAL_UART_WriteString("FOC.");
+#endif
 
 #if FEATURE_GSP
     CK_ParamsInitDefaults();
@@ -177,11 +190,21 @@ int main(void)
 
         if (IsPressed_Button1())
         {
-            if (gEscState == ESC_IDLE)
+            if (gEscState == ESC_IDLE) {
+#if FEATURE_FOC_AN1078
+                FOC_StartMotor();
+#else
                 GarudaService_StartMotor();
+#endif
+            }
         }
-        if (IsPressed_Button2())
+        if (IsPressed_Button2()) {
+#if FEATURE_FOC_AN1078
+            FOC_StopMotor();
+#else
             GarudaService_StopMotor();
+#endif
+        }
 
         heartbeatCounter++;
         if (heartbeatCounter >= HEARTBEAT_PERIOD)
@@ -190,6 +213,24 @@ int main(void)
             if (gEscState == ESC_IDLE)
                 LED_RUN ^= 1;
         }
+
+#if FEATURE_FOC_AN1078
+        /* FOC observer debug print + LED mode-blink at ~10 Hz once armed.
+         * Tied to the heartbeat counter — fires N×finer than the LED
+         * heartbeat toggle. The LED_RUN blink rate is the primary
+         * visual indicator (no UART required): off=STOPPED, solid=LOCK,
+         * slow=OL, fast=CL, frantic=FAULT. */
+        {
+            static uint32_t focDbgCnt = 0;
+            if (++focDbgCnt >= (HEARTBEAT_PERIOD / 5UL)) {
+                focDbgCnt = 0;
+                if (gEscState != ESC_IDLE) {
+                    FOC_BlinkTick();
+                    FOC_DebugPrint();
+                }
+            }
+        }
+#endif
 
         /* Housekeeping */
         GarudaService_MainLoop();

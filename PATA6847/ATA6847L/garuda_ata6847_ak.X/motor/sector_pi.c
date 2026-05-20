@@ -10,11 +10,14 @@
  * SCCP3 sector timer and CCP2 capture. PI owns commutation from there.
  */
 
+#include "../garuda_config.h"
+
+#if !FEATURE_FOC_AN1078
+
 #include "sector_pi.h"
 
 
 #include <xc.h>
-#include "../garuda_config.h"
 #include "../hal/hal_ak_compat.h"
 #include "../hal/hal_pwm.h"
 #include "../hal/hal_com_timer.h"
@@ -1064,3 +1067,5 @@ void SectorPI_TelemGet(TELEM_T *out)
     }
 }
 
+
+#endif /* !FEATURE_FOC_AN1078 */

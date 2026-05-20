@@ -258,6 +258,7 @@ void HAL_PWM_SetDutyCyclePeriod(uint32_t duty, uint16_t per)
     PG3STATbits.UPDREQ = 1;
 }
 
+#if !FEATURE_FOC_AN1078
 /**
  * @brief Apply 6-step commutation pattern.
  * Uses the same commutation table as the AK project.
@@ -273,6 +274,7 @@ void HAL_PWM_SetCommutationStep(uint8_t step)
     ApplyPhaseState((volatile uint16_t *)&PG2IOCONL, s->phaseB);
     ApplyPhaseState((volatile uint16_t *)&PG3IOCONL, s->phaseC);
 }
+#endif /* !FEATURE_FOC_AN1078 */
 
 void HAL_PWM_ChargeBootstrap(void)
 {
@@ -300,4 +302,43 @@ void HAL_PWM_ForceAllLow(void)
     PG2IOCONL = (PG2IOCONL | 0x3000u | 0x0400u) & ~0x0800u;
     PG3IOCONL = (PG3IOCONL | 0x3000u | 0x0400u) & ~0x0800u;
 }
+
+#if FEATURE_FOC_AN1078
+/* Drop OVRENH/OVRENL on all three PGs so PGxDC drives the complementary
+ * pair directly (SVPWM mode). Called once on AN_MotorStart's STOPPED→LOCK
+ * transition; reasserted via HAL_PWM_ForceAllFloat on STOPPED. */
+void HAL_PWM_ReleaseAllOverrides(void)
+{
+    PG1IOCONL &= ~0x3000u;
+    PG2IOCONL &= ~0x3000u;
+    PG3IOCONL &= ~0x3000u;
+}
+
+/* Write three independent duties from float [0,1] (AN_MotorFastTick output).
+ * Slave-before-master order matches HAL_PWM_SetDutyCycle. NaN/Inf are forced
+ * to 0.5 (zero net voltage) since XC-DSC float→int is UB on non-finite.
+ * LOOPTIME_TCY scaling, MIN_DUTY/MAX_DUTY clamp for dead-time safety. */
+void HAL_PWM_SetDutyFloat3Phase(float da, float db, float dc)
+{
+    if (!(da >= 0.0f && da <= 1.0f)) da = 0.5f;
+    if (!(db >= 0.0f && db <= 1.0f)) db = 0.5f;
+    if (!(dc >= 0.0f && dc <= 1.0f)) dc = 0.5f;
+
+    uint32_t a = (uint32_t)(da * (float)LOOPTIME_TCY);
+    uint32_t b = (uint32_t)(db * (float)LOOPTIME_TCY);
+    uint32_t c = (uint32_t)(dc * (float)LOOPTIME_TCY);
+    if (a < MIN_DUTY) a = MIN_DUTY;  if (a > MAX_DUTY) a = MAX_DUTY;
+    if (b < MIN_DUTY) b = MIN_DUTY;  if (b > MAX_DUTY) b = MAX_DUTY;
+    if (c < MIN_DUTY) c = MIN_DUTY;  if (c > MAX_DUTY) c = MAX_DUTY;
+
+    PG3DC = (uint16_t)c;
+    PG2DC = (uint16_t)b;
+    PG1DC = (uint16_t)a;
+    g_pwmActualDuty = (uint16_t)a;          /* phase A for telemetry */
+
+    PG1STATbits.UPDREQ = 1;
+    PG2STATbits.UPDREQ = 1;
+    PG3STATbits.UPDREQ = 1;
+}
+#endif /* FEATURE_FOC_AN1078 */
 

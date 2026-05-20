@@ -32,4 +32,12 @@ void     HAL_PWM_ChargeBootstrap(void);
 void     HAL_PWM_ForceAllFloat(void);
 void     HAL_PWM_ForceAllLow(void);
 
+#if FEATURE_FOC_AN1078
+/* SVPWM helpers — used by the AN1078 FOC path. The 6-step block
+ * commutation code never calls these; they're a separate output mode
+ * that drops the override layer and writes three independent duties. */
+void     HAL_PWM_ReleaseAllOverrides(void);
+void     HAL_PWM_SetDutyFloat3Phase(float da, float db, float dc);
+#endif
+
 #endif

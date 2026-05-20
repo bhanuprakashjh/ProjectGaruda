@@ -106,6 +106,11 @@ typedef struct __attribute__((packed)) {
 #define GSP_FEATURE_ILIM_HW     (1UL << 26)  /* Hardware current limit */
 #define GSP_FEATURE_CURRENT_SNS (1UL << 27)  /* Phase current sensing */
 #define GSP_FEATURE_GSP         (1UL << 16)  /* GSP protocol active */
+#define GSP_FEATURE_FOC_AN1078  (1UL << 23)  /* AN1078 SMO sensorless FOC
+                                              * (source-board convention; the
+                                              * GUI uses this bit to switch the
+                                              * snapshot decoder from 6-step
+                                              * fields to FOC observer fields). */
 
 /**
  * GSP_SNAPSHOT_T — 64 bytes, telemetry snapshot.

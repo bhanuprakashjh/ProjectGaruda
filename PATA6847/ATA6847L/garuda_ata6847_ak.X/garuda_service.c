@@ -36,6 +36,10 @@
 #include "motor/motor_params.h"
 #include "hal/hal_com_timer.h"
 
+#if FEATURE_FOC_AN1078
+#include "foc/foc_runtime.h"
+#endif
+
 /* ====================================================================
  * SECTOR PI ARCHITECTURE
  * ==================================================================== */
@@ -97,10 +101,13 @@ static volatile uint32_t gStartTick = 0;  /* systemTick when motor started */
 void GarudaService_Init(void)
 {
     gEscState = ESC_IDLE;
+#if !FEATURE_FOC_AN1078
     SectorPI_Init();
+#endif
     HAL_Timer1_Start();
 }
 
+#if !FEATURE_FOC_AN1078
 void GarudaService_StartMotor(void)
 {
     if (gEscState != ESC_IDLE) return;
@@ -169,17 +176,20 @@ void GarudaService_StopMotor(void)
     gStateChanged = true;
     LED_RUN = 0;
 }
+#endif  /* !FEATURE_FOC_AN1078 — closes GarudaService_StartMotor + StopMotor */
 
 /* ── Timer1 ISR ────────────────────────────────────────────────── */
 void __attribute__((interrupt, auto_psv)) _T1Interrupt(void)
 {
     _T1IF = 0;
 
+#if !FEATURE_FOC_AN1078
     /* OL ramp: Timer1 drives commutation at 20kHz during ALIGN+OL_RAMP.
      * This is the V3-proven approach. Every 50µs tick, the ramp countdown
      * decrements. When it hits 0, the next commutation step fires. */
     if (SectorPI_IsRunning())
         SectorPI_OlTick();
+#endif
 
     /* 1ms tick (divide 20kHz by 20) */
     if (++gTickDiv >= 20)
@@ -187,6 +197,7 @@ void __attribute__((interrupt, auto_psv)) _T1Interrupt(void)
         gTickDiv = 0;
         gSystemTick++;
 
+#if !FEATURE_FOC_AN1078
         if (SectorPI_IsRunning())
         {
             SectorPI_TimeTick();
@@ -209,6 +220,7 @@ void __attribute__((interrupt, auto_psv)) _T1Interrupt(void)
                 gStateChanged = true;
             }
         }
+#endif
     }
 
     /* ATA6847 nIRQ check — DISABLED for now.
@@ -254,15 +266,20 @@ volatile uint32_t postZcFallingRej = 0;
 /* ── ADC ISR ───────────────────────────────────────────────────── */
 void __attribute__((interrupt, auto_psv)) _AD1CH4Interrupt(void)
 {
-    gPotRaw  = ADCBUF_POT;
-    gVbusRaw = ADCBUF_VBUS;
-    /* Phase + bus currents: unsigned 12-bit ADC reads, zero-current bias
-     * subtracted to give a signed int16 swing around 0.  Raw counts are
-     * kept for internal use; the host-facing values are converted to
-     * milliamps below using the calibration constants from garuda_config.h. */
-    gIaRaw   = (int16_t)((int16_t)ADCBUF_IA   - ADC_CURRENT_BIAS);
-    gIbRaw   = (int16_t)((int16_t)ADCBUF_IB   - ADC_CURRENT_BIAS);
-    gIbusRaw = (int16_t)((int16_t)ADCBUF_IBUS - ADC_CURRENT_BIAS);
+    /* Latch raw unsigned counts up front. AN1078 wants raw counts (it
+     * subtracts AN_ADC_MIDPOINT internally); the legacy globals below
+     * keep the bias-subtracted int16 the 6-step path always used. */
+    const uint16_t raw_pot   = (uint16_t)ADCBUF_POT;
+    const uint16_t raw_vbus  = (uint16_t)ADCBUF_VBUS;
+    const uint16_t raw_ia_u  = (uint16_t)ADCBUF_IA;
+    const uint16_t raw_ib_u  = (uint16_t)ADCBUF_IB;
+    const uint16_t raw_ibus_u = (uint16_t)ADCBUF_IBUS;
+
+    gPotRaw  = raw_pot;
+    gVbusRaw = raw_vbus;
+    gIaRaw   = (int16_t)((int16_t)raw_ia_u   - ADC_CURRENT_BIAS);
+    gIbRaw   = (int16_t)((int16_t)raw_ib_u   - ADC_CURRENT_BIAS);
+    gIbusRaw = (int16_t)((int16_t)raw_ibus_u - ADC_CURRENT_BIAS);
 
     /* Convert ADC counts → physical units once, at the source.  All
      * downstream consumers (snapshot builder, fault snapshot, peak
@@ -285,6 +302,12 @@ void __attribute__((interrupt, auto_psv)) _AD1CH4Interrupt(void)
     if (gIb_mA   < gIbPkMin)   gIbPkMin   = gIb_mA;
     if (gIbus_mA > gIbusPkMax) gIbusPkMax = gIbus_mA;
     if (gIbus_mA < gIbusPkMin) gIbusPkMin = gIbus_mA;
+
+#if FEATURE_FOC_AN1078
+    /* AN1078 fast loop. Runs every PWM cycle. Handles arming, calibration,
+     * AN_MotorFastTick, SVPWM duty write, and FAULT/STOPPED transitions. */
+    FOC_AdcIsrTick(raw_ia_u, raw_ib_u, raw_vbus, raw_pot);
+#endif
 
     /* AK ADC uses per-channel flags. Clear AD1CH4 (VBUS) since it
      * triggered this ISR. BEMF detection runs in ProcessBemfSample
@@ -320,6 +343,7 @@ void __attribute__((interrupt, auto_psv)) _AD1CH4Interrupt(void)
  *
  * NOT marked inline: called from two ISRs in different .o files.
  * Out-of-line is correct. */
+#if !FEATURE_FOC_AN1078
 void ProcessBemfSample(void)
 {
     /* Same scaffold the ADC ISR used to host directly.  Original
@@ -430,6 +454,7 @@ void __attribute__((interrupt, no_auto_psv)) _CCT3Interrupt(void)
     CCP3PRL = 0xFFFF;
     SectorPI_Commutate();
 }
+#endif /* !FEATURE_FOC_AN1078 — closes ProcessBemfSample + _CCT3Interrupt */
 
 /* CCP ISRs drain the FIFO unconditionally — blanking lives in the
  * commutation ISR. Draining on every edge prevents FIFO overflow
@@ -467,12 +492,17 @@ volatile uint16_t expectedZcHR = 0;
 /* ── Service tick (called from main loop) ─────────────────── */
 void GarudaService_Tasks(void)
 {
-    /* Check for stall → restart */
+#if !FEATURE_FOC_AN1078
+    /* 6-step stall detector: state==CL but sector_pi quit → desync.
+     * In FOC mode the AN1078 path legitimately drives state to
+     * ESC_CLOSED_LOOP without ever starting sector_pi, so this check
+     * would mis-fire at every successful OL→CL handoff. */
     if (gEscState == ESC_CLOSED_LOOP && !SectorPI_IsRunning())
     {
         HAL_UART_WriteString("V4:STALL\r\n");
         GarudaService_StopMotor();
     }
+#endif
 }
 
 void GarudaService_ClearFault(void)

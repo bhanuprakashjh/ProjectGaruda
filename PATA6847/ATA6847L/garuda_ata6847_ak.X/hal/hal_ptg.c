@@ -22,11 +22,14 @@
  *   PTGSTRT  = 1   begin queue execution
  */
 
+#include "../garuda_config.h"
+
+#if !FEATURE_FOC_AN1078
+
 #include <xc.h>
 #include <stdint.h>
 #include "hal_ptg.h"
 #include "port_config.h"           /* BEMF_x_GetValue() macros */
-#include "../garuda_config.h"
 #include "../garuda_service.h"     /* ProcessBemfSample() */
 
 /* ── Globals (defined here, externed from hal_ptg.h) ──────────────── */
@@ -37,6 +40,12 @@ volatile uint32_t ptgSkipped    = 0;
  * in sector_pi.c when POST_ZC_ACCEPT is enabled.  Read in the BEMF
  * ISR paths to classify accept vs reject. */
 volatile uint8_t  ptgExpectedComp = 0;
+
+/* Sample-mode state, exposed via telemetry. Codes defined in
+ * garuda_config.h (PTG_SAMPLE_MODE_*). The ISR updates this with
+ * hysteresis on g_pwmActualDuty; the host reads it from the snapshot
+ * to interpret BEMF-counter rates correctly (DUAL doubles them). */
+volatile uint8_t  g_ptgSampleMode = PTG_SAMPLE_MODE_SINGLE_OFF;
 
 /* ── PTG step-command opcodes (DS70005539 Table 26-5) ─────────────── */
 #define PTG_OP_CTRL     (0x0u << 4)   /* 0x00 — PTGCTRL  */
@@ -113,8 +122,10 @@ void HAL_PTG_Stop(void)
 }
 
 /* ── PTG0 ISR ──────────────────────────────────────────────────────
- * Fires at every PG1TRIGB match (PWM mid-OFF, period boundary, by
- * default — same instant the BEMF GPIO is stable for sampling).
+ * Fires at every PG1TRIGB match. The ISR rewrites PG1TRIGB at the end
+ * of its body to point at the next sample position, so the PTG step
+ * queue keeps firing automatically — one fire per PWM cycle in single-
+ * sample modes, two fires per PWM cycle in DUAL.
  *
  *  - ptgFires++ runs every fire (heartbeat counter for diagnostics).
  *  - ProcessBemfSample() runs here (not in the ADC ISR). The ADC
@@ -134,36 +145,39 @@ void __attribute__((interrupt, no_auto_psv)) _PTG0Interrupt(void)
     }
     postscaler = 0;
 #endif
-    /* Duty-adaptive sample position.
-     *
-     * Center-aligned PWM: OFF window is (1-duty)·period wide, ON window
-     * is duty·period. Below 50% duty the OFF window is wider → MID-OFF
-     * is farthest from switching edges. Above 50% the ON window is
-     * wider → MID-ON is cleanest. Above ~80% duty MID-OFF desyncs (OFF
-     * window too narrow for PTG ISR latency + 3-read deglitch to fit).
-     *
-     * One position per fire (not both simultaneously). Hysteresis band
-     * ±5% around 50% to avoid chatter when PI hunts across the boundary. */
+    /* Sample the BEMF — the captureValid sticky flag inside
+     * ProcessBemfSample short-circuits the second DUAL-mode fire of a
+     * sector if the first one already accepted a ZC. */
     ProcessBemfSample();
 
+    /* Single-sample-per-PWM-cycle, duty-adaptive. Position depends on
+     * duty via PTG_DUTY_ADAPT_THRESHOLD (±HYST). `g_ptgSampleMode` is
+     * exposed via telemetry; only SINGLE_OFF / SINGLE_ON are emitted. */
     {
         extern volatile uint16_t g_pwmActualDuty;
-        static uint8_t lastWasMidOn = 0;   /* sticky for hysteresis */
+        static uint8_t lastWasMidOn = 0;
         uint16_t duty = g_pwmActualDuty;
+
         if (lastWasMidOn) {
             if (duty < (PTG_DUTY_ADAPT_THRESHOLD - PTG_DUTY_ADAPT_HYST)) {
-                PG1TRIGB = PTG_TRIG_MID_OFF_POS;
-                lastWasMidOn = 0;
+                PG1TRIGB        = PTG_TRIG_MID_OFF_POS;
+                lastWasMidOn    = 0;
+                g_ptgSampleMode = PTG_SAMPLE_MODE_SINGLE_OFF;
             } else {
-                PG1TRIGB = PTG_TRIG_MID_ON_POS;
+                PG1TRIGB        = PTG_TRIG_MID_ON_POS;
+                g_ptgSampleMode = PTG_SAMPLE_MODE_SINGLE_ON;
             }
         } else {
             if (duty > (PTG_DUTY_ADAPT_THRESHOLD + PTG_DUTY_ADAPT_HYST)) {
-                PG1TRIGB = PTG_TRIG_MID_ON_POS;
-                lastWasMidOn = 1;
+                PG1TRIGB        = PTG_TRIG_MID_ON_POS;
+                lastWasMidOn    = 1;
+                g_ptgSampleMode = PTG_SAMPLE_MODE_SINGLE_ON;
             } else {
-                PG1TRIGB = PTG_TRIG_MID_OFF_POS;
+                PG1TRIGB        = PTG_TRIG_MID_OFF_POS;
+                g_ptgSampleMode = PTG_SAMPLE_MODE_SINGLE_OFF;
             }
         }
     }
 }
+
+#endif /* !FEATURE_FOC_AN1078 */
