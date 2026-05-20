@@ -41,7 +41,6 @@ extern "C" {
 
 /* Group 1: Capture / blanking */
 #define PARAM_BLANKING_PCT        0xF3  /* % of sector period */
-#define PARAM_PI_FEED_POLARITY    0xF5  /* 0=both, 1=rising only, 2=falling only */
 
 /* Group 2: Limits */
 #define PARAM_MIN_PERIOD_HR       0xF4  /* Speed ceiling — timerPeriod floor */
@@ -53,7 +52,7 @@ extern "C" {
                                             * Written to PG1TRIGA on Set. Read returns
                                             * current PG1TRIGA decoded into this format. */
 
-#define PARAM_COUNT  7
+#define PARAM_COUNT  6
 
 /* ── Group IDs ─────────────────────────────────────────────────── */
 /* Numbered 8/9/10 to avoid GUI metadata collision with V3 groups 0-7
@@ -79,7 +78,6 @@ typedef struct {
 
     /* Group 1: Capture / blanking */
     uint8_t  blankingPct;        /* 10–60: % of sectorPeriodHR */
-    uint8_t  piFeedPolarity;     /* 0=both, 1=rising-only, 2=falling-only */
 
     /* Group 2: Limits */
     uint16_t minPeriodHr;        /* 5–500 HR ticks */
@@ -88,7 +86,7 @@ typedef struct {
 /* ── Derived values — precomputed for ISR hot path ─────────────── */
 typedef struct {
     uint16_t advancePlus30Fp8;   /* (advance + 30°) × 256/60, 8.8 fixed */
-    /* blanking factor stays as raw % — HAL_Capture_SetBlanking does the scale */
+    /* blanking factor stays as raw %, scaled where consumed */
 } ESC_DERIVED_T;
 
 /* ── Descriptor table entry (matches V3 12-byte wire format) ───── */

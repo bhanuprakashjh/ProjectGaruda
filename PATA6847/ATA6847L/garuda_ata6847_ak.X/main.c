@@ -44,6 +44,14 @@ static volatile uint32_t lastDebugTick = 0;
 static volatile uint32_t heartbeatCounter = 0;
 #define HEARTBEAT_PERIOD  50000UL  /* main loop iterations (~500ms at 100MHz) */
 
+/* Free-running main-loop iteration counter — exposed via telemetry to
+ * diagnose main-loop starvation (frames stuck at fixed RPM, etc).
+ * If telemetry stalls while this counter still grows between frames,
+ * main loop is fine and TelemTick is being skipped or the GSP TX path
+ * is blocked. If counter freezes between frames, main loop itself is
+ * blocked by an ISR storm. Reset on motor start in GarudaService. */
+volatile uint32_t gMainLoopHb = 0;
+
 
 int main(void)
 {
@@ -152,6 +160,7 @@ int main(void)
     /* Main loop */
     while (1)
     {
+        gMainLoopHb++;
         BoardService();
 
         /* V4: pot/Vbus updated from the ADC ISR while motor runs. In IDLE

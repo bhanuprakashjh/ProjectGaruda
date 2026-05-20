@@ -35,7 +35,6 @@
 #include "motor/sector_pi.h"
 #include "motor/motor_params.h"
 #include "hal/hal_com_timer.h"
-#include "hal/hal_capture.h"
 
 /* ====================================================================
  * SECTOR PI ARCHITECTURE
@@ -234,23 +233,11 @@ extern volatile uint16_t timerPeriod_g;  /* from sector_pi.c */
 volatile uint32_t adcBlankReject  = 0;  /* ADC fired pre-blanking-end */
 volatile uint32_t adcStateMismatch = 0; /* past blanking, wrong GPIO  */
 volatile uint32_t adcCaptureSet   = 0;  /* set captureValid       */
-/* Polarity split: sets that happened on rising-ZC sectors (0,2,4).
- * Falling portion is (adcCaptureSet - adcSetRising).
- * Uint32 data shows capture rate is a flat 49% across all speeds —
- * structural, not speed-dependent. This counter tests the hypothesis
- * that one polarity class (rising vs falling) misses every time. */
-volatile uint32_t adcSetRising    = 0;
 
-/* Capture-layer probe — tally comp value × sector polarity, past
- * blanking. Distinguishes a physics asymmetry (BEMF never reaches
- * virtual neutral on one polarity) from a software bug (accept logic
- * discards a valid post-ZC sample). On the inverted ATA6847:
- *   rising-BEMF sector:  pre-ZC comp=1, post-ZC comp=0
- *   falling-BEMF sector: pre-ZC comp=0, post-ZC comp=1
- * compRising_High >> compRising_Low means rising-sector BEMF never
- * crosses virtual neutral at the sample point. */
-volatile uint32_t compRising_High  = 0;  /* rising sector,  comp=1 (pre-ZC state)  */
-volatile uint32_t compRising_Low   = 0;  /* rising sector,  comp=0 (post-ZC state) */
+/* Capture-layer probe — falling-sector counters only. compFalling_Low =
+ * comp=0 at sample (PRE-ZC on inverted ATA6847), High = comp=1 (POST-ZC).
+ * The rising-sector counterparts were always ~100% Low / 0% High on
+ * this hardware (sample lands POST-ZC of rising) — pure noise, removed. */
 volatile uint32_t compFalling_High = 0;  /* falling sector, comp=1 (post-ZC state) */
 volatile uint32_t compFalling_Low  = 0;  /* falling sector, comp=0 (pre-ZC state)  */
 
@@ -339,7 +326,13 @@ void ProcessBemfSample(void)
      * comments preserved verbatim because they document hard-won
      * tuning history (single-read vs 3-read regression, isRising
      * stuck-true workarounds, PI-feed polarity rationale, etc). */
-    if (SectorPI_IsRunning() && SectorPI_GetPhase() == 3)
+    /* Stage A: gate widened from "phase == 3 (CL only)" to "phase >= 2
+     * (OL_RAMP or CL)" so ProcessBemfSample writes captureValid during
+     * the open-loop ramp too. sector_pi.c's OlTick harvests these to
+     * populate the olCapInCorridor / olCapOutOfCorridor diag. ALIGN
+     * (phase 1) and OFF (0) still short-circuit — no commutations happen
+     * in those, so BEMF samples have no rotor-position meaning. */
+    if (SectorPI_IsRunning() && SectorPI_GetPhase() >= 2)
     {
         if (!captureValid)
         {
@@ -347,7 +340,6 @@ void ProcessBemfSample(void)
              * per-sector globals. Commutate (IPL 6) cannot interleave a
              * partial update with our reads after this point. */
             uint16_t snap   = sectorSnap;
-            uint8_t  sect   = SECTOR_SNAP_SECT(snap);
             uint8_t  fp     = SECTOR_SNAP_FP(snap);
             uint8_t  exp    = SECTOR_SNAP_EXP(snap);
 
@@ -358,33 +350,6 @@ void ProcessBemfSample(void)
             }
             else
             {
-                /* Multi-phase tally probe — read all 3 BEMF GPIOs and
-                 * tally per-sector comp=1 counts. Runs before deglitch,
-                 * costs ~10 cycles, validates whether the floating-phase
-                 * field of the snapshot points at the actually-floating
-                 * pin in each sector. */
-                {
-                    extern volatile uint16_t bemfTally[6][3];
-                    extern volatile uint16_t bemfTallyTotal[6];
-                    extern volatile uint16_t fpStaleCount;
-                    if (sect < 6u) {
-                        uint8_t bA = BEMF_A_GetValue();
-                        uint8_t bB = BEMF_B_GetValue();
-                        uint8_t bC = BEMF_C_GetValue();
-                        bemfTallyTotal[sect]++;
-                        if (bA) bemfTally[sect][0]++;
-                        if (bB) bemfTally[sect][1]++;
-                        if (bC) bemfTally[sect][2]++;
-
-                        /* Stale-fp probe: does the snapshot's fp match
-                         * the table's belief for sect? Non-zero means
-                         * the snapshot's three fields disagree internally,
-                         * which the atomic write should prevent. */
-                        uint8_t fp_table = commutationTable[sect].floatingPhase;
-                        if (fp_table != fp) fpStaleCount++;
-                    }
-                }
-
                 /* 3-read deglitch with majority vote rejects single-
                  * sample GPIO bounce + comparator chatter near threshold
                  * (~400 ns total). Single-read regresses high-speed
@@ -396,19 +361,12 @@ void ProcessBemfSample(void)
                 uint8_t r3 = ReadBEMFComp(fp);
                 uint8_t comp = ((uint8_t)(r1 + r2 + r3) >= 2u) ? 1u : 0u;
 
-                /* Capture-layer probe — tally comp × sector polarity,
-                 * past blanking. Uses the snapshot's `exp` rather than
-                 * HAL_Capture_IsRisingZc(), which exhibits stuck-true
-                 * behavior in ISR context. */
-                {
-                    bool sectorRising_probe = (exp == 0u);
-                    if (sectorRising_probe) {
-                        if (comp) compRising_High++;
-                        else      compRising_Low++;
-                    } else {
-                        if (comp) compFalling_High++;
-                        else      compFalling_Low++;
-                    }
+                /* Capture-layer probe — falling-sector comp tally only.
+                 * Feeds `postF` in telemetry. Polarity comes from the
+                 * atomic sector snapshot (`exp`). */
+                if (exp != 0u) {
+                    if (comp) compFalling_High++;
+                    else      compFalling_Low++;
                 }
 
 #if FEATURE_POST_ZC_ACCEPT
@@ -430,12 +388,18 @@ void ProcessBemfSample(void)
                 /* PRE-ZC detection. Polarity from the same snapshot. */
                 bool sectorRising_v5 = (exp == 0u);
 
-                /* Falling-only PI feed: expected=0 accepts comp=0, which
-                 * on inverted ATA6847 is PRE-ZC of falling. Rising
-                 * sectors stay at comp=1 (preR=100% across full speed
-                 * range) so rising never reaches the gate — net effect
-                 * is the PI is fed from falling-sector captures only. */
-                uint8_t expected = 0;
+                /* Polarity-symmetric PRE-ZC gate, matching CK reference
+                 * (garuda_service.c:453: `expected = isRising ? 1 : 0`).
+                 * On inverted ATA6847:
+                 *   Rising sectors: BEMF crosses up → comp 1→0, so PRE-ZC = 1.
+                 *   Falling sectors: BEMF crosses down → comp 0→1, so PRE-ZC = 0.
+                 * Old code hardcoded expected=0 and starved the PI of
+                 * rising-sector captures (preR≈100% but never accepted).
+                 * That asymmetry kept the loop alive at 60 kHz but walls
+                 * the motor at 40 kHz where single-polarity sample noise
+                 * dominates. CK runs both polarities and is stable at
+                 * 60 + 40 kHz on multiple motors. */
+                uint8_t expected = sectorRising_v5 ? 1u : 0u;
                 if (comp != expected)
                 {
                     adcStateMismatch++;
@@ -443,23 +407,12 @@ void ProcessBemfSample(void)
                 else
                 {
                     adcCaptureSet++;
-                    if (sectorRising_v5) adcSetRising++;
 
-                    bool feedPi;
-                    switch (escParams.piFeedPolarity)
-                    {
-                        case 1:  feedPi = sectorRising_v5;   break;
-                        case 2:  feedPi = !sectorRising_v5;  break;
-                        default: feedPi = true;              break;
-                    }
-                    if (feedPi)
-                    {
-                        /* Publish the capture for Commutate to consume.
-                         * nowHR is the SCCP4 free-running tick at the
-                         * moment the deglitch sample passed. */
-                        lastCaptureHR_g = nowHR;
-                        captureValid = true;
-                    }
+                    /* Publish the capture for Commutate to consume.
+                     * nowHR is the SCCP4 free-running tick at the
+                     * moment the deglitch sample passed. */
+                    lastCaptureHR_g = nowHR;
+                    captureValid = true;
                 }
             }
         }
@@ -508,21 +461,6 @@ volatile uint16_t blankingEndHR = 0;
 /* Expected ZC HR timestamp (center of corridor for SP CCP ISR) */
 volatile uint16_t expectedZcHR = 0;
 
-/* Multi-phase BEMF tally — every post-blanking PTG fire reads all 3
- * BEMF GPIOs and counts comp=1 per (sector, phase). In sector S, the
- * floating phase should transition (comp=1 ratio in 10..90%); a ratio
- * stuck at 0% or 100% means we're reading a driven phase, indicating
- * a floatingPhase-mapping bug. */
-volatile uint16_t bemfTally[6][3]  = {{0}};   /* [sector][phase] count of comp=1 */
-volatile uint16_t bemfTallyTotal[6] = {0};    /* per-sector post-blanking fires */
-
-/* Stale-floatingPhase diagnostic — counts post-blanking PTG fires
- * where floatingPhase doesn't match commutationTable[currentSector].
- * Should be 0 in steady state since Commutate (IPL 6) atomically writes
- * both globals and PTG (IPL 5) can't preempt. Non-zero indicates one
- * write is being missed. Reset on snapshot send so each frame shows
- * a fresh delta. */
-volatile uint16_t fpStaleCount = 0;
 /* (adc* counters declared earlier — used by ADC ISR above) */
 
 

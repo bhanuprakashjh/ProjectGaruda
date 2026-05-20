@@ -42,7 +42,6 @@ python3 tools/gsp_ak_test.py mon /dev/ttyACM1 115200 run.csv
 | `motor/commutation.{c,h}` | 6-step commutation table |
 | `hal/hal_pwm.{c,h}` | PG1/2/3 setup, override drives, duty + commutation step |
 | `hal/hal_ptg.{c,h}` | Peripheral Trigger Generator — fires the BEMF sampler |
-| `hal/hal_capture.{c,h}` | Per-sector capture state stubs |
 | `hal/hal_com_timer.{c,h}` | SCCP3 one-shot sector timer + SCCP4 HR free-running |
 | `hal/hal_ata6847.{c,h}` | SPI register interface to the gate driver |
 | `hal/hal_adc.{c,h}` | ADC1/ADC2 channel setup |
@@ -64,7 +63,7 @@ python3 tools/gsp_ak_test.py mon /dev/ttyACM1 115200 run.csv
 ### State machine (`ESC_STATE_T`)
 
 ```
-   IDLE ──START──▶ ARMED ──▶ ALIGN ──▶ OL_RAMP ──▶ CLOSED_LOOP
+   IDLE ──START──▶ ARMED ──▶ ALIGN ───────────▶ CLOSED_LOOP
                                                         │
                                                         └─▶ FAULT
 ```
@@ -74,22 +73,44 @@ python3 tools/gsp_ak_test.py mon /dev/ttyACM1 115200 run.csv
 | `ESC_IDLE` | main loop | pot/Vbus reads only; PWM module off |
 | `ESC_ARMED` | Timer1 | short hold after START to let GDU stabilize |
 | `ESC_ALIGN` | Timer1 → `SectorPI_OlTick` | force one sector at low duty; rotor locks to known angle |
-| `ESC_OL_RAMP` | Timer1 → `SectorPI_OlTick` | accelerate commutation rate from `INITIAL_STEP_PERIOD` to `MIN_STEP_PERIOD` |
 | `ESC_CLOSED_LOOP` | SCCP3 + PTG | sector PI owns commutation; BEMF feeds the PI |
 | `ESC_FAULT` | main loop | gates off, PWM module off, awaits `CLEAR_FAULT` |
+
+**ALIGN → CL direct startup.** The OL ramp state was removed after
+bench data showed it didn't actually sync the rotor — captures land at
+random positions throughout the ramp. After the ALIGN window expires,
+`SectorPI_OlTick` jumps straight to `EnterCL()` with a conservative seed
+`timerPeriod` (= `INITIAL_STEP_PERIOD × 625/8`). SCCP3 fires the first
+commutation, the rotor swings through one sector under the seed duty,
+and the legacy ZC capture path drives subsequent commutations.
+
+A `piEnabled` gate holds the PI integrator at `seedIntegrator` until
+`CORRIDOR_GOOD_THRESHOLD` (=12) consecutive captures arrive in-corridor,
+or `CL_SETTLE_MS` (=500 ms) times out. This prevents the PI from
+collapsing `timerPeriod` to the floor during the rough first sectors.
+`ESC_STATE_T` still defines `ESC_OL_RAMP` for ABI stability but the
+state is never entered.
 
 ### ISR map
 
 | ISR | Source | IPL | Rate | Job |
 |---|---|---|---|---|
-| `_T1Interrupt` | Timer1 match | 4 | 20 kHz | OL ramp tick, 1 ms `SectorPI_TimeTick`, throttle sample |
+| `_T1Interrupt` | Timer1 match | 4 | 20 kHz | startup tick, 1 ms `SectorPI_TimeTick`, throttle sample |
 | `_AD1CH4Interrupt` | ADC1 ch4 done | 3 | ~60 kHz | POT/Vbus/Ia/Ib/Ibus read, mA conversion, peak tracking |
 | `_PTG0Interrupt` | PTG IRQ step | 4 | ~60 kHz | `ProcessBemfSample()`: deglitch + comparator classification |
 | `_CCT3Interrupt` | SCCP3 period match | 6 | per sector | one-shot guard → `SectorPI_Commutate()` |
-| `_CCT2Interrupt` | SCCP2 IC FIFO | 5 | per edge | drains FIFO (timestamps consumed in Commutate) |
 
 Priority 6 (Commutate) cannot be preempted by anything except CPU
 traps. PTG (4) and ADC (3) yield to it.
+
+**No SCCP IC on AK.** Unlike the CK port, the floating-phase
+comparators are not routed to an IC-capable PPS input on this MCU. The
+ATA6847's digital comparator outputs are read as plain GPIO from inside
+`_PTG0Interrupt` — the PTG schedules the read at the geometric center
+of the clean PWM window, away from switching transients. Earlier
+experiments with hardware edge capture (`FEATURE_HW_ZC_CAPTURE`) and
+the related CLC gating were removed after bench data showed they
+trapped post-commutation chatter; see the architecture note below.
 
 ### Hardware timers
 
@@ -97,7 +118,6 @@ traps. PTG (4) and ADC (3) yield to it.
 |---|---|
 | **SCCP3** | One-shot sector timer. Fires `_CCT3Interrupt` at the scheduled commutation target. `HAL_ComTimer_ScheduleAbsolute(targetHR)` arms it. |
 | **SCCP4** | 1.5625 MHz (640 ns/tick) **HR free-running timer**. All commutation/BEMF timestamps live in this domain — `lastCommHR`, `lastCaptureHR_g`, `targetHR`. |
-| **SCCP2** | Input Capture on the floating-phase comparator. Drained by `_CCT2Interrupt`. |
 | **PTG** | Hardware step queue triggers `_PTG0Interrupt` at every PG1TRIGB match (PWM mid-OFF or mid-ON, selected per fire by duty). Drives the BEMF sampler. |
 | **Timer1** | 50 µs system tick. Drives OL ramp + 1 ms timekeeping. |
 | **PG1/PG2/PG3** | PWM generators. PG1 = master (SOC update), PG2/PG3 = slaves. `MPER = LOOPTIME_TCY` (60 kHz). |
@@ -155,18 +175,22 @@ HAL_ComTimer_ScheduleAbsolute(targetHR)
 ### TAL bands (speed-adaptive scheduler advance)
 
 The **scheduler** uses more advance at higher speed because BEMF
-latency consumes a larger fraction of a short sector:
+latency consumes a larger fraction of a short sector. Two-level table
+matching the CK reference (proven on multiple motors at 60 + 40 kHz):
 
 | `timerPeriod` (HR) | eRPM band | TAL | advance |
 |---|---|---|---|
 | ≥260 | ≤60 k | 2 | 15.0° |
-| 130–260 | 60–120 k | 3 | 22.5° |
-| 100–130 | 120–156 k | 4 | 30.0° |
-| <100 | >156 k | 5 | 37.5° |
+| <260 | >60 k | 3 | 22.5° |
 
 The **PI's `setValue`** uses a separate fixed advance
 (`PHASE_ADVANCE_DEG` — runtime-tunable). Unifying the two destabilizes
 the loop.
+
+An older 4-level table (capping at 37.5°) was experimented with and
+reverted: at 40 kHz PWM the larger advance values exit the PI's stable
+window. The 22.5° cap is a load-bearing constraint for low-PWM
+operation.
 
 ### Block commutation
 
@@ -219,21 +243,26 @@ mid-OFF would desync because the OFF window narrows below ISR-latency
 The BEMF ISR runs four gates in order. A sample only feeds the PI
 when **all four** pass:
 
-1. **`SectorPI_GetPhase() == 3`** — only run in closed loop.
+1. **`SectorPI_GetPhase() >= 2`** — only run in OL_RAMP or CL. (OL_RAMP is dead code today; effectively CL-only.)
 2. **`!captureValid`** — one accepted capture per sector. After Commutate consumes one, the flag re-arms.
 3. **`(nowHR − blankingEndHR) >= 0`** — past blanking. Default blanking = 25% of `actualStepPeriodHR`. Counter: `adcBlankReject`.
-4. **3-read deglitch + polarity gate**: majority-of-3 reads of the floating-phase GPIO must equal `expected = 0`. On the **inverted ATA6847**, `comp=0` is PRE-ZC of a falling sector. Rising sectors stay at `comp=1` for the whole sector, so they don't pass this gate → PI is fed from falling sectors only. Counter: `adcStateMismatch`.
+4. **3-read deglitch + polarity-symmetric gate**: majority-of-3 reads of the floating-phase GPIO must equal `expected = sectorRising ? 1 : 0`. On the **inverted ATA6847**, the PRE-ZC level is `1` for rising sectors and `0` for falling. Counter: `adcStateMismatch`.
 
 When all four gates pass: `lastCaptureHR_g = nowHR; captureValid = true;`
 
-### Why falling-only feed?
+### Polarity-symmetric capture
 
-`piFeedPolarity` is runtime-tunable (`0 = both`, `1 = rising-only`,
-`2 = falling-only`, default `0`). The rising-sector floating phase
-has an asymmetry that traps `comp` at the pre-ZC level for the entire
-sector. Falling-sector samples cleanly cross neutral. With
-`piFeedPolarity = 0` (both) the gate `expected = 0` already selects
-falling because rising sectors never satisfy it.
+The gate matches the CK reference (`expected = isRising ? 1 : 0`).
+This admits captures from both rising and falling sectors when the
+physics allows it. In practice on this hardware at 60 kHz PWM, the
+rising-sector samples consistently land POST-ZC of rising (where
+`comp = 0`) rather than PRE-ZC of rising (where `comp = 1`) — so the
+gate effectively rejects them and falling sectors carry the loop.
+This is a BEMF-physics asymmetry, not a software bug. The
+`postF` telemetry counter (compFalling tally) reports how often
+falling-sector samples pass; the equivalent rising counter was
+removed because it was always zero on this hardware and added no
+information.
 
 ---
 
@@ -244,7 +273,7 @@ falling because rising sectors never satisfy it.
 | Function | Called from | Purpose |
 |---|---|---|
 | `SectorPI_Init` | once at boot | Init HAL, struct defaults, set phase = OFF |
-| `SectorPI_Start(vbusRaw)` | `GarudaService_StartMotor` | Begin ALIGN → OL_RAMP → CL |
+| `SectorPI_Start(vbusRaw)` | `GarudaService_StartMotor` | Begin ALIGN → CL (direct) |
 | `SectorPI_Stop` | `GarudaService_StopMotor` | Float all phases, stop timers |
 | `SectorPI_OlTick` | Timer1 ISR (20 kHz) | OL ramp commutation pacing |
 | `SectorPI_Commutate` | SCCP3 ISR | Run one PI iteration, schedule next sector |
@@ -252,7 +281,7 @@ falling because rising sectors never satisfy it.
 | `SectorPI_CommandSet(amplitude)` | `_T1Interrupt` | Q15 throttle command (0..32767) |
 | `SectorPI_ErpmGet` | telemetry | Current eRPM from `actualStepPeriodHR` |
 | `SectorPI_TelemGet(*out)` | `GSP_TelemTick` | Fill `TELEM_T` snapshot |
-| `SectorPI_GetPhase` | ISRs, service | 0=OFF, 1=ALIGN, 2=OL_RAMP, 3=CL |
+| `SectorPI_GetPhase` | ISRs, service | 0=OFF, 1=ALIGN, 2=OL_RAMP (unused), 3=CL |
 | `SectorPI_IsRunning` | service | `phase != OFF` |
 | `SectorPI_GetCaptureLog` | GSP `PI_LOG` cmd | First 30 PI iterations after CL entry (debug) |
 
@@ -324,9 +353,9 @@ Frame: `[STX=0x02][LEN][CMD][PAYLOAD...][CRC16]` on UART1 @ 115200.
 | `SET_PARAM(id, val)` | host→fw | Write runtime param |
 | `GET_PARAM_LIST(start)` | host→fw | Paginated descriptor table |
 | `PI_LOG` | host→fw | Dump first 30 PI iterations after CL entry |
-| `BEMF_PROBE` | host→fw | Multi-phase BEMF tally dump |
+| `BEMF_PROBE` | host→fw | One-shot BEMF GPIO probe: 7-byte response (per-phase comp, floating-phase index, expected level, current step, polarity flag). |
 | `ATA_DIAG` | host→fw | Read ATA6847 status registers |
-| `TELEM_FRAME` | fw→host | 250-byte snapshot (auto when `TELEM_START` is active) |
+| `TELEM_FRAME` | fw→host | 180-byte snapshot (auto when `TELEM_START` is active) |
 
 ---
 
@@ -405,9 +434,15 @@ make idle torque.
 | `CL_SETTLE_MS` | 500 | seed-integrator floor duration. Too short = PI can shrink `Tp` to floor before motor catches up. |
 | `CL_IDLE_DUTY_PERCENT` | 10 (35 for HiZ) | idle duty when pot=0. |
 | `FEATURE_GSP` | 1 | UART1 is GSP binary protocol. Set 0 to get debug text instead. |
-| `FEATURE_POST_ZC_ACCEPT` | 1 | per-sample post-ZC shadow counters (diag only). |
+| `FEATURE_POST_ZC_ACCEPT` | 1 | per-sample post-ZC shadow counters (diag only — feed `postF` in telemetry). |
 | `FEATURE_MEAS_PI` | 1 | smoothed period tracker (diag/telemetry only). |
 | `MEAS_PI_ALPHA_SHIFT` | 2 | EMA α = 1/4 for the measurement-PI smoother. |
+
+Several experimental flags were removed after their hypotheses were
+disproved on bench: `FEATURE_HW_ZC_CAPTURE`, `FEATURE_HW_ZC_GATED`,
+`FEATURE_HW_ZC_TO_PI`, `FEATURE_ALIGN_TO_CL_DIRECT`. The features
+themselves are either gone (HW ZC capture path) or hard-coded in
+(`ALIGN_TO_CL_DIRECT` is now the only startup path).
 
 ### ADC calibration
 
@@ -421,18 +456,20 @@ make idle torque.
 
 ## Runtime-tunable parameters (GSP)
 
-Seven HOT params changeable while the motor runs (`SET_PARAM` doesn't
+Six HOT params changeable while the motor runs (`SET_PARAM` doesn't
 require IDLE):
 
 | ID | Name | Type | Range | Default | What it does |
 |---|---|---|---|---|---|
-| `0xF0` | `PHASE_ADVANCE_X10` | u16 | 0–300 | 125 (12.5°) | PI's `setValue` advance. Larger = PI assumes ZC arrives earlier in the sector. 5° regresses harder than 10° → partly torque advance, not just latency. |
-| `0xF1` | `PI_KP_SHIFT` | u8 | 0–8 | 2 | Kp = 1/2^N. Larger N = gentler. |
-| `0xF2` | `PI_KI_SHIFT` | u8 | 0–8 | 4 | Ki = 1/2^N. Larger N = slower integrator response. |
+| `0xF0` | `PHASE_ADVANCE_X10` | u16 | 0–300 | 125 (12.5°) | PI's `setValue` advance. Larger = PI assumes ZC arrives earlier in the sector. Compensates for the T_PWM/2 sample-quantization latency in addition to torque advance. |
+| `0xF1` | `PI_KP_SHIFT` | u8 | 1–8 | 2 | Kp = 1/2^N. Larger N = gentler. |
+| `0xF2` | `PI_KI_SHIFT` | u8 | 1–8 | 4 | Ki = 1/2^N. Larger N = slower integrator response. |
 | `0xF3` | `BLANKING_PCT` | u8 | 10–60 | 25 | blanking window as % of `actualStepPeriodHR`. Larger rejects more post-commutate ringing but risks missing fast ZCs. |
 | `0xF4` | `MIN_PERIOD_HR` | u16 | 5–500 | 10 | `timerPeriod` floor. Sets the speed ceiling. |
-| `0xF5` | `PI_FEED_POLARITY` | u8 | 0–2 | 0 | 0 = both, 1 = rising-only, 2 = falling-only. Restricts which sectors feed the PI. |
 | `0xF6` | `TRIGA_POS` | u16 | bit-packed | 0 | bits 0–14 = TRIGA value, bit 15 = CAHALF. Diagnostic — moves the ADC trigger position. |
+
+`0xF5` (`PI_FEED_POLARITY`) was removed when the gate became
+polarity-symmetric — there's nothing for a runtime switch to select.
 
 Read via `GET_PARAM(id) → (id, value)`. Write via `SET_PARAM(id, value) → echo`.
 
@@ -441,10 +478,13 @@ good, edit the compile-time default in `garuda_config.h` and re-flash.
 
 ---
 
-## Telemetry snapshot (250 bytes)
+## Telemetry snapshot (180 bytes)
 
 Emitted at ~10 Hz when `TELEM_START` is active. Decoded by
-`tools/gsp_ak_test.py` and `gui/`.
+`tools/gsp_ak_test.py` and `gui/`. Snapshot was trimmed from
+250 → 180 bytes when several dead diagnostic counters were removed;
+wire offsets were kept stable (removed bytes are zeroed in place) so
+old hosts that read by absolute offset don't crash.
 
 | Offset | Field | Size | Notes |
 |---|---|---|---|
@@ -453,23 +493,26 @@ Emitted at ~10 Hz when `TELEM_START` is active. Decoded by
 | 10..27 | amplitude%, Vbus, Ia/Ib/Ibus peaks | mixed | live electricals |
 | 28..39 | lastCapValue, PI delta, captures, runs | u16×4 | inner-loop diag |
 | 40..47 | systemTick, uptime | u32×2 | timekeeping |
-| 48..63 | adcBlankReject, adcStateMismatch, adcCaptureSet, adcSetRising | u32×4 | BEMF gate counters |
-| 64..71 | zero pad (was offMid*) | — | reserved |
-| 72..91 | ptgFires + 4 unused per-polarity slots | u32×5 | PTG-side diag |
+| 48..59 | adcBlankReject, adcStateMismatch, adcCaptureSet | u32×3 | BEMF gate counters |
+| 60..71 | zero pad (was adcSetRising + offMid slots) | — | reserved |
+| 72..75 | ptgFires | u32 | PTG heartbeat |
+| 76..91 | zero pad (was per-polarity PTG counters) | — | reserved |
 | 92..107 | diagPiFedRising/Miss, diagPiFedFalling/Miss | u32×4 | per-polarity PI feed |
 | 108..109 | tMeasHR | u16 | smoothed period |
 | 110..113 | sectorCount | u32 | total commutations |
 | 114..145 | current peak block + at-fault frozen snapshot | mixed | post-fault forensics |
 | 146..155 | elapsed accept/reject per polarity + filterHR | u16×5 | mechanism probe |
-| 156..171 | comp × polarity tally | u32×4 | physics vs software bug |
+| 156..163 | zero pad (was compRising_High/Low) | — | reserved |
+| 164..171 | compFalling_High/Low | u32×2 | feeds `postF` ratio in telemetry |
 | 172..175 | ptgSkipped | u32 | postscale counter |
-| 176..199 | sectorHits[0..5] | u32×6 | all-6-positions validation |
-| 200..211 | bemfTallyTotal[0..5] | u16×6 | multi-phase tally totals |
-| 212..247 | bemfTally[sector][phase] | u16×6×3 | comp=1 per (sector, phase) |
-| 248..249 | fpStaleCount | u16 | atomic-write race detector |
+| 176..177 | mainHb | u16 | main-loop heartbeat (low 16 bits of `gMainLoopHb`) |
+| 178..179 | reserved | — | snapshot pad |
 
-Per-window counters (`bemfTally*`, `fpStaleCount`) are zeroed after
-copy, so each frame is a fresh ~100 ms delta.
+`sectorHits[0..5]`, `bemfTally`, `bemfTallyTotal`, `fpStaleCount`, and
+the multi-phase BEMF probe were removed entirely (variables + ISR
+work + telemetry slots). The probe used 3 GPIO reads + 4 counter
+writes per PTG fire and never carried information after the
+sector-snapshot atomic-write invariant was proven correct.
 
 ---
 
@@ -505,12 +548,12 @@ copy, so each frame is a fresh ~100 ms delta.
 1. Build with the right `MOTOR_PROFILE` for your motor.
 2. Connect the GUI or `tools/gsp_ak_test.py mon`.
 3. Start the motor. Watch:
-   - `pR` / `pF` percentages — should be ~3% / ~95% in steady state with default falling-feed.
-   - `fpStale` — should be <5%. Higher means atomic-write invariant is broken somewhere.
+   - `pR` / `pF` percentages — should be ~0% / ~95–100% in steady state (rising-sector samples land POST-ZC on AK and don't satisfy the gate; falling carries the loop).
+   - `postF` (in the bottom diag block) — should be 80–95% across the speed range; this is the real BEMF-detection success indicator.
    - `stl` (stall counter) — should stay near 0.
 4. Live-tune from the GUI:
    - **Stalls at idle** → raise `BLANKING_PCT` (0xF3) toward 30–35.
    - **Hunts / oscillates** → raise `PI_KI_SHIFT` (0xF2) toward 5–6, or `PI_KP_SHIFT` (0xF1) toward 3.
-   - **Walls below `MAX_CLOSED_LOOP_ERPM`** → try `PHASE_ADVANCE_X10` (0xF0) between 100 and 250.
-   - **High-speed desync** → keep `PHASE_ADVANCE_X10` ≤ 200 and verify the TAL bands at top end.
+   - **Walls below `MAX_CLOSED_LOOP_ERPM`** → try `PHASE_ADVANCE_X10` (0xF0) between 100 and 200. Higher advance compensates for both torque-advance and sample-quantization latency at high speed.
+   - **High-speed desync** → keep `PHASE_ADVANCE_X10` ≤ 200 and verify the TAL bands cap at 22.5°.
 5. Once happy, edit the matching `garuda_config.h` default and re-flash. Runtime values don't persist.

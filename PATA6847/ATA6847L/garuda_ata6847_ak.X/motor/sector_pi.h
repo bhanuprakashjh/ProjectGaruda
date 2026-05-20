@@ -44,18 +44,13 @@ typedef struct {
     uint32_t adcBlankReject;        /* ADC fired pre-blanking-end */
     uint32_t adcStateMismatch;      /* past blanking, GPIO != expected */
     uint32_t adcCaptureSet;         /* set captureValid (candidate) */
-    uint32_t adcSetRising;          /* subset of adcCaptureSet on rising-ZC sectors (0,2,4) */
     uint32_t commutateNoCapture;    /* Commutate found capValue == SENTINEL */
-    uint32_t ptgFires;              /* V5.0: _PTG0Interrupt fire count */
-    uint32_t ptgRisingAcc;          /* V5.0: rising-sector samples post-ZC */
-    uint32_t ptgRisingRej;
-    uint32_t ptgFallingAcc;         /* V5.0: falling-sector samples post-ZC */
-    uint32_t ptgFallingRej;
-    uint32_t postZcRisingAcc;       /* V5.1: ADC ISR post-ZC shadow counters */
+    uint32_t ptgFires;              /* _PTG0Interrupt fire count (heartbeat) */
+    uint32_t postZcRisingAcc;       /* ADC ISR post-ZC shadow counters */
     uint32_t postZcRisingRej;
     uint32_t postZcFallingAcc;
     uint32_t postZcFallingRej;
-    uint16_t tMeasHR;               /* V5.2: smoothed commutation interval */
+    uint16_t tMeasHR;               /* smoothed commutation interval */
 } TELEM_T;
 
 void     SectorPI_Init(void);
@@ -93,6 +88,18 @@ extern volatile uint16_t g_pwmPer;
  *   bits 3..4  floatingPhase  (0..2)
  *   bit  5     ptgExpectedComp (0..1) */
 extern volatile uint16_t sectorSnap;
+
+/* SCCP4-domain timestamp of the most recent commutation. Read-only
+ * outside SectorPI_Commutate. */
+extern volatile uint16_t lastCommHR;
+
+/* Latest accepted BEMF capture (SCCP4 HR domain). Written by
+ * ProcessBemfSample when its deglitch + polarity gate accepts a
+ * sample; consumed by SectorPI_OlTick and SectorPI_Commutate. The
+ * captureValid flag re-arms (cleared) after each Commutate consumes
+ * the timestamp. */
+extern volatile uint16_t lastCaptureHR_g;
+extern volatile bool     captureValid;
 
 #define SECTOR_SNAP_SECT(w)  ((uint8_t)((w) & 0x7u))
 #define SECTOR_SNAP_FP(w)    ((uint8_t)(((w) >> 3) & 0x3u))

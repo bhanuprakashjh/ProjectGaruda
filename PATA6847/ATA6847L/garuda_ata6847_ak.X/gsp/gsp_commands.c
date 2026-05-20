@@ -15,7 +15,6 @@
 #include "../motor/sector_pi.h"
 #include "../motor/motor_params.h"
 #include "../hal/hal_ata6847.h"
-#include "../hal/hal_capture.h"
 #include "../hal/port_config.h"
 
 extern volatile ESC_STATE_T gEscState;
@@ -247,7 +246,10 @@ void GSP_DispatchCommand(uint8_t cmdId, const uint8_t *payload, uint8_t payloadL
             probe[3] = floatingPhase;
             probe[4] = ptgExpectedComp;
             probe[5] = (uint8_t)SectorPI_GetPhase();
-            probe[6] = HAL_Capture_IsRisingZc() ? 1u : 0u;
+            /* Rising-ZC sectors are the ones where ptgExpectedComp==0
+             * (BEMF crosses up → inverted comparator goes 1→0, so the
+             * post-ZC expected level is 0). */
+            probe[6] = (SECTOR_SNAP_EXP(sectorSnap) == 0u) ? 1u : 0u;
             GSP_SendResponse(GSP_CMD_BEMF_PROBE, probe, sizeof(probe));
             break;
         }
@@ -303,16 +305,23 @@ void GSP_TelemTick(void)
     if ((now - telemLastTick) < 100) return;
     telemLastTick = now;
 
-    /* 252-byte telemetry snapshot consumed by pot_capture.py / GUI.
+    /* 180-byte telemetry snapshot consumed by pot_capture.py / GUI.
+     * Trimmed 2026-05-19 from 254 → 180 bytes to reduce UART congestion
+     * (was 258-byte frames at 115200 baud → 22ms/frame, contributing to
+     * dropped frames at high CPU load). Dropped fields: sectHit[6] (24B),
+     * bemfTallyTotal (12B), bemfTally (36B), fpStaleCount (2B). The
+     * dropped fields were only consumed in the end-of-run summary table,
+     * not the per-frame live decode line.
+     *
      * Wire layout (offsets are into `snap[]`, not `d[]`):
-     *   snap[0..1]   = seq
-     *   snap[2..249] = d[0..247] — fixed-offset diagnostic fields below
-     *   snap[250..251] = fpStaleCount (d[248..249])
-     * snap[252] would be OOB — keep this array sized strictly. */
+     *   snap[0..1]    = seq
+     *   snap[2..175]  = d[0..173] — live-decode diagnostic fields
+     *   snap[176..177] = d[174..175] — ptgSkipped low 16 (was uint32)
+     *   snap[178..179] = d[176..177] — gMainLoopHb low16 (heartbeat) */
     TELEM_T t;
     SectorPI_TelemGet(&t);
 
-    uint8_t snap[252];
+    uint8_t snap[180];
     memset(snap, 0, sizeof(snap));
 
     /* Seq counter (2 bytes) */
@@ -392,23 +401,20 @@ void GSP_TelemTick(void)
     uint32_t uptime = gSystemTick / 1000;
     memcpy(&d[44], &uptime, 4);              /* uptime */
 
-    /* Capture-rate diagnostics (offset 48-63). 32-bit because the BEMF
+    /* Capture-rate diagnostics (offset 48-75). 32-bit because the BEMF
      * ISR fires at ~60 kHz and uint16 would wrap every ~1.1 s.
      *   adcBlankReject  : sample fired pre-blanking-end
      *   adcStateMismatch: past blanking, GPIO != expected post-ZC
      *   adcCaptureSet   : total captures (all 6 sectors)
-     *   adcSetRising    : subset on rising-ZC sectors (0,2,4)
-     * Wire slots d[64]/d[68] kept as zero pads for layout stability. */
+     * Slots d[60..71] held adcSetRising + ptg-polarity counters that
+     * are gone; zeroed for wire-layout stability. d[72] keeps ptgFires
+     * as a free-running heartbeat. */
     memcpy(&d[48], &t.adcBlankReject,   4);
     memcpy(&d[52], &t.adcStateMismatch, 4);
     memcpy(&d[56], &t.adcCaptureSet,    4);
-    memcpy(&d[60], &t.adcSetRising,     4);
-    { uint32_t zero = 0; memcpy(&d[64], &zero, 4); memcpy(&d[68], &zero, 4); }
-    memcpy(&d[72], &t.ptgFires,         4);  /* PTG ISR fire count */
-    memcpy(&d[76], &t.ptgRisingAcc,     4);  /* per-polarity shadow (unused) */
-    memcpy(&d[80], &t.ptgRisingRej,     4);
-    memcpy(&d[84], &t.ptgFallingAcc,    4);
-    memcpy(&d[88], &t.ptgFallingRej,    4);
+    memset(&d[60], 0, 12);                   /* adcSetRising + 2 pad slots */
+    memcpy(&d[72], &t.ptgFires,         4);  /* PTG ISR heartbeat */
+    memset(&d[76], 0, 16);                   /* removed ptg-polarity counters */
 
     /* Per-polarity PI-feed accounting (host computes pR/pF % from these).
      *   d[92]  = diagPiFedRising  (rising sector accepted into PI)
@@ -479,14 +485,13 @@ void GSP_TelemTick(void)
         memcpy(&d[154], &diagFilterHRLast,         2);
     }
 
-    /* Capture-layer probe — comp value × sector polarity, past blanking.
-     * Distinguishes physics asymmetry (comp never leaves pre-ZC state)
-     * from a software bug (accept logic discards a valid post-ZC sample). */
+    /* Capture-layer probe — falling-sector comp tally only. The host's
+     * `postF` ratio reads d[164]/d[168]. Slots d[156..163] held the
+     * rising-sector counterparts that were always ~100% Low / 0% High
+     * on AK (sample lands POST-ZC of rising — pure physics, no info). */
     {
-        extern volatile uint32_t compRising_High,  compRising_Low;
         extern volatile uint32_t compFalling_High, compFalling_Low;
-        memcpy(&d[156], &compRising_High,  4);
-        memcpy(&d[160], &compRising_Low,   4);
+        memset(&d[156], 0, 8);   /* compRising_High/Low removed */
         memcpy(&d[164], &compFalling_High, 4);
         memcpy(&d[168], &compFalling_Low,  4);
     }
@@ -498,41 +503,17 @@ void GSP_TelemTick(void)
         memcpy(&d[172], &ptgSkipped, 4);
     }
 
-    /* Per-sector hit counters — 6 × uint32. Validates that all 6
-     * commutation positions actually fire (an even/odd-only pattern
-     * would mean position is incrementing by 2 somewhere). */
+    /* Main-loop heartbeat — uint16 (lower 16 bits) at d[176..177].
+     * Increments every iteration of main()'s while(1). Diagnoses main-
+     * loop starvation: if telemetry frames pause but this counter still
+     * advances between received frames, main loop is alive and the
+     * stall is in TelemTick rate-limiting or TX path. If the counter
+     * freezes across the stall, main loop itself is blocked. uint16
+     * wraps every 65k iterations — fine for seconds-long stall diagnosis. */
     {
-        extern volatile uint32_t sectorHits[6];
-        memcpy(&d[176], (const void *)sectorHits, 24);
-    }
-
-    /* Multi-phase BEMF tally:
-     *   d[200..211]: bemfTallyTotal[6]    (6 × uint16)
-     *   d[212..247]: bemfTally[6][3]      (6 × 3 × uint16)
-     * Host computes comp=1/total ratio per (sector, phase) to detect
-     * phase-mapping bugs (ratio at 0% or 100% on the supposed floating
-     * phase = bug; (10..90)% = actually floating).
-     *
-     * Tallies are reset after copy so each frame is a fresh delta over
-     * the ~50 ms inter-snapshot window. Without the reset, uint16 wraps
-     * before one window completes at 60 kHz PWM. */
-    {
-        extern volatile uint16_t bemfTally[6][3];
-        extern volatile uint16_t bemfTallyTotal[6];
-        memcpy(&d[200], (const void *)bemfTallyTotal, 12);
-        memcpy(&d[212], (const void *)bemfTally,      36);
-        memset((void *)bemfTallyTotal, 0, sizeof(bemfTallyTotal));
-        memset((void *)bemfTally,      0, sizeof(bemfTally));
-    }
-
-    /* Stale-floatingPhase diagnostic — uint16 at d[248..249], per-window
-     * count of PTG fires (past blanking) where floatingPhase disagreed
-     * with commutationTable[currentSector].floatingPhase. Reset
-     * alongside the tally. */
-    {
-        extern volatile uint16_t fpStaleCount;
-        memcpy(&d[248], (const void *)&fpStaleCount, 2);
-        fpStaleCount = 0;
+        extern volatile uint32_t gMainLoopHb;
+        uint16_t hbLow = (uint16_t)(gMainLoopHb & 0xFFFFu);
+        memcpy(&d[176], &hbLow, 2);
     }
 
     /* Reset rolling peaks for next 20 ms window. Seed with current

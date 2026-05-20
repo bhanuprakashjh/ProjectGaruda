@@ -145,6 +145,7 @@ void __attribute__((interrupt, no_auto_psv)) _PTG0Interrupt(void)
      * One position per fire (not both simultaneously). Hysteresis band
      * ±5% around 50% to avoid chatter when PI hunts across the boundary. */
     ProcessBemfSample();
+
     {
         extern volatile uint16_t g_pwmActualDuty;
         static uint8_t lastWasMidOn = 0;   /* sticky for hysteresis */

@@ -132,52 +132,12 @@ SNAPSHOT_FIELDS = [
     # PTG postscale experiment: count of fires that bypassed
     # V4_ProcessBemfSample(). Effective sample rate = (ptgFires-ptgSkipped)/sec.
     ('ptgSkipped',       174, '<I', 1,     '',     'PTG postscaled-out fires'),
-    # 2026-05-15 — per-sector hit counters from sector_pi.c. Tell us
-    # whether all 6 commutation positions actually fire, or only half
-    # (s0/2/4 stuck at 0 → position++ is +2 somewhere → pR=0% explained).
-    ('sectHit0',         178, '<I', 1,     '',     'commutate hits at position 0'),
-    ('sectHit1',         182, '<I', 1,     '',     'commutate hits at position 1'),
-    ('sectHit2',         186, '<I', 1,     '',     'commutate hits at position 2'),
-    ('sectHit3',         190, '<I', 1,     '',     'commutate hits at position 3'),
-    ('sectHit4',         194, '<I', 1,     '',     'commutate hits at position 4'),
-    ('sectHit5',         198, '<I', 1,     '',     'commutate hits at position 5'),
-    # 2026-05-15 — multi-phase BEMF tally.
-    #   total[6]:           per-sector post-blanking fires
-    #   tally[6][3]:        per-sector × per-phase count of comp=1
-    # Ratio comp=1/total per (sector, phase) tells us if the phase the
-    # firmware *thinks* is floating in sector S matches what's actually
-    # transitioning.  0% or 100% = driven phase (likely bug); 10..90% =
-    # actually floating.
-    # bTot/bS offsets follow the firmware's d[200..247] = snap[202..249].
-    # The previous table had bTot0 at 200, which overlapped sectHit5's
-    # high half and shifted every bemf-tally field by 2 — see fix in
-    # gsp_commands.c that also extended snap[] to 252 to give fpStale a
-    # legal home at snap[250..251].
-    ('bTot0',            202, '<H', 1,     '',     'sector 0 post-blanking fires'),
-    ('bTot1',            204, '<H', 1,     '',     'sector 1 post-blanking fires'),
-    ('bTot2',            206, '<H', 1,     '',     'sector 2 post-blanking fires'),
-    ('bTot3',            208, '<H', 1,     '',     'sector 3 post-blanking fires'),
-    ('bTot4',            210, '<H', 1,     '',     'sector 4 post-blanking fires'),
-    ('bTot5',            212, '<H', 1,     '',     'sector 5 post-blanking fires'),
-    ('bS0A',             214, '<H', 1,     '',     'sector 0, phase A, comp=1 count'),
-    ('bS0B',             216, '<H', 1,     '',     'sector 0, phase B, comp=1 count'),
-    ('bS0C',             218, '<H', 1,     '',     'sector 0, phase C, comp=1 count'),
-    ('bS1A',             220, '<H', 1,     '',     'sector 1, phase A, comp=1 count'),
-    ('bS1B',             222, '<H', 1,     '',     'sector 1, phase B, comp=1 count'),
-    ('bS1C',             224, '<H', 1,     '',     'sector 1, phase C, comp=1 count'),
-    ('bS2A',             226, '<H', 1,     '',     'sector 2, phase A, comp=1 count'),
-    ('bS2B',             228, '<H', 1,     '',     'sector 2, phase B, comp=1 count'),
-    ('bS2C',             230, '<H', 1,     '',     'sector 2, phase C, comp=1 count'),
-    ('bS3A',             232, '<H', 1,     '',     'sector 3, phase A, comp=1 count'),
-    ('bS3B',             234, '<H', 1,     '',     'sector 3, phase B, comp=1 count'),
-    ('bS3C',             236, '<H', 1,     '',     'sector 3, phase C, comp=1 count'),
-    ('bS4A',             238, '<H', 1,     '',     'sector 4, phase A, comp=1 count'),
-    ('bS4B',             240, '<H', 1,     '',     'sector 4, phase B, comp=1 count'),
-    ('bS4C',             242, '<H', 1,     '',     'sector 4, phase C, comp=1 count'),
-    ('bS5A',             244, '<H', 1,     '',     'sector 5, phase A, comp=1 count'),
-    ('bS5B',             246, '<H', 1,     '',     'sector 5, phase B, comp=1 count'),
-    ('bS5C',             248, '<H', 1,     '',     'sector 5, phase C, comp=1 count'),
-    ('fpStale',          250, '<H', 1,     '',     'PTG fires where snapshot fp != table'),
+    # 2026-05-19 — frame trimmed to 180 bytes (was 254). Dropped fields
+    # that were only used in the Ctrl-C summary, not the per-frame line:
+    #   sectHit0..5 (d[176..199], 24B), bTot0..5 (d[200..211], 12B),
+    #   bS0A..S5C (d[212..247], 36B), fpStale (d[248..249], 2B).
+    # mainHb moved from d[250..251] to d[176..177].
+    ('mainHb',           178, '<H', 1,     '',     'main-loop heartbeat (low16 of free-running counter)'),
 ]
 
 
@@ -241,11 +201,6 @@ def decode_telem(buf: bytes) -> str:
     # Phase peak in this snapshot window (|max| or |min|, whichever bigger).
     iaPk_A = max(abs(s['iaPkMax_A']), abs(s['iaPkMin_A']))
     ibPk_A = max(abs(s['ibPkMax_A']), abs(s['ibPkMin_A']))
-    # Per-sector hit counters — diagnostic for "step always odd" anomaly.
-    # If even (0/2/4) stay at 0 while odd (1/3/5) climb, position is
-    # incrementing by 2 somewhere and rising-sector BEMF never runs.
-    sh = [s.get(f'sectHit{i}', 0) for i in range(6)]
-    sect_str = "/".join(_kfmt(x).strip() for x in sh)
     return (f"#{s['seq']:5d} {name} s{s['step']} "
             f"pot={s['potRaw']:4d} d={s['dutyPct']:3d}%{duty_tag} "
             f"amp={s['amp_pct']:5.1f}% "
@@ -261,7 +216,7 @@ def decode_telem(buf: bytes) -> str:
             f"fH{s['filterHRLast']:5d} | "
             f"preR{s['preR_pct']:3d}% postF{s['postF_pct']:3d}% "
             f"skip={_kfmt(s['ptgSkipped'])} "
-            f"sect[{sect_str}]")
+            f"hb={s.get('mainHb', 0):5d}")
 
 def read_frames(ser, want_cmd: int, count: int, timeout_s: float = 3.0):
     """Read `count` frames matching want_cmd or until timeout. Yields (cmd, payload)."""
@@ -321,10 +276,15 @@ def live_monitor(port: str, baud: int, csv_path: str = None):
                 # 202 = with per-sector hit probe at d[176..199]
                 # 250 = multi-phase BEMF tally (firmware before the OOB fix
                 #       wrote fpStale OOB — that build was technically UB)
-                # 252 = current firmware: snap[] sized correctly, fpStale
-                #       lands at snap[250..251], bTot/bS offsets repaired
-                if len(payload) >= 252:
-                    tag = "(NEW — fpStale fixed, bTot/bS offsets repaired)"
+                # 180 = current firmware (trimmed): heartbeat at snap[178..179]
+                # 254 = older firmware: full snapshot with bemf tally
+                # 252 = older firmware: fpStale at snap[250..251]
+                if len(payload) >= 254:
+                    tag = "(OLD-254 — full snap with bemfTally; trimmed in newer fw)"
+                elif len(payload) >= 180:
+                    tag = "(NEW — trimmed 180B snap, heartbeat at snap[178..179])"
+                elif len(payload) >= 252:
+                    tag = "(OLD-252 — no heartbeat, hb=0)"
                 elif len(payload) >= 250:
                     tag = "(OLD-250 — fpStale may be torn, bTot misaligned)"
                 elif len(payload) >= 202:
@@ -339,7 +299,62 @@ def live_monitor(port: str, baud: int, csv_path: str = None):
             snap = parse_snapshot(payload)
             snap['host_t_ms'] = int((time.time() - t0) * 1000)
             rows.append(snap)
-            print(f"{decode_telem(payload)} pot[{pot_min}..{pot_max}]")
+            # HWZC diag piggyback — fire 0x90 every ~10 frames so we see
+            # SCCP1 IC capture state while the motor is running, without
+            # needing a second terminal.
+            hwzc_line = ""
+            if (len(rows) % 10) == 0:
+                try:
+                    s.write(frame(0x90)); s.flush()
+                    time.sleep(0.02)
+                    rx = s.read(s.in_waiting or 1)
+                    time.sleep(0.02); rx += s.read(s.in_waiting)
+                    parsed = parse_reply(rx)
+                    if parsed and parsed[0] == 0x90 and len(parsed[1]) == 250:
+                        d = parsed[1]
+                        cnt = struct.unpack_from('<I', d, 0)[0]
+                        pre, ov, xe = struct.unpack_from('<III', d, 4)
+                        le, lb, be = struct.unpack_from('<HHH', d, 16)
+                        a, _b, _c = struct.unpack_from('<III', d, 24)
+                        sh = struct.unpack_from('<IIIIII', d, 36)
+                        # s1-elapsed histogram: 16 u32 at offset 60.
+                        # Bin n = lE in [n*128, (n+1)*128). lE > 2047 → wrap.
+                        hist = struct.unpack_from('<16I', d, 60)
+                        wrap = struct.unpack_from('<I', d, 124)[0]
+                        drained = struct.unpack_from('<I', d, 128)[0]
+                        garm, gos = struct.unpack_from('<II', d, 132)
+                        # Phase 3b wrap-diagnosis fields
+                        eih = struct.unpack_from('<16I', d, 140)
+                        eihuge = struct.unpack_from('<I', d, 204)[0]
+                        leiR, lciR, weHR, wlcHR, wiHR = struct.unpack_from(
+                            '<HHHHH', d, 208)
+                        # Phase 4-diag pair fields (offset 220)
+                        llR, llF, lhR, lhF = struct.unpack_from('<HHHH', d, 220)
+                        lvR, lvF, hvR, hvF = struct.unpack_from('<IIII', d, 228)
+                        # Stage A OL fields (offset 244)
+                        olIn, olOut, olLast = struct.unpack_from('<HHH', d, 244)
+                        eih_s = "/".join(_kfmt(x) for x in eih)
+                        hist_s = "/".join(_kfmt(x) for x in hist)
+                        # Compact "pair" string: legacy vs hwzc latest elapsed per polarity.
+                        # 0xFFFF = "no capture yet" → render as "-".
+                        def _ll(v): return "-" if v == 0xFFFF else str(v)
+                        hwzc_line = (f" | HW cnt={_kfmt(cnt)} prB={_kfmt(pre)}"
+                                     f" xE={_kfmt(xe)} A={a} lE={le}"
+                                     f" sec[{_kfmt(sh[0])}/{_kfmt(sh[1])}/{_kfmt(sh[2])}"
+                                     f"/{_kfmt(sh[3])}/{_kfmt(sh[4])}/{_kfmt(sh[5])}]"
+                                     f" lEh[{hist_s}] wrap={_kfmt(wrap)} drn={_kfmt(drained)}"
+                                     f" gArm={_kfmt(garm)} gOS={_kfmt(gos)}"
+                                     f" e2i={leiR} c2i={lciR}"
+                                     f" eih[{eih_s}]+H{_kfmt(eihuge)}"
+                                     f" W(e={weHR},c={wlcHR},n={wiHR})"
+                                     f" pair[R lg={_ll(llR)}/hw={_ll(lhR)}"
+                                     f" F lg={_ll(llF)}/hw={_ll(lhF)}]"
+                                     f" pairN[R l={_kfmt(lvR)}/h={_kfmt(hvR)}"
+                                     f" F l={_kfmt(lvF)}/h={_kfmt(hvF)}]"
+                                     f" OL[in={olIn} out={olOut} lE={olLast}]")
+                except Exception:
+                    pass
+            print(f"{decode_telem(payload)} pot[{pot_min}..{pot_max}]{hwzc_line}")
     except KeyboardInterrupt:
         pass
     finally:
@@ -491,6 +506,124 @@ def bemf_probe(port: str, baud: int, count: int = 1):
             time.sleep(0.8)
     s.close()
 
+def hwzc_diag(port: str, baud: int, count: int = 1, interval_s: float = 0.2):
+    """Poll GSP_CMD_HWZC_DIAG (0x90) and decode the 250-byte HWZC_DIAG_T.
+
+    Wire layout (little-endian, 250 bytes):
+      uint32 count, dropPreBlank, dropFifoOv, dropExtraEdge       [0-15]
+      uint16 lastElapsed, lastRawBuf, blankingEndHR, pad           [16-23]
+      uint32 phaseA, phaseB, phaseC                                [24-35]
+      uint32 secHit[6]                                             [36-59]
+      uint32 elapsedHist[16]   (lE: 128 HR/bin, 0-2047)            [60-123]
+      uint32 lEhugeWrap                                            [124-127]
+      uint32 fifoDrained                                           [128-131]
+      uint32 gatedArms, gatedOneShot                               [132-139]
+      uint32 edgeIsrHist[16]   (8 HR/bin, 0-127)                   [140-203]
+      uint32 edgeIsrHuge       (count of edge_to_isr > 127 HR)     [204-207]
+      uint16 lastEdgeToIsr, lastCommToIsr                          [208-211]
+      uint16 wrapEdgeHR, wrapLastCommHR, wrapIsrNowHR, pad2        [212-219]
+      uint16 latestLegacyElapsedRising/Falling                     [220-223]
+      uint16 latestHwzcElapsedRising/Falling                       [224-227]
+      uint32 legacyValidRising/Falling                             [228-235]
+      uint32 hwzcValidRising/Falling                               [236-243]
+      uint16 olCapInCorridor, olCapOutOfCorridor, olLastElapsedHR  [244-249]
+    """
+    s = serial.Serial(port, baud, timeout=0.5)
+    time.sleep(0.2); s.reset_input_buffer()
+    print(f"Opening {port} @ {baud}  — {count} HWZC diag read(s)")
+    print(f"{'#':>4} {'count':>8} {'preBlnk':>8} {'xEdge':>6} "
+          f"{'lastE':>5} {'lastBuf':>7} {'A':>5} "
+          f"{'s0':>7} {'s1':>7} {'s2':>7} {'s3':>7} {'s4':>7} {'s5':>7}")
+    for i in range(count):
+        s.write(frame(0x90)); s.flush()
+        time.sleep(0.1)
+        rx = s.read(s.in_waiting or 1)
+        time.sleep(0.05); rx += s.read(s.in_waiting)
+        parsed = parse_reply(rx)
+        if not parsed or parsed[0] != 0x90 or len(parsed[1]) != 250:
+            print(f"  bad reply (len={len(parsed[1]) if parsed else 0}): {rx.hex()}")
+        else:
+            d = parsed[1]
+            cnt, pre, ov, xe = struct.unpack_from('<IIII', d, 0)
+            le, lb, be, _pad = struct.unpack_from('<HHHH', d, 16)
+            pa, pb, pc = struct.unpack_from('<III', d, 24)
+            sh = struct.unpack_from('<IIIIII', d, 36)
+            hist = struct.unpack_from('<16I', d, 60)
+            wrap = struct.unpack_from('<I', d, 124)[0]
+            drained = struct.unpack_from('<I', d, 128)[0]
+            garm, gos = struct.unpack_from('<II', d, 132)
+            eih = struct.unpack_from('<16I', d, 140)
+            eihuge = struct.unpack_from('<I', d, 204)[0]
+            leiR, lciR = struct.unpack_from('<HH', d, 208)
+            weHR, wlcHR, wiHR, _pad2 = struct.unpack_from('<HHHH', d, 212)
+            # Phase 4-diag pair fields
+            llR, llF, lhR, lhF = struct.unpack_from('<HHHH', d, 220)
+            lvR, lvF, hvR, hvF = struct.unpack_from('<IIII', d, 228)
+            # Stage A OL fields
+            olIn, olOut, olLast = struct.unpack_from('<HHH', d, 244)
+            print(f"{i:>4} {cnt:>8} {pre:>8} {xe:>6} "
+                  f"{le:>5} {lb:>7} {pa:>5} "
+                  f"{sh[0]:>7} {sh[1]:>7} {sh[2]:>7} {sh[3]:>7} {sh[4]:>7} {sh[5]:>7}")
+            print(f"      fifoDrained = {drained}  gatedArms = {garm}  gatedOneShot = {gos}")
+            # Phase 3b: edge_to_isr histogram (8 HR/bin → 0-127 HR)
+            eih_total = sum(eih) + eihuge
+            print(f"      edge_to_isr histogram (lastEdgeToIsr={leiR} HR, "
+                  f"lastCommToIsr={lciR} HR, total={eih_total}):")
+            for b, c in enumerate(eih):
+                lo = b * 8
+                hi = lo + 7
+                label = f"{lo:>3}-{hi:<3}"
+                pct = (100.0 * c / eih_total) if eih_total else 0.0
+                bar = "#" * int(pct / 2)
+                print(f"        [{b:>2}] {label} HR  {c:>7}  {pct:5.1f}%  {bar}")
+            pct_h = (100.0 * eihuge / eih_total) if eih_total else 0.0
+            bar_h = "#" * int(pct_h / 2)
+            print(f"        [HU] >127   HR  {eihuge:>7}  {pct_h:5.1f}%  {bar_h}")
+            # Wrap snapshot — compute the deltas by hand for the postmortem.
+            wrap_lE      = (weHR - wlcHR) & 0xFFFF
+            wrap_e2i     = (wiHR - weHR)  & 0xFFFF
+            wrap_c2i     = (wiHR - wlcHR) & 0xFFFF
+            print(f"      latest wrap snapshot:")
+            print(f"        edgeHR={weHR}  lastCommHR={wlcHR}  isrNowHR={wiHR}")
+            print(f"        wrap lE       = (edgeHR - lastCommHR) = {wrap_lE}  (expect huge if real wrap)")
+            print(f"        edge_to_isr   = (isrNowHR - edgeHR)   = {wrap_e2i}  (small=ISR fast; huge=FIFO stale or timer mismatch)")
+            print(f"        comm_to_isr   = (isrNowHR - lastComm) = {wrap_c2i}  (small=Commutate just fired; race)")
+            # Phase 4-diag pair comparison: legacy vs hwzc elapsed per polarity.
+            # When both paths see the same physical ZC, the two values should
+            # be within a few HR of each other. Large divergence (one near 0
+            # or near sector-end while the other is at T/2 + advance) means
+            # the hwzc path is capturing chatter, not real BEMF.
+            def _ll2(v): return "    -" if v == 0xFFFF else f"{v:>5}"
+            print(f"      pair comparison (legacy vs hwzc elapsed, HR):")
+            print(f"        Rising  : legacy={_ll2(llR)}  hwzc={_ll2(lhR)}  "
+                  f"count[legacy={lvR}  hwzc={hvR}]")
+            print(f"        Falling : legacy={_ll2(llF)}  hwzc={_ll2(lhF)}  "
+                  f"count[legacy={lvF}  hwzc={hvF}]")
+            # Stage A: OL-ramp ZC observation. olIn (corridor hits) is
+            # the evidence the rotor is locked to the forced commutation.
+            ol_total = olIn + olOut
+            ol_ratio = (100.0 * olIn / ol_total) if ol_total else 0.0
+            print(f"      OL-ramp ZC observation:")
+            print(f"        in-corridor  = {olIn}  out-of-corridor = {olOut}  "
+                  f"last elapsed = {olLast} HR  in-ratio = {ol_ratio:.1f}%")
+            # Histogram visualization: bin label = HR range, count, bar
+            total = sum(hist) + wrap
+            in_range = sum(hist)
+            print(f"      lE histogram (s1 only, in-range={in_range}, wrap={wrap}, total={total}):")
+            for b, c in enumerate(hist):
+                lo = b * 128
+                hi = f"{lo+127}"
+                label = f"{lo:>4}-{hi:<4}"
+                pct = (100.0 * c / total) if total else 0.0
+                bar = "#" * int(pct / 2)  # 50% = 25 chars
+                print(f"        [{b:>2}] {label} HR  {c:>7}  {pct:5.1f}%  {bar}")
+            pct_w = (100.0 * wrap / total) if total else 0.0
+            bar_w = "#" * int(pct_w / 2)
+            print(f"        [WR] >2047    HR  {wrap:>7}  {pct_w:5.1f}%  {bar_w}")
+        if i < count - 1:
+            time.sleep(interval_s)
+    s.close()
+
 def main():
     if len(sys.argv) > 1 and sys.argv[1] == "bemf":
         port = sys.argv[2] if len(sys.argv) > 2 else '/dev/ttyACM1'
@@ -514,6 +647,12 @@ def main():
         port = sys.argv[2] if len(sys.argv) > 2 else '/dev/ttyACM1'
         baud = int(sys.argv[3]) if len(sys.argv) > 3 else 115200
         ata_diag(port, baud)
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "hwzc":
+        port = sys.argv[2] if len(sys.argv) > 2 else '/dev/ttyACM1'
+        baud = 115200
+        cnt  = int(sys.argv[3]) if len(sys.argv) > 3 else 30
+        hwzc_diag(port, baud, cnt)
         return
 
     port = sys.argv[1] if len(sys.argv) > 1 else '/dev/ttyACM1'

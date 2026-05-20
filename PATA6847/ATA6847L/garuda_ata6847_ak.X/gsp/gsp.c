@@ -28,7 +28,7 @@
                                     * 257-byte frame at the txFree check. */
 #define GSP_RX_RING_MASK      (GSP_RX_RING_SIZE - 1)
 #define GSP_TX_RING_MASK      (GSP_TX_RING_SIZE - 1)
-#define GSP_MAX_PAYLOAD_LEN   253  /* Sized for the 252-byte telemetry
+#define GSP_MAX_PAYLOAD_LEN   200  /* Sized for the 180-byte telemetry
                                       * snapshot (seq + 250 d-bytes incl.
                                       * fpStaleCount tail). LEN field is
                                       * uint8 so any value ≤ 254 fits. */

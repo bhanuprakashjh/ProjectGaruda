@@ -29,9 +29,10 @@
 #define FOSC_PWM_MHZ        400U         /* CLK5 PWM clock (MHz) — see hal/clock.c */
 
 /* ── PWM ───────────────────────────────────────────────────────────── */
-/* Why: 60 kHz is the proven peak on this AK port. Switching to 40 kHz
- * regressed peak 226k→166k with desync, currents up at same speed —
- * the gap is commutation accuracy (BEMF sample rate), not switching loss. */
+/* 40 kHz debug session (2026-05-19): investigating why commutation
+ * timing fails at lower PWM. Latency-compensation hypothesis disproved
+ * (more advance regressed 138k→84k → commutation already fires too early).
+ * Goal: find the actual mechanism, then test 20 kHz too. */
 #define PWMFREQUENCY_HZ     60000U
 #define LOOPTIME_MICROSEC   (uint16_t)(1000000UL / PWMFREQUENCY_HZ)  /* 50 us */
 
@@ -309,10 +310,38 @@
  * (window too narrow for ISR latency + 3-read fit). */
 
 #define PTG_TRIG_MID_OFF_POS       1U
-#define PTG_TRIG_MID_ON_POS        (LOOPTIME_TCY - 1U)
+/* MID-ON sample position. AK center-aligned PWM is two back-to-back
+ * up-counter cycles per pulse (DS70005539 §14.4.2.2.4). PGxTRIGy[31] =
+ * CAHALF selects which cycle the trigger fires in. PG counter ticks
+ * at 1.6 GHz (625 ps/tick) regardless of PWM frequency; MPER spans
+ * half the PWM period.
+ *
+ * Prior: 3% of MPER past peak — scaled with PWM (250 ns @ 60kHz,
+ * 375 ns @ 40 kHz). Hypothesis under test (2026-05-19): the absolute-
+ * time settling envelope (motor L/R, gate driver CCPT) is fixed by
+ * physics and doesn't scale with PWM, so scaling our sample position
+ * proportionally lands at different points in that envelope at each
+ * frequency.
+ *
+ * New: fixed 400 PG ticks past peak (= 250 ns absolute) regardless
+ * of PWM frequency. Matches the working 60 kHz position exactly;
+ * at 40 kHz this places the sample closer to peak than the prior
+ * 3%-of-MPER setting did. If 40 kHz works (or works better) with
+ * this, the proportional scaling was the issue. */
+#define PTG_TRIG_MID_ON_POS \
+    ((uint32_t)0x80000000UL | 400U)
 
+/* Switch from MID-OFF to MID-ON sampling at 25% duty (was 50%).
+ * Reason: under prop load at 30% duty, freewheel current through the
+ * low-side body diodes during OFF time couples large transient voltages
+ * onto the active phases. That noise rides on the floating-phase pin
+ * and the MID-OFF sample lands in this corrupted region — ProcessBemfSample
+ * sees post-comm chatter (lE ≈ 19 HR) instead of the real BEMF ZC at ~T/2.
+ * MID-ON sampling at 25-50% duty avoids the freewheel ringing because
+ * the active phase is hard-driven and the floating phase sees clean
+ * BEMF + a stable level shift the comparator threshold tolerates. */
 #ifndef PTG_DUTY_ADAPT_THRESHOLD_PCT
-#define PTG_DUTY_ADAPT_THRESHOLD_PCT   50U
+#define PTG_DUTY_ADAPT_THRESHOLD_PCT   25U
 #endif
 #define PTG_DUTY_ADAPT_THRESHOLD \
     ((uint16_t)(((uint32_t)LOOPTIME_TCY * PTG_DUTY_ADAPT_THRESHOLD_PCT) / 100U))

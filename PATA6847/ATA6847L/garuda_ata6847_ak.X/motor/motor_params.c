@@ -30,7 +30,6 @@ static const PARAM_DESC_T descTable[PARAM_COUNT] = {
 
     /* Capture / blanking */
     { PARAM_BLANKING_PCT,      TYPE_U8,  GROUP_CAPTURE,   10,  60 },
-    { PARAM_PI_FEED_POLARITY,  TYPE_U8,  GROUP_CAPTURE,    0,   2 },
 
     /* Limits */
     { PARAM_MIN_PERIOD_HR,     TYPE_U16, GROUP_LIMITS,     5, 500 },
@@ -50,17 +49,6 @@ void Params_InitDefaults(void)
     escParams.piKpShift          = PI_KP_SHIFT;
     escParams.piKiShift          = PI_KI_SHIFT;
     escParams.blankingPct        = 25;
-    escParams.piFeedPolarity     = 0;           /* 2026-05-14 diagnostic run: feed BOTH polarities.
-                                                * With OWN=0 (legacy PRE-ZC), this routes both
-                                                * rising and falling captures through to the PI
-                                                * via the `default: feedPi = true` branch in
-                                                * garuda_service.c. The new diagPiFed{Rising,
-                                                * Falling}/Miss{Rising,Falling} counters in the
-                                                * snapshot will tell us per-polarity which sectors
-                                                * actually reach the PI through the plausibility
-                                                * filter. cR=44k/cF=3417 frozen at 1 proved Phase
-                                                * 1 (piFeedPolarity=1) was structurally
-                                                * rising-only-fed — 3 captures/cycle vs CK's 6. */
     escParams.minPeriodHr        = MIN_PERIOD_HR;
 
     Params_RecomputeDerived();
@@ -86,7 +74,6 @@ uint32_t Params_Get(uint16_t paramId, bool *ok)
         case PARAM_PI_KP_SHIFT:       return escParams.piKpShift;
         case PARAM_PI_KI_SHIFT:       return escParams.piKiShift;
         case PARAM_BLANKING_PCT:      return escParams.blankingPct;
-        case PARAM_PI_FEED_POLARITY:  return escParams.piFeedPolarity;
         case PARAM_MIN_PERIOD_HR:     return escParams.minPeriodHr;
         case PARAM_TRIGA_POS: {
             uint32_t reg = PG1TRIGA;
@@ -122,7 +109,6 @@ bool Params_Set(uint16_t paramId, uint32_t value)
         case PARAM_PI_KP_SHIFT:       escParams.piKpShift          = (uint8_t)value;  break;
         case PARAM_PI_KI_SHIFT:       escParams.piKiShift          = (uint8_t)value;  break;
         case PARAM_BLANKING_PCT:      escParams.blankingPct        = (uint8_t)value;  break;
-        case PARAM_PI_FEED_POLARITY:  escParams.piFeedPolarity     = (uint8_t)value;  break;
         case PARAM_MIN_PERIOD_HR:     escParams.minPeriodHr        = (uint16_t)value; break;
         case PARAM_TRIGA_POS: {
             uint32_t v = (uint32_t)((uint16_t)value & 0x7FFFu);

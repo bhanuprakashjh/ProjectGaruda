@@ -16,26 +16,18 @@
       <itemPath>hal/hal_adc.h</itemPath>
       <itemPath>hal/hal_pwm.h</itemPath>
       <itemPath>hal/hal_timer1.h</itemPath>
-      <itemPath>hal/hal_capture.h</itemPath>
       <itemPath>hal/hal_com_timer.h</itemPath>
       <itemPath>hal/hal_ptg.h</itemPath>
       <itemPath>hal/hal_opa.h</itemPath>
-      <itemPath>hal/hal_ic.h</itemPath>
-      <itemPath>hal/hal_ic_dma.h</itemPath>
-      <itemPath>hal/hal_clc.h</itemPath>
-      <itemPath>hal/hal_dma_burst.h</itemPath>
       <itemPath>hal/hal_ak_compat.h</itemPath>
       <itemPath>hal/delay.h</itemPath>
       <itemPath>hal/board_service.h</itemPath>
       <itemPath>motor/commutation.h</itemPath>
-      <itemPath>motor/startup.h</itemPath>
-      <itemPath>motor/bemf_zc.h</itemPath>
       <itemPath>motor/sector_pi.h</itemPath>
-      <itemPath>motor/v4_params.h</itemPath>
+      <itemPath>motor/motor_params.h</itemPath>
       <itemPath>gsp/gsp.h</itemPath>
       <itemPath>gsp/gsp_commands.h</itemPath>
-      <itemPath>gsp/gsp_snapshot.h</itemPath>
-      <itemPath>gsp/gsp_ck_params.h</itemPath>
+      <itemPath>gsp/gsp_params.h</itemPath>
     </logicalFolder>
     <logicalFolder name="ExternalFiles"
                    displayName="Important Files"
@@ -52,7 +44,6 @@
       <itemPath>main.c</itemPath>
       <itemPath>garuda_service.c</itemPath>
       <itemPath>hal/clock.c</itemPath>
-      <itemPath>hal/device_config.c</itemPath>
       <itemPath>hal/port_config.c</itemPath>
       <itemPath>hal/hal_uart.c</itemPath>
       <itemPath>hal/hal_diag.c</itemPath>
@@ -61,20 +52,16 @@
       <itemPath>hal/hal_adc.c</itemPath>
       <itemPath>hal/hal_pwm.c</itemPath>
       <itemPath>hal/hal_timer1.c</itemPath>
-      <itemPath>hal/hal_capture.c</itemPath>
       <itemPath>hal/hal_com_timer.c</itemPath>
       <itemPath>hal/hal_ptg.c</itemPath>
       <itemPath>hal/hal_trap.c</itemPath>
       <itemPath>hal/board_service.c</itemPath>
       <itemPath>motor/commutation.c</itemPath>
-      <itemPath>motor/startup.c</itemPath>
-      <itemPath>motor/bemf_zc.c</itemPath>
       <itemPath>motor/sector_pi.c</itemPath>
-      <itemPath>motor/v4_params.c</itemPath>
+      <itemPath>motor/motor_params.c</itemPath>
       <itemPath>gsp/gsp.c</itemPath>
       <itemPath>gsp/gsp_commands.c</itemPath>
-      <itemPath>gsp/gsp_snapshot.c</itemPath>
-      <itemPath>gsp/gsp_ck_params.c</itemPath>
+      <itemPath>gsp/gsp_params.c</itemPath>
     </logicalFolder>
   </logicalFolder>
   <sourceRootList>
