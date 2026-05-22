@@ -24,7 +24,11 @@ extern "C" {
 
 #include <stdint.h>
 #include <stdbool.h>
+#include "../garuda_config.h"
 #include "an1078_smc.h"
+#if FEATURE_FWC
+#include "fwc.h"      /* FWC_T for inline member */
+#endif
 
 /* ── Mode byte for telemetry (mirror of AN1078 uGF.bits.OpenLoop) ─ */
 typedef enum {
@@ -35,15 +39,9 @@ typedef enum {
     AN_MODE_FAULT     = 4
 } AN_Mode_t;
 
-/* ── PI controller — float port of AN1078 MC_ControllerPIUpdate ─ */
-typedef struct {
-    float kp;          /* proportional gain         [V/A or A·s/rad] */
-    float ki;          /* integral gain             [V/A·s or A/rad] */
-    float kc;          /* anti-windup back-calc gain [-] (1.0 = none) */
-    float outMax;      /* upper saturation limit */
-    float outMin;      /* lower saturation limit */
-    float integrator;  /* integral state */
-} AN_PI_T;
+/* PI controller + an_pi_run() now in foc_pi.h (extracted 2026-05-22 to
+ * break the motor.h ↔ fwc.h circular include). */
+#include "foc_pi.h"
 
 /* ── Top-level controller state ───────────────────────────────── */
 typedef struct {
@@ -63,6 +61,10 @@ typedef struct {
     AN_PI_T pi_d;   /* d-axis current */
     AN_PI_T pi_q;   /* q-axis current */
     AN_PI_T pi_spd; /* speed */
+
+#if FEATURE_FWC
+    FWC_T fwc;          /* see foc/fwc.h */
+#endif
 
     /* Open-loop startup state */
     uint32_t startupLock;       /* ticks elapsed in LOCK phase */
@@ -85,6 +87,7 @@ typedef struct {
     float ia, ib;               /* phase currents [A] */
     float i_alpha, i_beta;      /* α-β currents */
     float id_meas, iq_meas;     /* measured d-q currents */
+    float id_filt, iq_filt;     /* LPF'd id/iq for FF cross-coupling */
     float vd, vq;               /* commanded d-q voltages */
     float v_alpha, v_beta;      /* α-β voltages from inverse Park */
     float theta_drive;          /* commutation angle this tick */

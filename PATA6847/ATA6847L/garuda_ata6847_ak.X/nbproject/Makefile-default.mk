@@ -51,17 +51,17 @@ OBJECTDIR=build/${CND_CONF}/${IMAGE_TYPE}
 DISTDIR=dist/${CND_CONF}/${IMAGE_TYPE}
 
 # Source Files Quoted if spaced
-SOURCEFILES_QUOTED_IF_SPACED=main.c garuda_service.c hal/clock.c hal/port_config.c hal/hal_uart.c hal/hal_diag.c hal/hal_spi.c hal/hal_ata6847.c hal/hal_adc.c hal/hal_pwm.c hal/hal_timer1.c hal/hal_com_timer.c hal/hal_ptg.c hal/hal_ioc.c hal/hal_trap.c hal/board_service.c motor/commutation.c motor/sector_pi.c motor/motor_params.c gsp/gsp.c gsp/gsp_commands.c gsp/gsp_params.c foc/an1078_motor.c foc/an1078_smc.c foc/esmo_observer.c foc/pll_estimator.c foc/foc_runtime.c
+SOURCEFILES_QUOTED_IF_SPACED=main.c garuda_service.c hal/clock.c hal/port_config.c hal/hal_uart.c hal/hal_diag.c hal/hal_spi.c hal/hal_ata6847.c hal/hal_adc.c hal/hal_pwm.c hal/hal_timer1.c hal/hal_com_timer.c hal/hal_ptg.c hal/hal_ioc.c hal/hal_trap.c hal/board_service.c motor/commutation.c motor/sector_pi.c motor/motor_params.c gsp/gsp.c gsp/gsp_commands.c gsp/gsp_params.c foc/an1078_motor.c foc/an1078_smc.c foc/esmo_observer.c foc/fwc.c foc/pll_estimator.c foc/foc_runtime.c
 
 # Object Files Quoted if spaced
-OBJECTFILES_QUOTED_IF_SPACED=${OBJECTDIR}/main.o ${OBJECTDIR}/garuda_service.o ${OBJECTDIR}/hal/clock.o ${OBJECTDIR}/hal/port_config.o ${OBJECTDIR}/hal/hal_uart.o ${OBJECTDIR}/hal/hal_diag.o ${OBJECTDIR}/hal/hal_spi.o ${OBJECTDIR}/hal/hal_ata6847.o ${OBJECTDIR}/hal/hal_adc.o ${OBJECTDIR}/hal/hal_pwm.o ${OBJECTDIR}/hal/hal_timer1.o ${OBJECTDIR}/hal/hal_com_timer.o ${OBJECTDIR}/hal/hal_ptg.o ${OBJECTDIR}/hal/hal_ioc.o ${OBJECTDIR}/hal/hal_trap.o ${OBJECTDIR}/hal/board_service.o ${OBJECTDIR}/motor/commutation.o ${OBJECTDIR}/motor/sector_pi.o ${OBJECTDIR}/motor/motor_params.o ${OBJECTDIR}/gsp/gsp.o ${OBJECTDIR}/gsp/gsp_commands.o ${OBJECTDIR}/gsp/gsp_params.o ${OBJECTDIR}/foc/an1078_motor.o ${OBJECTDIR}/foc/an1078_smc.o ${OBJECTDIR}/foc/esmo_observer.o ${OBJECTDIR}/foc/pll_estimator.o ${OBJECTDIR}/foc/foc_runtime.o
-POSSIBLE_DEPFILES=${OBJECTDIR}/main.o.d ${OBJECTDIR}/garuda_service.o.d ${OBJECTDIR}/hal/clock.o.d ${OBJECTDIR}/hal/port_config.o.d ${OBJECTDIR}/hal/hal_uart.o.d ${OBJECTDIR}/hal/hal_diag.o.d ${OBJECTDIR}/hal/hal_spi.o.d ${OBJECTDIR}/hal/hal_ata6847.o.d ${OBJECTDIR}/hal/hal_adc.o.d ${OBJECTDIR}/hal/hal_pwm.o.d ${OBJECTDIR}/hal/hal_timer1.o.d ${OBJECTDIR}/hal/hal_com_timer.o.d ${OBJECTDIR}/hal/hal_ptg.o.d ${OBJECTDIR}/hal/hal_ioc.o.d ${OBJECTDIR}/hal/hal_trap.o.d ${OBJECTDIR}/hal/board_service.o.d ${OBJECTDIR}/motor/commutation.o.d ${OBJECTDIR}/motor/sector_pi.o.d ${OBJECTDIR}/motor/motor_params.o.d ${OBJECTDIR}/gsp/gsp.o.d ${OBJECTDIR}/gsp/gsp_commands.o.d ${OBJECTDIR}/gsp/gsp_params.o.d ${OBJECTDIR}/foc/an1078_motor.o.d ${OBJECTDIR}/foc/an1078_smc.o.d ${OBJECTDIR}/foc/esmo_observer.o.d ${OBJECTDIR}/foc/pll_estimator.o.d ${OBJECTDIR}/foc/foc_runtime.o.d
+OBJECTFILES_QUOTED_IF_SPACED=${OBJECTDIR}/main.o ${OBJECTDIR}/garuda_service.o ${OBJECTDIR}/hal/clock.o ${OBJECTDIR}/hal/port_config.o ${OBJECTDIR}/hal/hal_uart.o ${OBJECTDIR}/hal/hal_diag.o ${OBJECTDIR}/hal/hal_spi.o ${OBJECTDIR}/hal/hal_ata6847.o ${OBJECTDIR}/hal/hal_adc.o ${OBJECTDIR}/hal/hal_pwm.o ${OBJECTDIR}/hal/hal_timer1.o ${OBJECTDIR}/hal/hal_com_timer.o ${OBJECTDIR}/hal/hal_ptg.o ${OBJECTDIR}/hal/hal_ioc.o ${OBJECTDIR}/hal/hal_trap.o ${OBJECTDIR}/hal/board_service.o ${OBJECTDIR}/motor/commutation.o ${OBJECTDIR}/motor/sector_pi.o ${OBJECTDIR}/motor/motor_params.o ${OBJECTDIR}/gsp/gsp.o ${OBJECTDIR}/gsp/gsp_commands.o ${OBJECTDIR}/gsp/gsp_params.o ${OBJECTDIR}/foc/an1078_motor.o ${OBJECTDIR}/foc/an1078_smc.o ${OBJECTDIR}/foc/esmo_observer.o ${OBJECTDIR}/foc/fwc.o ${OBJECTDIR}/foc/pll_estimator.o ${OBJECTDIR}/foc/foc_runtime.o
+POSSIBLE_DEPFILES=${OBJECTDIR}/main.o.d ${OBJECTDIR}/garuda_service.o.d ${OBJECTDIR}/hal/clock.o.d ${OBJECTDIR}/hal/port_config.o.d ${OBJECTDIR}/hal/hal_uart.o.d ${OBJECTDIR}/hal/hal_diag.o.d ${OBJECTDIR}/hal/hal_spi.o.d ${OBJECTDIR}/hal/hal_ata6847.o.d ${OBJECTDIR}/hal/hal_adc.o.d ${OBJECTDIR}/hal/hal_pwm.o.d ${OBJECTDIR}/hal/hal_timer1.o.d ${OBJECTDIR}/hal/hal_com_timer.o.d ${OBJECTDIR}/hal/hal_ptg.o.d ${OBJECTDIR}/hal/hal_ioc.o.d ${OBJECTDIR}/hal/hal_trap.o.d ${OBJECTDIR}/hal/board_service.o.d ${OBJECTDIR}/motor/commutation.o.d ${OBJECTDIR}/motor/sector_pi.o.d ${OBJECTDIR}/motor/motor_params.o.d ${OBJECTDIR}/gsp/gsp.o.d ${OBJECTDIR}/gsp/gsp_commands.o.d ${OBJECTDIR}/gsp/gsp_params.o.d ${OBJECTDIR}/foc/an1078_motor.o.d ${OBJECTDIR}/foc/an1078_smc.o.d ${OBJECTDIR}/foc/esmo_observer.o.d ${OBJECTDIR}/foc/fwc.o.d ${OBJECTDIR}/foc/pll_estimator.o.d ${OBJECTDIR}/foc/foc_runtime.o.d
 
 # Object Files
-OBJECTFILES=${OBJECTDIR}/main.o ${OBJECTDIR}/garuda_service.o ${OBJECTDIR}/hal/clock.o ${OBJECTDIR}/hal/port_config.o ${OBJECTDIR}/hal/hal_uart.o ${OBJECTDIR}/hal/hal_diag.o ${OBJECTDIR}/hal/hal_spi.o ${OBJECTDIR}/hal/hal_ata6847.o ${OBJECTDIR}/hal/hal_adc.o ${OBJECTDIR}/hal/hal_pwm.o ${OBJECTDIR}/hal/hal_timer1.o ${OBJECTDIR}/hal/hal_com_timer.o ${OBJECTDIR}/hal/hal_ptg.o ${OBJECTDIR}/hal/hal_ioc.o ${OBJECTDIR}/hal/hal_trap.o ${OBJECTDIR}/hal/board_service.o ${OBJECTDIR}/motor/commutation.o ${OBJECTDIR}/motor/sector_pi.o ${OBJECTDIR}/motor/motor_params.o ${OBJECTDIR}/gsp/gsp.o ${OBJECTDIR}/gsp/gsp_commands.o ${OBJECTDIR}/gsp/gsp_params.o ${OBJECTDIR}/foc/an1078_motor.o ${OBJECTDIR}/foc/an1078_smc.o ${OBJECTDIR}/foc/esmo_observer.o ${OBJECTDIR}/foc/pll_estimator.o ${OBJECTDIR}/foc/foc_runtime.o
+OBJECTFILES=${OBJECTDIR}/main.o ${OBJECTDIR}/garuda_service.o ${OBJECTDIR}/hal/clock.o ${OBJECTDIR}/hal/port_config.o ${OBJECTDIR}/hal/hal_uart.o ${OBJECTDIR}/hal/hal_diag.o ${OBJECTDIR}/hal/hal_spi.o ${OBJECTDIR}/hal/hal_ata6847.o ${OBJECTDIR}/hal/hal_adc.o ${OBJECTDIR}/hal/hal_pwm.o ${OBJECTDIR}/hal/hal_timer1.o ${OBJECTDIR}/hal/hal_com_timer.o ${OBJECTDIR}/hal/hal_ptg.o ${OBJECTDIR}/hal/hal_ioc.o ${OBJECTDIR}/hal/hal_trap.o ${OBJECTDIR}/hal/board_service.o ${OBJECTDIR}/motor/commutation.o ${OBJECTDIR}/motor/sector_pi.o ${OBJECTDIR}/motor/motor_params.o ${OBJECTDIR}/gsp/gsp.o ${OBJECTDIR}/gsp/gsp_commands.o ${OBJECTDIR}/gsp/gsp_params.o ${OBJECTDIR}/foc/an1078_motor.o ${OBJECTDIR}/foc/an1078_smc.o ${OBJECTDIR}/foc/esmo_observer.o ${OBJECTDIR}/foc/fwc.o ${OBJECTDIR}/foc/pll_estimator.o ${OBJECTDIR}/foc/foc_runtime.o
 
 # Source Files
-SOURCEFILES=main.c garuda_service.c hal/clock.c hal/port_config.c hal/hal_uart.c hal/hal_diag.c hal/hal_spi.c hal/hal_ata6847.c hal/hal_adc.c hal/hal_pwm.c hal/hal_timer1.c hal/hal_com_timer.c hal/hal_ptg.c hal/hal_ioc.c hal/hal_trap.c hal/board_service.c motor/commutation.c motor/sector_pi.c motor/motor_params.c gsp/gsp.c gsp/gsp_commands.c gsp/gsp_params.c foc/an1078_motor.c foc/an1078_smc.c foc/esmo_observer.c foc/pll_estimator.c foc/foc_runtime.c
+SOURCEFILES=main.c garuda_service.c hal/clock.c hal/port_config.c hal/hal_uart.c hal/hal_diag.c hal/hal_spi.c hal/hal_ata6847.c hal/hal_adc.c hal/hal_pwm.c hal/hal_timer1.c hal/hal_com_timer.c hal/hal_ptg.c hal/hal_ioc.c hal/hal_trap.c hal/board_service.c motor/commutation.c motor/sector_pi.c motor/motor_params.c gsp/gsp.c gsp/gsp_commands.c gsp/gsp_params.c foc/an1078_motor.c foc/an1078_smc.c foc/esmo_observer.c foc/fwc.c foc/pll_estimator.c foc/foc_runtime.c
 
 
 
@@ -239,6 +239,12 @@ ${OBJECTDIR}/foc/esmo_observer.o: foc/esmo_observer.c  .generated_files/flags/de
 	@${RM} ${OBJECTDIR}/foc/esmo_observer.o
 	${MP_CC} $(MP_EXTRA_CC_PRE)  foc/esmo_observer.c  -o ${OBJECTDIR}/foc/esmo_observer.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/foc/esmo_observer.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PK5=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"hal" -I"motor" -I"gsp" -I"foc" -I"." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 
+${OBJECTDIR}/foc/fwc.o: foc/fwc.c  .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+	@${MKDIR} "${OBJECTDIR}/foc"
+	@${RM} ${OBJECTDIR}/foc/fwc.o.d
+	@${RM} ${OBJECTDIR}/foc/fwc.o
+	${MP_CC} $(MP_EXTRA_CC_PRE)  foc/fwc.c  -o ${OBJECTDIR}/foc/fwc.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/foc/fwc.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PK5=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"hal" -I"motor" -I"gsp" -I"foc" -I"." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
+
 ${OBJECTDIR}/foc/pll_estimator.o: foc/pll_estimator.c  .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/foc"
 	@${RM} ${OBJECTDIR}/foc/pll_estimator.o.d
@@ -401,6 +407,12 @@ ${OBJECTDIR}/foc/esmo_observer.o: foc/esmo_observer.c  .generated_files/flags/de
 	@${RM} ${OBJECTDIR}/foc/esmo_observer.o.d
 	@${RM} ${OBJECTDIR}/foc/esmo_observer.o
 	${MP_CC} $(MP_EXTRA_CC_PRE)  foc/esmo_observer.c  -o ${OBJECTDIR}/foc/esmo_observer.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/foc/esmo_observer.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"hal" -I"motor" -I"gsp" -I"foc" -I"." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
+
+${OBJECTDIR}/foc/fwc.o: foc/fwc.c  .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+	@${MKDIR} "${OBJECTDIR}/foc"
+	@${RM} ${OBJECTDIR}/foc/fwc.o.d
+	@${RM} ${OBJECTDIR}/foc/fwc.o
+	${MP_CC} $(MP_EXTRA_CC_PRE)  foc/fwc.c  -o ${OBJECTDIR}/foc/fwc.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/foc/fwc.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"hal" -I"motor" -I"gsp" -I"foc" -I"." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 
 ${OBJECTDIR}/foc/pll_estimator.o: foc/pll_estimator.c  .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/foc"

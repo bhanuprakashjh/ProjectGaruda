@@ -57,37 +57,8 @@
 /* Calibration sample count (1024 → 10-bit shift average). */
 #define AN_CAL_SAMPLES     1024U
 
-/* ── PI controller (port of MC_ControllerPIUpdate_Assembly) ─────
- *
- * Q15 reference behavior:
- *   err = ref - meas
- *   integrator += ki × err - kc × prev_excess
- *   pre_sat = integrator + kp × err
- *   out = clamp(pre_sat, outMin, outMax)
- *   prev_excess = pre_sat - out   (anti-windup back-calculation)
- *
- * Float port: identical.  ki and kp are both per-tick gains
- * (not continuous), matching AN1078 convention. */
-static inline float an_pi_run(AN_PI_T *pi, float ref, float meas, float dt)
-{
-    float err = ref - meas;
-    /* Integrator update: ki has units of (output / input) per second, so
-     * multiply by dt for the per-tick step. */
-    pi->integrator += pi->ki * err * dt;
-
-    float pre_sat = pi->integrator + pi->kp * err;
-    float out = pre_sat;
-    if (out > pi->outMax) out = pi->outMax;
-    if (out < pi->outMin) out = pi->outMin;
-
-    /* Anti-windup back-calc: subtract excess from integrator, scaled by kc.
-     * AN1078 kc ≈ 0.999 → near-disabled.  We implement the same form. */
-    float excess = pre_sat - out;
-    pi->integrator -= (1.0f - pi->kc) * excess;
-
-    return out;
-}
-
+/* an_pi_run() lives in an1078_motor.h (header inline) so it can be
+ * reused by other FOC modules — foc/fwc.c needs it for the angle PI. */
 static inline void an_pi_preload(AN_PI_T *pi, float v) { pi->integrator = v; }
 
 static void an_pi_init(AN_PI_T *pi, float kp, float ki, float outMin, float outMax)
@@ -232,6 +203,23 @@ static void an_reset_parameters(AN_Motor_T *m)
     /* Re-init estimator */
     OBS_INIT(&m->smc);
 
+#if FEATURE_FWC
+    /* FWC: angle-based field-weakening controller (foc/fwc.h).
+     *
+     * Bench tuning history:
+     *   Init  : kp=0.05  ki=1.5  max=0.785 (π/4 / 45°)
+     *           Result: PI hunting (42% engaged / 39% disengaged samples
+     *           at top), Id excursions ±18 A.  Peak 207k.
+     *   Now   : kp=0.02  ki=0.5  max=1.05  (60°)
+     *           Calmer PI (less twitchy → no hunting) + deeper FW depth
+     *           (Id can reach −0.87·Is at full angle vs −0.71 at 45°). */
+    /* FW depth comes from garuda_config.h:FWC_ANGLE_MAX_RAD.
+     *   0.0f       → FW DISABLED (Id_ref always 0)
+     *   1.05f (60°) → deep FW (Id ≤ -0.87·|Is_ref|) */
+    FWC_Init(&m->fwc, /*kp*/ 0.02f, /*ki*/ 0.5f,
+             /*angle_fw_max*/ FWC_ANGLE_MAX_RAD);
+#endif
+
     /* Reset startup state */
     m->startupLock = 0;
     m->startupRamp = 0.0f;
@@ -250,6 +238,11 @@ static void an_reset_parameters(AN_Motor_T *m)
     /* Reset commanded voltages so SVPWM outputs 50% on first tick */
     m->vd = 0.0f;
     m->vq = 0.0f;
+    /* Reset FF current LPF state — must zero on every (re)start so a
+     * previous run's filtered currents don't leak into the first FF
+     * computation when ω is rapidly rising. */
+    m->id_filt = 0.0f;
+    m->iq_filt = 0.0f;
     m->v_alpha = 0.0f;
     m->v_beta = 0.0f;
     m->theta_drive = 0.0f;
@@ -388,6 +381,59 @@ static void an_do_control(AN_Motor_T *m, float dt)
             else if (diff < -max_step) m->velRef_rad_s -= max_step;
             else m->velRef_rad_s = speed_target;
         }
+
+        /* ── VelRef saturation guard ───────────────────────────────
+         * When the motor is voltage-saturated (deep FW, modulation at
+         * or above MOD_GUARD), the rotor physically cannot accelerate
+         * further regardless of how high velRef goes.  Without this
+         * guard, velRef keeps climbing → speed PI sees ever-larger
+         * error → demands max Iq → bus current spikes → vbus dips →
+         * USB EMI / brownout → MCU reset → motor desync.
+         *
+         * Symptom seen at the 227k peak (Phase A, foc_run_143856):
+         *   t=33.46  velRef→max  Iq=+2.5     OK
+         *   t=33.66  velRef→max  Iq=+16.7   ← spike (PI windup)
+         *   t=33.86               Vbus=22.7  ← bus dipped → USB reset
+         *
+         * Cap velRef to (OmegaFltred + small lead) while saturated.
+         * Below MOD_GUARD the guard is inactive — normal throttle
+         * response.  Uses the PREVIOUS tick's vd/vq (no extra cost).
+         *
+         * Tuning notes:
+         *  - MOD_GUARD = 0.93  triggers slightly before the FW corner
+         *    at 0.91 so PI windup is caught early.
+         *  - SPEED_LEAD = 500 rad/s ≈ 4.8 k eRPM headroom for the PI
+         *    to still drive the motor up the remaining range without
+         *    being able to run away. */
+        {
+            float vmax_guard = m->vbus * AN_INV_SQRT3 * AN_MAX_VOLTAGE_VECTOR_FRAC;
+            float v_last  = sqrtf(m->vd * m->vd + m->vq * m->vq);
+            float mod_now = (vmax_guard > 0.001f) ? v_last / vmax_guard : 0.0f;
+            const float MOD_GUARD    = 0.93f;
+            const float SPEED_LEAD   = 500.0f;  /* rad/s electrical */
+            const float SAT_INT_MAX  = 5.0f;    /* A — tighter than ±18A
+                                                 * outMax so integrator
+                                                 * can't run away under
+                                                 * sustained saturation */
+            if (mod_now > MOD_GUARD) {
+                /* (a) Cap velRef so speed-PI's P-term contribution stays
+                 *     bounded — error capped at SPEED_LEAD,
+                 *     Kp_spd × LEAD = 0.015 × 500 = 7.5 A worst case. */
+                float vel_cap = m->smc.OmegaFltred + SPEED_LEAD;
+                if (m->velRef_rad_s > vel_cap) m->velRef_rad_s = vel_cap;
+
+                /* (b) Clamp the integrator to a tight envelope while
+                 *     saturated.  Existing back-calc (kc=0.999) is too
+                 *     gentle for sustained-saturation operation; this
+                 *     hard-clamp prevents windup to the 18 A output
+                 *     limit.  Total Iq ≤ P_max + SAT_INT_MAX ≈ 12.5 A,
+                 *     well below the +13-16 A spikes that triggered USB
+                 *     resets in earlier runs. */
+                if (m->pi_spd.integrator >  SAT_INT_MAX) m->pi_spd.integrator =  SAT_INT_MAX;
+                if (m->pi_spd.integrator < -SAT_INT_MAX) m->pi_spd.integrator = -SAT_INT_MAX;
+            }
+        }
+
         /* Keep startupRamp synced for SMC LPF (used in OL bootstrap path
          * AND as the fallback Kslf source in step 4b). */
         m->startupRamp = m->velRef_rad_s;
@@ -420,7 +466,11 @@ static void an_do_control(AN_Motor_T *m, float dt)
             m->id_ref_fw       = 0.0f;
         }
 
-        /* Speed PI → Iq ref.  Feedback from observer's REAL Omega. */
+        /* Speed PI → Iq ref.  Feedback from observer's REAL Omega.
+         * iq_ref here is treated as the STATOR CURRENT MAGNITUDE Is_ref
+         * when FWC is active (FWC splits it into Id_ref / Iq_ref via
+         * angle).  When FWC is off, iq_ref maps directly to Iq with Id
+         * driven separately by the legacy integrator below. */
         float iq_ref = an_pi_run(&m->pi_spd,
                                  m->velRef_rad_s,
                                  m->smc.OmegaFltred,
@@ -429,7 +479,38 @@ static void an_do_control(AN_Motor_T *m, float dt)
 
         float vmax = m->vbus * AN_INV_SQRT3 * AN_MAX_VOLTAGE_VECTOR_FRAC;
 
-        /* ── Field weakening ─────────────────────────────────────
+#if FEATURE_FWC
+        /* ── FWC: angle-based field weakening ─────────────────────
+         *
+         * vs_now: |V| from previous tick's PI outputs.
+         * vsRef:  voltage threshold at which FWC engages.  Use 95% of
+         *         vmax — same trigger as the legacy 0.91 mod ratio
+         *         but expressed in volts since that's FWC's unit. */
+        {
+            float vs_now = sqrtf(m->vd * m->vd + m->vq * m->vq);
+            float vsRef  = 0.95f * vmax;
+
+            /* Gate FWC on positive speed-PI demand (avoid pumping FW
+             * during coast/brake — same protection the legacy path had). */
+            const float FWC_IQ_GATE = 1.0f;
+            if (iq_ref > FWC_IQ_GATE) FWC_Enable(&m->fwc);
+            else                      FWC_Disable(&m->fwc);
+
+            FWC_RunAngle(&m->fwc, vs_now, vsRef, dt);
+        }
+
+        /* Split iq_ref (= Is magnitude) into (Id_ref, Iq_ref) via angle.
+         *   angle_fw = 0     → Id_ref = 0,             Iq_ref = iq_ref
+         *   angle_fw > 0     → Id_ref < 0 (FW),        Iq_ref < iq_ref */
+        float id_ref;
+        {
+            float id_split, iq_split;
+            FWC_SplitCurrent(&m->fwc, iq_ref, &id_split, &iq_split);
+            id_ref = id_split;
+            iq_ref = iq_split;
+        }
+#else
+        /* ── Legacy field weakening (id_ref_fw integrator) ──────
          *
          * At ~180k eRPM on this motor, |V| saturates at vmax.  Speed
          * PI keeps demanding more Iq but voltage limiter clamps Vq →
@@ -491,18 +572,68 @@ static void an_do_control(AN_Motor_T *m, float dt)
             }
         }
         float id_ref = m->id_ref_fw;
+#endif /* !FEATURE_FWC */
 
+#if FEATURE_FOC_FF_DECOUPLE
+        /* ── BEMF-only feedforward ─────────────────────────────────
+         *
+         *   Vq_ff = ω · λ_est   (cancels BEMF — depends only on ω)
+         *   Vd_ff = 0
+         *
+         * Vd cross-coupling FF was attempted three ways (Phase B with
+         * iq_filt, Phase B' with iq_filt + integrator scaling, Vd FF
+         * with iq_ref). The first two destabilized at the FW boundary;
+         * iq_ref-based FF (bench-tested 2026-05-22, foc_run_160847.csv)
+         * showed no measurable Id improvement vs no Vd FF (span 25.8A
+         * vs 26.8A — within run-to-run noise).  The residual Id
+         * swings at top come from observer angle noise + telemetry
+         * aliasing of PWM-rate ripple, not from cross-coupling. */
+        float ff_omega  = m->smc.OmegaFltred;
+        float ff_lambda = (gspParams.focKeUvSRad > 0)
+                        ? gspParams.focKeUvSRad * 1.0e-6f
+                        : AN_MOTOR_LAMBDA;
+        float vd_ff = 0.0f;
+        float vq_ff = ff_omega * ff_lambda;
+#else
+        float vd_ff = 0.0f;
+        float vq_ff = 0.0f;
+#endif
+
+        /* ── d-axis ─────────────────────────────────────────────────
+         * Vd_ff = 0, so PI keeps the full ±vmax range. */
+        float vmax_sq = vmax * vmax;
         m->pi_d.outMax =  vmax;
         m->pi_d.outMin = -vmax;
-        m->vd = an_pi_run(&m->pi_d, id_ref, m->id_meas, dt);
+        float vd_pi = an_pi_run(&m->pi_d, id_ref, m->id_meas, dt);
+        m->vd = vd_ff + vd_pi;
 
+        /* ── q-axis (D-priority circle clamp) ──────────────────────
+         * Given committed Vd, remaining Vq envelope is the circle
+         * chord:  vq_avail = sqrt(vmax² - Vd²).  Total Vq ∈ ±vq_avail.
+         *   Vq_pi ∈ [ -vq_avail - Vq_ff, +vq_avail - Vq_ff ]
+         * Saturate Vq_ff to ±vq_avail first; FW will then pull
+         * id_ref negative to reduce BEMF demand if it's clipping. */
         float vd_sq = m->vd * m->vd;
-        float vmax_sq = vmax * vmax;
-        float vq_lim_sq = vmax_sq - vd_sq;
-        float vq_lim = (vq_lim_sq > 0.0f) ? sqrtf(vq_lim_sq) : 0.0f;
-        m->pi_q.outMax =  vq_lim;
-        m->pi_q.outMin = -vq_lim;
-        m->vq = an_pi_run(&m->pi_q, iq_ref, m->iq_meas, dt);
+        float vq_avail_sq = vmax_sq - vd_sq;
+        float vq_avail = (vq_avail_sq > 0.0f) ? sqrtf(vq_avail_sq) : 0.0f;
+
+        if      (vq_ff >  vq_avail) vq_ff =  vq_avail;
+        else if (vq_ff < -vq_avail) vq_ff = -vq_avail;
+
+        m->pi_q.outMax =  vq_avail - vq_ff;
+        m->pi_q.outMin = -vq_avail - vq_ff;
+        float vq_pi = an_pi_run(&m->pi_q, iq_ref, m->iq_meas, dt);
+        m->vq = vq_ff + vq_pi;
+
+        /* Final circle clamp safety net. */
+        {
+            float vs_sq = m->vd * m->vd + m->vq * m->vq;
+            if (vs_sq > vmax_sq) {
+                float scale = sqrtf(vmax_sq / vs_sq);
+                m->vd *= scale;
+                m->vq *= scale;
+            }
+        }
     }
 }
 
@@ -688,6 +819,13 @@ void AN_MotorFastTick(AN_Motor_T *m,
         an_park(m->i_alpha, m->i_beta, sin_t, cos_t,
                 &m->id_meas, &m->iq_meas);
     }
+
+    /* Single-pole LPF on id/iq for FF cross-coupling.  PI keeps using
+     * raw id_meas/iq_meas — only the FF terms read id_filt/iq_filt.
+     * Filters PWM ripple + ADC noise that otherwise gets amplified by
+     * ω·L at high speed.  See AN_FF_I_LPF_TAU_S. */
+    m->id_filt += AN_FF_I_LPF_ALPHA * (m->id_meas - m->id_filt);
+    m->iq_filt += AN_FF_I_LPF_ALPHA * (m->iq_meas - m->iq_filt);
 
     /* ── 4. Feed observer ────────────────────────────────── */
     m->smc.Ialpha = m->i_alpha;

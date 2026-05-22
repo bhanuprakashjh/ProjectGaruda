@@ -85,6 +85,17 @@ extern "C" {
 /** Discrete plant gain G = Ts/Ls. */
 #define AN_G_PLANT                  (AN_TS / AN_MOTOR_LS)
 
+/** LPF time constant on id_meas/iq_meas used by FF cross-coupling.
+ *  Filters ADC noise + PWM ripple before currents feed back through
+ *  the FF terms (which multiply by ω·L → noise gets amplified at high
+ *  speed).  VESC uses τ ≈ 10 ms for the same purpose.  2 ms here is a
+ *  middle ground: noise suppression up to ~80 Hz cutoff, but still
+ *  tracks the slow operating-point drift well enough.
+ *
+ *  α = AN_TS / τ.  At 30 kHz PWM, AN_TS = 33.3 µs → α ≈ 0.0167. */
+#define AN_FF_I_LPF_TAU_S           0.002f
+#define AN_FF_I_LPF_ALPHA           (AN_TS / AN_FF_I_LPF_TAU_S)
+
 /* ── Operating speed envelope ──────────────────────────────────── */
 
 /** Open-loop ramp-up end value, mechanical RPM.  Two roles:
@@ -115,9 +126,15 @@ extern "C" {
  *  CL throttle range maps 0→full to AN_END_SPEED → AN_NOMINAL_SPEED.
  *
  *  2810 @ 24V: theoretical no-load = 24 × 1350 = 32400 RPM mech
- *  (= 227k eRPM at 7PP).  Practical with FW + observer margin: 30000
- *  RPM mech (= 210k eRPM) — past the 196k 6-step benchmark target. */
-#define AN_NOMINAL_SPEED_RPM_MECH   30000.0f     /* = 210k eRPM */
+ *  (= 227k eRPM at 7PP).  6-step on same motor/Vbus reaches 225k.
+ *
+ *  Was 30000 (= 210k eRPM) → motor reached this and stopped under FOC
+ *  because throttle topped out there.  Bumped to 45000 (= 315k eRPM,
+ *  way above motor's physical ceiling) so full throttle exposes the
+ *  REAL bottleneck (voltage saturation → FWC engages hard).  Motor
+ *  will cap at whatever it can physically do; this define no longer
+ *  artificially clips. */
+#define AN_NOMINAL_SPEED_RPM_MECH   45000.0f     /* = 315k eRPM target (motor caps lower) */
 
 /** Maximum mechanical RPM. */
 #define AN_MAX_SPEED_RPM_MECH       3500.0f
@@ -246,8 +263,12 @@ extern "C" {
 
 /* ── Voltage clamps ───────────────────────────────────────────── */
 
-/** Maximum voltage vector magnitude as fraction of Vbus.  AN1078: 0.98. */
-#define AN_MAX_VOLTAGE_VECTOR_FRAC  0.95f
+/** Maximum voltage vector magnitude as fraction of Vbus.  AN1078: 0.98.
+ *  Bumped 0.95→0.99 on 2026-05-22 to push base speed higher without FW
+ *  and reduce voltage saturation (which was causing PI windup + Id swings).
+ *  ω_base = (Vbus/√3·0.99) / λ ≈ 23.6k rad/s ≈ 225 k eRPM with 24 V Vbus
+ *  on the 2810 (vs ~216k @ 0.95). */
+#define AN_MAX_VOLTAGE_VECTOR_FRAC  0.99f
 
 /* ── SMC observer ─────────────────────────────────────────────── */
 

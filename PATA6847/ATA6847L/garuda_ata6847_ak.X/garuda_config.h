@@ -61,6 +61,63 @@
 #error "FEATURE_FOC_ESMO requires FEATURE_FOC_AN1078=1 (ESMO is an observer alternative)"
 #endif
 
+/* FWC (Field Weakening Control): voltage-margin PI on stator current
+ * angle.  Port of TI C2000 motor-control-sdk libraries/control/fwc/.
+ * Default OFF until bench-validated.  Set to 1 to compile foc/fwc.{c,h}
+ * and enable the FW path in an1078_motor.c.  See foc/fwc.h. */
+#ifndef FEATURE_FWC
+#define FEATURE_FWC         1   /* 2026-05-22: bench test of voltage-margin
+                                   angle-PI FW.  Set to 0 for legacy id_ref_fw
+                                   integrator (proven to ~210k but with Id
+                                   excursions ±20A above 175k). */
+#endif
+#if FEATURE_FWC && !FEATURE_FOC_AN1078
+#error "FEATURE_FWC requires FEATURE_FOC_AN1078=1 (FWC is for FOC only)"
+#endif
+
+/* FW depth — maximum field-weakening angle in radians.
+ *   1.05f (60°)  → deep FW; Id can pull to -0.87·|Is_ref|, Iq scaled by 0.5.
+ *   0.785f (45°) → moderate FW; Id ≤ -0.71·|Is_ref|.
+ *   0.0f         → FW DISABLED.  Id_ref always 0, motor capped at the
+ *                  natural base speed (Vbus/√3·frac / λ).
+ * Effective only when FEATURE_FWC=1.  At runtime FWC's PI clamps to
+ * [0, FWC_ANGLE_MAX_RAD] so setting this to 0 turns the FW off entirely. */
+#ifndef FWC_ANGLE_MAX_RAD
+#define FWC_ANGLE_MAX_RAD   0.0f
+#endif
+
+/* FOC feed-forward decoupling: cancel cross-coupling and BEMF terms in
+ * the d/q current loop, so the PI only handles residual R·I + L·dI/dt
+ * dynamics.  Bench evidence (2026-05-22): at 226k eRPM with FWC engaged
+ * at max, Id swings -24 to +7 A with no commanded change — current PIs
+ * are unstable because they're fighting ω·L·I cross-coupling and ω·λ
+ * BEMF terms internally with no voltage headroom (Vs saturated at vmax).
+ *
+ *   Vd_ff = -ω·L·Iq            (cancel d-axis cross-coupling)
+ *   Vq_ff =  ω·L·Id + ω·λ      (cancel q-axis cross-coupling + BEMF)
+ *   Vd_total = Vd_ff + PI_d(Id_ref, Id_meas)
+ *   Vq_total = Vq_ff + PI_q(Iq_ref, Iq_meas)
+ *
+ * PI then operates on a clean R+s·L plant, much more stable at speed. */
+#ifndef FEATURE_FOC_FF_DECOUPLE
+#define FEATURE_FOC_FF_DECOUPLE     1   /* Phase A: BEMF-only FF.
+                                         *   Vq_ff = ω · λ_est   (no current dep)
+                                         *   Vd_ff = 0
+                                         * Frees the full ±vmax envelope for
+                                         * the PIs above ~180k eRPM where ω·λ
+                                         * approaches vmax and current control
+                                         * gets rough.
+                                         *
+                                         * History — earlier attempt with full
+                                         * cross-coupling FF using unfiltered
+                                         * id_meas/iq_meas diverged at 110k.
+                                         * Phase B (task #128) re-adds cross-
+                                         * coupling with LPF on currents. */
+#endif
+#if FEATURE_FOC_FF_DECOUPLE && !FEATURE_FOC_AN1078
+#error "FEATURE_FOC_FF_DECOUPLE requires FEATURE_FOC_AN1078=1"
+#endif
+
 /* Startup V2: proper forced-commutation spinup + lock-detect (2026-05-21).
  * Default OFF — preserves the existing ALIGN→CL-direct path so nothing
  * regresses on the bench. Set to 1 to enable the new startup which:
