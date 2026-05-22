@@ -21,6 +21,8 @@ void pll_reset(PLL_t *pll)
     pll->theta_est  = 0.0f;
     pll->omega_est  = 0.0f;
     pll->integrator = 0.0f;
+    pll->speed_avg  = 0.0f;
+    pll->speed_flt  = 0.0f;
 }
 
 void pll_update(PLL_t *pll, float e_alpha, float e_beta, float Ts)

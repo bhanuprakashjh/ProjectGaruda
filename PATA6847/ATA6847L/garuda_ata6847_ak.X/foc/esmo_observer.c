@@ -231,10 +231,40 @@ static inline void EsmoCalcBEMF(AN_SMC_T *s)
 #define ESMO_PLL_KP_MIN    PLL_KP            /* 628 — low-speed Kp */
 #endif
 #ifndef ESMO_PLL_KP_MAX
-#define ESMO_PLL_KP_MAX    (3.0f * PLL_KP)   /* 1884 — high-speed Kp (was 5×) */
+#define ESMO_PLL_KP_MAX    (3.0f * PLL_KP)   /* 1884 — high-speed Kp.
+                                              * Bench tuning history:
+                                              *   5× + 100 Hz LPF: idle
+                                              *     unstable (Id ±9A,
+                                              *     Iq ±23A, ω 18-32k).
+                                              *   4× + 200 Hz LPF: no
+                                              *     measurable improvement
+                                              *     (Id span 17.1 → 18.5 A,
+                                              *     well within run-to-run
+                                              *     noise).
+                                              * 3× is the right answer; the
+                                              * TI 2-stage LPF (ESMO_TI_PLL=1)
+                                              * is the real gain. */
 #endif
 #ifndef ESMO_PLL_KP_SF
 #define ESMO_PLL_KP_SF     0.125f            /* same slope; saturates at lower ω */
+#endif
+
+/* TI-style PLL: integrate LPF'd omega into theta instead of raw omega.
+ * Port of esmo.c:291-297 (ti-c2000-motor-control-sdk) — TI inserts a
+ * single-pole LPF on PLL output before using it for θ integration.
+ * Theory: per-tick (Kp·err + integrator) has high-frequency content from
+ * BEMF noise and PWM ripple.  Filtering before integrating gives a
+ * cleaner θ trajectory → cleaner Park transform → less spurious Id/Iq
+ * mixing.  Trade-off: small θ lag (≈ 1/(2π·fc) seconds) during ω
+ * transients.  At fc=200Hz the lag is ~0.8ms = 1.5° of theta at top
+ * speed (23000 rad/s).
+ *
+ * Default OFF so first builds match prior behavior — flip to 1 to bench. */
+#ifndef ESMO_TI_PLL
+#define ESMO_TI_PLL                 1
+#endif
+#ifndef ESMO_TI_PLL_LPF_FC_HZ
+#define ESMO_TI_PLL_LPF_FC_HZ       200.0f
 #endif
 
 static inline void EsmoPllUpdate(PLL_t *pll, float e_alpha, float e_beta)
@@ -268,7 +298,22 @@ static inline void EsmoPllUpdate(PLL_t *pll, float e_alpha, float e_beta)
     if (omega < -PLL_SPEED_CLAMP) omega = -PLL_SPEED_CLAMP;
     pll->omega_est = omega;
 
+#if ESMO_TI_PLL
+    /* TI pattern: LPF the PLL output, integrate the FILTERED ω into θ.
+     * Coefficients are compile-time const-folded by XC-DSC to a single
+     * MAC.  speed_flt converges to omega in steady state, so locked
+     * tracking is unaffected; only per-tick jitter is suppressed. */
+    {
+        const float two_pi_fc_ts = 2.0f * ESMO_PI * ESMO_TI_PLL_LPF_FC_HZ * AN_TS;
+        const float a1 = 1.0f / (1.0f + two_pi_fc_ts);
+        const float b0 = 1.0f - a1;
+        pll->speed_flt = b0 * omega + a1 * pll->speed_flt;
+        pll->theta_est += pll->speed_flt * AN_TS;
+    }
+#else
     pll->theta_est += omega * AN_TS;
+#endif
+
     while (pll->theta_est >= ESMO_TWO_PI) pll->theta_est -= ESMO_TWO_PI;
     while (pll->theta_est <  0.0f)        pll->theta_est += ESMO_TWO_PI;
 }

@@ -58,6 +58,8 @@ typedef struct {
     float theta_est;    /* Estimated electrical angle (rad) */
     float omega_est;    /* Estimated electrical speed (rad/s) */
     float integrator;   /* PLL integral accumulator */
+    float speed_avg;    /* 1st-stage 0.5-blend of pll output (TI mode) */
+    float speed_flt;    /* 2nd-stage LPF of pll output, used for θ integration (TI mode) */
 } PLL_t;
 
 /* ── Top-level motor control state ──────────────────────────── */
