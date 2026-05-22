@@ -22,6 +22,7 @@
 #include "../hal/hal_pwm.h"
 #include "../hal/hal_com_timer.h"
 #include "../hal/hal_ptg.h"
+#include "../hal/hal_ioc.h"     /* edge-triggered BEMF (FEATURE_IOC_BEMF) */
 #include "../hal/port_config.h"
 #include "commutation.h"
 #include "motor_params.h"
@@ -37,8 +38,9 @@ volatile bool     captureValid    = false;
 typedef enum {
     SECTOR_PHASE_OFF = 0,
     SECTOR_PHASE_ALIGN,
-    SECTOR_PHASE_OL_RAMP,
-    SECTOR_PHASE_CL
+    SECTOR_PHASE_OL_RAMP,        /* legacy (unused since 2026-05 ALIGN→CL-direct) */
+    SECTOR_PHASE_CL,
+    SECTOR_PHASE_OL_RAMP_V2      /* new: proper forced-comm spinup + lock detect */
 } SECTOR_PHASE_T;
 
 static volatile SECTOR_PHASE_T phase;
@@ -74,6 +76,25 @@ static volatile uint16_t   alignCounter;
 static volatile uint16_t   rampStepPeriod;  /* Timer1 ticks per step */
 static volatile uint16_t   rampCounter;     /* Timer1 countdown */
 static volatile uint32_t   rampDuty;
+
+#if FEATURE_STARTUP_V2
+/* ── Startup-V2 state ──────────────────────────────────────────────
+ * OL_RAMP_V2 drives forced commutation from Timer1 (50 µs ticks). The
+ * IOC/PTG path is armed per sector, and after each forced commutation
+ * we sample captureValid to learn whether the rotor has caught up.
+ * Once OL_V2_LOCK_THRESHOLD consecutive captures land inside a wide
+ * plausibility corridor AND rampStepPeriod has reached MIN_STEP_PERIOD,
+ * we declare lock and transition to CL with PI seeded from observed Tp.
+ *
+ * Tunables — bench experimental; profile-agnostic for now. */
+#define OL_V2_LOCK_THRESHOLD     20U   /* consecutive good captures to declare lock */
+#define OL_V2_RAMP_SHIFT          5U   /* rampStepPeriod -= rampStepPeriod >> SHIFT per step.
+                                          5 → ~3% per step, ~88 steps from 800→50 (~1 s ramp) */
+#define OL_V2_DUTY_MIN_NUM        1U   /* duty at start = (NUM/DEN) * RAMP_DUTY_CAP */
+#define OL_V2_DUTY_MIN_DEN        2U
+static volatile uint8_t  olV2_lockedCount;
+static volatile uint16_t olV2_lastCommHR;     /* set on each forced commutation */
+#endif
 /* OL handoff settle: after rampStepPeriod reaches MIN_STEP_PERIOD, hold
  * the motor at the forced rate for OL_HANDOFF_SETTLE_TICKS Timer1 ticks
  * (50µs each) before EnterCL. Without this, the rotor lags commanded
@@ -98,7 +119,7 @@ static volatile uint16_t   integrator;
  * commutates faster → rotor falls further behind → death spiral. The
  * floor blocks this until the loop has settled. */
 static volatile uint16_t   seedIntegrator;
-static          uint8_t    stallCounter;
+static          uint16_t   stallCounter;     /* uint16 since STALL_THRESHOLD can exceed 255 */
 static volatile bool       commandEnabled;
 /* Updated in Commutate ISR; exposed for telemetry.              */
 volatile uint16_t g_pwmPer = LOOPTIME_TCY;
@@ -215,7 +236,11 @@ static inline uint16_t FixpMulU16(uint16_t a, uint16_t b)
 
 static void ShutOff(void)
 {
+#if FEATURE_IOC_BEMF
+    HAL_Ioc_Disarm();
+#else
     HAL_PTG_Stop();
+#endif
     HAL_ComTimer_Cancel();
     HAL_PWM_ForceAllFloat();
     HAL_PWM_SetDutyCycle(0);
@@ -317,7 +342,11 @@ void SectorPI_Init(void)
     Params_InitDefaults();
 
     HAL_ComTimer_Init();   /* SCCP3 one-shot + SCCP4 HR (proven V3 pattern) */
+#if FEATURE_IOC_BEMF
+    HAL_Ioc_Init();
+#else
     HAL_PTG_Init();
+#endif
     running = false;
     phase = SECTOR_PHASE_OFF;
     statusEvents = 0;
@@ -396,10 +425,132 @@ void SectorPI_Stop(void)
     ShutOff();
 }
 
+#if FEATURE_STARTUP_V2
+/* Force a commutation during OL_RAMP_V2. Mirrors the sector-globals
+ * publish + IOC/PTG arm pattern from the ALIGN→CL transition (lines
+ * ~465-496) but used as a per-step helper. lastCommHR/blankingEndHR are
+ * kept consistent so the IOC ISR's L1/L2 gates remain valid. */
+static void OlV2_ForceCommutate(void)
+{
+    extern volatile uint8_t  floatingPhase;
+    extern volatile uint8_t  ptgExpectedComp;
+    extern volatile uint16_t blankingEndHR;
+
+    position++;
+    if (position > 5) position = 0;
+
+    {
+        const COMMUTATION_STEP_T *step = &commutationTable[position];
+        uint8_t newFp       = step->floatingPhase;
+        uint8_t newExpected = (uint8_t)(position & 1u);
+        currentSector  = position;
+        floatingPhase  = newFp;
+        ptgExpectedComp = newExpected;
+        sectorSnap = (uint16_t)(position
+                              | ((uint16_t)newFp       << 3)
+                              | ((uint16_t)newExpected << 5));
+    }
+    HAL_PWM_SetCommutationStep(position);
+    HAL_PWM_SetDutyCycle(rampDuty);
+
+    uint16_t nowHR = HAL_ComTimer_ReadTimer();
+    lastCommHR     = nowHR;
+    olV2_lastCommHR = nowHR;
+
+    /* Re-seed blanking so the IOC's L2 gate behaves correctly into the
+     * new sector. Width = 25% of expected sector (rampStepPeriod is
+     * Timer1 ticks; 1 Timer1 tick = 78.125 HR ticks). */
+    uint16_t T_OL_HR = (uint16_t)(((uint32_t)rampStepPeriod * 625UL) / 8UL);
+    blankingEndHR = (uint16_t)(nowHR + (T_OL_HR >> 2));
+
+    captureValid = false;
+
+#if FEATURE_IOC_BEMF
+    HAL_Ioc_ArmForSector(position);
+#else
+    /* PTG path: it samples on its own clock, already running */
+#endif
+}
+#endif /* FEATURE_STARTUP_V2 */
+
+
 /* ── Called from Timer1 ISR at 20kHz (50µs) during ALIGN + OL_RAMP ── */
 void SectorPI_OlTick(void)
 {
     if (!running) return;
+
+#if FEATURE_STARTUP_V2
+    if (phase == SECTOR_PHASE_OL_RAMP_V2)
+    {
+        if (rampCounter > 0)
+        {
+            rampCounter--;
+            return;
+        }
+        /* Sector boundary: first, sample the result of the previous
+         * forced commutation. If a capture arrived AND its elapsed
+         * (lastCaptureHR_g - olV2_lastCommHR) falls inside a wide
+         * plausibility corridor for OL (16 HR ticks to expected period),
+         * count it as a lock hit. */
+        if (captureValid)
+        {
+            uint16_t elapsed = (uint16_t)(lastCaptureHR_g - olV2_lastCommHR);
+            uint16_t T_OL_HR = (uint16_t)(((uint32_t)rampStepPeriod * 625UL) / 8UL);
+            /* Corridor: elapsed > L1 demag + L2 blanking floor, < 1.0 × T_OL.
+             * Wide on purpose — OL captures are noisy, we only need a
+             * monotonic indicator that ZCs are tracking. */
+            if (elapsed > 16U && elapsed < T_OL_HR)
+            {
+                if (olV2_lockedCount < 255) olV2_lockedCount++;
+            }
+            else
+            {
+                olV2_lockedCount = 0;
+            }
+        }
+        else
+        {
+            olV2_lockedCount = 0;
+        }
+
+        /* Step the forced commutation. */
+        OlV2_ForceCommutate();
+        rampCounter = rampStepPeriod;
+
+        /* Rate ramp: shrink rampStepPeriod exponentially each step. */
+        if (rampStepPeriod > MIN_STEP_PERIOD)
+        {
+            uint16_t dec = rampStepPeriod >> OL_V2_RAMP_SHIFT;
+            if (dec == 0u) dec = 1u;
+            if ((uint32_t)rampStepPeriod < (uint32_t)MIN_STEP_PERIOD + dec)
+                rampStepPeriod = MIN_STEP_PERIOD;
+            else
+                rampStepPeriod = (uint16_t)(rampStepPeriod - dec);
+        }
+
+        /* Duty ramp: from RAMP_DUTY_CAP/OL_V2_DUTY_MIN_DEN at start, to
+         * full RAMP_DUTY_CAP at MIN_STEP_PERIOD. Linear in ramp progress
+         * (1 - rampStepPeriod/INITIAL_STEP_PERIOD). */
+        {
+            uint32_t dutyMin = ((uint32_t)RAMP_DUTY_CAP * OL_V2_DUTY_MIN_NUM)
+                              / OL_V2_DUTY_MIN_DEN;
+            uint32_t dutyMax = RAMP_DUTY_CAP;
+            uint32_t progNum = (uint32_t)(INITIAL_STEP_PERIOD - rampStepPeriod);
+            uint32_t progDen = (uint32_t)(INITIAL_STEP_PERIOD - MIN_STEP_PERIOD);
+            if (progDen == 0u) progDen = 1u;
+            if (progNum > progDen) progNum = progDen;
+            rampDuty = dutyMin + ((dutyMax - dutyMin) * progNum) / progDen;
+        }
+
+        /* Lock + ramp-complete → hand off to CL. */
+        if (rampStepPeriod <= MIN_STEP_PERIOD
+            && olV2_lockedCount >= OL_V2_LOCK_THRESHOLD)
+        {
+            EnterCL();
+        }
+        return;
+    }
+#endif /* FEATURE_STARTUP_V2 */
 
     if (phase == SECTOR_PHASE_ALIGN)
     {
@@ -450,7 +601,11 @@ void SectorPI_OlTick(void)
                                       | ((uint16_t)newFp       << 3)
                                       | ((uint16_t)newExpected << 5));
 
+#if FEATURE_IOC_BEMF
+                HAL_Ioc_ArmForSector(position);
+#else
                 HAL_PTG_Start();
+#endif
                 lastCommHR = HAL_ComTimer_ReadTimer();
                 /* Seed blankingEndHR so the very first OL sector's
                  * ProcessBemfSample blanking check uses a sensible
@@ -462,6 +617,17 @@ void SectorPI_OlTick(void)
                     blankingEndHR = (uint16_t)(lastCommHR + (T_ol_HR0 >> 2));
                 }
             }
+#if FEATURE_STARTUP_V2
+            /* ALIGN → OL_RAMP_V2. Hand off into the forced-commutation
+             * spinup phase. The handler in SectorPI_OlTick (above) takes
+             * over from here — stepping commutations at rampStepPeriod
+             * and counting good captures until lock is declared. */
+            olV2_lockedCount = 0;
+            rampDuty         = (RAMP_DUTY_CAP * OL_V2_DUTY_MIN_NUM) / OL_V2_DUTY_MIN_DEN;
+            HAL_PWM_SetDutyCycle(rampDuty);
+            rampCounter      = rampStepPeriod;   /* first step fires after one period */
+            phase            = SECTOR_PHASE_OL_RAMP_V2;
+#else
             /* ALIGN → CL direct. Bump rampDuty to half the ramp-cap so
              * EnterCL inherits a duty that produces torque for the first
              * sector swing (alignment duty is ~2.5%, way too low to
@@ -476,6 +642,7 @@ void SectorPI_OlTick(void)
             rampDuty = RAMP_DUTY_CAP / 2u;
             HAL_PWM_SetDutyCycle(rampDuty);
             EnterCL();
+#endif
         }
         return;
     }
@@ -617,6 +784,13 @@ void SectorPI_Commutate(void)
         sectorSnap     = newSnap;
     }
     HAL_PWM_SetCommutationStep(position);
+
+#if FEATURE_IOC_BEMF
+    /* Edge-triggered BEMF detection: arm the floating-phase pin's CN
+     * interrupt for the new sector's expected edge polarity. The PTG
+     * level-sample path is compiled out when this flag is on. */
+    HAL_Ioc_ArmForSector(position);
+#endif
 
     /* 4. Set blanking + expected ZC for CCP ISR.
      * floatingPhase is written atomically in step-3 above. */
@@ -778,6 +952,15 @@ void SectorPI_Commutate(void)
         uint16_t delayHR = (halfHR > advHR) ? (uint16_t)(halfHR - advHR) : 2U;
         uint16_t targetHR = (uint16_t)(lastCaptureHR_g + delayHR);
 
+        /* Schedule margin clamp was tried 2026-05-21 (`margin ≥ Tp/4`)
+         * to suppress ASAP-fires that produced tiny measuredCommPeriod
+         * (Tact ≈ 50) and poisoned the plausibility filter. Result:
+         * pinned Tact at exactly Tp/4 and the motor stalled in 700 ms.
+         * The PI/scheduler/filter triplet is co-tuned around the
+         * legacy alternating Tact rhythm — clamping it as a unit breaks
+         * everything. Revert + leave the 2× mystery alone for now;
+         * pursue desync via PI gain or HW blanking instead. */
+
         diagDelta = (int16_t)(targetHR - thisCommHR);  /* margin */
         HAL_ComTimer_ScheduleAbsolute(targetHR);
     }
@@ -802,7 +985,7 @@ void SectorPI_Commutate(void)
     {
         if (capValue == CAP_SENTINEL)
         {
-            stallCounter++;
+            if (stallCounter < 0xFFFFU) stallCounter++;   /* saturate, don't wrap */
             if (stallCounter > STALL_THRESHOLD)
             {
                 ShutOff();
@@ -943,20 +1126,32 @@ void SectorPI_TimeTick(void)
         }
     }
 
-    /* Pot→duty direct. Reactive scheduling in Commutate handles
-     * speed — more duty = more torque = faster = earlier ZC. */
+    /* Pot→duty slew-rate limit. Updated 2026-05-21: dropped from 13/ms
+     * to 4/ms after V2 startup exposed real sensorless behavior. With
+     * V2 the motor genuinely tracks the rotor, so rapid duty steps cause
+     * the rotor to lag and desync (seen at 14k→26k transition in 200 ms
+     * → stall). 4/ms gives 0→Q15-max in ~8 s — plenty fast for a flight
+     * controller throttle ramp, conservative enough for the bench pot.
+     * Tune via SECTOR_DUTY_SLEW_UP / _DOWN below if motor responds too
+     * slowly. */
+#ifndef SECTOR_DUTY_SLEW_UP
+#define SECTOR_DUTY_SLEW_UP    4U
+#endif
+#ifndef SECTOR_DUTY_SLEW_DOWN
+#define SECTOR_DUTY_SLEW_DOWN  4U
+#endif
     if (commandEnabled)
     {
         if (actualAmplitude < targetAmplitude)
         {
-            actualAmplitude += 13;
+            actualAmplitude += SECTOR_DUTY_SLEW_UP;
             if (actualAmplitude > targetAmplitude)
                 actualAmplitude = targetAmplitude;
         }
         else if (actualAmplitude > targetAmplitude)
         {
-            if (actualAmplitude > 13)
-                actualAmplitude -= 13;
+            if (actualAmplitude > SECTOR_DUTY_SLEW_DOWN)
+                actualAmplitude -= SECTOR_DUTY_SLEW_DOWN;
             else
                 actualAmplitude = 0;
         }
@@ -1064,6 +1259,7 @@ void SectorPI_TelemGet(TELEM_T *out)
         out->postZcFallingAcc = postZcFallingAcc;
         out->postZcFallingRej = postZcFallingRej;
         out->tMeasHR          = tMeasHRSmooth;      /* smoothed; 0 when MEAS_PI=0 */
+        out->actualStepPeriodHR = actualStepPeriodHR;
     }
 }
 

@@ -31,6 +31,20 @@
 #include <math.h>
 #include <stddef.h>
 
+/* Observer selection — AN1078 SMO (default) or ESMO drop-in. Both
+ * operate on the same AN_SMC_T struct so the dozens of `m->smc.field`
+ * reads below are unchanged across paths. See foc/esmo_observer.h. */
+#if FEATURE_FOC_ESMO
+#include "esmo_observer.h"
+#define OBS_INIT(s)    ESMO_Init(s)
+#define OBS_RESET(s)   ESMO_Reset(s)
+#define OBS_UPDATE(s)  ESMO_Update(s)
+#else
+#define OBS_INIT(s)    AN_SMCInit(s)
+#define OBS_RESET(s)   AN_SMCReset(s)
+#define OBS_UPDATE(s)  AN_SMC_Position_Estimation(s)
+#endif
+
 /* ── Local constants ──────────────────────────────────────────── */
 
 #define AN_TWO_PI          6.28318530717958647692f
@@ -216,7 +230,7 @@ static void an_reset_parameters(AN_Motor_T *m)
     an_init_pi_controllers(m);
 
     /* Re-init estimator */
-    AN_SMCInit(&m->smc);
+    OBS_INIT(&m->smc);
 
     /* Reset startup state */
     m->startupLock = 0;
@@ -301,7 +315,7 @@ static void an_do_control(AN_Motor_T *m, float dt)
             m->vqRef = 0.0f;
             m->vdRef = 0.0f;
 
-            AN_SMCReset(&m->smc);
+            OBS_RESET(&m->smc);
 
             m->startupLock = 0;
             m->startupRamp = 0.0f;
@@ -680,7 +694,7 @@ void AN_MotorFastTick(AN_Motor_T *m,
     m->smc.Ibeta  = m->i_beta;
     m->smc.Valpha = m->v_alpha;   /* from previous tick's inverse Park */
     m->smc.Vbeta  = m->v_beta;
-    AN_SMC_Position_Estimation(&m->smc);
+    OBS_UPDATE(&m->smc);
 
     /* ── 4b. SMC LPF tuning — pin Kslf to commanded speed (startupRamp).
      *

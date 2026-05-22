@@ -17,7 +17,60 @@
 /* ── Mode select (needs to come BEFORE the PWM block, since
  *      PWMFREQUENCY_HZ is mode-dependent) ───────────────────────── */
 #ifndef FEATURE_FOC_AN1078
-#define FEATURE_FOC_AN1078  0
+#define FEATURE_FOC_AN1078  1   /* 2026-05-22: FOC mode for ESMO bench testing.
+                                   Flip back to 0 to return to 6-step. */
+#endif
+
+/* ── 6-step BEMF detection method ──────────────────────────────────
+ * 0 = PTG-triggered level sample (current, proven 225 k eRPM)
+ * 1 = Interrupt-on-Change edge capture (experimental — see
+ *     docs/ioc_bemf_detection_plan.md)
+ *
+ * IOC path is edge-true (no PWM-rate latency), uses two CN interrupt
+ * vectors (Port A for BEMF_C/RA10, Port B for BEMF_A/RB9 + BEMF_B/RB8).
+ * Per sector only ONE pin is armed; the other port's interrupt enable
+ * is masked. Five-layer rejection: demag interval gate, static
+ * blanking, 3-read consensus, polarity match, speed-adaptive widths.
+ *
+ * Only meaningful when FEATURE_FOC_AN1078=0 (FOC uses currents not
+ * BEMF). Mutually exclusive with the PTG path. */
+#ifndef FEATURE_IOC_BEMF
+#define FEATURE_IOC_BEMF    0   /* 2026-05-22: disabled — FOC mode active.
+                                   Flip back to 1 when returning to 6-step. */
+#endif
+#if FEATURE_IOC_BEMF && FEATURE_FOC_AN1078
+#error "FEATURE_IOC_BEMF is for 6-step path only — disable FEATURE_FOC_AN1078"
+#endif
+
+/* FOC ESMO (Enhanced SMO): TI-C2000-style observer drop-in replacement
+ * for AN1078 SMO. Adds adaptive Kp PLL, adaptive Kslide, closed-form
+ * theta-offset (atan2(speedRef·offsetSF, Kslf)), Ed/|E| discriminator
+ * with full-quadrant pull-in, and speed LPF. Default OFF — flip to 1
+ * to compile in the ESMO path; AN_SMC functions still callable for
+ * fallback. Mutually selected with AN1078 via OBS_* macros in
+ * an1078_motor.c. See docs/ti_esmo_inventory_2026_05_22.md. */
+#ifndef FEATURE_FOC_ESMO
+#define FEATURE_FOC_ESMO    1   /* 2026-05-22: ESMO observer default ON. Bench-
+                                   tuned config: Ed/|E| PLL + adaptive Kp (3×) +
+                                   speed LPF. Side-by-side vs AN1078 baseline:
+                                   top-end Id range ±13 (vs ±24), ω jitter 3× lower.
+                                   Peak ~210k eRPM (within 2% of baseline 213k).
+                                   Set to 0 to revert to AN1078 SMO baseline. */
+#endif
+#if FEATURE_FOC_ESMO && !FEATURE_FOC_AN1078
+#error "FEATURE_FOC_ESMO requires FEATURE_FOC_AN1078=1 (ESMO is an observer alternative)"
+#endif
+
+/* Startup V2: proper forced-commutation spinup + lock-detect (2026-05-21).
+ * Default OFF — preserves the existing ALIGN→CL-direct path so nothing
+ * regresses on the bench. Set to 1 to enable the new startup which:
+ *   ALIGN  →  OL_RAMP_V2 (forced comm, rate & duty ramp, captures observed)
+ *          →  lock detect (N consecutive plausible captures)
+ *          →  CL with PI seeded from observed Tp
+ * Does NOT modify the IOC/PTG ZC detection path. */
+#ifndef FEATURE_STARTUP_V2
+#define FEATURE_STARTUP_V2  1   /* default ON 2026-05-21 for bench validation —
+                                   flip back to 0 once tuned */
 #endif
 
 /* ── Motor Profile Selection ──────────────────────────────────────── */
@@ -45,9 +98,11 @@
  *   make MP_EXTRA_CC_PRE="-DPWMFREQUENCY_HZ_FOC=60000"
  */
 #ifndef PWMFREQUENCY_HZ_6STEP
-#define PWMFREQUENCY_HZ_6STEP   60000U   /* 6-step: 60 kHz known-working
-                                          * (CK 225k milestone + AK port).
-                                          * 30 kHz also valid; 40 kHz dead-end. */
+#define PWMFREQUENCY_HZ_6STEP   60000U   /* 6-step: 60 kHz proven for PTG path
+                                          * at 225k eRPM milestone. 30 kHz also
+                                          * works for PTG; 40 kHz dead-end.
+                                          * (30 kHz tested with IOC path — was
+                                          * counter-productive, see docs.) */
 #endif
 #ifndef PWMFREQUENCY_HZ_FOC
 #define PWMFREQUENCY_HZ_FOC     30000U   /* FOC first-light at 30 kHz; bump
@@ -325,7 +380,14 @@
 #endif
 
 #define STARTUP_TIME_MS      1000U
-#define STALL_THRESHOLD      200U
+/* Stall threshold: weighted miss counter (+1/sector miss, -2/sector
+ * accept). Stored as uint16_t in sector_pi.c. At 19 k eRPM (~1.9 kHz
+ * commutation rate) with 20 % accept ratio, the counter climbs ~930/s
+ * during desync. 200 tripped in ~210 ms — too eager when real ZCs are
+ * intermittently absent during a brief lag. 1000 gives ~1 s recovery
+ * window before ShutOff. Bumped 2026-05-21 after CNSTYLE=1 fix exposed
+ * real ZC behavior. */
+#define STALL_THRESHOLD      1000U
 #define MIN_PERIOD_HR           10U     /* Timer period floor (~1.5M eRPM safety) */
 
 /* SCCP4 HR timer: CLKSEL=000 (Std Speed Periph Clock = 100 MHz),

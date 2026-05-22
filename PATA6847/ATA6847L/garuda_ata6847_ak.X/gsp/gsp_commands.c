@@ -127,6 +127,9 @@ void GSP_DispatchCommand(uint8_t cmdId, const uint8_t *payload, uint8_t payloadL
 #if FEATURE_FOC_AN1078
             f |= GSP_FEATURE_FOC_AN1078;    /* bit 23 — host switches to FOC decoder */
 #endif
+#if FEATURE_FOC_ESMO
+            f |= (1UL << 22);               /* bit 22 — ESMO observer active */
+#endif
             memcpy(&info[8],  &f, 4);
             uint32_t pwmHz = PWMFREQUENCY_HZ;
             memcpy(&info[12], &pwmHz, 4);
@@ -493,7 +496,7 @@ void GSP_TelemTick(void)
 
     /* Speed/Timing (offset 18-31) */
     memcpy(&d[18], &t.timerPeriod, 2);       /* stepPeriod → timerPeriod */
-    memcpy(&d[20], &t.timerPeriod, 2);       /* stepPeriodHR → same */
+    memcpy(&d[20], &t.actualStepPeriodHR, 2); /* stepPeriodHR → raw measured (1× real) */
     uint32_t eRpm = SectorPI_ErpmGet();
     memcpy(&d[22], &eRpm, 4);               /* eRpm */
     memcpy(&d[26], &t.sectorCount, 2);      /* goodZc → sectorCount low */
@@ -504,7 +507,7 @@ void GSP_TelemTick(void)
     memcpy(&d[30], &t.diagDelta, 2);         /* prevZcInterval → PI delta (signed) */
     memcpy(&d[32], &t.diagCaptures, 2);      /* icAccepted → captures accepted */
     memcpy(&d[34], &t.diagPiRuns, 2);        /* icFalse → PI run count */
-    d[36] = t.stallCounter;                  /* filterLevel → stallCounter */
+    d[36] = (t.stallCounter > 0xFFU) ? 0xFFU : (uint8_t)t.stallCounter;  /* stallCounter, byte-saturated */
     /* Pack both SP bits: bit0 = active, bit1 = request.
      * 0 = no request, not active
      * 2 = request latched but SP not yet applied (boundary lag / error)
@@ -666,6 +669,36 @@ void GSP_TelemTick(void)
         gIbPkMax   = gIbPkMin   = gIb_mA;
         gIbusPkMax = gIbusPkMin = gIbus_mA;
     }
+
+#if FEATURE_IOC_BEMF
+    /* IOC counters overlay onto PTG counter slots (which are always
+     * zero when FEATURE_IOC_BEMF=1 — PTG never starts in IOC mode).
+     * pot_capture.py reads these offsets as ptgFires/ptgRisingAcc/etc.,
+     * so a "ptgFires" >0 in IOC mode is actually iocAcceptCount.
+     * Slot map (firmware d[]):
+     *   d[72..75]   ptgFires         ←  iocAcceptCount
+     *   d[76..79]   ptgRisingAcc     ←  iocDemagReject
+     *   d[80..83]   ptgRisingRej     ←  iocBlankReject
+     *   d[84..87]   ptgFallingAcc    ←  iocPolarityReject
+     *   d[88..91]   ptgFallingRej    ←  iocFiresPortA
+     *   d[92..95]   postZcRisingAcc  ←  iocIntervalReject (Layer 6)
+     *   d[96..99]   diagPiMissRising ←  iocPolUnanimous (L4 unanimous-wrong)
+     *   d[172..175] ptgSkipped       ←  iocFiresPortB                 */
+    {
+        extern volatile uint32_t iocAcceptCount, iocDemagReject;
+        extern volatile uint32_t iocBlankReject, iocPolarityReject;
+        extern volatile uint32_t iocIntervalReject, iocPolUnanimous;
+        extern volatile uint32_t iocFiresPortA, iocFiresPortB;
+        memcpy(&d[72],  &iocAcceptCount,    4);
+        memcpy(&d[76],  &iocDemagReject,    4);
+        memcpy(&d[80],  &iocBlankReject,    4);
+        memcpy(&d[84],  &iocPolarityReject, 4);
+        memcpy(&d[88],  &iocFiresPortA,     4);
+        memcpy(&d[92],  &iocIntervalReject, 4);   /* L6 reject count */
+        memcpy(&d[96],  &iocPolUnanimous,   4);   /* L4 unanimous-wrong */
+        memcpy(&d[172], &iocFiresPortB,     4);
+    }
+#endif
 
     GSP_SendResponse(GSP_CMD_TELEM_FRAME, snap, sizeof(snap));
 #endif /* !FEATURE_FOC_AN1078 — closes the 6-step telemetry block */

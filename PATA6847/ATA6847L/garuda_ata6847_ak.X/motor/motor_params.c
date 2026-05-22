@@ -48,6 +48,10 @@ void Params_InitDefaults(void)
     escParams.phaseAdvanceDegX10 = (uint16_t)(PHASE_ADVANCE_DEG * 10.0f + 0.5f);
     escParams.piKpShift          = PI_KP_SHIFT;
     escParams.piKiShift          = PI_KI_SHIFT;
+    /* Bench tested 15% with FEATURE_IOC_BEMF=1 on 2026-05-21 — desync
+     * within 1 second because at high speed (Tp ≈ 350 HR ticks) 15%
+     * blanking shrinks to ~30 µs which is less than demag time under
+     * load. Stay at 25%. */
     escParams.blankingPct        = 25;
     escParams.minPeriodHr        = MIN_PERIOD_HR;
 

@@ -27,7 +27,7 @@ typedef struct {
     uint16_t actualAmplitude;
     uint16_t measuredSpeed;
     uint8_t  position;
-    uint8_t  stallCounter;
+    uint16_t stallCounter;   /* widened 2026-05-21 so STALL_THRESHOLD can exceed 255 */
     uint32_t sectorCount;
     uint16_t statusEvents;
     bool     running;
@@ -51,6 +51,7 @@ typedef struct {
     uint32_t postZcFallingAcc;
     uint32_t postZcFallingRej;
     uint16_t tMeasHR;               /* smoothed commutation interval */
+    uint16_t actualStepPeriodHR;    /* raw measured comm-to-comm HR (1× real) */
 } TELEM_T;
 
 void     SectorPI_Init(void);
