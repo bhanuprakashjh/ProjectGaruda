@@ -152,12 +152,86 @@ void ESMO_Reset(AN_SMC_T *s)
     s->Kslf      = s->KslfMin;
     s->KslfFinal = s->KslfMin;
 
+    /* STA integrator state — reset BEMF estimate to 0 on observer reset.
+     * Harmless when FEATURE_ESMO_STA=0 (fields unused). */
+    s->z2_a = 0.0f;
+    s->z2_b = 0.0f;
+
 #if ESMO_KSLIDE_MODE == 1
     s->Kslide = ESMO_KSLIDE_MIN;           /* restart ramp on reset */
 #endif
 
     pll_reset(&s->pll);
 }
+
+#if FEATURE_ESMO_STA
+/* ── Super-twisting (STA) observer ──────────────────────────────
+ *
+ * One function combines current-observer update + BEMF reconstruction.
+ * BEMF is recovered directly from the second-order integrator z2 — no
+ * separate LPF stage, no Kslf, no 1/2 scaling factor.
+ *
+ * Sign convention: literature uses i_err = i_meas - i_hat; we internally
+ * compute that as -IalphaError (where IalphaError = EstI - I_meas).
+ * IalphaError is still maintained for telemetry/diagnostics. */
+static inline float esmo_safe_sqrt(float v)
+{
+    return (v > 0.0f) ? sqrtf(v) : 0.0f;
+}
+
+static inline void EsmoCalcEstI(AN_SMC_T *s)
+{
+    /* Current observer model with z2 as the BEMF estimate.
+     * z1 is the STA proportional-like correction added directly to di/dt
+     * (in plant-current units; G·Ts already inside Gsmopos · ... no:
+     *  we add Ts·z1/L_motor via the existing G constant since
+     *  G = Ts/L). */
+    s->IalphaError = s->EstIalpha - s->Ialpha;
+    s->IbetaError  = s->EstIbeta  - s->Ibeta;
+
+    /* Standard i_err = i - i_hat = -IalphaError */
+    float ierr_a = -s->IalphaError;
+    float ierr_b = -s->IbetaError;
+
+    float sign_a = (ierr_a >= 0.0f) ? 1.0f : -1.0f;
+    float sign_b = (ierr_b >= 0.0f) ? 1.0f : -1.0f;
+
+    float z1_a = ESMO_STA_K1 * esmo_safe_sqrt(esmo_abs(ierr_a)) * sign_a;
+    float z1_b = ESMO_STA_K1 * esmo_safe_sqrt(esmo_abs(ierr_b)) * sign_b;
+
+    /* z2 integrators — directly accumulate the BEMF estimate (V) */
+    s->z2_a += ESMO_STA_K2 * sign_a * AN_TS;
+    s->z2_b += ESMO_STA_K2 * sign_b * AN_TS;
+
+    /* BEMF = z2.  No LPF, no scaling.  Both stages set to same value
+     * so downstream code reading EalphaFinal/EbetaFinal gets the BEMF
+     * estimate directly. */
+    s->Ealpha      = s->z2_a;
+    s->Ebeta       = s->z2_b;
+    s->EalphaFinal = s->z2_a;
+    s->EbetaFinal  = s->z2_b;
+
+    /* Observer state update: include z1 as correction.  Gsmopos = Ts/L
+     * so multiplying z1 (V/s) by Gsmopos = (V·Ts)/L = same units as the
+     * existing V term.  Mathematically:
+     *   EstI_new = F·EstI + (Ts/L)·(V − e_hat) + Ts·z1/L
+     *           = F·EstI + G·(V − e_hat + z1·Ts/G·L)
+     * Simpler: precompute as additive correction in current units. */
+    s->EstIalpha = s->Fsmopos * s->EstIalpha
+                 + s->Gsmopos * (s->Valpha - s->Ealpha + AN_TS * z1_a);
+    s->EstIbeta  = s->Fsmopos * s->EstIbeta
+                 + s->Gsmopos * (s->Vbeta  - s->Ebeta  + AN_TS * z1_b);
+
+    /* Keep Zalpha/Zbeta set to z1 for diagnostic compatibility — anyone
+     * reading them sees the STA P-term. */
+    s->Zalpha = z1_a;
+    s->Zbeta  = z1_b;
+}
+
+/* No-op for STA — BEMF is already in Ealpha/EalphaFinal from CalcEstI. */
+static inline void EsmoCalcBEMF(AN_SMC_T *s) { (void)s; }
+
+#else  /* classic SMC + LPF (original AN1078) */
 
 /* ── CalcEstI: current observer + sliding switching ───────────── */
 static inline void EsmoCalcEstI(AN_SMC_T *s)
@@ -196,6 +270,8 @@ static inline void EsmoCalcBEMF(AN_SMC_T *s)
     s->Ebeta       += s->Kslf      * (s->Zbeta  - s->Ebeta);
     s->EbetaFinal  += s->KslfFinal * (s->Ebeta  - s->EbetaFinal);
 }
+
+#endif /* FEATURE_ESMO_STA */
 
 /* ── ESMO PLL: Ed/|E| projection with full-quadrant pull-in + adaptive Kp
  *
@@ -341,7 +417,18 @@ void ESMO_Update(AN_SMC_T *s)
      * linear-region.  offsetSF = K·Kslf/1 ≈ 5e-5 ish; will need bench
      * tuning. */
 #ifndef ESMO_THETA_OFFSET_MODE
-#define ESMO_THETA_OFFSET_MODE  0       /* 0=LINEAR, 1=ATAN2 */
+#define ESMO_THETA_OFFSET_MODE  0       /* 0=LINEAR, 1=ATAN2.
+                                         * Tried mode 1 with SF=Ts on
+                                         * 2026-05-22 — atan2 lag at
+                                         * idle (ω=2900, Kslf=0.097) is
+                                         * 45° vs linear's 17°, and the
+                                         * 28° jump at OL→CL handoff
+                                         * made the motor reverse 4000
+                                         * rad/s in 200ms.  OL→CL is
+                                         * empirically tuned around the
+                                         * linear-mode offset value.
+                                         * Stay on mode 0 unless OL→CL
+                                         * handoff is reworked. */
 #endif
 #ifndef ESMO_OFFSET_SF
 #define ESMO_OFFSET_SF          5.0e-5f /* atan2 scale, mode 1 only */

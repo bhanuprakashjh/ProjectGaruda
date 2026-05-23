@@ -152,8 +152,9 @@ def decode_foc_snapshot(data):
         s['calDone'] = data[109]
     else:
         s['calDone'] = 0
-    # Fields removed from this layout (now zeroed in firmware): bemfSq, dwell.
-    s['bemfSq'] = 0.0
+    # bemfSq = |Eα|² + |Eβ|² (V²) — observer BEMF signal magnitude.
+    # Populated at byte 14 since 2026-05-23.  dwell still unused.
+    s['bemfSq'] = struct.unpack_from('<f', data, 14)[0] if len(data) >= 18 else 0.0
     s['dwell']  = 0
     return s
 

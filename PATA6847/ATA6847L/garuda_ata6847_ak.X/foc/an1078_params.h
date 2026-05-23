@@ -282,11 +282,73 @@ extern "C" {
  *  correction without saturating.  Bumping above this breaks
  *  low-speed handoff (Z dominates over weak BEMF, observer can't lock). */
 #define AN_SMC_KSLIDE               2.5f
+/* Bench history 2026-05-23:
+ *   2.5 → 5.0: |E|² rose 7 → 30 V² (closer to physics ~46), confirming
+ *              observer was previously running at ~1/4 signal strength.
+ *              BUT Id span 17 → 45 A, Iq span 12 → 48 A, vbus dipped to
+ *              22V on transients (foc_run_132249).  Rest of loop was
+ *              implicitly tuned around the *attenuated* signal; restoring
+ *              it exposes downstream gain mismatch.  Reverted to 2.5.
+ * To use Kslide=5 (or higher), the PLL and current PI gains need scaling
+ * down to match.  Not done.  Quiet, weak-signal observer is the
+ * working point until a coordinated tuning pass is undertaken. */
 
 /** Maximum linear-region current error (A).  Below this, Z = K·err/MaxErr;
  *  above, Z saturates at ±K.  Bigger boundary keeps Z in linear range
  *  for 4A-class operating currents on low-impedance motors. */
 #define AN_SMC_MAX_LINEAR_ERR       1.0f
+
+/* ── Super-twisting algorithm (STA) observer ───────────────────
+ *
+ * Higher-order sliding-mode observer.  Replaces the chattering Z signal
+ * + LPF chain with two cascaded continuous integrators that reconstruct
+ * BEMF in finite time without lag and without the 1/2 scaling factor.
+ *
+ * Plant:        L·di/dt   = V − R·i − e
+ * Observer:     L·di_hat/dt = V − R·i_hat − e_hat − L·z1
+ *               de_hat/dt   = k2 · sign(i_err)            ← second integrator
+ *               z1          = k1 · √|i_err| · sign(i_err) ← first-order term
+ *
+ * i_err = i_meas − i_hat (standard convention; opposite sign from our
+ * existing IalphaError struct field which still holds EstI − I).
+ *
+ * At sliding: i_err → 0 in finite time, e_hat → e exactly.  No LPF, no
+ * phase lag, no scaling factor.
+ *
+ * Gains (conservative starting point — bench-tune from here):
+ *   ESMO_STA_K1 — proportional-like gain, units V·s^(−1/2)·A^(−1/2).
+ *     Levant: k1 > √(2·k2·(1+p)/(1−p)) for some p in (0,1).  Pick
+ *     k1 ≈ 1500 — covers reasonable disturbance bound.
+ *   ESMO_STA_K2 — integrator gain, units V/s.  Must exceed max |de/dt|
+ *     which is ω²·λ ≈ 23000²·0.000583 ≈ 308 kV/s at top.  Pick k2 ≈
+ *     500 kV/s = 5e5.
+ *
+ * If motor doesn't lock at startup, lower k1 (overshooting).
+ * If observer lags at top, raise k2 (can't track BEMF rate).
+ * If observer chatters in steady state, raise k1 (insufficient damping). */
+#ifndef FEATURE_ESMO_STA
+#define FEATURE_ESMO_STA            0   /* 1 = use STA, 0 = use classic SMC.
+                                         *
+                                         * 2026-05-23 first bench (foc_run_133838):
+                                         * STA diverged catastrophically — z2
+                                         * integrators ran to 5×10⁶ V because
+                                         * sign(i_err) had sustained bias during
+                                         * OL ramp (observer-model angle vs real
+                                         * rotor angle mismatch).  At CL handoff
+                                         * z2 was garbage, PLL locked wrong, motor
+                                         * stalled at CL with Iq saturated at 18A.
+                                         *
+                                         * To make STA work properly we need:
+                                         *  (a) anti-windup on z2 (clamp ±30V)
+                                         *  (b) suppress integration during OL
+                                         *      (use classic SMC until CL)
+                                         *  (c) initial-value priming at OL→CL
+                                         *  (d) co-tuned k1, k2 via Lyapunov
+                                         * Code preserved under flag for when
+                                         * that engineering investment is made. */
+#endif
+#define ESMO_STA_K1                 1500.0f
+#define ESMO_STA_K2                 500000.0f
 
 /** Phase shift applied to atan2 output (radians).
  *

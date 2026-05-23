@@ -57,6 +57,14 @@ static void BuildFocSnapshot(uint8_t *snap)
     memcpy(&snap[10], &ibus, 2);
     memcpy(&snap[12], &ibus, 2);
 
+    /* |E|² = Eα² + Eβ² — observer BEMF signal magnitude squared (V²).
+     * Used as a diagnostic: should track ω²·λ² (≈ 180 V² at 23k rad/s
+     * on the 2810 @ λ=0.000583).  If it collapses while ω stays
+     * non-zero → PLL holding stale angle while SMC has lost track. */
+    float bemf_sq = s_foc_an.smc.EalphaFinal * s_foc_an.smc.EalphaFinal
+                  + s_foc_an.smc.EbetaFinal  * s_foc_an.smc.EbetaFinal;
+    memcpy(&snap[14], &bemf_sq, 4);
+
     uint32_t st = gSystemTick;
     memcpy(&snap[60], &st, 4);
     uint32_t uptime = st / 1000U;

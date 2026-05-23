@@ -79,6 +79,13 @@ typedef struct {
      *
      * Reuses the existing pll_estimator.c block (already used by v2/v3). */
     PLL_t pll;
+
+    /* Super-twisting algorithm (STA) integrator state — only used when
+     * FEATURE_ESMO_STA=1.  z2_α/β are the second-order integrators that
+     * directly reconstruct the back-EMF (no LPF, no 1/2 factor).
+     * Reset to 0 on observer init/reset. */
+    float z2_a;
+    float z2_b;
 } AN_SMC_T;
 
 /* ── Initialization ────────────────────────────────────────── */
