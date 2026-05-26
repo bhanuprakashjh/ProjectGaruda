@@ -37,7 +37,13 @@ extern "C" {
 
 /* Duty cycle limits */
 #define MIN_DUTY                    (uint32_t)(DEADTIME_COUNTS + DEADTIME_COUNTS)
-#define MAX_DUTY                    (LOOPTIME_TCY - (uint32_t)(DEADTIME_COUNTS + DEADTIME_COUNTS))
+/* Raised to 99% (2026-05-26): old formula reserved 2×deadtime of L-side on-time
+ * (max 94.6% at 45kHz × 300ns DT). Past ~94% the L-FET is going to be suppressed
+ * anyway (PWM peripheral handles deadtime internally — when requested H-pulse
+ * leaves no room for L+2×DT, L just doesn't fire). So allow up to 99% and let
+ * the module take over at the top. Effectively this gives BC-like behavior
+ * above ~94% without an explicit BC mode. */
+#define MAX_DUTY                    ((uint32_t)((LOOPTIME_TCY * 99UL) / 100UL))
 
 /* Alignment duty cycle in PWM counts */
 #define ALIGN_DUTY                  (uint32_t)((ALIGN_DUTY_PERCENT / 100.0f) * LOOPTIME_TCY)
