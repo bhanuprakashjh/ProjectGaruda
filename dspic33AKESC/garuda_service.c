@@ -2727,8 +2727,18 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                     HAL_CMP3_SetThreshold(RT_OC_CMP3_STARTUP_DAC);
 #endif
 #if FEATURE_DESYNC_RECOVERY
-                    if (garudaData.runCommandActive)
+                    if (garudaData.runCommandActive
+#if !FEATURE_THROTTLE_ZERO_AUTO_DISARM
+                        || true   /* AUTO_DISARM=0: stay in the run loop even
+                                   * if some earlier path cleared the flag.
+                                   * Re-arm here so the recovery exit can
+                                   * restart instead of falling to IDLE. */
+#endif
+                       )
                     {
+#if !FEATURE_THROTTLE_ZERO_AUTO_DISARM
+                        garudaData.runCommandActive = true;
+#endif
                         HAL_MC1PWMDisableOutputs();
                         garudaData.state = ESC_RECOVERY;
                         garudaData.recoveryCounter = RT_DESYNC_COAST_COUNTS;
@@ -3261,6 +3271,15 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
                  * regardless of throttle level. Pot-at-zero is treated as
                  * "run at idle duty", not "stop". */
                 bool restartGateThrottle = true;
+#endif
+
+#if !FEATURE_THROTTLE_ZERO_AUTO_DISARM
+                /* AUTO_DISARM=0: never run out of restart attempts.
+                 * Reset the counter when it would otherwise cap, so the
+                 * motor keeps restarting indefinitely at any throttle. */
+                if (garudaData.desyncRestartAttempts >= RT_DESYNC_MAX_RESTARTS)
+                    garudaData.desyncRestartAttempts = 0;
+                garudaData.runCommandActive = true;
 #endif
 
                 if (garudaData.runCommandActive &&
