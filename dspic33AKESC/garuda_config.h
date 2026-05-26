@@ -400,13 +400,23 @@ extern "C" {
  * mode: rapid throttle drop from 240k eRPM caused Vbus to climb 25V→32V before
  * triggering a (mislabeled) UV fault. Holding duty constant when Vbus > ON
  * threshold lets the motor coast down naturally instead of dumping regen
- * energy into the bus capacitor. ADC values at ratio 23.0:
- *   1500 ADC ≈ 28V (regen brake engages)
- *   1380 ADC ≈ 26V (regen brake releases) */
+ * energy into the bus capacitor.
+ *
+ * Initial 2V hysteresis (28V/26V) was too narrow — brake chattered on/off as
+ * motor briefly decelerated and Vbus dipped under 26V between regen pulses.
+ * Widened to 4V hysteresis + minimum engage duration (~10ms = 240 ticks at
+ * 24kHz ADC ISR) to make the brake "sticky" — once engaged, stays engaged
+ * for at least N ticks regardless of Vbus dips, then releases only if Vbus
+ * has fallen all the way to OFF threshold.
+ *
+ * ADC values at ratio 23.0:
+ *   1500 ADC ≈ 28V (engage)
+ *   1290 ADC ≈ 24V (release — 4V hysteresis) */
 #define FEATURE_VBUS_REGEN_BRAKE 1
 #if FEATURE_VBUS_REGEN_BRAKE
-#define VBUS_REGEN_BRAKE_ON_ADC   1500    /* ~28V — engage brake (freeze duty-down) */
-#define VBUS_REGEN_BRAKE_OFF_ADC  1380    /* ~26V — release brake (resume slewing) */
+#define VBUS_REGEN_BRAKE_ON_ADC    1500    /* ~28V — engage brake */
+#define VBUS_REGEN_BRAKE_OFF_ADC   1290    /* ~24V — release brake (4V hysteresis) */
+#define VBUS_REGEN_BRAKE_MIN_TICKS 240     /* Minimum engaged duration ~10ms at 24kHz */
 #endif
 
 /* BEMF Integration Shadow Estimator (Phase E) */

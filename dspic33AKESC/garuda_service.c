@@ -2920,19 +2920,26 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                     else if (delta < 0)
                     {
 #if FEATURE_VBUS_REGEN_BRAKE
-                        /* Vbus-aware regen brake. When motor regenerates into
-                         * the bus (BEMF > applied during throttle-down at high
-                         * RPM), Vbus rises. Holding duty constant while Vbus is
-                         * elevated lets the motor coast down via friction +
-                         * residual regen, instead of dumping regen energy into
-                         * the bus capacitor. Hysteresis prevents chatter. */
+                        /* Vbus-aware regen brake — sticky version. Once engaged
+                         * (Vbus rose above ON threshold during a regen event),
+                         * stays engaged for minimum hold ticks even if Vbus
+                         * briefly dips, then releases only when Vbus falls all
+                         * the way to OFF threshold (wide hysteresis). This
+                         * prevents the chatter that let duty keep dropping
+                         * across regen pulses in the prior implementation. */
                         static bool regenBrakeActive = false;
+                        static uint16_t regenBrakeHoldTicks = 0;
                         if (regenBrakeActive) {
-                            if (garudaData.vbusRaw < VBUS_REGEN_BRAKE_OFF_ADC)
+                            if (regenBrakeHoldTicks > 0)
+                                regenBrakeHoldTicks--;
+                            if (regenBrakeHoldTicks == 0
+                                && garudaData.vbusRaw < VBUS_REGEN_BRAKE_OFF_ADC)
                                 regenBrakeActive = false;
                         } else {
-                            if (garudaData.vbusRaw > VBUS_REGEN_BRAKE_ON_ADC)
+                            if (garudaData.vbusRaw > VBUS_REGEN_BRAKE_ON_ADC) {
                                 regenBrakeActive = true;
+                                regenBrakeHoldTicks = VBUS_REGEN_BRAKE_MIN_TICKS;
+                            }
                         }
                         if (regenBrakeActive) {
                             mappedDuty = prevDuty;  /* Freeze — don't lower duty */
