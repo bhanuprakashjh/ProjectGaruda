@@ -2941,12 +2941,22 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                                 regenBrakeHoldTicks = VBUS_REGEN_BRAKE_MIN_TICKS;
                             }
                         }
+                        uint32_t effectiveDownRate = RT_DUTY_SLEW_DOWN_RATE;
                         if (regenBrakeActive) {
-                            mappedDuty = prevDuty;  /* Freeze — don't lower duty */
-                        } else
-#endif
+                            /* Slow the slew-down rather than freezing entirely.
+                             * Motor still decelerates during regen but at a rate
+                             * the bus capacitor can absorb. Avoids the clumsy
+                             * "can't decelerate" feel of a hard freeze. */
+                            effectiveDownRate = RT_DUTY_SLEW_DOWN_RATE
+                                              / VBUS_REGEN_BRAKE_SLEW_DIVISOR;
+                            if (effectiveDownRate == 0) effectiveDownRate = 1;
+                        }
+                        if ((uint32_t)(-delta) > effectiveDownRate)
+                            mappedDuty = prevDuty - effectiveDownRate;
+#else
                         if ((uint32_t)(-delta) > RT_DUTY_SLEW_DOWN_RATE)
                             mappedDuty = prevDuty - RT_DUTY_SLEW_DOWN_RATE;
+#endif
                     }
                     prevDuty = mappedDuty;
                 }

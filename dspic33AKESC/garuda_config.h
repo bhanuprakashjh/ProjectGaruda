@@ -277,9 +277,13 @@ extern "C" {
 #define ZC_DEMAG_BLANK_EXTRA_PERCENT 20    /* More aggressive than A2212 (18).
                                             * Low L = longer demag tail under switching */
 #define HWZC_CROSSOVER_ERPM       1500     /* Enable HWZC at morph handoff (same as A2212) */
-#define CL_IDLE_DUTY_PERCENT         6     /* Bare 2810 needs minimal idle torque.
-                                            * 24V * 6% / 0.050Ω = 29A if stalled at idle;
-                                            * in practice motor free-spins fast at 6% */
+#define CL_IDLE_DUTY_PERCENT         8     /* Match RAMP_DUTY_PERCENT so pot-at-zero CL idle
+                                            * is the same as the OL→CL handoff duty. Lower
+                                            * idle (6%) made the motor cross sectors slowly
+                                            * enough at low pot that detection became
+                                            * marginal. Sticking to startup duty gives the
+                                            * motor consistent torque budget across the
+                                            * full throttle range. */
 #define SINE_PHASE_OFFSET_DEG       60     /* Same as other profiles */
 #define OC_LIMIT_MA              20000     /* CMP3 chop. Board shunt saturates ~22A */
 #define OC_STARTUP_MA            22000     /* Near sensor saturation — relaxed during startup */
@@ -417,6 +421,15 @@ extern "C" {
 #define VBUS_REGEN_BRAKE_ON_ADC    1500    /* ~28V — engage brake */
 #define VBUS_REGEN_BRAKE_OFF_ADC   1290    /* ~24V — release brake (4V hysteresis) */
 #define VBUS_REGEN_BRAKE_MIN_TICKS 240     /* Minimum engaged duration ~10ms at 24kHz */
+#define VBUS_REGEN_BRAKE_SLEW_DIVISOR 16   /* When brake engaged, slew-down rate
+                                            * is reduced by this divisor (was a
+                                            * full freeze, which made deceleration
+                                            * feel clumsy — user couldn't slow
+                                            * motor down while Vbus held above
+                                            * brake-off threshold).
+                                            * Default 5%/ms ÷ 16 = 0.31%/ms during
+                                            * brake = ~320ms full-scale shutdown.
+                                            * Bus cap absorbs regen at this rate. */
 #endif
 
 /* BEMF Integration Shadow Estimator (Phase E) */
