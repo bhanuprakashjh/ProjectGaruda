@@ -2364,6 +2364,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                 if (garudaData.throttle >= ARM_THROTTLE_ZERO_ADC)
                     hasSeenThrottle = true;
 
+#if FEATURE_THROTTLE_ZERO_AUTO_DISARM
                 if (hasSeenThrottle && garudaData.throttle < ARM_THROTTLE_ZERO_ADC)
                 {
                     if (++zeroThrottleCount >= (PWMFREQUENCY_HZ / 20))  /* 50ms */
@@ -2388,6 +2389,13 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                 {
                     zeroThrottleCount = 0;
                 }
+#else
+                /* Throttle-zero auto-disarm disabled — motor keeps running at
+                 * CL_IDLE_DUTY when pot is at zero. Use GSP stop or power cycle
+                 * to stop the motor. */
+                (void)hasSeenThrottle;
+                (void)zeroThrottleCount;
+#endif
             }
 
             /* Detect first entry into CLOSED_LOOP (state transition) */
