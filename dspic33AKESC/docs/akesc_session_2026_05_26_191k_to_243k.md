@@ -330,3 +330,103 @@ All logs in `/media/bhanu1234/Development/ProjectGaruda/gui/logs/`:
 3. **Symmetric OFF-time gate for very low duty** — not needed at startup (98% accept rate confirmed), but might help if/when adding prop load operation where sustained low-duty matters.
 4. **Period floor from measured rotor period** — the safest catch for PI runaway, deferred since PWM gate solved the actual problem.
 5. **Why motor exceeds BEMF formula by ~5%** — believed to be filter comp's effective advance, but not rigorously characterized.
+6. **Filter comp linear approximation** — see appendix below. Theoretically correct form is `sin(arctan(ω·τ))`, current code uses linear `ω·τ` with a magic clamp + 50% fudge factor. Replacing with the algebraic identity `ω·τ / √(1+(ω·τ)²)` would be more correct without calling actual sin/arctan. Not implementing now since we're BEMF-limited at 24V; matters at higher Vbus or different motors where `ω·τ` enters the nonlinear region of arctan.
+
+---
+
+## Appendix A — Filter Compensation: Linear vs True `sin(arctan(ω·τ))`
+
+### Why the offset formula has sin and arctan in it
+
+The PCB BEMF lines run through a passive RC low-pass filter (5.5 kHz cutoff, τ ≈ 30 µs).
+At electrical frequency ω, this filter produces:
+
+- **Phase lag**: φ = arctan(ω·τ)
+- **Amplitude attenuation**: 1 / √(1 + (ω·τ)²)
+
+The comparator fires when the filtered signal crosses CMPLO. We want it to fire at the time that corresponds to the TRUE (pre-filter) zero crossing. To compensate the phase lag φ:
+
+- The pre-filter signal at the comparator-fire moment was at value `amp × sin(φ)` above/below zero
+- So we shift CMPLO by **`amp × sin(φ)`** from neutral — this pulls the comparator firing time back to the true ZC
+
+Combining: **`offset = amp × sin(arctan(ω·τ))`**
+
+That's the theoretically correct form. Sin and arctan live here.
+
+### How the current code approximates it
+
+`hwzc.h:HWZC_ApplyFilterComp()`:
+```c
+uint32_t omegaTauQ15 = HWZC_FILTER_K_Q15 / stepP;
+if (omegaTauQ15 > HWZC_FILTER_MAX_OMEGA_Q15)
+    omegaTauQ15 = HWZC_FILTER_MAX_OMEGA_Q15;     // <-- magic clamp
+uint32_t offset = ((uint32_t)amp * omegaTauQ15) >> 15;
+offset = (offset * HWZC_FILTER_AMP_PCT) / 100UL; // <-- AMP_PCT=50 magic factor
+```
+
+This uses just **`amp × ω·τ × 0.50`** — the linear part of the Taylor series around ω·τ = 0, scaled by 50%.
+
+### Why linear overshoots — and why the clamp exists
+
+The trig identity:
+- **sin(arctan(x)) = x / √(1 + x²)**  (right-triangle identity, no actual sin/arctan calls needed)
+
+| ω·τ | True `x/√(1+x²)` | Linear `x` | Linear overshoot |
+|---|---|---|---|
+| 0.05 (low RPM) | 0.0499 | 0.050 | +0.2% |
+| 0.1 | 0.0995 | 0.100 | +0.5% |
+| 0.3 | 0.287 | 0.300 | +4.5% |
+| 0.5 | 0.447 | 0.500 | +12% |
+| 0.73 (= `MAX_OMEGA_Q15`) | 0.591 | 0.730 | +24% |
+| 1.0 | 0.707 | 1.000 | +41% |
+| 2.0 | 0.894 | 2.000 | +124% |
+| ∞ | **1.0 (saturates)** | ∞ | — |
+
+The linear form is fine for low ω·τ (low RPM) but **diverges to infinity** as RPM climbs, while the true function **asymptotes at 1.0**.
+
+`HWZC_FILTER_MAX_OMEGA_Q15 = 24000` (= ω·τ ≈ 0.73 rad = 42°) was added as a clamp to prevent the linear value from exploding. `HWZC_FILTER_AMP_PCT = 50` was added as a fudge factor to scale the whole thing down because the linear values were too big.
+
+Together, the clamp + fudge accidentally produce an effective curve that's close to `sin(arctan)` in OUR operating range — which is why the code works.
+
+### The correct implementation (deferred)
+
+Replace the linear form with:
+
+```c
+/* offset = amp × sin(arctan(ω·τ)) = amp × ω·τ / √(1 + (ω·τ)²)
+ * Saturates naturally at amp × 1.0 (filter phase → 90° max).
+ * No magic clamp needed. AMP_PCT can be 100 (theoretical).             */
+uint32_t omegaTauQ15 = HWZC_FILTER_K_Q15 / stepP;
+uint64_t omegaTau2 = ((uint64_t)omegaTauQ15 * omegaTauQ15) >> 15;        // (ω·τ)²  in Q15
+uint32_t denom_sq = (1UL << 15) + (uint32_t)omegaTau2;                   // 1 + (ω·τ)²
+uint32_t denom = isqrt_q15(denom_sq);                                    // √(1+(ω·τ)²)
+uint32_t shift = ((uint64_t)omegaTauQ15 << 15) / denom;                  // ω·τ / √(1+(ω·τ)²)
+uint32_t offset = ((uint32_t)amp * shift) >> 15;
+offset = offset * HWZC_FILTER_AMP_PCT / 100UL;
+```
+
+CPU cost: one 64-bit multiply, one division, one integer sqrt — ~50-100 cycles on dsPIC33AK at 200 MHz vs ~5 cycles for the linear form. Per-event in the ISR, this is acceptable.
+
+### Why this is NOT being implemented today
+
+1. **We're BEMF-limited at 24V**, not detection-limited. The motor reaches 243k regardless of which approximation is used.
+2. **The fudge-factor combination happens to work in our operating range** — the clamp + 50% factor accidentally lands in the right neighborhood for `sin(arctan)` between ω·τ = 0.3 and 0.73.
+3. **Risk of subtle regression with no measurable upside** — getting the algebra right would require re-tuning `AMP_PCT` and removing the clamp, with potential to upset the carefully-tuned-at-24V behavior.
+
+### When this WOULD become important
+
+- **6S LiPo testing (22V)** — pushes ω·τ further into the nonlinear region. The linear form's overshoot grows, the fudge factor would need re-tuning.
+- **Different motors** with much higher τ (longer filter time constant) — same issue at lower RPM.
+- **Removing magic constants for code clarity** — the algebraically-correct form is self-contained: no MAX_OMEGA clamp, no fudge factor, just the physics.
+
+### Alternatives to `x/√(1+x²)`
+
+| Form | Pros | Cons |
+|---|---|---|
+| Current linear `x` | Cheap | Diverges, needs clamp + fudge |
+| `x / √(1+x²)` (exact) | Self-saturating, correct | sqrt cost in ISR |
+| `tanh(x)` table lookup | Cheap (~20 cycles) | Slightly different shape; ~10% mismatch at boundary |
+| `arctan(x)` table → then sin | Most accurate decomposition | Two table lookups, more memory |
+| Polynomial fit (Chebyshev or Padé) | No table memory, parameterizable | Tuning effort |
+
+For our use case, `x/√(1+x²)` is the natural choice — it's the exact algebraic equivalent of sin(arctan) and removes the need for any magic constants.
