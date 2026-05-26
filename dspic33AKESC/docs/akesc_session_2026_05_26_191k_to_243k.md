@@ -325,7 +325,7 @@ All logs in `/media/bhanu1234/Development/ProjectGaruda/gui/logs/`:
 
 ## What's Still Open
 
-1. **Throttle rollback regen UV** — backing off throttle from very high RPM can cause regen brake into the bench supply → UV. Needs a duty-down slew limiter.
+1. **Throttle rollback regen → fake UV** — see Appendix B. Backing off throttle from very high RPM causes Vbus to RISE (regen brake into bench supply) up to 32V before dipping and triggering a fault labeled UV. Real fix: duty-down slew limiter and/or brake resistor.
 2. **OC_SW threshold tuning** — currently 18A trip. The 22A saturation events during fast throttle bumps trip this. Could relax or implement smarter current limiting.
 3. **Symmetric OFF-time gate for very low duty** — not needed at startup (98% accept rate confirmed), but might help if/when adding prop load operation where sustained low-duty matters.
 4. **Period floor from measured rotor period** — the safest catch for PI runaway, deferred since PWM gate solved the actual problem.
@@ -430,3 +430,80 @@ CPU cost: one 64-bit multiply, one division, one integer sqrt — ~50-100 cycles
 | Polynomial fit (Chebyshev or Padé) | No table memory, parameterizable | Tuning effort |
 
 For our use case, `x/√(1+x²)` is the natural choice — it's the exact algebraic equivalent of sin(arctan) and removes the need for any magic constants.
+
+---
+
+## Appendix B — Throttle Rollback Regen → "UV Fault"
+
+Two bench runs (`step6_20260526_215456.csv` and `step6_20260526_215904.csv`) tested rapid throttle modulation at 45 kHz / MAX_DUTY=99%. Both ran 250+ samples at 98% duty cleanly. Both showed the same pattern when throttle was reduced from high RPM: **Vbus RISES** (not drops) as the motor regenerates into the supply.
+
+### The actual mechanism
+
+When throttle suddenly drops from 98% → 56% at 240k eRPM:
+1. Applied voltage drops from 24.5V → 14V instantly
+2. Motor still spinning at 240k eRPM (rotor inertia, takes hundreds of ms to slow)
+3. **BEMF at 240k eRPM ≈ 22-23V** (matches the no-load top speed at full duty)
+4. BEMF (22V) >> Applied (14V) → motor regenerates HARD
+5. Energy flows back into the Vbus capacitor → Vbus rises
+6. If the bench supply can't absorb the regen current, Vbus keeps climbing
+
+### What's happening at the supply
+
+Most bench supplies (and many flight LiPo packs) are **sources, not sinks** for current. They can't absorb reverse current — only resist it via internal impedance. So when the motor regenerates:
+- Bus capacitor charges up rapidly
+- Supply input current goes to zero, then becomes briefly negative if supply tolerates it
+- If supply has a reverse-current protection diode, Vbus keeps rising unbounded
+- Eventually FET reverse-recovery or bridge limits clip something → current spike → fault
+
+### Bench data from two runs
+
+**Run 1 (`215456.csv`) — fast rollback → fault**:
+```
+t=32.495s  76% / 218k  Vbus=28.38V  ibusPkNeg=-11.1A
+t=32.519s  70% / 209k  Vbus=29.67V  ibusPkNeg=-1.0A
+t=32.544s  60% / 192k  Vbus=32.31V  ibusPkNeg=-1.0A   ← Vbus +7V above nominal
+t=32.567s  56% / FAULT Vbus=20.08V  iaPkPos=22.0 (sat)  ← spike then collapse
+```
+Vbus rose 7V above nominal in 50ms. Then a 22A phase current saturation (likely from FET reverse-recovery or bus cap clamping) triggered the fault. Label "UV" is misleading — root cause is regen overvoltage.
+
+**Run 2 (`215904.csv`) — slower rollback → survived**:
+```
+t=39.053s  77% / 201k  Vbus=26.16V  ibusPkNeg=-7.1A
+t=39.218s  53% / 143k  Vbus=28.77V  ibusPkNeg=-1.0A
+t=39.266s  51% / 125k  Vbus=26.12V (recovered)
+```
+Same direction (Vbus rising) but smaller peak (28.77V vs 32.31V). Throttle drop was spread over 165ms instead of 70ms. Bus capacitor handled it.
+
+### Why the previous "BEMF ceiling at 220k" intuition is consistent with this
+
+At 240k eRPM no-load, BEMF ≈ 23V — almost equal to Vbus. The motor barely needs any duty to maintain that speed. When duty drops to 56% (= 14V applied), the difference (23V - 14V = 9V) drives regen current through the bridge inductors. Standard back-EMF braking.
+
+### Three fixes (in order of preference)
+
+**(1) Firmware duty-down slew limiter** — best
+Limit how fast duty can decrease, especially at high RPM. At 200k+ eRPM, force throttle-down to take at least 500ms even if pot changes faster. Motor decelerates naturally through wind resistance and bearing friction; BEMF drops with it; regen pulses stay manageable.
+
+```c
+/* Pseudocode in the throttle → duty mapping */
+uint16_t maxDutyChange = (currentERPM > 150000)
+                        ? MAX_DUTY * 5 / 1000   /* 0.5% per ms at high RPM */
+                        : MAX_DUTY * 50 / 1000; /* 5% per ms at low RPM */
+if (targetDuty < currentDuty - maxDutyChange)
+    targetDuty = currentDuty - maxDutyChange;
+```
+
+This is what every flight ESC does. It mimics realistic flight-controller throttle behavior.
+
+**(2) Brake resistor + comparator** — hardware fix
+Add an external resistor (a few ohms, high-wattage) switched by a MOSFET across the bus, triggered by a comparator at, say, 28V. Dumps regen energy as heat. Common in industrial drives, rare in flight ESCs because of weight/cost.
+
+**(3) Bigger bus capacitor** — hardware fix
+Absorb more transient energy. Adds weight but reliable. Diminishing returns — at the energies we're seeing, would need huge caps.
+
+### Why we're not implementing (1) right now
+
+User testing is intentionally pushing the motor hard to validate the high-RPM detection chain. Adding a slew limiter while testing detection would mask the data. Once detection is fully validated (probably done now), slew limiter is a one-evening implementation.
+
+### What this means for future testing
+
+When testing throttle response or rapid maneuvers, expect Vbus to spike up to ~30V on the bench supply during decelerations from 240k+ eRPM. The "UV fault" reported in this regime is **not** a real undervoltage event — it's the bridge saturation after regen overvoltage. Don't chase it as a sync issue.
