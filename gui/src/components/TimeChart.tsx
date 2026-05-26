@@ -3,12 +3,20 @@ import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContai
 
 export function TimeChart() {
   const history = useEscStore(s => s.history);
-  const data = history.map((s, i) => ({
-    t: (i * 0.02).toFixed(1),
-    eRPM: s.stepPeriod > 0 ? Math.round(240000 / s.stepPeriod) : 0,
-    duty: s.dutyPct,
-    ibus: ((s.ibusRaw - 2048) / 93.0),
-  }));
+  const info = useEscStore(s => s.info);
+  const pwmHz = info?.pwmFrequency ?? 24000;
+  const swErpmNum = pwmHz * 10;
+  const data = history.map((s, i) => {
+    const erpm = s.hwzcEnabled && s.hwzcStepPeriodHR > 0
+      ? Math.round(1_000_000_000 / s.hwzcStepPeriodHR)
+      : (s.stepPeriod > 0 ? Math.round(swErpmNum / s.stepPeriod) : 0);
+    return {
+      t: (i * 0.02).toFixed(1),
+      eRPM: erpm,
+      duty: s.dutyPct,
+      ibus: ((s.ibusRaw - 2048) / 93.0),
+    };
+  });
 
   return (
     <div style={{

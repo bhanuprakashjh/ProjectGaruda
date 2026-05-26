@@ -134,13 +134,18 @@ export function GaugePanel() {
   const rawFocPowerW = focMode ? 1.5 * (snapshot.focVq * snapshot.focIqMeas + snapshot.focVd * snapshot.focIdMeas) : 0;
   /* eRPM source depends on mode:
    *   FOC: derive from focOmega (electrical rad/s × 60/2π = eRPM)
-   *   6-step: derive from stepPeriod (ZC-period based)
-   * Previously this used stepPeriod always — broken in FOC because
-   * stepPeriod is 0 there, making eRPM display read 0 even when
-   * motor was at 200k. */
+   *   6-step + HWZC active: derive from hwzcStepPeriodHR (SCCP2 ticks @ 100 MHz)
+   *   6-step SW path: derive from stepPeriod (ADC-tick units, PWM-frequency
+   *                   dependent). PWMFREQUENCY_HZ comes from device info so
+   *                   the scale stays correct when the firmware changes its
+   *                   PWM rate (24 kHz / 45 kHz / 60 kHz). */
+  const pwmHz = info?.pwmFrequency ?? 24000;
+  const swErpmNum = pwmHz * 10; // eRPM = pwmHz*10 / stepPeriod (6 sectors/rev × 60s/min ÷ ADC tick)
   const rawERPM = focMode
     ? Math.abs(snapshot.focOmega) * 60 / (2 * Math.PI)
-    : (snapshot.stepPeriod > 0 ? 240000 / snapshot.stepPeriod : 0);
+    : (snapshot.hwzcEnabled && snapshot.hwzcStepPeriodHR > 0
+        ? 1_000_000_000 / snapshot.hwzcStepPeriodHR
+        : (snapshot.stepPeriod > 0 ? swErpmNum / snapshot.stepPeriod : 0));
   const rawMechRPM = polePairs > 0 ? rawERPM / polePairs : rawERPM;
   const s = smoothed.current;
   s.vbus = ema(s.vbus, rawVbus);
