@@ -2919,6 +2919,25 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                     }
                     else if (delta < 0)
                     {
+#if FEATURE_VBUS_REGEN_BRAKE
+                        /* Vbus-aware regen brake. When motor regenerates into
+                         * the bus (BEMF > applied during throttle-down at high
+                         * RPM), Vbus rises. Holding duty constant while Vbus is
+                         * elevated lets the motor coast down via friction +
+                         * residual regen, instead of dumping regen energy into
+                         * the bus capacitor. Hysteresis prevents chatter. */
+                        static bool regenBrakeActive = false;
+                        if (regenBrakeActive) {
+                            if (garudaData.vbusRaw < VBUS_REGEN_BRAKE_OFF_ADC)
+                                regenBrakeActive = false;
+                        } else {
+                            if (garudaData.vbusRaw > VBUS_REGEN_BRAKE_ON_ADC)
+                                regenBrakeActive = true;
+                        }
+                        if (regenBrakeActive) {
+                            mappedDuty = prevDuty;  /* Freeze — don't lower duty */
+                        } else
+#endif
                         if ((uint32_t)(-delta) > RT_DUTY_SLEW_DOWN_RATE)
                             mappedDuty = prevDuty - RT_DUTY_SLEW_DOWN_RATE;
                     }

@@ -395,6 +395,20 @@ extern "C" {
 #define VBUS_SAG_GAIN            8        /* Duty reduction proportional to sag depth: (depth * gain) >> 4 */
 #endif
 
+/* Regen Brake (Phase C3, 2026-05-26): freeze duty-down slewing when Vbus is
+ * elevated due to motor regenerating into the supply. Documented bench failure
+ * mode: rapid throttle drop from 240k eRPM caused Vbus to climb 25V→32V before
+ * triggering a (mislabeled) UV fault. Holding duty constant when Vbus > ON
+ * threshold lets the motor coast down naturally instead of dumping regen
+ * energy into the bus capacitor. ADC values at ratio 23.0:
+ *   1500 ADC ≈ 28V (regen brake engages)
+ *   1380 ADC ≈ 26V (regen brake releases) */
+#define FEATURE_VBUS_REGEN_BRAKE 1
+#if FEATURE_VBUS_REGEN_BRAKE
+#define VBUS_REGEN_BRAKE_ON_ADC   1500    /* ~28V — engage brake (freeze duty-down) */
+#define VBUS_REGEN_BRAKE_OFF_ADC  1380    /* ~26V — release brake (resume slewing) */
+#endif
+
 /* BEMF Integration Shadow Estimator (Phase E) */
 #if FEATURE_BEMF_INTEGRATION
 #define INTEG_THRESHOLD_GAIN  256   /* Q8.8: 256=1.0x */
