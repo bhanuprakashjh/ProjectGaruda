@@ -3252,15 +3252,27 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
             }
             else
             {
+#if FEATURE_THROTTLE_ZERO_AUTO_DISARM
+                bool restartGateThrottle =
+                    (garudaData.throttle >= ARM_THROTTLE_ZERO_ADC);
+#else
+                /* Throttle-zero auto-disarm disabled — recovery always
+                 * attempts restart while runCommandActive is still set,
+                 * regardless of throttle level. Pot-at-zero is treated as
+                 * "run at idle duty", not "stop". */
+                bool restartGateThrottle = true;
+#endif
+
                 if (garudaData.runCommandActive &&
                     garudaData.desyncRestartAttempts < RT_DESYNC_MAX_RESTARTS &&
-                    garudaData.throttle >= ARM_THROTTLE_ZERO_ADC)
+                    restartGateThrottle)
                 {
                     garudaData.desyncRestartAttempts++;
                     STARTUP_Init(&garudaData);
                     garudaData.state = ESC_ALIGN;
                     LED2 = 1;
                 }
+#if FEATURE_THROTTLE_ZERO_AUTO_DISARM
                 else if (garudaData.throttle < ARM_THROTTLE_ZERO_ADC)
                 {
                     /* Throttle is zero — user wants motor stopped.
@@ -3270,6 +3282,7 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
                     garudaData.state = ESC_IDLE;
                     LED2 = 0;
                 }
+#endif
                 else if (!garudaData.runCommandActive)
                 {
                     /* User pressed stop during coast — graceful idle */
