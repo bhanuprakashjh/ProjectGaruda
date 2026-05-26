@@ -65,6 +65,22 @@ void HWZC_Init(volatile GARUDA_DATA_T *pData)
     pData->hwzc.dbgTimeoutBemfThresh = 0;
     pData->hwzc.dbgEnableStepPeriod = 0;
     pData->hwzc.dbgAdvanceDeg = 0;
+    pData->hwzc.dbgFilterOffset = 0;
+#if FEATURE_HWZC_SECTOR_PI
+    pData->hwzc.timerPeriod = 0;
+    pData->hwzc.integrator = 0;
+    pData->hwzc.lastCaptureHR = 0;
+    pData->hwzc.prevCommHR = 0;
+    pData->hwzc.captureValid = false;
+    pData->hwzc.stepPeriodForFilterComp = 0;
+    pData->hwzc.dbgPiDelta = 0;
+    pData->hwzc.dbgPiCaptureCount = 0;
+    pData->hwzc.dbgPiMissCount = 0;
+    for (uint8_t s = 0; s < 6; s++) {
+        pData->hwzc.dbgPiMissBySector[s] = 0;
+        pData->hwzc.dbgPiCapBySector[s] = 0;
+    }
+#endif
 #if FEATURE_BEMF_INTEGRATION
     pData->hwzc.shadowHwzcSkipCount = 0;
     pData->hwzc.obsCommSeq = 0;
@@ -101,6 +117,20 @@ void HWZC_Enable(volatile GARUDA_DATA_T *pData)
     uint32_t now = HAL_SCCP2_ReadTimestamp();
     pData->hwzc.lastZcStamp = now - pData->hwzc.stepPeriodHR / 2;
     pData->hwzc.lastCommStamp = now;
+
+#if FEATURE_HWZC_SECTOR_PI
+    /* Sector PI seed: start timerPeriod at the IIR-seeded stepPeriodHR
+     * (the same value the reactive path uses for its first commutation
+     * scheduling). integrator tracks timerPeriod 1:1. prevCommHR matches
+     * lastCommStamp so the first capValue (computed at next PI fire)
+     * uses a sensible base. captureValid stays false until first ZC. */
+    pData->hwzc.timerPeriod   = pData->hwzc.stepPeriodHR;
+    pData->hwzc.integrator    = pData->hwzc.stepPeriodHR;
+    pData->hwzc.prevCommHR    = now;
+    pData->hwzc.lastCaptureHR = now - pData->hwzc.stepPeriodHR / 2;
+    pData->hwzc.captureValid  = false;
+    pData->hwzc.stepPeriodForFilterComp = pData->hwzc.stepPeriodHR;
+#endif
 
     /* Enable SCCP1 interrupt (priority already set by ServiceInit).
      * Clear any stale flag first to prevent immediate spurious ISR entry. */
@@ -140,6 +170,11 @@ void HWZC_Disable(volatile GARUDA_DATA_T *pData)
 void HWZC_OnCommutation(volatile GARUDA_DATA_T *pData)
 {
     uint32_t now = HAL_SCCP2_ReadTimestamp();
+#if FEATURE_HWZC_SECTOR_PI
+    /* Save previous commutation timestamp before overwriting — capValue is
+     * computed as (lastCaptureHR - prevCommHR) at next OnPiPeriodExpired. */
+    pData->hwzc.prevCommHR = pData->hwzc.lastCommStamp;
+#endif
     pData->hwzc.lastCommStamp = now;
     pData->hwzc.rejectsThisStep = 0;
 
@@ -167,8 +202,13 @@ void HWZC_OnCommutation(volatile GARUDA_DATA_T *pData)
     }
     pData->hwzc.activeCore = core;
 
-    /* Compute threshold with deadband (Rule 4) */
+    /* Compute threshold with deadband (Rule 4).
+     * Filter compensation (if enabled) shifts the threshold AWAY from neutral
+     * in the direction OPPOSITE the deadband, so the comparator fires earlier
+     * by an amount equal to the PCB RC filter's phase lag at this stepPeriodHR.
+     * No-op when FEATURE_HWZC_FILTER_COMP=0. */
     uint16_t thresh = pData->bemf.zcThreshold;
+    thresh = HWZC_ApplyFilterComp(pData, thresh, risingZc);
     if (risingZc)
         thresh = (thresh + HWZC_CMP_DEADBAND < 4095) ? thresh + HWZC_CMP_DEADBAND : 4095;
     else
@@ -176,14 +216,61 @@ void HWZC_OnCommutation(volatile GARUDA_DATA_T *pData)
 
     HAL_ADC_ConfigComparator(core, thresh, risingZc);
 
-    /* Calculate blanking delay from step period */
-    uint32_t blankTicks = pData->hwzc.stepPeriodHR * HWZC_BLANKING_PERCENT / 100;
+    /* Calculate blanking delay from step period.
+     * In sector PI mode, use timerPeriod (the PI-controlled commutation
+     * interval) as the basis so blanking scales with the actual closed-loop
+     * period, not the IIR-tracked stepPeriodHR (which is paused in PI mode). */
+#if FEATURE_HWZC_SECTOR_PI
+    uint32_t periodForBlank = pData->hwzc.timerPeriod;
+    if (periodForBlank < pData->hwzc.stepPeriodHR)
+        periodForBlank = pData->hwzc.stepPeriodHR;   /* startup safety */
+#else
+    uint32_t periodForBlank = pData->hwzc.stepPeriodHR;
+#endif
+    uint32_t blankTicks = periodForBlank * HWZC_BLANKING_PERCENT / 100;
     if (blankTicks < 100) blankTicks = 100;  /* Minimum 1us blanking */
 
     /* Set state BEFORE starting timer (Rule 3) */
     pData->hwzc.phase = HWZC_BLANKING;
 
     HAL_SCCP1_StartOneShot(blankTicks);
+}
+
+/**
+ * @brief Compute commDelay from current stepPeriodHR + advance schedule.
+ * Pulled out so OnBlankingExpired can pre-compute (saving ~1.5µs in the
+ * latency-critical OnZcDetected ISR). Uses stepPeriodHR (IIR-filtered), so
+ * pre-computing during BLANKING gives the same result as computing in
+ * OnZcDetected except for the most-recent IIR update (~25% influence from
+ * the just-measured interval). Acceptable tradeoff for latency.
+ */
+static inline uint32_t ComputeCommDelay(uint32_t stepPeriodHR,
+                                        volatile uint16_t *dbgAdvanceDegOut)
+{
+    uint32_t commDelay;
+#if FEATURE_TIMING_ADVANCE
+    uint32_t eRPM = HWZC_TICKS_TO_ERPM(stepPeriodHR);
+    uint16_t advDeg;
+    if (eRPM <= RT_RAMP_TARGET_ERPM)
+        advDeg = TIMING_ADVANCE_MIN_DEG;
+    else if (eRPM >= RT_MAX_CLOSED_LOOP_ERPM)
+        advDeg = RT_TIMING_ADV_MAX_DEG;
+    else
+    {
+        uint32_t range = RT_MAX_CLOSED_LOOP_ERPM - RT_RAMP_TARGET_ERPM;
+        uint32_t pos = eRPM - RT_RAMP_TARGET_ERPM;
+        advDeg = TIMING_ADVANCE_MIN_DEG +
+            (uint16_t)((uint32_t)(RT_TIMING_ADV_MAX_DEG - TIMING_ADVANCE_MIN_DEG)
+                       * pos / range);
+    }
+    commDelay = stepPeriodHR * (30 - advDeg) / 60;
+    if (dbgAdvanceDegOut) *dbgAdvanceDegOut = advDeg;
+#else
+    commDelay = stepPeriodHR / 2;
+    (void)dbgAdvanceDegOut;
+#endif
+    if (commDelay < 10) commDelay = 10;
+    return commDelay;
 }
 
 /**
@@ -203,13 +290,40 @@ void HWZC_OnBlankingExpired(volatile GARUDA_DATA_T *pData)
      * ZC detection runs in the 24 kHz ADC ISR via HWZC_OnSoftwareSample(). */
 #endif
 
-    /* Timeout = 2x step period (same as software ZC) */
+#if FEATURE_HWZC_SECTOR_PI
+    /* Sector PI mode: schedule SCCP1 to fire at the autonomous commutation
+     * deadline (lastCommStamp + timerPeriod). ZC events that arrive between
+     * now and that deadline just timestamp lastCaptureHR; the PI math runs
+     * in HWZC_OnPiPeriodExpired (dispatched from _CCT1Interrupt at phase
+     * WATCHING when in PI mode). No separate timeout — a missed ZC is
+     * absorbed by the PI as a non-update (timerPeriod unchanged). */
+    uint32_t blankTicks = pData->hwzc.timerPeriod * HWZC_BLANKING_PERCENT / 100;
+    if (blankTicks < 100) blankTicks = 100;
+    uint32_t remaining = (pData->hwzc.timerPeriod > blankTicks)
+                         ? (pData->hwzc.timerPeriod - blankTicks)
+                         : 100;
+    /* Set state BEFORE starting timer (Rule 3) */
+    pData->hwzc.phase = HWZC_WATCHING;
+    HAL_SCCP1_StartOneShot(remaining);
+#else
+    /* Reactive mode: SCCP1 fires as a timeout (no ZC) at 2× stepPeriodHR.
+     * On real ZC, OnZcDetected restarts SCCP1 with commDelay for the
+     * commutation phase. */
     uint32_t timeoutTicks = pData->hwzc.stepPeriodHR * 2;
+
+    /* Pre-compute commDelay so the latency-critical OnZcDetected ISR can
+     * skip the ~1.5µs of division/interpolation. Result is essentially the
+     * same — OnZcDetected would only see a slightly different stepPeriodHR
+     * after one more IIR update (25% influence). At 100k eRPM that's ~1°
+     * of advance equivalent recovered. */
+    pData->hwzc.cachedCommDelay = ComputeCommDelay(pData->hwzc.stepPeriodHR,
+                                                    &pData->hwzc.dbgAdvanceDeg);
 
     /* Set state BEFORE starting timer (Rule 3) */
     pData->hwzc.phase = HWZC_WATCHING;
 
     HAL_SCCP1_StartOneShot(timeoutTicks);
+#endif
 }
 
 /**
@@ -246,6 +360,23 @@ void HWZC_OnZcDetected(volatile GARUDA_DATA_T *pData)
     if (pData->hwzc.firstZcAfterEnable)
     {
         pData->hwzc.firstZcAfterEnable = false;
+#if FEATURE_HWZC_SECTOR_PI
+        /* PI mode: don't reschedule SCCP1 — the autonomous period timer
+         * set up in OnBlankingExpired stays active. Just timestamp this
+         * first capture so the next OnPiPeriodExpired can compute capValue
+         * against prevCommHR. */
+        pData->hwzc.lastCaptureHR = zcStamp;
+        pData->hwzc.captureValid  = true;
+        pData->hwzc.lastZcStamp   = zcStamp;
+        pData->hwzc.stepsSinceLastHwZc = 0;
+        if (pData->hwzc.goodZcCount < 0xFFFE)
+            pData->hwzc.goodZcCount++;
+        pData->hwzc.missCount = 0;
+        pData->hwzc.totalZcCount++;
+        HAL_ADC_DisableComparatorIE(pData->hwzc.activeCore);
+        /* phase stays WATCHING; SCCP1 already armed for end-of-period */
+        return;
+#else
         HAL_SCCP1_Stop();
         pData->hwzc.lastZcStamp = zcStamp;
         pData->hwzc.stepsSinceLastHwZc = 0;
@@ -254,45 +385,51 @@ void HWZC_OnZcDetected(volatile GARUDA_DATA_T *pData)
         pData->hwzc.missCount = 0;
         pData->hwzc.totalZcCount++;
 
-        /* Schedule commDelay using seeded stepPeriodHR (same logic below) */
-        uint32_t commDelay;
-#if FEATURE_TIMING_ADVANCE
-        {
-            uint32_t eRPM = HWZC_TICKS_TO_ERPM(pData->hwzc.stepPeriodHR);
-            uint16_t advDeg;
-            if (eRPM <= RT_RAMP_TARGET_ERPM)
-                advDeg = TIMING_ADVANCE_MIN_DEG;
-            else if (eRPM >= RT_MAX_CLOSED_LOOP_ERPM)
-                advDeg = RT_TIMING_ADV_MAX_DEG;
-            else
-            {
-                uint32_t range = RT_MAX_CLOSED_LOOP_ERPM - RT_RAMP_TARGET_ERPM;
-                uint32_t pos = eRPM - RT_RAMP_TARGET_ERPM;
-                advDeg = TIMING_ADVANCE_MIN_DEG +
-                    (uint16_t)((uint32_t)(RT_TIMING_ADV_MAX_DEG - TIMING_ADVANCE_MIN_DEG)
-                               * pos / range);
-            }
-            commDelay = pData->hwzc.stepPeriodHR * (30 - advDeg) / 60;
-            pData->hwzc.dbgAdvanceDeg = advDeg;
-        }
-#else
-        commDelay = pData->hwzc.stepPeriodHR / 2;
-#endif
-        if (commDelay < 10) commDelay = 10;
+        /* First ZC: use freshly computed commDelay since OnBlankingExpired's
+         * cached value reflects the seeded stepPeriodHR which is correct here.
+         * (One inline call to ComputeCommDelay — couldn't pre-compute yet.) */
+        uint32_t commDelay = ComputeCommDelay(pData->hwzc.stepPeriodHR,
+                                              &pData->hwzc.dbgAdvanceDeg);
+        /* Gate comparator OFF during COMM_PENDING — see comment in main path */
+        HAL_ADC_DisableComparatorIE(pData->hwzc.activeCore);
         pData->hwzc.phase = HWZC_COMM_PENDING;
         HAL_SCCP1_StartOneShot(commDelay);
         return;
+#endif
     }
 
-    /* Noise rejection: motor inertia prevents >50% speed change per step.
-     * Any shorter interval is PWM switching noise, not a real BEMF crossing.
-     * Check BEFORE cancelling timeout — noise must not eat the timeout.
+#if FEATURE_HWZC_PWM_GATE
+    /* PWM-state gate: reject captures during PWM OFF time. At BEMF crossover
+     * (Vapp ≈ Vbemf), the comparator fires on different signal regimes in
+     * ON vs OFF windows — ON-time crossings around motor neutral (duty×Vbus/2),
+     * OFF-time pseudo-crossings around 0V (all driven phases grounded, only
+     * BEMF on floating phase). PI ingesting both produces ambiguous rotor
+     * angle estimates → occasional 60° slip → 22A phase spike → UV cascade.
      *
-     * Hard floor: RT_HWZC_MIN_STEP_TICKS corresponds to RT_MAX_CLOSED_LOOP_ERPM.
-     * Any interval below that is physically impossible (motor can't spin faster
-     * than max). Using this as the floor prevents IIR collapse runaway: without
-     * it, as stepPeriodHR drops, the 70% gate drops with it, accepting shorter
-     * and shorter phantoms and pulling IIR to the MIN_STEP floor. */
+     * Reads the H-side GPIO of the currently PWMing phase. In complementary
+     * mode, H-side HIGH = PWM ON, H-side LOW = PWM OFF. Worst-case latency
+     * at 45 kHz × 79% duty = 4.6 µs OFF time ≈ 3° at 200k eRPM. */
+    {
+        const COMMUTATION_STEP_T *cs = &commutationTable[pData->currentStep];
+        bool pwmOn;
+        if      (cs->phaseA == PHASE_PWM_ACTIVE) pwmOn = (PORTD & (1u << 2)) != 0; /* RD2 = PWM1H */
+        else if (cs->phaseB == PHASE_PWM_ACTIVE) pwmOn = (PORTD & (1u << 0)) != 0; /* RD0 = PWM2H */
+        else                                     pwmOn = (PORTC & (1u << 3)) != 0; /* RC3 = PWM3H */
+        if (!pwmOn) {
+            pData->hwzc.noiseRejectCount++;
+            pData->hwzc.rejectsThisStep++;
+            uint8_t core = pData->hwzc.activeCore;
+            HAL_ADC_ClearComparatorFlag(core);
+            HAL_ADC_EnableComparatorIE(core);
+            return;
+        }
+    }
+#endif
+
+    /* INTERVAL CHECK FIRST (cheap, ~500 ns) — reorder C: kills early-arriving
+     * noise before spending 3 µs on verify reads. Most PWM-ripple-driven
+     * comparator re-fires happen within microseconds of the last accept,
+     * so this catches them before the verify loop runs. */
     uint32_t interval = zcStamp - pData->hwzc.lastZcStamp;
     uint32_t minInterval = pData->hwzc.stepPeriodHR
                            * HWZC_MIN_INTERVAL_PCT / 100;
@@ -309,6 +446,76 @@ void HWZC_OnZcDetected(volatile GARUDA_DATA_T *pData)
         HAL_ADC_EnableComparatorIE(core);
         return;
     }
+
+#if FEATURE_HWZC_VERIFY_READS
+    /* Signal-coherence verification (post-203k restructure 2026-05-26):
+     * The comparator-trigger ADC sample already passed the threshold (else the
+     * IRQ wouldn't have fired) — re-reading AD1CH5DATA immediately would just
+     * see that same sample. Useful verification requires WAITING for the next
+     * ADC conversion (SCCP3 = 1 MHz → ~1 µs cadence) then reading a fresh
+     * value. A real BEMF crossing stays on the crossed side; a phantom driven
+     * by PWM ripple flips back within one sample period.
+     *
+     * Order matters: wait FIRST, then read. With HWZC_VERIFY_READS=1 we make
+     * exactly one meaningful verification at ~1 µs cost (~7° at 200k). With
+     * N>1 each additional iteration adds another 1 µs and one more read.
+     *
+     * Active across the full RPM range — HWZC_VERIFY_SKIP_ERPM=999999 keeps
+     * this loop enabled at high RPM where it's most needed (PWM ripple at the
+     * BEMF passband becomes harder to distinguish from real crossings). */
+    if (pData->hwzc.stepPeriodHR > HWZC_VERIFY_SKIP_TICKS) {
+        uint8_t v_core = pData->hwzc.activeCore;
+        int8_t  v_pol  = commutationTable[pData->currentStep].zcPolarity;
+        bool    v_rising = (v_pol > 0);
+        uint16_t v_thresh = pData->bemf.zcThreshold;
+        if (v_rising)
+            v_thresh = (v_thresh + HWZC_CMP_DEADBAND < 4095)
+                       ? v_thresh + HWZC_CMP_DEADBAND : 4095;
+        else
+            v_thresh = (v_thresh > HWZC_CMP_DEADBAND)
+                       ? v_thresh - HWZC_CMP_DEADBAND : 0;
+
+        for (uint8_t i = 0; i < HWZC_VERIFY_READS; i++) {
+            /* Wait one ADC conversion period FIRST so the read sees a fresh
+             * sample (not the comparator-trigger sample). 80 NOPs ≈ 800 ns
+             * + read/branch ≈ 1 µs total at SCCP3 = 1 MHz. */
+            for (uint8_t j = 0; j < 80; j++) __asm__ volatile("nop");
+
+            uint16_t adc_now = (v_core == 1) ? AD1CH5DATA : AD2CH1DATA;
+            bool crossed = v_rising ? (adc_now > v_thresh) : (adc_now < v_thresh);
+            if (!crossed) {
+                /* Phantom — BEMF returned to original side within one sample
+                 * period. Re-arm comparator, keep timeout running. */
+                pData->hwzc.noiseRejectCount++;
+                pData->hwzc.rejectsThisStep++;
+                HAL_ADC_ClearComparatorFlag(v_core);
+                HAL_ADC_EnableComparatorIE(v_core);
+                return;
+            }
+        }
+    }
+#endif
+
+#if FEATURE_HWZC_SECTOR_PI
+    /* Sector PI mode: ZC has passed noise rejection. Just record the
+     * timestamp and let the autonomous SCCP1 timer (set in OnBlankingExpired
+     * to fire at lastCommStamp + timerPeriod) drive commutation.
+     * HWZC_OnPiPeriodExpired will run the PI math using this capture.
+     *
+     * Comparator IE is disabled — this is the "one accept per sector" rule
+     * (matches ATA's ProcessBemfSample one-shot semantic). Further ZC IRQs
+     * in this sector would be phantoms or chatter; let them sleep until
+     * the next OnBlankingExpired re-enables. */
+    pData->hwzc.lastCaptureHR = zcStamp;
+    pData->hwzc.captureValid  = true;
+    pData->hwzc.lastZcStamp   = zcStamp;   /* keep legacy field for diag */
+    if (pData->hwzc.goodZcCount < 0xFFFE)
+        pData->hwzc.goodZcCount++;
+    pData->hwzc.missCount = 0;
+    pData->hwzc.totalZcCount++;
+    HAL_ADC_DisableComparatorIE(pData->hwzc.activeCore);
+    return;
+#endif
 
     /* Cancel the timeout timer */
     HAL_SCCP1_Stop();
@@ -342,38 +549,23 @@ void HWZC_OnZcDetected(volatile GARUDA_DATA_T *pData)
     pData->hwzc.missCount = 0;
     pData->hwzc.totalZcCount++;
 
-    /* Calculate commutation delay: half step period (30 degrees).
-     * With timing advance, the delay is reduced proportionally.
-     *
-     * Uses stepPeriodHR (IIR-filtered, gain 0.25). Tried using the fresh
-     * `interval` directly (2026-04-20) — made trip eRPM worse (55k→45k)
-     * because interval-to-interval noise (phantom-reject-induced jitter)
-     * fed directly into commDelay. The IIR is doing real filtering work.
-     */
-    uint32_t commDelay;
-#if FEATURE_TIMING_ADVANCE
-    {
-        uint32_t eRPM = HWZC_TICKS_TO_ERPM(pData->hwzc.stepPeriodHR);
-        uint16_t advDeg;
-        if (eRPM <= RT_RAMP_TARGET_ERPM)
-            advDeg = TIMING_ADVANCE_MIN_DEG;
-        else if (eRPM >= RT_MAX_CLOSED_LOOP_ERPM)
-            advDeg = RT_TIMING_ADV_MAX_DEG;
-        else
-        {
-            uint32_t range = RT_MAX_CLOSED_LOOP_ERPM - RT_RAMP_TARGET_ERPM;
-            uint32_t pos = eRPM - RT_RAMP_TARGET_ERPM;
-            advDeg = TIMING_ADVANCE_MIN_DEG +
-                (uint16_t)((uint32_t)(RT_TIMING_ADV_MAX_DEG - TIMING_ADVANCE_MIN_DEG)
-                           * pos / range);
-        }
-        commDelay = pData->hwzc.stepPeriodHR * (30 - advDeg) / 60;
-        pData->hwzc.dbgAdvanceDeg = advDeg;
-    }
-#else
-    commDelay = pData->hwzc.stepPeriodHR / 2;
-#endif
-    if (commDelay < 10) commDelay = 10;  /* Minimum 100ns */
+    /* Optimization B: use commDelay pre-computed by OnBlankingExpired.
+     * Saves ~1.5 µs of division/interpolation inside the latency-critical ISR.
+     * The cached value reflects stepPeriodHR at blanking-expiry, which is the
+     * same IIR-filtered value used here except for the one IIR update above
+     * (25% weight on the just-measured interval — negligible at steady state). */
+    uint32_t commDelay = pData->hwzc.cachedCommDelay;
+    if (commDelay < 10) commDelay = 10;
+
+    /* Gate comparator OFF during COMM_PENDING. After accepting a real ZC, the
+     * BEMF stays on the crossed side until the next commutation — any further
+     * comparator IRQs in this window come from PWM ripple oscillating the
+     * signal back across threshold, body-diode recovery, or cross-coupling,
+     * and waste ~5µs of ISR time each (verify reads + interval check + re-arm)
+     * for no useful purpose. At high RPM these spurious ISRs starve the 24kHz
+     * ADC ISR, delaying threshold updates and degrading the NEXT sector's
+     * detection. Re-enabled in OnBlankingExpired of next step. */
+    HAL_ADC_DisableComparatorIE(pData->hwzc.activeCore);
 
     /* Set state BEFORE starting timer (Rule 3) */
     pData->hwzc.phase = HWZC_COMM_PENDING;
@@ -395,6 +587,193 @@ void HWZC_OnCommDeadline(volatile GARUDA_DATA_T *pData)
     /* Set up ZC detection for the new step */
     HWZC_OnCommutation(pData);
 }
+
+#if FEATURE_HWZC_SECTOR_PI
+/**
+ * @brief Sector PI period expired — run PI math and commutate.
+ *
+ * Called from SCCP1 ISR (via _CCT1Interrupt) when phase == HWZC_WATCHING
+ * AND FEATURE_HWZC_SECTOR_PI=1. In reactive mode this slot is HWZC_OnTimeout
+ * (a missed-ZC handler); in PI mode it is the AUTONOMOUS commutation event.
+ *
+ * Algorithm (ported from PATA6847 sector_pi.c at the 225k milestone):
+ *   1. Compute setValue from current advance schedule and timerPeriod.
+ *      setValue = (advancePlus30Fp8 × timerPeriod) >> 8
+ *      At lock, capValue ≈ setValue. With filter comp already aligning
+ *      capValue with the true rotor ZC, the formula assumes:
+ *          ZC happens at (advance + 30°)/60° of the inter-commutation
+ *          interval, since commutation fires `advance°` early relative
+ *          to the next rotor sector boundary.
+ *   2. delta = capValue − setValue (signed phase error)
+ *   3. delta = clamp(delta, ±timerPeriod >> CLAMP_SHIFT)
+ *   4. integrator += delta >> KI_SHIFT
+ *   5. timerPeriod = integrator + (delta >> KP_SHIFT)
+ *   6. Advance commutation step, re-arm next sector.
+ *
+ * On capture-miss: skip PI update (timerPeriod unchanged), still commutate.
+ * The motor is more robust to a missed sample than to a wrong correction.
+ */
+void HWZC_OnPiPeriodExpired(volatile GARUDA_DATA_T *pData)
+{
+    /* Compute current torque-advance (interpolated from RT_TIMING_ADV_MAX_DEG)
+     * — same schedule the reactive path uses, just consumed differently. */
+    uint16_t advDeg;
+    uint32_t T = pData->hwzc.timerPeriod;
+#if FEATURE_TIMING_ADVANCE
+    uint32_t eRPM = (T > 0) ? HWZC_TICKS_TO_ERPM(T) : 0;
+    if (eRPM <= RT_RAMP_TARGET_ERPM)
+        advDeg = TIMING_ADVANCE_MIN_DEG;
+    else if (eRPM >= RT_MAX_CLOSED_LOOP_ERPM)
+        advDeg = RT_TIMING_ADV_MAX_DEG;
+    else {
+        uint32_t range = RT_MAX_CLOSED_LOOP_ERPM - RT_RAMP_TARGET_ERPM;
+        uint32_t pos = eRPM - RT_RAMP_TARGET_ERPM;
+        advDeg = TIMING_ADVANCE_MIN_DEG +
+            (uint16_t)((uint32_t)(RT_TIMING_ADV_MAX_DEG - TIMING_ADVANCE_MIN_DEG)
+                       * pos / range);
+    }
+#else
+    advDeg = 0;
+#endif
+    pData->hwzc.dbgAdvanceDeg = advDeg;
+
+    /* advancePlus30Fp8 = (30 + advDeg) × 256 / 60. Max value at advDeg=30 is 256;
+     * at advDeg=0 is 128. Fits comfortably in uint16. */
+    uint16_t advFp8 = (uint16_t)(((30u + (uint32_t)advDeg) * 256u) / 60u);
+
+    /* Run PI if we have a fresh capture from this sector */
+    if (pData->hwzc.captureValid) {
+        /* capValue = elapsed HR ticks FROM THE START OF THIS SECTOR (i.e. the
+         * most recent commutation = lastCommStamp) TO the captured ZC.
+         *
+         * Timing: OnPiPeriodExpired fires BEFORE OnCommutation runs. So at
+         * this moment, lastCommStamp still holds T_N (start of the sector
+         * that's ending), and lastCaptureHR ≈ T_N + T/2 (ZC at midpoint).
+         * After PI math, OnCommutation shifts prevCommHR ← lastCommStamp
+         * and lastCommStamp ← now. Modular subtraction handles SCCP2 wrap
+         * (every ~42 s at 100 MHz). */
+        uint32_t capValue = pData->hwzc.lastCaptureHR - pData->hwzc.lastCommStamp;
+        uint32_t setValue = ((uint32_t)advFp8 * T) >> 8;
+
+        /* Only reject CROSS-SECTOR captures (capValue > T means the capture
+         * is from a previous sector, not this one — most likely happens
+         * when commutation timing is significantly off and the lastCaptureHR
+         * is from the prior sector). All in-sector captures pass through
+         * to the PI; the T/8 delta clamp below provides the robustness
+         * against any single noisy event.
+         *
+         * Earlier attempt with setValue/2 ≤ capValue ≤ 1.5×setValue gate
+         * BROKE STARTUP — during throttle-driven acceleration, real captures
+         * arrive at ~20-30% of T (rotor running faster than the lagging
+         * timerPeriod), which would be rejected by the tight setValue-
+         * based bounds. The motor would idle at seed speed and refuse
+         * to accelerate. */
+        if (capValue > T) {
+            pData->hwzc.dbgPiMissCount++;
+            pData->hwzc.captureValid = false;
+            goto pi_commutate;
+        }
+
+        int32_t delta = (int32_t)capValue - (int32_t)setValue;
+
+        /* Per-capture delta clamp — ASYMMETRIC at high RPM.
+         *
+         * Symmetric clamp at low/mid RPM: ±T/8 allows responsive accel both
+         * up (positive delta = need to slow) and down (negative delta = speed
+         * up). Motor has voltage headroom so either direction is physically
+         * achievable.
+         *
+         * ASYMMETRIC at high RPM (T < HWZC_PI_CLAMP_HIGH_TICKS):
+         *   Positive delta (capValue > setValue, rotor lagging): clamp at +T/16
+         *     — allow PI to grow period freely when motor genuinely slows.
+         *   Negative delta (capValue < setValue, rotor leading): clamp at -T/32
+         *     — TIGHTEN per-event period shrinkage, because at BEMF ceiling
+         *     the motor CANNOT physically accelerate. Any "rotor ahead"
+         *     reading is either measurement noise or the start of a runaway.
+         *     Halving the negative clamp blocks the cumulative ~2% drift
+         *     that causes regen pulses → Vbus sag → UV trip at 79-80% duty. */
+        int32_t posDeltaCap, negDeltaCap;
+        if (T < HWZC_PI_CLAMP_HIGH_TICKS) {
+            posDeltaCap = (int32_t)(T >> HWZC_PI_DELTA_CLAMP_SHIFT_HIGH);
+            negDeltaCap = (int32_t)(T >> HWZC_PI_NEG_DELTA_CLAMP_SHIFT_HIGH);
+        } else {
+            posDeltaCap = (int32_t)(T >> HWZC_PI_DELTA_CLAMP_SHIFT);
+            negDeltaCap = posDeltaCap;
+        }
+        if (delta >  posDeltaCap) delta =  posDeltaCap;
+        if (delta < -negDeltaCap) delta = -negDeltaCap;
+        pData->hwzc.dbgPiDelta = (int16_t)(delta > 32767 ? 32767
+                                          : delta < -32768 ? -32768
+                                          : delta);
+
+        /* Integrator update — slow drift correction. */
+        int32_t newInt = (int32_t)pData->hwzc.integrator + (delta >> HWZC_PI_KI_SHIFT);
+        if (newInt < (int32_t)RT_HWZC_MIN_STEP_TICKS)
+            newInt = (int32_t)RT_HWZC_MIN_STEP_TICKS;
+        if (newInt < 0) newInt = (int32_t)RT_HWZC_MIN_STEP_TICKS;
+        pData->hwzc.integrator = (uint32_t)newInt;
+
+        /* Period update — fast dynamics. */
+        int32_t newPer = (int32_t)pData->hwzc.integrator + (delta >> HWZC_PI_KP_SHIFT);
+        if (newPer < (int32_t)RT_HWZC_MIN_STEP_TICKS)
+            newPer = (int32_t)RT_HWZC_MIN_STEP_TICKS;
+        if (newPer < 0) newPer = (int32_t)RT_HWZC_MIN_STEP_TICKS;
+        pData->hwzc.timerPeriod = (uint32_t)newPer;
+
+        /* Mirror to stepPeriodHR so eRPM telemetry (and the reactive
+         * path's diagnostics) reflect the PI-controlled rotor period. */
+        pData->hwzc.writeSeq++;
+        pData->hwzc.stepPeriodHR = pData->hwzc.timerPeriod;
+        pData->hwzc.writeSeq++;
+
+        pData->hwzc.captureValid = false;
+        pData->hwzc.dbgPiCaptureCount++;
+        {
+            uint8_t s = pData->currentStep;
+            if (s < 6) pData->hwzc.dbgPiCapBySector[s]++;
+        }
+        if (pData->hwzc.goodZcCount < 0xFFFE) /* keep goodZc growing for telem */
+            pData->hwzc.goodZcCount++;
+    } else {
+        /* No capture this sector — period unchanged. Robust by design.
+         * Track which sector is missing so we can confirm AD1 vs AD2 split. */
+        pData->hwzc.dbgPiMissCount++;
+        pData->hwzc.missCount++;
+        pData->hwzc.totalMissCount++;
+        {
+            uint8_t s = pData->currentStep;
+            if (s < 6) pData->hwzc.dbgPiMissBySector[s]++;
+        }
+    }
+
+pi_commutate:
+    /* Slow-IIR update of stepPeriodForFilterComp — this is the period used
+     * in ω·τ for HWZC_ApplyFilterComp. Decoupled from timerPeriod to break
+     * the positive-feedback loop where a single PI period-shrink → larger
+     * ω·τ → larger CMPLO offset → earlier comparator fire → more PI shrink.
+     *
+     * Shift 11 → 1/2048 per sector ≈ 11 ms time constant at 190k eRPM.
+     * Slow vs PI per-sector dynamics (~1 ms) → loop gain << 1.
+     * Fast vs real motor accel (~50 ms) → tracks real changes adequately. */
+    if (pData->hwzc.stepPeriodForFilterComp == 0) {
+        pData->hwzc.stepPeriodForFilterComp = pData->hwzc.timerPeriod;
+    } else {
+        int32_t pDelta = (int32_t)pData->hwzc.timerPeriod
+                       - (int32_t)pData->hwzc.stepPeriodForFilterComp;
+        pData->hwzc.stepPeriodForFilterComp =
+            (uint32_t)((int32_t)pData->hwzc.stepPeriodForFilterComp
+                       + (pDelta >> 11));
+    }
+
+    /* Advance to next sector — autonomous timer drives this regardless
+     * of capture state. OnCommutation re-arms BLANKING + comparator. */
+    COMMUTATION_AdvanceStep(pData);
+    pData->hwzc.totalCommCount++;
+    pData->hwzc.commSeq++;
+    pData->hwzc.stepsSinceLastHwZc = 0;
+    HWZC_OnCommutation(pData);
+}
+#endif /* FEATURE_HWZC_SECTOR_PI */
 
 /**
  * @brief ZC timeout — no crossing detected within 2x step period.

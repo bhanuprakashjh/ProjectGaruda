@@ -435,6 +435,7 @@ void GARUDA_ServiceInit(void)
 
     garudaData.bemf.bemfRaw = 0;
     garudaData.bemf.zcThreshold = 0;
+    garudaData.bemf.zcAmpForFilterComp = 0;
     garudaData.bemf.zeroCrossDetected = false;
     garudaData.bemf.cmpPrev = 0xFF;
     garudaData.bemf.cmpExpected = 0;
@@ -667,6 +668,35 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
             garudaData.bemf.zcThreshold = rawThresh;
         }
 
+#if FEATURE_HWZC_FILTER_COMP
+        /* Slow-IIR amplitude estimate for filter-comp offset magnitude.
+         * Time constant 2^11 × (1/PWMFREQ) ≈ 2048 / 45kHz = 46 ms — long
+         * enough that a step duty change doesn't instantly inflate the
+         * filter-comp offset, but fast enough to converge within ~150 ms
+         * of any sustained operating point. This decouples the offset
+         * magnitude from the fast zcThreshold IIR, which prevents the
+         * 4000-sector PI drift that bit Phase A at 75%+ duty.
+         *
+         * Seeded to zcThreshold on first tick to avoid a long start-up
+         * convergence (zcAmpForFilterComp==0 would over-cancel comp at
+         * startup). Non-CL path also resets to current zcThreshold so
+         * morph→CL handoff doesn't carry stale state. */
+        if (garudaData.bemf.zcAmpForFilterComp == 0) {
+            garudaData.bemf.zcAmpForFilterComp = garudaData.bemf.zcThreshold;
+        } else {
+            int32_t ampDelta = (int32_t)garudaData.bemf.zcThreshold
+                             - (int32_t)garudaData.bemf.zcAmpForFilterComp;
+            garudaData.bemf.zcAmpForFilterComp =
+                (uint16_t)((int32_t)garudaData.bemf.zcAmpForFilterComp
+                           + (ampDelta >> 11));   /* ~46 ms time constant */
+        }
+        if (garudaData.state != ESC_CLOSED_LOOP) {
+            /* Out of CL — keep tracking instantaneously so we're ready
+             * for next CL entry with a sensible seed. */
+            garudaData.bemf.zcAmpForFilterComp = garudaData.bemf.zcThreshold;
+        }
+#endif
+
 #if FEATURE_ADC_CMP_ZC
         /* Live CMPLO refresh while HWZC is actively watching for a crossing.
          * Without this, CMPLO is only written at OnCommutation, so it stays
@@ -686,6 +716,10 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
         {
             int8_t pol = commutationTable[garudaData.currentStep].zcPolarity;
             uint16_t t = garudaData.bemf.zcThreshold;
+            /* Filter-lag pre-distortion mirrors what HWZC_OnCommutation applied
+             * — keep the live refresh in lockstep so CMPLO stays compensated
+             * as zcThreshold drifts with Vbus/duty mid-sector. */
+            t = HWZC_ApplyFilterComp(&garudaData, t, (pol > 0));
             if (pol > 0)
                 t = (t + HWZC_CMP_DEADBAND < 4095) ? t + HWZC_CMP_DEADBAND : 4095;
             else
@@ -3296,7 +3330,13 @@ void __attribute__((__interrupt__, no_auto_psv)) _CCT1Interrupt(void)
             HWZC_OnBlankingExpired(&garudaData);
             break;
         case HWZC_WATCHING:
+#if FEATURE_HWZC_SECTOR_PI
+            /* PI mode: SCCP1 firing in WATCHING phase is the autonomous
+             * period-expired event (NOT a timeout). Run PI math + commutate. */
+            HWZC_OnPiPeriodExpired(&garudaData);
+#else
             HWZC_OnTimeout(&garudaData);
+#endif
             break;
         case HWZC_COMM_PENDING:
             HWZC_OnCommDeadline(&garudaData);

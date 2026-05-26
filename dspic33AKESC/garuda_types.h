@@ -62,6 +62,18 @@ typedef struct
 {
     uint16_t bemfRaw;           /* Floating phase ADC reading (0-4095) */
     uint16_t zcThreshold;       /* ZC comparison threshold (scaled from Vbus) */
+    uint16_t zcAmpForFilterComp; /* Slow-IIR amplitude estimate for filter
+                                  * compensation offset magnitude. Tracks the
+                                  * BEMF amplitude's actual mechanical response
+                                  * (~100 ms) rather than the instantaneous DC
+                                  * level (zcThreshold) which steps with duty.
+                                  * Decoupling these prevents the slow-drift PI
+                                  * runaway observed at 75%+ duty: when duty
+                                  * bumps, zcThreshold tracks fast but real
+                                  * BEMF lags by rotor inertia (~50-100ms), so
+                                  * if offset used zcThreshold directly the PI
+                                  * accumulates a systematic phase-error bias
+                                  * over thousands of sectors. */
     bool     zeroCrossDetected; /* ZC event detected this step */
     uint8_t  cmpPrev;           /* Previous computed state (0 or 1, 0xFF=unknown) */
     uint8_t  cmpExpected;       /* Expected post-ZC state (0 or 1) */
@@ -265,6 +277,44 @@ typedef struct {
     uint16_t     dbgTimeoutBemfThresh; /* bemf.zcThreshold at timeout */
     uint16_t     dbgEnableStepPeriod;  /* timing.stepPeriod when HWZC_Enable was called */
     uint16_t     dbgAdvanceDeg;        /* Current timing advance in HW ZC path (degrees) */
+    uint32_t     cachedCommDelay;      /* Pre-computed commDelay for next ZC (set in
+                                        * OnBlankingExpired). Avoids ~1.5µs of div/mult
+                                        * inside the latency-critical OnZcDetected ISR. */
+    uint16_t     dbgFilterOffset;      /* Last filter-comp CMPLO shift (ADC counts).
+                                        * 0 when FEATURE_HWZC_FILTER_COMP=0. Used to
+                                        * bench-validate the pre-distortion magnitude. */
+
+#if FEATURE_HWZC_SECTOR_PI
+    /* Sector PI synchronizer (Phase A — 2026-05-26).
+     * In PI mode, timerPeriod is the autonomous commutation period driven
+     * by phase-error feedback. stepPeriodHR (above) stays in use as the
+     * measurement-side period (no IIR write in PI mode). */
+    uint32_t     timerPeriod;          /* PI-controlled commutation period (HR ticks) */
+    uint32_t     integrator;           /* PI integrator state (HR ticks) */
+    uint32_t     lastCaptureHR;        /* Most recent ZC timestamp (SCCP2 HR domain) */
+    uint32_t     prevCommHR;           /* Previous commutation timestamp — base for capValue */
+    bool         captureValid;         /* True after a ZC is timestamped this sector;
+                                        * cleared at commutation when PI consumes it. */
+    uint32_t     stepPeriodForFilterComp; /* Slow-IIR period for filter-comp ω·τ
+                                        * calculation. ~10 ms time constant at high
+                                        * RPM (vs ~1 sector for timerPeriod). Breaks
+                                        * the positive feedback where PI shrinking
+                                        * timerPeriod → ω·τ grows → offset grows →
+                                        * CMPLO shifts → comparator fires earlier →
+                                        * PI shrinks more (loop gain ~1 per sector).
+                                        * Decoupling ω·τ from PI changes prevents
+                                        * the 75-79% duty runaway. */
+    /* Telemetry / diagnostics */
+    int16_t      dbgPiDelta;           /* Last clamped phase error (HR ticks, signed) */
+    uint32_t     dbgPiCaptureCount;    /* PI captures consumed (lifetime) */
+    uint32_t     dbgPiMissCount;       /* Commutations without capture (lifetime) */
+    uint32_t     dbgPiMissBySector[6]; /* Per-sector miss tally. If 50% miss rate at high
+                                        * RPM is the AD2-PINSEL settle hypothesis, then 3
+                                        * of these (the AD2 sectors) will dominate the
+                                        * count. If misses are uniform across all 6,
+                                        * it's something else. */
+    uint32_t     dbgPiCapBySector[6];  /* Per-sector accept tally for reference */
+#endif
 
 #if FEATURE_BEMF_INTEGRATION
     uint32_t     shadowHwzcSkipCount; /* Scoring opportunities skipped in HW ZC mode */

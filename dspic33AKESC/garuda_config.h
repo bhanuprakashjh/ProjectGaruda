@@ -15,11 +15,11 @@ extern "C" {
 #endif
 
 /* Feature Flags (0=disabled, 1=enabled) */
-#define FEATURE_BEMF_CLOSED_LOOP 0  /* Phase 2: BEMF ZC detection — DISABLED for FOC V2 (mutex) */
+#define FEATURE_BEMF_CLOSED_LOOP 1  /* Phase 2: BEMF ZC detection — ENABLED for 6-step (2026-05-25) */
 #define FEATURE_VBUS_FAULT       1  /* Phase A4: Bus voltage OV/UV fault enforcement */
 #define FEATURE_DESYNC_RECOVERY  1  /* Phase B2: Controlled restart-on-desync (ESC_RECOVERY) */
 #define FEATURE_DUTY_SLEW        1  /* Phase B1: Asymmetric duty slew rate limiter */
-#define FEATURE_TIMING_ADVANCE   0  /* Phase B3: Linear timing advance by RPM — DISABLED for FOC V2 (6-step feature; references MIN_ADC_STEP_PERIOD gated under FEATURE_BEMF_CLOSED_LOOP) */
+#define FEATURE_TIMING_ADVANCE   1  /* Phase B3: Linear timing advance by RPM — RE-ENABLED 2026-05-26 to compensate detection-chain latency at high RPM. Original baseline schedule: 0° below 3k eRPM, linear ramp to 22° at MAX_CLOSED_LOOP_ERPM (70k for 2810), clamped 22° above. */
 #define FEATURE_DYNAMIC_BLANKING 1  /* Phase C1: Speed+duty-aware blanking (extra blank at high duty/demag) */
 #define FEATURE_VBUS_SAG_LIMIT   1  /* Phase C2: Bus voltage sag power limiting (reduce duty on Vbus dip) */
 #define FEATURE_BEMF_INTEGRATION 1  /* Phase E: Shadow integration estimator (shadow-only, no control) */
@@ -29,14 +29,14 @@ extern "C" {
                                      * advances steps at increasing rate with RAMP_DUTY_CAP.
                                      * Much easier to reason about current and timing
                                      * than sine modulation. */
-#define FEATURE_ADC_CMP_ZC       0  /* Phase F: ADC comparator-based high-speed ZC — DISABLED for FOC V2 (mutex) */
+#define FEATURE_ADC_CMP_ZC       1  /* Phase F: ADC comparator-based high-speed ZC — required for 6-step (2026-05-25). */
 #define FEATURE_HW_OVERCURRENT  1  /* Phase G: Hardware overcurrent protection via CMP3+OA3 */
 
 /* FOC (Field-Oriented Control) — compile-time alternative to 6-step */
 #define FEATURE_FOC              0  /* Phase I: OLD FOC v1 (reference, deprecated) */
 #define FEATURE_FOC_V2           0  /* Phase I v2: closed-loop current control + MXLEMMING */
 #define FEATURE_FOC_V3           0  /* Phase J: FOC v3 — SMO observer + PLL */
-#define FEATURE_FOC_AN1078       1  /* Phase K: AN1078 float port — direct Microchip reference */
+#define FEATURE_FOC_AN1078       0  /* 2026-05-25: switched to 6-step. Flip back to 1 to return to FOC AN1078. */
 #define FEATURE_SMO              0  /* 0=PLL only, 1=PLL+SMO parallel (v1 only) */
 #define FEATURE_MXLEMMING        0  /* 0=PLL chain, 1=MXLEMMING flux observer (v1 only) */
 #define FEATURE_LEARN_MODULES    0  /* master: ring buffer + quality + health */
@@ -117,10 +117,10 @@ extern "C" {
 
 /*──────────────────────────────────────────────────────────────────────────
  * Motor Profile Selection
- * 0 = Hurst DMB0224C10002 (10-pole, 24V, 4.03 ohm, 7.24 Vpk/KRPM)
- * 1 = A2212 1400KV (14-pole, 12V, 0.065 ohm, 1400 KV)
- * 2 = 5010 750KV (14-pole, 4S/14.8V, ~0.1 ohm, 750 KV, 14" prop)
- * 3 = 5055 ~580KV (14-pole, 4S/14.8V, 0.05 ohm L-N, 17.5 uH L-N)
+ * 0 = Hurst DMB2424B10002 (long Hurst, 10-pole 5PP, 24V bench motor)
+ * 1 = A2212 1400KV (14-pole 7PP, 12V drone motor)
+ * 2 = 2810 1350KV (14-pole 7PP, 5-6S drone motor, ~226k eRPM ceiling at 24V)
+ * 3 = 5055 ~580KV (14-pole 7PP, 4S, 0.05 ohm L-N, 17.5 uH L-N)
  *
  * All motor-dependent parameters are grouped here for easy swapping.
  * Board-specific and feature-tuning parameters are below.
@@ -372,12 +372,18 @@ extern "C" {
 /* Timing Advance (Phase B3) */
 #if FEATURE_TIMING_ADVANCE
 #define TIMING_ADVANCE_MIN_DEG      0       /* Degrees advance at low speed */
-#define TIMING_ADVANCE_MAX_DEG      22      /* Degrees advance at TIMING_ADVANCE_MAX_ERPM
+#define TIMING_ADVANCE_MAX_DEG      25      /* Degrees advance at TIMING_ADVANCE_MAX_ERPM
                                              * (interpolated linearly from MIN_DEG at
-                                             * RAMP_TARGET_ERPM). Capped at 25° by static
-                                             * assert to prevent desync. The interpolation
-                                             * anchor eRPM is the motor profile's
-                                             * MAX_CLOSED_LOOP_ERPM — see the note there. */
+                                             * RAMP_TARGET_ERPM). Bumped 22 → 25 (post-203k,
+                                             * 2026-05-26) to push past the advance ceiling
+                                             * that capped peak speed. 25° is the static
+                                             * assert hard limit (any higher risks desync).
+                                             * NOTE: with FEATURE_GSP=1 the EEPROM value
+                                             * (gspParams.timingAdvMaxDeg) overrides this
+                                             * default. After flashing, run:
+                                             *   tools/step6_reset_profile.py --profile 2
+                                             * to push the profile-2 (2810) default of 25° into
+                                             * EEPROM if it isn't already there. */
 #endif
 
 /* Dynamic Blanking (Phase C1) — motor-specific params in motor profile above */
@@ -451,10 +457,72 @@ extern "C" {
                                       * detection resolution is 42 µs (one PWM period) vs
                                       * 1 µs on the HW path. At 55 k eRPM that's ~13° of
                                       * electrical angle, absorbed by TIMING_ADVANCE. */
-#define HWZC_BLANKING_PERCENT    8   /* Blanking as % of step period (after commutation).
-                                      * Bumped from 5 to 8 for more noise rejection margin
-                                      * at high eRPM (100k+ sector period = 100µs, so 8% =
-                                      * 8µs blanking — covers longer demag tail on A2212). */
+/* AM32/CK-style signal-coherence check inside HWZC_OnZcDetected.
+ * After comparator IRQ fires, re-read AD1CH5DATA/AD2CH1DATA N times with
+ * small NOP delay between reads (~1µs each = spans one ADC sample at the
+ * 1 MHz SCCP3 trigger rate). All N reads must show the BEMF still on the
+ * expected side of the threshold. Single-sample noise (PWM ripple cross,
+ * body-diode recovery, cross-coupling transient) fails this check and is
+ * rejected before the plausibility gate sees it.
+ *
+ * Rationale: AKESC's stock filter is single-shot + interval gate only — at
+ * high RPM the watching window is short and false comparator hits that
+ * happen to land at >70% of stepPeriodHR get accepted as real ZCs, causing
+ * mistimed commutation and high bench current. CK board uses the same
+ * consecutive-read idea via filterCount; AM32 calls it `filter_level`.
+ *
+ * N=3 is conservative (~3µs ISR overhead). N=5 is more robust. */
+#define FEATURE_HWZC_PWM_GATE      1   /* Reject ZC captures during PWM OFF time.
+                                        * At BEMF crossover (Vapp ≈ Vbemf at ~79%
+                                        * duty / 188k eRPM on 2810@24V), the
+                                        * comparator can fire in BOTH PWM ON and
+                                        * OFF windows at different rotor angles —
+                                        * during ON, signal swings around motor
+                                        * neutral (duty×Vbus/2); during OFF, all
+                                        * driven phases are at GND so floating-
+                                        * phase reads pure BEMF (zero-centered).
+                                        * Both regimes trigger CMPLO crossings
+                                        * but at different rotor positions. PI
+                                        * ingesting mixed captures → occasional
+                                        * 60° rotor slip → 22A phase spike → UV
+                                        * cascade. Gate accepts only ON-time
+                                        * captures. At 45 kHz × 79% duty, worst-
+                                        * case latency = 4.6 µs OFF time = ~3°
+                                        * at 200k eRPM, fits inside 25° advance
+                                        * budget. Reads HS GPIO of currently
+                                        * PWMing phase (PWM1H=RD2 / PWM2H=RD0 /
+                                        * PWM3H=RC3) and rejects if LOW. */
+#define FEATURE_HWZC_VERIFY_READS  1
+#define HWZC_VERIFY_READS          1   /* 3 → 1 (2026-05-26 post-203k): the verify
+                                        * loop now restructured to wait-then-read
+                                        * so a single re-read after ~1 µs catches
+                                        * the phantom-vs-real distinction. Cost is
+                                        * one ADC conversion period regardless of
+                                        * N, so N=1 captures the same signal info
+                                        * as N=3 with 1/3 the latency. */
+/* HWZC_VERIFY_SKIP_ERPM: skip verify reads above this eRPM.
+ * The 1 µs verify wait costs ~7° at 200k and on this PCB the 5.5 kHz BEMF
+ * filter only attenuates 45 kHz PWM ripple by ~8× — ripple at the ADC pin
+ * is still ±125 counts during the verify wait, which can falsely reject real
+ * BEMF crossings. Keep verify enabled at low RPM (where PWM ripple is more
+ * harmful relative to small BEMF amplitude AND the latency cost is tiny) and
+ * skip above 80k where speed/torque demand has no patience for added latency.
+ *
+ * (Restored 999999 → 80000 after the post-203k experiment showed peak motor
+ * speed dropped from 203k → 152k when verify reads were active at high RPM.
+ * The interval gate at 85% does the phantom-rejection job at high RPM for free.) */
+#define HWZC_VERIFY_SKIP_ERPM      80000
+
+#define HWZC_BLANKING_PERCENT   14   /* Blanking as % of step period (after commutation).
+                                      * Bumped 8 → 14 (2026-05-26) to diagnose 50% miss rate
+                                      * above ~130k eRPM. Hypothesis: AD2 sectors (Phase A or
+                                      * C, PINSEL switch needed) get a first ADC conversion
+                                      * with not-yet-settled S&H, causing the comparator to
+                                      * either latch on garbage or miss the real ZC. With 8%
+                                      * at 130k = 6 µs blanking, the settle window after
+                                      * PINSEL was only ~4 µs. 14% at 130k = 10.5 µs gives
+                                      * ~8 µs settle window with detection window still 42 µs.
+                                      * ZC midpoint at ~26 µs — plenty of margin. */
 #define HWZC_HYSTERESIS_ERPM   500   /* Hysteresis band for crossover (prevents oscillation) */
 #define HWZC_SYNC_THRESHOLD      6   /* Consecutive HW ZCs to declare sync */
 #define HWZC_MISS_LIMIT          3   /* Missed HW ZCs before fallback to software ZC (low for debug) */
@@ -465,12 +533,16 @@ extern "C" {
                                       * mistimed ZC used to pull stepPeriodHR to floor and stall
                                       * the motor. Seeded stepPeriodHR drives commDelay until the
                                       * motor locks in and the adaptive IIR takes over. */
-#define HWZC_MIN_INTERVAL_PCT   70   /* Reject ZC if interval < this % of stepPeriodHR.
-                                      * Noise floor: commDelay + blanking = 30-55% of step,
-                                      * so noise intervals are always < 55%. 70% rejects all
-                                      * noise while allowing real acceleration (max ~10%/step).
-                                      * Rejected noise → timeout → stepsSinceLastHwZc=2 →
-                                      * next accepted event can't update IIR (guard==1). */
+#define HWZC_MIN_INTERVAL_PCT   50   /* Reject ZC if interval < this % of stepPeriodHR.
+                                      * Loosened 75 → 50 (2026-05-26) to address the 50%
+                                      * miss rate at >135k eRPM. Mechanism: at high RPM
+                                      * (sector ~ 3 PWM cycles), PWM ripple through the
+                                      * 5.5kHz BEMF filter can shift the comparator firing
+                                      * time by up to one PWM period (= ~30% of T at 135k).
+                                      * The previous 75% gate then rejected these REAL but
+                                      * PWM-shifted captures, causing sectors to miss
+                                      * entirely. Plausibility gate (capValue > T) and PI
+                                      * delta clamp absorb the residual noise. */
 #define HWZC_SAMC               3    /* Sample time for high-speed channels (~205ns conversion) */
 #define HWZC_ADC_SAMPLE_HZ   1000000  /* High-speed ADC trigger rate (SCCP3). Max ~4.9 MHz. */
 #define HWZC_STALL_DUTY_PCT     30   /* % of MAX_DUTY below which floor-speed is implausible.
@@ -478,6 +550,131 @@ extern "C" {
                                       * eRPM) but duty is below this, HWZC is tracking PWM
                                       * noise from a stalled motor. */
 #define HWZC_STALL_DEBOUNCE_MS  100  /* ms of continuous implausible state before stall disable */
+
+/* Filter phase-lag compensation (Path 1: CMPLO pre-distortion).
+ *
+ * The PCB BEMF RC filter (R=3kΩ × C=10nF on MCLV-48V-300W) has τ=30µs and a
+ * 5.5kHz cutoff. The filtered signal at the ADC pin lags the true BEMF by
+ * φ = arctan(2π·f_elec·τ). At 150k eRPM that's 24° — exceeds the 22°
+ * TIMING_ADVANCE_MAX_DEG ceiling, leaving ~2° residual lag that drives
+ * high current at the top of the speed range.
+ *
+ * This feature shifts CMPLO away from neutral by the amount the FILTERED
+ * signal is offset at the moment of TRUE zero-crossing, so the HW comparator
+ * fires at the pre-filter ZC instant rather than the post-filter one.
+ *
+ * Math (sinusoidal BEMF approximation near ZC):
+ *   stepPeriodHR is in SCCP2 ticks (100 MHz / 10 ns each).
+ *   ω·τ        = (π · τ_ns / 30) / stepPeriodHR
+ *   ω·τ_Q15    = HWZC_FILTER_K_Q15 / stepPeriodHR
+ *   offset_cnt = (zcThreshold × ω·τ_Q15 / 32768) × AMP_PCT / 100
+ *   Rising sector  → CMPLO = zcThreshold − offset
+ *   Falling sector → CMPLO = zcThreshold + offset
+ *
+ * K_Q15 derivation: K = 32768 · π · τ_ns / 30. For τ=30000 ns: K = 102_943_706.
+ * If τ changes (different filter caps), recompute K manually.
+ *
+ * AMP_PCT scales the assumed BEMF amplitude (theory says A ≈ zcThreshold for
+ * a 6-step motor at no-load, but linear approximation overshoots actual
+ * sin(φ) by ~10% at high RPM and load reduces amplitude). Start at 75%, tune
+ * by reading dbgFilterOffset on the bench and watching commutation phase.
+ *
+ * Disabled by default. Enable with FEATURE_HWZC_FILTER_COMP=1 to test. */
+#define FEATURE_HWZC_FILTER_COMP    1   /* Restored after diagnostic. Comp off vs on
+                                         * showed IDENTICAL ~135k miss-onset threshold
+                                         * — so the misses aren't comp-caused. But
+                                         * comp DOES help current/efficiency by giving
+                                         * effective advance to compensate the 24° RC
+                                         * filter lag at high RPM. Keep enabled. */
+#define HWZC_FILTER_K_Q15           102943706UL  /* For τ=30µs; recompute if filter changes */
+/* Sector PI synchronizer (Phase A — break the 204k reactive ceiling).
+ *
+ * Architecture inspired by AK ATA6847L's sector_pi.c (the 225k milestone).
+ * Decouples DETECTION from COMMUTATION timing:
+ *   - HWZC IRQ no longer schedules commutation; it just timestamps the ZC
+ *     (lastCaptureHR) and sets captureValid.
+ *   - An autonomous SCCP1 timer fires at lastCommHR + timerPeriod and
+ *     advances the commutation step.
+ *   - On each commutation, PI math adjusts timerPeriod from the phase
+ *     error: delta = capValue − setValue, where setValue is the expected
+ *     ZC position within the sector (driven by torque advance schedule).
+ *
+ * Why this lifts the ceiling: with the reactive HWZC path, a single
+ * mis-timed ZC propagates directly into a mis-timed commutation, which
+ * the IIR period then chases — a self-reinforcing wobble that walls at
+ * ~204k. With sector PI, a noisy capValue is clamped at ±T/4 and barely
+ * moves timerPeriod, so commutation stays smooth and the motor keeps
+ * accepting more torque. Couples cleanly with FEATURE_HWZC_FILTER_COMP
+ * (filter comp already aligns capValue with the true rotor ZC).
+ *
+ * PI math (HR ticks, signed):
+ *   setValue    = (advancePlus30Fp8 × timerPeriod) >> 8
+ *   delta       = capValue − setValue
+ *   delta       = clamp(delta, ±timerPeriod >> CLAMP_SHIFT)
+ *   integrator += delta >> KI_SHIFT     (slow drift)
+ *   timerPeriod = integrator + (delta >> KP_SHIFT)   (fast dynamics)
+ *
+ * Disabled by default. Flip to 1 for the breakthrough run. */
+#define FEATURE_HWZC_SECTOR_PI         1
+#define HWZC_PI_KP_SHIFT               2   /* Kp = 1/4  — proportional gain  */
+#define HWZC_PI_KI_SHIFT               4   /* Ki = 1/16 — integral gain      */
+#define HWZC_PI_DELTA_CLAMP_SHIFT      3   /* ±T/8 per-sample clamp (default).
+                                            * At low/mid RPM this gives responsive
+                                            * accel without runaway. Tightens to
+                                            * HWZC_PI_DELTA_CLAMP_SHIFT_HIGH at
+                                            * very high RPM where the motor can't
+                                            * physically accelerate per-event. */
+#define HWZC_PI_DELTA_CLAMP_SHIFT_HIGH 4   /* +T/16 POSITIVE delta clamp at high RPM.
+                                            * Positive delta = capture late = rotor
+                                            * BEHIND expected → grow period → slow
+                                            * commutation. Allowing this freely keeps
+                                            * PI responsive when motor genuinely
+                                            * slows (load increase, throttle drop). */
+#define HWZC_PI_NEG_DELTA_CLAMP_SHIFT_HIGH 5  /* -T/32 NEGATIVE delta clamp at high RPM.
+                                            * Negative delta = capture early = rotor
+                                            * AHEAD expected → shrink period → faster
+                                            * commutation. At BEMF ceiling the motor
+                                            * CANNOT physically go faster, so any
+                                            * shrinkage commutates ahead of rotor →
+                                            * wrong-angle commutation → 22A current
+                                            * spike → Vbus sag → UV.
+                                            *
+                                            * Bench data 2026-05-26: AMP_PCT=50 and
+                                            * AMP_PCT=35 BOTH desync at 79-80% duty /
+                                            * 190k eRPM. PI period at fault was 5217-
+                                            * 5266 HR ticks, vs 5330+ in the one
+                                            * successful trace. Symmetric clamp let
+                                            * PI drift ~2% short over the dwell. Half
+                                            * the clamp for negative deltas blocks
+                                            * the drift while preserving full
+                                            * responsiveness to real slowdowns. */
+#define HWZC_PI_CLAMP_HIGH_ERPM      150000 /* Switch to tight clamp above this eRPM */
+#define HWZC_PI_CLAMP_HIGH_TICKS     (1000000000UL / HWZC_PI_CLAMP_HIGH_ERPM)
+/* Plausibility gate on capValue. Reject any capture more than this fraction
+ * BELOW setValue — at lock, real capValue ≈ setValue (within a few %); a
+ * capture <50% of setValue is almost certainly a phantom or accel transient.
+ * Discarded captures don't update the PI (timerPeriod stays). */
+#define HWZC_PI_CAP_MIN_NUM            1   /* lower bound = setValue × NUM/DEN */
+#define HWZC_PI_CAP_MIN_DEN            2   /* default: 1/2 of setValue */
+#define HWZC_PI_CAP_MAX_NUM            3   /* upper bound = setValue × NUM/DEN */
+#define HWZC_PI_CAP_MAX_DEN            2   /* default: 3/2 of setValue */
+#define HWZC_FILTER_AMP_PCT         50    /* BEMF amplitude as % of zcThreshold.
+                                           * Tested 50 vs 35: AMP=35 helped at 74-78% duty
+                                           * (ibusPkNeg -0.61A vs -0.88A) but made 78-82% WORSE
+                                           * (-4.87A vs -3.53A) and PI period SHORTER (5217 vs
+                                           * 5266 HR ticks), still desyncing. This proved
+                                           * filter comp was NOT the dominant driver of the
+                                           * 79% wall. The real cause is symmetric PI delta
+                                           * clamp letting integrator drift toward shorter
+                                           * period at BEMF ceiling. Restored to 50 since
+                                           * larger drift correction is handled by the new
+                                           * asymmetric clamp (see HWZC_PI_NEG_DELTA_CLAMP_*). */
+#define HWZC_FILTER_MAX_OMEGA_Q15   24000 /* Cap ω·τ at ~0.73 rad (≈42° equiv).
+                                           * Bumped 20000→24000 after 203k run where cap was
+                                           * engaged at 200k+ (ω·τ_Q15=20588 → clamped). Lets
+                                           * comp track the full 200-220k band. Caller still
+                                           * limits absolute offset via HWZC_FILTER_MAX_OFFSET. */
+#define HWZC_FILTER_MAX_OFFSET      600   /* Cap CMPLO shift in ADC counts (12-bit ADC, ~15% FS) */
 #endif
 
 /* Hardware Overcurrent Protection (Phase G) — current thresholds in motor profile above */

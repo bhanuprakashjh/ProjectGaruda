@@ -342,6 +342,11 @@ _Static_assert(MORPH_WINDOW_MIN_TICKS >= 5,
 /* Minimum step period in SCCP2 ticks at MAX_CLOSED_LOOP_ERPM */
 #define HWZC_MIN_STEP_TICKS     HWZC_ERPM_TO_TICKS(MAX_CLOSED_LOOP_ERPM)
 
+/* Step period threshold for skipping verify reads (high-RPM latency optimization).
+ * Below this many ticks, motor is spinning fast enough that the ~3µs verify
+ * overhead matters more than the noise immunity. */
+#define HWZC_VERIFY_SKIP_TICKS  HWZC_ERPM_TO_TICKS(HWZC_VERIFY_SKIP_ERPM)
+
 /* Noise rejection stall limit: if noiseRejectCount reaches this value since
  * HWZC_Enable, the ZC events are dominated by PWM switching noise (stalled
  * motor). Normal operation produces 0 rejects. Stall produces ~17% reject

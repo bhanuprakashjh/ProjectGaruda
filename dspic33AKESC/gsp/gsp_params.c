@@ -167,8 +167,14 @@ static const GSP_PARAMS_T profileDefaults[4] = {
         .alignDutyPct       = 3,       /* 24V * 3% / 0.050Ω = 14.4A stall.
                                         * Half of A2212's 8% at 12V for similar current */
         .initialErpm        = 150,     /* Slow start — 2810 needs gentle first steps */
-        .maxClosedLoopErpm  = 220000,  /* KV * Vbus * pp = 1350 * 24 * 7 = 226.8k.
-                                        * Target 200k, cap slightly above */
+        .maxClosedLoopErpm  = 260000,  /* Raised 220→260k (2026-05-26). Old 220k cap
+                                        * was exactly the BEMF ceiling for 92% duty
+                                        * at 24V. Motor was getting stuck at the
+                                        * cap, not BEMF — current spikes at 93%+
+                                        * caused by trying to push duty against a
+                                        * speed lock. 260k = ~118% of theoretical
+                                        * BEMF ceiling. If motor stays at <230k,
+                                        * BEMF is the true limit. */
         .sineAlignModPct    = 3,       /* Conservative align — low Rs means current */
         .sineRampModPct     = 8,       /* 2810 at 24V picks up fast — keep mod low */
         .zcDemagDutyThresh  = 40,      /* Same as A2212 — low L → more demag */
