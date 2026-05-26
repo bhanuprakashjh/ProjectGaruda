@@ -176,6 +176,23 @@ static uint16_t blockCommStableTicks = 0;
  * that disturbs the BEMF measurement and can cascade into desync). */
 static uint16_t blockExitCooldown = 0;
 
+/* ── Diagnostic capture log (CL handoff investigation) ─────────────
+ * Snapshots the first PI_LOG_ENTRIES PI iterations after CL entry so
+ * we can see exactly what captures the PI was fed with — useful when
+ * runaway or desync happens too fast for streamed telemetry to show.
+ * Per entry: input timerPeriod, PI's setValue, raw capValue, clamped
+ * delta. Frozen once full; re-armed by EnterCL. Read via GSP. */
+#define PI_LOG_ENTRIES   30U
+typedef struct __attribute__((packed)) {
+    uint16_t timerPeriod;   /* before PI update */
+    uint16_t setValue;
+    uint16_t capValue;
+    int16_t  deltaClamped;
+} PI_LOG_ENTRY_T;
+
+static volatile PI_LOG_ENTRY_T piLog[PI_LOG_ENTRIES];
+static volatile uint8_t        piLogCount = 0;
+
 /* ── Helpers ────────────────────────────────────────────────────── */
 
 static inline uint16_t PhaseAdvance(uint16_t fp8, uint16_t period)
@@ -240,6 +257,7 @@ static void EnterCL(void)
     corridorGoodStreak = 0;
     corridorMissStreak = 0;
     piEnabled = false;
+    piLogCount = 0;
 
     targetPeriod = timerPeriod;
     basePeriod = timerPeriod;
@@ -269,6 +287,22 @@ static void EnterCL(void)
 
     /* Seed lastCommHR for PI elapsed calculation */
     lastCommHR = HAL_ComTimer_ReadTimer();
+
+    /* Seed v4_blankingEndHR so the ADC ISR's blanking gate is sane
+     * during the first CL sector — before Commutate has a chance to
+     * write it.  Without this, a stale 0 from init lets every ADC
+     * sample past the gate. */
+    {
+        extern volatile uint16_t v4_blankingEndHR;
+        uint8_t  pct      = v4Params.blankingPct;
+        uint16_t blankHR;
+        if (pct == 0U || pct > 100U) {
+            blankHR = timerPeriod >> 2;
+        } else {
+            blankHR = (uint16_t)(((uint32_t)timerPeriod * pct) / 100U);
+        }
+        v4_blankingEndHR = (uint16_t)(lastCommHR + blankHR);
+    }
 
 #if FEATURE_V5_SCHEDULER
     /* V5.3: seed scheduler state from ramp period. sched_Tsector is
@@ -584,6 +618,32 @@ void SectorPI_Commutate(void)
     /* 2. Consume best corridor candidate from previous sector */
     uint16_t thisCommHR = HAL_ComTimer_ReadTimer();
     uint16_t prevCommHR = lastCommHR;
+
+    /* 2.0 Close the cross-sector ADC race.  The ADC ISR (40 kHz, not
+     * disabled here) can fire between `v4_captureValid = false` below
+     * and the new-sector blanking write further down.  With OLD
+     * blankingEnd in the past, its `(now - blankingEnd) >= 0` gate
+     * always passes → it captures the start of the new sector and
+     * the next Commutate sees a tiny capValue.  Symptom seen on prop
+     * startup with FEATURE_V5_POST_ZC_OWN=1: capVal cluster at <50 HR.
+     *
+     * Move the new blankingEnd into place *now*, before clearing
+     * captureValid, so the gate rejects every ADC sample until real
+     * blanking expires.  Width re-uses actualStepPeriodHR (sector
+     * width is independent of position parity). */
+    {
+        extern volatile uint16_t v4_blankingEndHR;
+        uint16_t guardSectorHR = (actualStepPeriodHR >= V4_MIN_PERIOD)
+                                 ? actualStepPeriodHR : timerPeriod;
+        uint8_t  guardPct      = v4Params.blankingPct;
+        uint16_t guardBlankHR;
+        if (guardPct == 0U || guardPct > 100U) {
+            guardBlankHR = guardSectorHR >> 2;
+        } else {
+            guardBlankHR = (uint16_t)(((uint32_t)guardSectorHR * guardPct) / 100U);
+        }
+        v4_blankingEndHR = (uint16_t)(thisCommHR + guardBlankHR);
+    }
     uint16_t measuredCommPeriod = (uint16_t)(thisCommHR - prevCommHR);
     if (measuredCommPeriod >= V4_MIN_PERIOD)
     {
@@ -827,6 +887,31 @@ void SectorPI_Commutate(void)
             uint16_t setValue = (uint16_t)(((uint32_t)advFp8 * timerPeriod) >> 8)
                                 + V4_RC_DELAY_HR;
             int32_t delta = (int32_t)capValue - (int32_t)setValue;
+
+            /* Per-capture delta clamp — bounds each PI correction to
+             * ±25% of current timerPeriod. Prevents runaway from any
+             * single noisy capture (observed under prop load: first
+             * post-handoff captures arrive at unpredictable timestamps,
+             * unclamped PI shortened timerPeriod aggressively → phantom
+             * 700k+ eRPM → SP trip). Normal-operation deltas are <5%
+             * of timerPeriod, so this clamp is invisible during steady
+             * state. Each capture can still nudge the PI; it just can't
+             * cliff-edge a single bad sample. */
+            int32_t deltaCap = (int32_t)timerPeriod >> 2;
+            if (delta >  deltaCap) delta =  deltaCap;
+            if (delta < -deltaCap) delta = -deltaCap;
+
+            /* Diagnostic snapshot — first PI_LOG_ENTRIES PI runs after CL.
+             * timerPeriod is the value PI is operating ON (pre-update).
+             * delta is post-clamp (what PI actually applies). */
+            if (piLogCount < PI_LOG_ENTRIES) {
+                uint8_t i = piLogCount;
+                piLog[i].timerPeriod  = timerPeriod;
+                piLog[i].setValue     = setValue;
+                piLog[i].capValue     = capValue;
+                piLog[i].deltaClamped = (int16_t)delta;
+                piLogCount = (uint8_t)(i + 1U);
+            }
 
             int32_t newInt = (int32_t)integrator + (delta >> kiShift);
             if (newInt < minPeriod) newInt = minPeriod;
@@ -1099,6 +1184,26 @@ bool SectorPI_IsRunning(void)
 uint8_t SectorPI_GetPhase(void)
 {
     return (uint8_t)phase;
+}
+
+void SectorPI_GetCaptureLog(uint8_t *buf, uint8_t *entriesOut)
+{
+    uint8_t n = piLogCount;
+    if (n > PI_LOG_ENTRIES) n = PI_LOG_ENTRIES;
+    /* Snapshot under no-interrupt window — entries are 8B and the PI
+     * could write a partial one mid-copy.  Cheap copy: 30 × 8 = 240B. */
+    for (uint8_t i = 0; i < n; i++) {
+        PI_LOG_ENTRY_T e = piLog[i];   /* struct copy from volatile */
+        buf[i*8 + 0] = (uint8_t)(e.timerPeriod  & 0xFF);
+        buf[i*8 + 1] = (uint8_t)(e.timerPeriod  >> 8);
+        buf[i*8 + 2] = (uint8_t)(e.setValue     & 0xFF);
+        buf[i*8 + 3] = (uint8_t)(e.setValue     >> 8);
+        buf[i*8 + 4] = (uint8_t)(e.capValue     & 0xFF);
+        buf[i*8 + 5] = (uint8_t)(e.capValue     >> 8);
+        buf[i*8 + 6] = (uint8_t)((uint16_t)e.deltaClamped & 0xFF);
+        buf[i*8 + 7] = (uint8_t)((uint16_t)e.deltaClamped >> 8);
+    }
+    *entriesOut = n;
 }
 
 void SectorPI_TelemGet(V4_TELEM_T *out)

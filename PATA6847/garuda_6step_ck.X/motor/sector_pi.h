@@ -74,6 +74,12 @@ void     SectorPI_TelemGet(V4_TELEM_T *out);
 bool     SectorPI_IsRunning(void);
 uint8_t  SectorPI_GetPhase(void);     /* 0=OFF, 1=ALIGN, 2=OL_RAMP, 3=CL */
 
+/* Capture-log accessor — returns up to *entriesOut entries (8B each:
+ * timerPeriod, setValue, capValue, delta_clamped) into buf, freezes
+ * after first 30 PI runs post-CL-entry. *entriesOut updated to actual
+ * count copied. Caller must size buf >= 30*8 = 240 bytes. */
+void     SectorPI_GetCaptureLog(uint8_t *buf, uint8_t *entriesOut);
+
 #endif /* FEATURE_V4_SECTOR_PI */
 
 /* ── Single-Pulse mode shared state ────────────────────────────── */

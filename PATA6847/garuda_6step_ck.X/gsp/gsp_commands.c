@@ -699,6 +699,18 @@ void GSP_DispatchCommand(uint8_t cmdId, const uint8_t *payload, uint8_t payloadL
             GSP_SendResponse(GSP_CMD_LOAD_DEFAULTS, NULL, 0);
             break;
 
+        case GSP_CMD_PI_LOG:
+        {
+            /* Diagnostic dump of first PI runs after CL entry.
+             * Response: [count][30×8B entries] — total <=241 bytes. */
+            uint8_t resp[1 + 30 * 8];
+            uint8_t n = 0;
+            SectorPI_GetCaptureLog(&resp[1], &n);
+            resp[0] = n;
+            GSP_SendResponse(GSP_CMD_PI_LOG, resp, (uint8_t)(1U + (uint16_t)n * 8U));
+            break;
+        }
+
         default:
         {
             uint8_t err = GSP_ERR_UNKNOWN_CMD;

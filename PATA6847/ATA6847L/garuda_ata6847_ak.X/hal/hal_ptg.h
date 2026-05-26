@@ -32,6 +32,13 @@ extern volatile uint8_t  ptgExpectedComp;
  * ProcessBemfSample() (see PTG_POSTSCALE_N in garuda_config.h). */
 extern volatile uint32_t ptgSkipped;
 
+/* Sample-mode state machine output. One of PTG_SAMPLE_MODE_* codes
+ * defined in garuda_config.h. Updated by the PTG ISR with hysteresis
+ * on g_pwmActualDuty; read by gsp_commands.c into the telemetry
+ * snapshot so the host can interpret BEMF counter rates (DUAL doubles
+ * the per-PWM-cycle sample count). */
+extern volatile uint8_t  g_ptgSampleMode;
+
 void HAL_PTG_Init(void);
 void HAL_PTG_Start(void);
 void HAL_PTG_Stop(void);

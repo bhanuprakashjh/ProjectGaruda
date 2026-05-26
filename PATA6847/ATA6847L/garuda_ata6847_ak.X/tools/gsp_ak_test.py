@@ -68,7 +68,7 @@ def _kfmt(n: int) -> str:
 SNAPSHOT_FIELDS = [
     # (key,            offset, struct_fmt, scale, unit, comment)
     ('seq',                0, '<H', 1,     '',     'sequence number'),
-    ('state',              2, 'B',  1,     '',     'gV4State (0=IDLE..6=FLT)'),
+    ('state',              2, 'B',  1,     '',     'gEscState (0=IDLE..6=FAULT)'),
     ('step',               4, 'B',  1,     '',     'commutation step 0..5'),
     ('potRaw',             6, '<H', 1,     '',     'pot ADC counts'),
     ('dutyPct',            8, 'B',  1,     '%',    'g_pwmActualDuty/g_pwmPer, 100=block-comm override'),
@@ -85,7 +85,7 @@ SNAPSHOT_FIELDS = [
     ('diagDelta',         32, '<h', 1,     'HR',   'PI delta (signed: target - measured)'),
     ('diagCaptures',      34, '<H', 1,     '',     'PI-fed captures (16-bit rolling)'),
     ('diagPiRuns',        36, '<H', 1,     '',     'PI run counter'),
-    ('stallCnt',          38, 'B',  1,     '',     'stall counter (trip at V4_STALL_THRESHOLD)'),
+    ('stallCnt',          38, 'B',  1,     '',     'stall counter (trip at STALL_THRESHOLD)'),
     # d[37] = bit0:spMode  bit1:spRequest  bit2:g_blockCommActive
     ('spBcByte',          39, 'B',  1,     '',     'SP/BC packed flags (firmware d[37])'),
     ('erpmNow16',         40, '<H', 1,     '',     'erpmNow derived from timerPeriod'),
@@ -93,19 +93,29 @@ SNAPSHOT_FIELDS = [
     ('uptime_s',          46, '<I', 1,     's',    'uptime seconds'),
     ('adcBlankRej',       50, '<I', 1,     '',     'ADC samples rejected by blanking'),
     ('adcStateMis',       54, '<I', 1,     '',     'ADC samples: comp != expected'),
-    ('adcCapSet',         58, '<I', 1,     '',     'ADC captures (cR + cF total)'),
-    ('adcSetRising',      62, '<I', 1,     '',     'ADC captures on rising sectors (cR)'),
-    ('offMidCap',         66, '<I', 1,     '',     'OFF-mid sampler captures (unused on AK)'),
-    ('offMidMis',         70, '<I', 1,     '',     'OFF-mid sampler mismatches'),
-    ('ptgFires',          74, '<I', 1,     '',     'V5.0 PTG ISR fire count'),
-    ('ptgR_acc',          78, '<I', 1,     '',     'PTG rising-sector accept'),
-    ('ptgR_rej',          82, '<I', 1,     '',     'PTG rising-sector reject'),
-    ('ptgF_acc',          86, '<I', 1,     '',     'PTG falling-sector accept'),
-    ('ptgF_rej',          90, '<I', 1,     '',     'PTG falling-sector reject'),
-    ('pR_acc',            94, '<I', 1,     '',     'V5 shadow rising: comp==0 (POST for rising)'),
-    ('pR_rej',            98, '<I', 1,     '',     'V5 shadow rising: comp==1 (PRE  for rising)'),
-    ('pF_acc',           102, '<I', 1,     '',     'V5 shadow falling: comp==1 (POST for falling)'),
-    ('pF_rej',           106, '<I', 1,     '',     'V5 shadow falling: comp==0 (PRE  for falling)'),
+    ('adcCapSet',         58, '<I', 1,     '',     'BEMF ISR captures (total accepted, all sectors)'),
+    # adcSetRising removed from firmware (always 0 on this hardware — rising
+    # sectors land POST-ZC, never reach the accept gate). Slot kept as zero
+    # pad for snap-layout stability; counters that used to live at d[60..71]
+    # are gone.
+    ('pad_60',            62, '<I', 1,     '',     'reserved (was adcSetRising — removed)'),
+    ('pad_64',            66, '<I', 1,     '',     'reserved zero pad'),
+    ('pad_68',            70, '<I', 1,     '',     'reserved zero pad'),
+    ('ptgFires',          74, '<I', 1,     '',     'PTG ISR fire count (heartbeat)'),
+    # PTG per-polarity counters removed (always 0 in TelemGet — diagnostic
+    # path that was never useful). Slots kept for layout stability.
+    ('pad_76',            78, '<I', 1,     '',     'reserved (was ptgRisingAcc)'),
+    ('pad_80',            82, '<I', 1,     '',     'reserved (was ptgRisingRej)'),
+    ('pad_84',            86, '<I', 1,     '',     'reserved (was ptgFallingAcc)'),
+    ('pad_88',            90, '<I', 1,     '',     'reserved (was ptgFallingRej)'),
+    # Per-polarity PI-feed counters. The firmware populates these from
+    # diagPiFedRising / diagPiMissRising / diagPiFedFalling /
+    # diagPiMissFalling (sector_pi.c). Host computes pR_pct / pF_pct as
+    # accepted/(accepted+missed) to show which polarities reach the PI.
+    ('piFedRising',       94, '<I', 1,     '',     'PI feed: rising sectors accepted'),
+    ('piMissRising',      98, '<I', 1,     '',     'PI feed: rising sectors dropped'),
+    ('piFedFalling',     102, '<I', 1,     '',     'PI feed: falling sectors accepted'),
+    ('piMissFalling',    106, '<I', 1,     '',     'PI feed: falling sectors dropped'),
     ('tMeasHR',          110, '<H', 1,     'HR',   'measurement-PI tracker (raw measured Tsector)'),
     ('sectorCount32',    112, '<I', 1,     '',     'sectorCount full 32-bit'),
     ('iaPkMax_mA',       116, '<h', 1,     'mA',   'rolling max Ia in window, mA'),
@@ -122,22 +132,34 @@ SNAPSHOT_FIELDS = [
     ('elapRejR',         152, '<H', 1,     'HR',   'last rejected elapsed, rising'),
     ('elapRejF',         154, '<H', 1,     'HR',   'last rejected elapsed, falling'),
     ('filterHRLast',     156, '<H', 1,     'HR',   'filterHR at last filter decision'),
-    # Capture-layer probe: comp tally past blanking, by sector polarity.
-    # PRE-ZC state on inverted ATA6847: rising→1, falling→0.
-    # POST-ZC state:                     rising→0, falling→1.
-    ('cR_hi',            158, '<I', 1,     '',     'rising sector, comp=1 (pre-ZC)'),
-    ('cR_lo',            162, '<I', 1,     '',     'rising sector, comp=0 (post-ZC)'),
-    ('cF_hi',            166, '<I', 1,     '',     'falling sector, comp=1 (post-ZC)'),
-    ('cF_lo',            170, '<I', 1,     '',     'falling sector, comp=0 (pre-ZC)'),
-    # PTG postscale experiment: count of fires that bypassed
-    # V4_ProcessBemfSample(). Effective sample rate = (ptgFires-ptgSkipped)/sec.
-    ('ptgSkipped',       174, '<I', 1,     '',     'PTG postscaled-out fires'),
-    # 2026-05-19 — frame trimmed to 180 bytes (was 254). Dropped fields
-    # that were only used in the Ctrl-C summary, not the per-frame line:
-    #   sectHit0..5 (d[176..199], 24B), bTot0..5 (d[200..211], 12B),
-    #   bS0A..S5C (d[212..247], 36B), fpStale (d[248..249], 2B).
-    # mainHb moved from d[250..251] to d[176..177].
+    # Capture-layer probe: comp tally past blanking on falling sectors only.
+    # On inverted ATA6847, falling sector POST-ZC = comp 1, PRE-ZC = comp 0.
+    # The rising-sector counterparts were always ~0% High / 100% Low on this
+    # hardware (sample lands POST-ZC of rising → comp 0) so they were
+    # removed from the firmware. Slots kept as zero pad for stability.
+    ('pad_156',          158, '<I', 1,     '',     'reserved (was compRising_High)'),
+    ('pad_160',          162, '<I', 1,     '',     'reserved (was compRising_Low)'),
+    ('cF_hi',            166, '<I', 1,     '',     'falling sector, comp=1 (POST-ZC)'),
+    ('cF_lo',            170, '<I', 1,     '',     'falling sector, comp=0 (PRE-ZC)'),
+    # PTG postscale: count of fires that bypassed ProcessBemfSample().
+    # Effective BEMF-sample rate = (ptgFires - ptgSkipped) / second.
+    ('ptgSkipped',       174, '<I', 1,     '',     'PTG fires bypassed by postscaler'),
+    # Frame trimmed to 180 bytes (was 254) 2026-05-19 to reduce UART
+    # congestion. Dropped fields lived past offset 200 and were only used
+    # in the Ctrl-C summary, not the per-frame line.
     ('mainHb',           178, '<H', 1,     '',     'main-loop heartbeat (low16 of free-running counter)'),
+    # PTG dual-sample mode byte (added 2026-05-20, frame grew 180 → 182).
+    #   0 = SINGLE_OFF — only mid-OFF sample per PWM cycle (low duty)
+    #   1 = DUAL       — mid-OFF + mid-ON alternating (mid duty, ~2× ISR rate)
+    #   2 = SINGLE_ON  — only mid-ON sample per PWM cycle (high duty / BC)
+    ('ptgMode',          180, '<B', 1,     '',     'PTG sample mode state machine'),
+    # PG1DC + MPER read DIRECTLY from PWM peripheral registers (added
+    # 2026-05-20, frame grew 182 → 186). Lets the host verify the gate
+    # is actually seeing the duty% the firmware reports. True gate
+    # duty% = pg1dc / mper × 100. PG counter clock is 800 MHz
+    # (= 8 × FPGX_CLK_HZ = 8 × 100 MHz), so 1 tick = 1.25 ns.
+    ('pg1dc',            182, '<H', 1,     '',     'PG1DC compare register (PG-clock ticks)'),
+    ('mper',             184, '<H', 1,     '',     'MPER period register (PG-clock ticks)'),
 ]
 
 
@@ -151,9 +173,11 @@ def parse_snapshot(buf: bytes) -> dict:
             out[key] = struct.unpack_from(fmt, buf, off)[0]
         else:
             out[key] = 0
-    # Derived counters
-    out['capRise']    = out['adcSetRising']
-    out['capFall']    = out['adcCapSet'] - out['adcSetRising']
+    # Derived counters. adcSetRising was removed from firmware (always 0 on
+    # this hardware), so capRise is hardcoded 0 and capFall == adcCapSet.
+    # The display labels stay the same for backwards compatibility.
+    out['capRise']    = 0
+    out['capFall']    = out['adcCapSet']
     out['amp_pct']    = (out['actualAmp_Q15'] * 100) / 32768 if out['actualAmp_Q15'] else 0
     # The firmware ships physical units directly (see garuda_config.h).  The
     # host only divides by 1000 to display volts / amps; it never knows the
@@ -168,19 +192,36 @@ def parse_snapshot(buf: bytes) -> dict:
     out['iaPkMin_A']  = out['iaPkMin_mA'] / 1000.0
     out['ibPkMax_A']  = out['ibPkMax_mA'] / 1000.0
     out['ibPkMin_A']  = out['ibPkMin_mA'] / 1000.0
-    pR_tot = out['pR_acc'] + out['pR_rej']
-    pF_tot = out['pF_acc'] + out['pF_rej']
-    out['pR_pct'] = (100 * out['pR_acc'] // pR_tot) if pR_tot else 0
-    out['pF_pct'] = (100 * out['pF_acc'] // pF_tot) if pF_tot else 0
-    # Capture-layer ratios. preR% = fraction of rising-sector samples that
-    # see comp=1 (pre-ZC). High preR% (≥90) means rising BEMF never crossed
-    # the (shifted) virtual neutral by the sample point — physics
-    # asymmetry. Low preR% means comp is transitioning fine, but the
-    # accept logic is failing.
-    cR_tot = out['cR_hi'] + out['cR_lo']
+    # Per-polarity PI-feed ratios. pR_pct = fraction of rising sectors that
+    # got an accepted BEMF capture into the PI. pF_pct = same for falling.
+    # On AK with the polarity-symmetric gate, rising-sector samples land
+    # POST-ZC and don't satisfy `comp == expected`, so pR_pct stays at 0%
+    # by physics — that's normal, not a bug. pF_pct ~100% confirms the PI
+    # is being fed reliably.
+    pR_tot = out['piFedRising']  + out['piMissRising']
+    pF_tot = out['piFedFalling'] + out['piMissFalling']
+    out['pR_pct'] = (100 * out['piFedRising']  // pR_tot) if pR_tot else 0
+    out['pF_pct'] = (100 * out['piFedFalling'] // pF_tot) if pF_tot else 0
+    # Capture-layer ratios. preR is hardcoded 0 on AK (compRising counters
+    # were removed from firmware — rising-sector samples always land POST-ZC
+    # of rising, never PRE-ZC, so the rising tally carried no information).
+    # postF = fraction of falling-sector samples that land POST-ZC (comp=1
+    # on inverted ATA6847). Typically 80-95% across the speed range.
     cF_tot = out['cF_hi'] + out['cF_lo']
-    out['preR_pct']  = (100 * out['cR_hi'] // cR_tot) if cR_tot else 0
+    out['preR_pct']  = 0
     out['postF_pct'] = (100 * out['cF_hi'] // cF_tot) if cF_tot else 0
+    # True gate duty% read straight from PWM registers, independent of the
+    # firmware-side g_pwmActualDuty mirror. Useful for confirming that the
+    # reported amp% actually reaches the gate. PG clock is 800 MHz, so the
+    # tick value also gives an absolute on-time in ns (= pg1dc × 1.25).
+    if out.get('mper', 0) > 0:
+        out['gate_duty_pct'] = 100.0 * out['pg1dc'] / out['mper']
+        out['pwm_period_us'] = out['mper'] * 1.25e-3   # ticks × 1.25 ns / 1000
+        out['gate_on_ns']    = out['pg1dc'] * 1.25
+    else:
+        out['gate_duty_pct'] = 0.0
+        out['pwm_period_us'] = 0.0
+        out['gate_on_ns']    = 0.0
     # Firmware flags from packed d[37]
     sp_bc = out.get('spBcByte', 0)
     out['spMode']     = bool(sp_bc & 0x01)
@@ -197,6 +238,12 @@ def decode_telem(buf: bytes) -> str:
     name = ESC_STATE.get(s['state'], f"S{s['state']}")
     # Block-comm tag: read the actual firmware flag (d[37] bit 2), not the
     # old "dutyPct==100 and amp<32768" heuristic which missed BC at full-amp.
+    def _ptg_mode_tag(v):
+        if v == 0:    return 'oFF'
+        elif v == 1:  return 'DUAL'
+        elif v == 2:  return 'on '
+        return f"?{v:02x}"
+
     duty_tag = " BC" if s.get('blockComm', False) else "PWM"
     # Phase peak in this snapshot window (|max| or |min|, whichever bigger).
     iaPk_A = max(abs(s['iaPkMax_A']), abs(s['iaPkMin_A']))
@@ -216,7 +263,10 @@ def decode_telem(buf: bytes) -> str:
             f"fH{s['filterHRLast']:5d} | "
             f"preR{s['preR_pct']:3d}% postF{s['postF_pct']:3d}% "
             f"skip={_kfmt(s['ptgSkipped'])} "
-            f"hb={s.get('mainHb', 0):5d}")
+            f"hb={s.get('mainHb', 0):5d} "
+            f"M={_ptg_mode_tag(s.get('ptgMode', 0xFF))} "
+            f"gate={s.get('gate_duty_pct', 0):5.1f}% "
+            f"PG1DC={s.get('pg1dc', 0):5d}/{s.get('mper', 0):5d}")
 
 def read_frames(ser, want_cmd: int, count: int, timeout_s: float = 3.0):
     """Read `count` frames matching want_cmd or until timeout. Yields (cmd, payload)."""
@@ -281,8 +331,12 @@ def live_monitor(port: str, baud: int, csv_path: str = None):
                 # 252 = older firmware: fpStale at snap[250..251]
                 if len(payload) >= 254:
                     tag = "(OLD-254 — full snap with bemfTally; trimmed in newer fw)"
+                elif len(payload) >= 186:
+                    tag = "(NEW-186 — adds PG1DC/MPER at snap[182..185] for gate-duty verification)"
+                elif len(payload) >= 182:
+                    tag = "(NEW-182 — PTG sample-mode byte at snap[180]; PG1DC/MPER missing — flash newer fw)"
                 elif len(payload) >= 180:
-                    tag = "(NEW — trimmed 180B snap, heartbeat at snap[178..179])"
+                    tag = "(NEW-180 — trimmed snap, ptgMode missing — flash newer fw)"
                 elif len(payload) >= 252:
                     tag = "(OLD-252 — no heartbeat, hb=0)"
                 elif len(payload) >= 250:
@@ -373,56 +427,30 @@ def live_monitor(port: str, baud: int, csv_path: str = None):
             print(f"\nCSV write failed: {e}")
         print(f"final pot range: {pot_min}..{pot_max}")
 
-        # ── Multi-phase BEMF tally (2026-05-15) ───────────────────────
-        # For each (sector, phase), the firmware counts how often comp=1
-        # past the blanking gate.  The firmware resets the tally after
-        # every snapshot send, so each frame's bTot/bS values are a fresh
-        # ~50 ms delta (avoids uint16 wrap at 60 kHz PWM × ~30 % blanking
-        # — was hitting wrap inside a single sector before reset landed).
-        # We SUM across all frames here to recover the run-total ratios.
-        # The phase the code BELIEVES is floating (per commutationTable)
-        # is annotated with [F].
+        # PTG sample-mode breakdown — was the dual-sample state machine
+        # actually doing anything? Show how many frames spent in each mode.
         if rows:
-            totals = [0] * 6
-            cnts   = {f'bS{s}{p}': 0 for s in range(6) for p in 'ABC'}
+            mode_names = {0: 'SINGLE_OFF', 1: 'DUAL', 2: 'SINGLE_ON'}
+            mode_counts = {0: 0, 1: 0, 2: 0, 'other': 0}
             for r in rows:
-                for s in range(6):
-                    totals[s] += r.get(f'bTot{s}', 0)
-                    for p in 'ABC':
-                        cnts[f'bS{s}{p}'] += r.get(f'bS{s}{p}', 0)
-            # Code's belief about which phase floats per sector — must
-            # match commutation.c.  0=A, 1=B, 2=C.
-            float_by_sector = {0: 2, 1: 0, 2: 1, 3: 2, 4: 0, 5: 1}
-            polarity        = {0: 'R', 1: 'F', 2: 'R', 3: 'F', 4: 'R', 5: 'F'}
-            print("\n=== Multi-phase BEMF tally — comp=1 ratios per (sector, phase) ===")
-            print("       │   phase A   │   phase B   │   phase C   │  total")
-            print("───────┼─────────────┼─────────────┼─────────────┼────────")
-            for s in range(6):
-                tot = totals[s] or 1
-                ratios = []
-                for p_idx, phase in enumerate('ABC'):
-                    cnt = cnts[f'bS{s}{phase}']
-                    pct = 100.0 * cnt / tot
-                    # Clamp to avoid format-width overflow if the firmware
-                    # ever produces cnt > tot (transient between reset and
-                    # snapshot read — increment can land after memcpy).
-                    if pct > 999.9: pct = 999.9
-                    mark = '[F]' if float_by_sector[s] == p_idx else '   '
-                    ratios.append(f"{pct:5.1f}% {mark}")
-                print(f"  s{s} {polarity[s]} │ {ratios[0]}  │ {ratios[1]}  │ {ratios[2]}  │ {totals[s]:8d}")
-            print("Reading: [F] = phase code BELIEVES floats.  Look for a [F]")
-            print("phase that's stuck at 0% or 100% — that's a phase-mapping bug.")
+                m = r.get('ptgMode', 0xff)
+                if m in mode_counts:
+                    mode_counts[m] += 1
+                else:
+                    mode_counts['other'] += 1
+            tot = sum(mode_counts.values()) or 1
+            print("\n=== PTG sample-mode breakdown ===")
+            for k in (0, 1, 2):
+                pct = 100.0 * mode_counts[k] / tot
+                print(f"  {k}={mode_names[k]:11s}: {mode_counts[k]:4d} frames ({pct:5.1f}%)")
+            if mode_counts['other'] > 0:
+                print(f"  other (unknown): {mode_counts['other']} frames "
+                      f"— firmware likely missing ptgMode byte; flash the 182-byte build")
 
-            # Stale-floatingPhase summary.  Sum across all frames.
-            fp_stale_total = sum(r.get('fpStale', 0) for r in rows)
-            total_samples  = sum(totals)
-            stale_pct      = (100.0 * fp_stale_total / total_samples) if total_samples else 0.0
-            print(f"v4_floatingPhase stale count: {fp_stale_total} / {total_samples} "
-                  f"samples ({stale_pct:.2f}%)")
-            if fp_stale_total > 0:
-                print("  → v4_floatingPhase disagreed with commutationTable[v4_currentSector]")
-                print("    on at least one PTG fire.  Deglitched comp (via global) is reading")
-                print("    a different pin than the multi-phase tally (via direct A/B/C reads).")
+        # (The bemfTally / fpStaleCount / sectorHits summary was removed
+        # when the firmware dropped those counters and shrunk the snap to
+        # 180 bytes on 2026-05-19. Their backing globals no longer exist;
+        # the per-fire ISR cost they incurred is gone too.)
 
 def ata_diag(port: str, baud: int):
     """Read ATA6847L gate-driver diagnostic registers and decode."""

@@ -313,16 +313,17 @@
 #define MOTOR_LS_MICROH     15U
 #define MOTOR_KV            1460U
 
-/* Startup — needs HIGH duty to develop torque (Rs is the bottleneck,
- * not duty). Cannot overcurrent so set duty caps generously.
- * Ramp cadence (TIME, ACCEL, INITIAL_STEP) matches profile 1's proven
- * 1500 eRPM/s rate; duty caps are high to push current through 16 Ω. */
-#define ALIGN_TIME_MS       150U
-#define ALIGN_DUTY          (LOOPTIME_TCY * 50U / 100U)  /* 50% → 0.94 A */
-#define INITIAL_STEP_PERIOD 800U
+/* Startup — proven by colleague's bench testing on the actual HiZ
+ * 16 Ω motor at commit 1956441. High-Rs motor has Rs naturally
+ * limiting current, so startup needs SLOW ramp and modest duty —
+ * not aggressive. Earlier draft (50% align / 80% cap) was wrong:
+ * Rs limits current anyway, but the abrupt step was destabilizing. */
+#define ALIGN_TIME_MS       200U
+#define ALIGN_DUTY          (LOOPTIME_TCY / 20)    /* ~5% — soft align */
+#define INITIAL_STEP_PERIOD 1000U
 #define MIN_STEP_PERIOD     50U          /* 2.5 ms = ~4000 eRPM handoff */
-#define RAMP_ACCEL_ERPM_S   1500U        /* Proven cadence on profile 1 */
-#define RAMP_DUTY_CAP       (LOOPTIME_TCY * 80U / 100U)  /* 80% → 1.5 A peak */
+#define RAMP_ACCEL_ERPM_S   500U         /* Slow ramp — high-Z motor needs time */
+#define RAMP_DUTY_CAP       (LOOPTIME_TCY / 8)     /* ~12.5% — modest */
 
 /* ZC Detection — same as 2810; low Ls means fast current settling. */
 #define ZC_BLANKING_PERCENT 20U
@@ -846,8 +847,13 @@
 #elif MOTOR_PROFILE == 3  /* HiZ1460 — Rs caps current at 1.87A */
 #define V4_STARTUP_SPEED_ERPM   500UL
 #define V4_STARTUP_CURRENT_MA   1500.0f
-#define V4_ALIGN_DURATION_MS    100U       /* Matches profile 1 — settling not Rs-dependent */
-#define V4_MIN_AMPLITUDE_PROFILE 16384U    /* 50% Q15 — high-Z motor needs lots of duty */
+#define V4_ALIGN_DURATION_MS    200U       /* Matches profile 3 ALIGN_TIME_MS */
+#define V4_MIN_AMPLITUDE_PROFILE 5000U     /* 15.3% Q15 — proven on colleague's bench
+                                            * with the actual HiZ 16 Ω motor (commit
+                                            * 1956441). 50% Q15 was over-tuned —
+                                            * Rs limits current naturally so high
+                                            * idle floor isn't needed and creates
+                                            * a destabilizing duty-step at CL. */
 #define V4_BLOCK_ENTER_ERPM     250000UL   /* HiZ1460 @ 30V theoretical 306k */
 #define V4_BLOCK_EXIT_ERPM      220000UL
 #endif
@@ -976,12 +982,21 @@
  * V5.1-step2 (FEATURE_V5_POST_ZC_OWN=1):
  *   Post-ZC accept actually drives v4_captureValid; PI sees both
  *   polarities. Bench-validate PI stability before this. */
+/* 2026-04-29 — Post-ZC ADC accept enabled.  Capture log on prop startup
+ * showed the V4 pre-ZC convention feeding bimodal capValues (cluster A
+ * around real ZC ~50% T, cluster B around first post-blanking sample
+ * where pre-ZC state still held) → 2-step PI limit cycle → death
+ * spiral. Post-ZC convention reads v5_ptgExpectedComp written cleanly
+ * by Commutate, bypassing the stuck-TRUE HAL_Capture_IsRisingZc()
+ * issue. Both polarities should now contribute single-cluster captures.
+ * Verify high-speed (196k) baseline isn't regressed before declaring
+ * this stable. */
 #ifndef FEATURE_V5_POST_ZC_ACCEPT
-#define FEATURE_V5_POST_ZC_ACCEPT  0
+#define FEATURE_V5_POST_ZC_ACCEPT  1
 #endif
 
 #ifndef FEATURE_V5_POST_ZC_OWN
-#define FEATURE_V5_POST_ZC_OWN     0   /* requires FEATURE_V5_POST_ZC_ACCEPT */
+#define FEATURE_V5_POST_ZC_OWN     1   /* requires FEATURE_V5_POST_ZC_ACCEPT */
 #endif
 
 #if FEATURE_V5_POST_ZC_OWN && !FEATURE_V5_POST_ZC_ACCEPT

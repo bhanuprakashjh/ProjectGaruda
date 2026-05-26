@@ -22,6 +22,7 @@ CMD_PING = 0x00
 CMD_GET_SNAPSHOT = 0x02
 CMD_TELEM_START = 0x14
 CMD_TELEM_STOP = 0x15
+CMD_PI_LOG = 0x30   # V4 diagnostic: first 30 PI runs after CL entry
 
 CK_CURRENT_SCALE = 1.049
 CK_VBUS_SCALE = 1211.0
@@ -395,6 +396,23 @@ def decode_ck_snapshot(data):
         s['dmaLastCorrectionHR'] = 0
         s['dmaMinCorrectionHR'] = 0
         s['dmaMaxCorrectionHR'] = 0
+    # 2026-05-14 AK mechanism probe: elapsed-snapshot from sector_pi.c
+    # plausibility filter. On AK these overlap with CK's pred* slots but
+    # CK firmware doesn't ship 156+ bytes, so the gate keeps them distinct.
+    # On AK the gate is met (158 bytes), so we get real values.
+    #   d[146..155]: elapAccR, elapAccF, elapRejR, elapRejF, filterHRLast
+    if len(data) >= 156:
+        s['elapAccR']      = struct.unpack_from('<H', data, 146)[0]
+        s['elapAccF']      = struct.unpack_from('<H', data, 148)[0]
+        s['elapRejR']      = struct.unpack_from('<H', data, 150)[0]
+        s['elapRejF']      = struct.unpack_from('<H', data, 152)[0]
+        s['filterHRLast']  = struct.unpack_from('<H', data, 154)[0]
+    else:
+        s['elapAccR'] = 0
+        s['elapAccF'] = 0
+        s['elapRejR'] = 0
+        s['elapRejF'] = 0
+        s['filterHRLast'] = 0
     # Derived
     s['iaMa'] = round(s['iaRaw'] * CK_CURRENT_SCALE)
     s['ibMa'] = round(s['ibRaw'] * CK_CURRENT_SCALE)
@@ -639,7 +657,16 @@ def main():
                 prev_sector_count = sc_now
                 prev_system_tick = st_now
                 if ersc > 999999: ersc = 999999
-                print(f"{t:7.1f} {state_str:>8s} {snap['eRpm']:7d} {ersc:6d} {snap['dutyPct']:3d}% {snap['vbusV']:5.1f}V {sp_str:>2s} {etp:6d} {etpm:7d} {cap_pct:4d}% {bnk_pct:4.0f}% {mis_pct:4.0f}% {set_pct:4.0f}% {rf_s:>7s} {fires_s:>9s} {offok_s:>7s} {offbd_s:>7s} {ptg_s:>8s} {pr_pct:3.0f}% {pf_pct:3.0f}% {p2r_pct:4.0f}% {p2f_pct:4.0f}%{fault_str}")
+                # 2026-05-14 mechanism probe: per-polarity elapsed snapshots.
+                # aR/aF = last accepted, rR/rF = last rejected, fH = filterHR.
+                # The lock is "rR ≈ fH + tiny" (drift past truth filter) vs
+                # "aF < fH" (the polarity that wins lands inside the window).
+                eaR = snap.get('elapAccR', 0)
+                eaF = snap.get('elapAccF', 0)
+                erR = snap.get('elapRejR', 0)
+                erF = snap.get('elapRejF', 0)
+                fH  = snap.get('filterHRLast', 0)
+                print(f"{t:7.1f} {state_str:>8s} {snap['eRpm']:7d} {ersc:6d} {snap['dutyPct']:3d}% {snap['vbusV']:5.1f}V {sp_str:>2s} {etp:6d} {etpm:7d} {cap_pct:4d}% {bnk_pct:4.0f}% {mis_pct:4.0f}% {set_pct:4.0f}% {rf_s:>7s} {fires_s:>9s} {offok_s:>7s} {offbd_s:>7s} {ptg_s:>8s} {pr_pct:3.0f}% {pf_pct:3.0f}% {p2r_pct:4.0f}% {p2f_pct:4.0f}% | aR{eaR:5d} aF{eaF:5d} rR{erR:5d} rF{erF:5d} fH{fH:5d}{fault_str}")
 
                 rows.append({
                     'time': round(t, 3),
@@ -777,6 +804,11 @@ def main():
                     'post_zc_falling_acc': snap.get('postZcFallingAcc', 0),
                     'post_zc_falling_rej': snap.get('postZcFallingRej', 0),
                     't_meas_hr':           snap.get('tMeasHR', 0),
+                    'elap_acc_r':          snap.get('elapAccR', 0),
+                    'elap_acc_f':          snap.get('elapAccF', 0),
+                    'elap_rej_r':          snap.get('elapRejR', 0),
+                    'elap_rej_f':          snap.get('elapRejF', 0),
+                    'filter_hr_last':      snap.get('filterHRLast', 0),
                 })
 
             time.sleep(0.01)
@@ -787,6 +819,55 @@ def main():
     # Stop telemetry
     ser.write(build_packet(CMD_TELEM_STOP))
     time.sleep(0.1)
+
+    # Fetch the PI capture log — first ~30 PI iterations after the
+    # most-recent CL entry. Useful for diagnosing CL-handoff runaway:
+    # the log freezes once full, so it captures the actual sequence
+    # PI was fed at the failure boundary.
+    ser.reset_input_buffer()
+    ser.write(build_packet(CMD_PI_LOG))
+    deadline = time.time() + 0.5
+    log_buf = b''
+    log_pkt = None
+    while time.time() < deadline:
+        log_buf += ser.read(512)
+        pkt, log_buf = parse_packet(log_buf)
+        if pkt and pkt[0] == CMD_PI_LOG:
+            log_pkt = pkt
+            break
+    if log_pkt is not None:
+        payload = log_pkt[1]
+        if len(payload) >= 1:
+            n = payload[0]
+            print(f"\n=== PI Capture Log (first {n} PI runs after CL entry) ===")
+            if n == 0:
+                print("  (empty — CL never engaged this run)")
+            else:
+                print(f"{'#':>3s} {'tPer':>6s} {'setVal':>6s} {'capVal':>6s} {'delta':>7s}")
+                for i in range(n):
+                    off = 1 + i * 8
+                    if off + 8 > len(payload):
+                        break
+                    tper, sval, cval = struct.unpack_from('<HHH', payload, off)
+                    delta, = struct.unpack_from('<h', payload, off + 6)
+                    print(f"{i:3d} {tper:6d} {sval:6d} {cval:6d} {delta:7d}")
+                # Save to CSV alongside the main capture
+                import os, csv as _csv
+                pi_csv = os.path.splitext(csv_file)[0] + '_pi_log.csv'
+                with open(pi_csv, 'w', newline='') as f:
+                    w = _csv.writer(f)
+                    w.writerow(['idx', 'timer_period', 'set_value', 'cap_value', 'delta_clamped'])
+                    for i in range(n):
+                        off = 1 + i * 8
+                        if off + 8 > len(payload):
+                            break
+                        tper, sval, cval = struct.unpack_from('<HHH', payload, off)
+                        delta, = struct.unpack_from('<h', payload, off + 6)
+                        w.writerow([i, tper, sval, cval, delta])
+                print(f"PI log saved to {pi_csv}")
+    else:
+        print("\n(no PI log response — firmware too old or no CL entry)")
+
     ser.close()
 
     # Write CSV

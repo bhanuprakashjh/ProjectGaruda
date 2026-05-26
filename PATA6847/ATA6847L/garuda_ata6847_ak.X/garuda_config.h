@@ -17,8 +17,8 @@
 /* ── Mode select (needs to come BEFORE the PWM block, since
  *      PWMFREQUENCY_HZ is mode-dependent) ───────────────────────── */
 #ifndef FEATURE_FOC_AN1078
-#define FEATURE_FOC_AN1078  1   /* 2026-05-22: FOC mode for ESMO bench testing.
-                                   Flip back to 0 to return to 6-step. */
+#define FEATURE_FOC_AN1078  0   /* 2026-05-25: back to 6-step. Flip to 1
+                                   to return to FOC. */
 #endif
 
 /* ── 6-step BEMF detection method ──────────────────────────────────
@@ -35,8 +35,7 @@
  * Only meaningful when FEATURE_FOC_AN1078=0 (FOC uses currents not
  * BEMF). Mutually exclusive with the PTG path. */
 #ifndef FEATURE_IOC_BEMF
-#define FEATURE_IOC_BEMF    0   /* 2026-05-22: disabled — FOC mode active.
-                                   Flip back to 1 when returning to 6-step. */
+#define FEATURE_IOC_BEMF    1   /* 2026-05-25: re-enabled with 6-step. */
 #endif
 #if FEATURE_IOC_BEMF && FEATURE_FOC_AN1078
 #error "FEATURE_IOC_BEMF is for 6-step path only — disable FEATURE_FOC_AN1078"
@@ -50,12 +49,7 @@
  * fallback. Mutually selected with AN1078 via OBS_* macros in
  * an1078_motor.c. See docs/ti_esmo_inventory_2026_05_22.md. */
 #ifndef FEATURE_FOC_ESMO
-#define FEATURE_FOC_ESMO    1   /* 2026-05-22: ESMO observer default ON. Bench-
-                                   tuned config: Ed/|E| PLL + adaptive Kp (3×) +
-                                   speed LPF. Side-by-side vs AN1078 baseline:
-                                   top-end Id range ±13 (vs ±24), ω jitter 3× lower.
-                                   Peak ~210k eRPM (within 2% of baseline 213k).
-                                   Set to 0 to revert to AN1078 SMO baseline. */
+#define FEATURE_FOC_ESMO    0   /* 2026-05-25: disabled (6-step mode active). */
 #endif
 #if FEATURE_FOC_ESMO && !FEATURE_FOC_AN1078
 #error "FEATURE_FOC_ESMO requires FEATURE_FOC_AN1078=1 (ESMO is an observer alternative)"
@@ -66,10 +60,7 @@
  * Default OFF until bench-validated.  Set to 1 to compile foc/fwc.{c,h}
  * and enable the FW path in an1078_motor.c.  See foc/fwc.h. */
 #ifndef FEATURE_FWC
-#define FEATURE_FWC         1   /* 2026-05-22: bench test of voltage-margin
-                                   angle-PI FW.  Set to 0 for legacy id_ref_fw
-                                   integrator (proven to ~210k but with Id
-                                   excursions ±20A above 175k). */
+#define FEATURE_FWC         0   /* 2026-05-25: disabled (6-step mode active). */
 #endif
 #if FEATURE_FWC && !FEATURE_FOC_AN1078
 #error "FEATURE_FWC requires FEATURE_FOC_AN1078=1 (FWC is for FOC only)"
@@ -100,19 +91,7 @@
  *
  * PI then operates on a clean R+s·L plant, much more stable at speed. */
 #ifndef FEATURE_FOC_FF_DECOUPLE
-#define FEATURE_FOC_FF_DECOUPLE     1   /* Phase A: BEMF-only FF.
-                                         *   Vq_ff = ω · λ_est   (no current dep)
-                                         *   Vd_ff = 0
-                                         * Frees the full ±vmax envelope for
-                                         * the PIs above ~180k eRPM where ω·λ
-                                         * approaches vmax and current control
-                                         * gets rough.
-                                         *
-                                         * History — earlier attempt with full
-                                         * cross-coupling FF using unfiltered
-                                         * id_meas/iq_meas diverged at 110k.
-                                         * Phase B (task #128) re-adds cross-
-                                         * coupling with LPF on currents. */
+#define FEATURE_FOC_FF_DECOUPLE     0   /* 2026-05-25: disabled (6-step mode active). */
 #endif
 #if FEATURE_FOC_FF_DECOUPLE && !FEATURE_FOC_AN1078
 #error "FEATURE_FOC_FF_DECOUPLE requires FEATURE_FOC_AN1078=1"

@@ -50,6 +50,10 @@ typedef enum {
     GSP_CMD_BURST_ARM       = 0x20,   /* arm the burst; no payload */
     GSP_CMD_BURST_STATUS    = 0x21,   /* response: {state, count} 2 bytes */
     GSP_CMD_BURST_GET_STEP  = 0x22,   /* payload: {stepIdx}; response: DMA_BURST_STEP_T */
+    /* V4 PI capture-log: first 30 PI runs after CL entry, frozen.
+     * Response: [count(u8)][entries 8B each: timerPeriod, setValue,
+     * capValue, delta_clamped — all LE]. */
+    GSP_CMD_PI_LOG          = 0x30,
     GSP_CMD_TELEM_FRAME     = 0x80,
     GSP_CMD_ERROR           = 0xFF
 } GSP_CMD_ID_T;

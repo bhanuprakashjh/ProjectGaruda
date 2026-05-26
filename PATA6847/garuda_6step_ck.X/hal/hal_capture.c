@@ -99,16 +99,12 @@ void HAL_Capture_Start(void)
     (void)CCP5BUFL; (void)CCP5BUFL; (void)CCP5BUFL; (void)CCP5BUFL;
     v4_captureValid = false;
     _CCP2IF = 0; _CCP5IF = 0;
-    _CCP2IE = 0;                /* DISABLED 2026-04-29 — V4 Mode 1 doesn't
-                                 * use the CCP2 capture path (gated to
-                                 * MIDPOINT_ZC=0 in garuda_service.c:631).
-                                 * CCP2 confirmed safe at 60 kHz / 228k;
-                                 * old "~100k trip" warning was a 40 kHz-
-                                 * baseline artifact. */
-    _CCP5IE = 0;                /* DISABLED 2026-04-29 — same reasoning as
-                                 * CCP2. V4 Mode 1 capture path gated to
-                                 * MIDPOINT_ZC=0 in garuda_service.c:740.
-                                 * Both ISRs were just FIFO drain cost. */
+    _CCP2IE = 1;                /* RE-ENABLED 2026-04-29 — testing as prop-startup
+                                 * regression suspect. Earlier this session disabled
+                                 * to save FIFO-drain CPU; comments before that
+                                 * called the ISRs "load-bearing" for low-speed BEMF
+                                 * detection (FIFO drain side effects). */
+    _CCP5IE = 1;                /* RE-ENABLED — same reason as CCP2. */
 
     /* Seed SCCP1 counter at half-period so it fires at PWM peak.
      * ADC fires at valley (counter=0); we want SCCP1 12.5 µs later.

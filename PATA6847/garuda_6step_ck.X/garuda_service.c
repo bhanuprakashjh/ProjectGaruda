@@ -447,6 +447,40 @@ void __attribute__((interrupt, auto_psv)) _ADCInterrupt(void)
                 }
 #endif
 
+#if FEATURE_V5_POST_ZC_OWN
+                /* V5.1-step2 post-ZC convention.  Accept when comp matches
+                 * the POST-ZC state for this sector — the inverted ATA6847
+                 * settles to 0 after rising-BEMF ZC and to 1 after
+                 * falling-BEMF ZC, so v5_ptgExpectedComp (0 for even/rising,
+                 * 1 for odd/falling sectors) is exactly the post-ZC state.
+                 *
+                 * Reads v5_ptgExpectedComp instead of HAL_Capture_IsRisingZc
+                 * to avoid the stuck-TRUE behaviour the diagnostic ISRs
+                 * documented around 2026-04-18 — the volatile global is
+                 * written cleanly by the Commutate ISR and is the same
+                 * source the working PTG/post-ZC shadow paths use.
+                 *
+                 * Replaces the legacy V4 pre-ZC logic which only ever
+                 * caught one polarity and fed the PI bimodal capValues
+                 * (one cluster = real ZC at ~50% T, other = first
+                 * post-blanking sample where pre-ZC state still held). */
+                {
+                    extern volatile uint8_t v5_ptgExpectedComp;
+                    uint8_t expectedPost = v5_ptgExpectedComp;
+                    bool    sectorRising = (expectedPost == 0u);
+                    if (comp != expectedPost)
+                    {
+                        v4_adcStateMismatch++;
+                    }
+                    else
+                    {
+                        v4_adcCaptureSet++;
+                        if (sectorRising) v4_adcSetRising++;
+                        v4_lastCaptureHR = nowHR;
+                        v4_captureValid  = true;
+                    }
+                }
+#else
                 uint8_t expected = isRising ? 1 : 0;
                 if (comp != expected)
                 {
@@ -470,6 +504,7 @@ void __attribute__((interrupt, auto_psv)) _ADCInterrupt(void)
                         v4_captureValid = true;
                     }
                 }
+#endif
             }
         }
     }
