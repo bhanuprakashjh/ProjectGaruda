@@ -595,6 +595,12 @@ extern "C" {
                                       * eRPM) but duty is below this, HWZC is tracking PWM
                                       * noise from a stalled motor. */
 #define HWZC_STALL_DEBOUNCE_MS  100  /* ms of continuous implausible state before stall disable */
+#define HWZC_NO_CAPTURE_MS      150  /* ms with zero new hwzc.totalZcCount increments while
+                                      * zcSynced is true. Catches the failure mode where the
+                                      * autonomous SCCP1 timer keeps commutating on a stale
+                                      * period but no real BEMF edges arrive (motor physically
+                                      * stalled). At 14k eRPM idle, a sector is ~12 ms so this
+                                      * tolerates ~12 missed sectors before forcing recovery. */
 
 /* Filter phase-lag compensation (Path 1: CMPLO pre-distortion).
  *

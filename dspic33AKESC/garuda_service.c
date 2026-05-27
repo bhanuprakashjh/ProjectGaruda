@@ -2848,6 +2848,53 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                     }
                 }
 
+                /* No-capture watchdog: independent of the period/duty stall
+                 * check above. If hwzc.totalZcCount hasn't moved for N ticks
+                 * while zcSynced is set, the motor is physically stalled
+                 * (autonomous SCCP1 timer keeps commutating on the last
+                 * known period but no real BEMF edges arrive). The standard
+                 * BEMF_ZC_CheckTimeout doesn't see this because lastCommTick
+                 * is updated by the autonomous timer's HWZC_OnCommutation
+                 * call. Force DESYNC → RECOVERY here so the pot-zero idle
+                 * path can recover via the regular restart cycle. */
+                {
+                    static uint32_t lastZcCount = 0;
+                    static uint16_t noCapCount = 0;
+                    if (prevAdcState != ESC_CLOSED_LOOP) {
+                        lastZcCount = garudaData.hwzc.totalZcCount;
+                        noCapCount = 0;
+                    }
+                    if (garudaData.hwzc.enabled && garudaData.timing.zcSynced)
+                    {
+                        if (garudaData.hwzc.totalZcCount != lastZcCount)
+                        {
+                            lastZcCount = garudaData.hwzc.totalZcCount;
+                            noCapCount = 0;
+                        }
+                        else if (++noCapCount >= HWZC_NO_CAPTURE_TICKS)
+                        {
+                            /* Mirror the desync-handler path so the pot-zero
+                             * recovery loop kicks in cleanly. */
+                            garudaData.zcDiag.zcDesyncCount++;
+#if FEATURE_HW_OVERCURRENT
+                            HAL_CMP3_SetThreshold(RT_OC_CMP3_STARTUP_DAC);
+#endif
+                            HAL_MC1PWMDisableOutputs();
+#if !FEATURE_THROTTLE_ZERO_AUTO_DISARM
+                            garudaData.runCommandActive = true;
+#endif
+                            garudaData.state = ESC_RECOVERY;
+                            garudaData.recoveryCounter = RT_DESYNC_COAST_COUNTS;
+                            LED2 = 0;
+                            noCapCount = 0;
+                        }
+                    }
+                    else
+                    {
+                        noCapCount = 0;
+                    }
+                }
+
 #if FEATURE_BEMF_INTEGRATION
                 /* Read-only observer: keep shadow integration warm (Rule 11) */
                 {

@@ -378,6 +378,7 @@ _Static_assert(MORPH_WINDOW_MIN_TICKS >= 5,
 /* Stall plausibility: duty limit and debounce in ADC ISR ticks */
 #define HWZC_STALL_DUTY_LIMIT   (uint32_t)((uint64_t)MAX_DUTY * HWZC_STALL_DUTY_PCT / 100)
 #define HWZC_STALL_DEBOUNCE_TICKS (uint16_t)(HWZC_STALL_DEBOUNCE_MS * PWMFREQUENCY_HZ / 1000)
+#define HWZC_NO_CAPTURE_TICKS     (uint16_t)(HWZC_NO_CAPTURE_MS    * PWMFREQUENCY_HZ / 1000)
 
 _Static_assert(HWZC_MIN_INTERVAL_PCT >= 1 && HWZC_MIN_INTERVAL_PCT <= 99,
                "HWZC_MIN_INTERVAL_PCT must be 1..99");
