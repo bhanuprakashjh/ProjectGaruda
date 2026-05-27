@@ -507,3 +507,78 @@ User testing is intentionally pushing the motor hard to validate the high-RPM de
 ### What this means for future testing
 
 When testing throttle response or rapid maneuvers, expect Vbus to spike up to ~30V on the bench supply during decelerations from 240k+ eRPM. The "UV fault" reported in this regime is **not** a real undervoltage event — it's the bridge saturation after regen overvoltage. Don't chase it as a sync issue.
+
+---
+
+## Appendix C: Rapid pot-zero intermittent stall (2026-05-27)
+
+### Symptom
+
+Holding pot at zero idles cleanly at ~14k eRPM / 6% duty. Bumping the
+pot briefly and letting it snap back works most of the time. But a
+**fast, hard pot release** sometimes pushes the firmware into a state
+where:
+
+- `hwzc.totalZcCount` stops incrementing (no new real BEMF captures)
+- `hwzcStepPeriodHR` freezes at the last value before the release
+- The autonomous SCCP1 timer keeps commutating on that stale period
+- `BEMF_ZC_CheckTimeout` doesn't see DESYNC because the timer's own
+  callback keeps `lastCommTick` fresh
+- Motor buzzes for several hundred ms and may or may not recover on
+  its own
+
+### What was added this session (commit `0de7d93`)
+
+A second watchdog in the CL ADC ISR slow path that monitors
+`hwzc.totalZcCount` directly. If it doesn't increment for
+`HWZC_NO_CAPTURE_MS` (150 ms default) while `zcSynced=true`, the code
+mirrors the desync handler:
+
+- Disable PWM
+- Re-arm `runCommandActive` under `AUTO_DISARM=0`
+- `state = ESC_RECOVERY`, `recoveryCounter = RT_DESYNC_COAST_COUNTS`
+
+This catches the runaway case where the previous fix could not.
+
+### What still fails (known limitation, parked)
+
+Even with the watchdog, **rapid** pot-zero events occasionally produce
+a brief stall before the 150 ms threshold fires. Bench log
+`step6_20260527_103134.csv` shows:
+
+| Time | State | Notes |
+|---|---|---|
+| `t=20.069` | CL @ 17836 eRPM, hwT=56066 — last good capture |
+| `t=20.092` | **RECOVERY** | new watchdog tripped, +35 hwMs in 23 ms |
+| `t=20.282` | ALIGN | restart begins |
+| `t=20.708` | back at 246k eRPM (PI-runaway again) |
+| `t=21.442` | IDLE | a different exit path took over |
+| `t=22.341` | ARMED | auto-rearm |
+| ... cycle continues ... | | motor recovered via the standard cycle |
+
+It is **not** a permanent stall. The motor always recovers via either
+the new no-capture watchdog or the existing auto-rearm chain. The
+visible behavior is "motor pauses then restarts" within a couple of
+seconds — the user can immediately throttle up to recover faster.
+
+### Why we're parking this
+
+- Threshold tuning (150 ms) is a tradeoff against false-trip on
+  legitimate low-signal transients near startup. Lowering it risks
+  tripping during normal CL entry where the first few captures are
+  sparse.
+- The rapid-release stall is a corner case of bench testing — a
+  flight ESC would never see human-speed throttle slams; it would see
+  a slew-limited DShot stream.
+- The real cure is the **duty-down slew limiter** described in
+  Appendix B. With slew-limited duty drops, BEMF stays measurable
+  during the deceleration and HWZC never goes silent in the first
+  place. That single fix solves both the regen overvoltage and the
+  rapid-pot stall.
+
+### When we come back to it
+
+The slew limiter from Appendix B is the priority. After that's in,
+re-run this test. The watchdog stays as a belt-and-suspenders for the
+case where the motor stalls for some other reason (e.g. mechanical
+load spike).
