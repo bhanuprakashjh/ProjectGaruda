@@ -181,3 +181,24 @@ None of these change the PI's fundamental architecture. They tune it.
 - `tools/pi_pll_simulator.py` — sim now models the realistic plant
 - Bench session 2026-05-28: chat history — three FF iterations on bench
 - `motor/hwzc.c` — the FF code path, currently disabled
+
+---
+
+## Phase 2 Milestone (2026-05-28 evening)
+
+Defensive PI bench-validated. Session step6_20260528_211557.csv:
+
+- **7 pot-zero releases**, all stayed in CL, no restart cycles
+- **Peak 236,350 eRPM** (new bench record, +2k over previous best)
+- **86.8 seconds clean CL operation**
+- The 2026-05-27 rapid-pot-zero stall bug is resolved
+- Only fault was BOARD_PCI from regen-OV during sustained 98% — unrelated
+  to defensive PI, fixed by future duty-down slew limiter (Appendix B)
+
+Current production state:
+  FEATURE_HWZC_PI_FLOAT     = 1   (Phase 1 ✓)
+  FEATURE_HWZC_PI_DEFENSIVE = 1   (Phase 2 ✓)
+  HWZC_PI_FF_ENABLE         = 0   (rejected, see above)
+
+Phase 2 stopping point. Remaining real improvements: duty-down slew
+limiter (regen-OV fix), demag detection, variable PWM frequency.
