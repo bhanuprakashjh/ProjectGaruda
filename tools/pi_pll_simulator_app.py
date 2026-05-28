@@ -220,10 +220,15 @@ def build_controllers():
 # Run sim (cached so unchanged inputs don't re-run)
 # ---------------------------------------------------------------
 @st.cache_data(show_spinner=False)
-def run_one(_ctrl_factory_key, motor_dict, Vbus, duration_s, initial_duty,
+def run_one(ctrl_factory_key, motor_dict, Vbus, duration_s, initial_duty,
             duty_kind, duty_extra, load_kind, load_extra, noise_HR, miss_pct,
             seed_error_pct, Kp_value, Ki_value, advance_deg):
-    """Cached single-controller run. Args are hashable; controllers built inside."""
+    """Cached single-controller run. Args are hashable; controllers built inside.
+
+    Note: arg names must NOT start with underscore — Streamlit skips
+    underscore-prefixed args during cache-key hashing, which would
+    cause different controllers to collide to the same cache entry.
+    """
     # Reconstruct motor
     m = MotorParams(**motor_dict)
 
@@ -251,15 +256,15 @@ def run_one(_ctrl_factory_key, motor_dict, Vbus, duration_s, initial_duty,
         load_sched = lambda t: load_Nm if load_start <= t < load_end else 0.0
 
     # Build the controller
-    if _ctrl_factory_key == "Current (int bit-shift)":
+    if ctrl_factory_key == "Current (int bit-shift)":
         c = CurrentFirmwarePI()
         c.ADVANCE_DEG = advance_deg
-    elif _ctrl_factory_key == "Float (no algo change)":
+    elif ctrl_factory_key == "Float (no algo change)":
         c = FloatPI()
         c.Kp = Kp_value
         c.Ki = Ki_value
         c.ADVANCE_DEG = advance_deg
-    elif _ctrl_factory_key == "Float + feedforward":
+    elif ctrl_factory_key == "Float + feedforward":
         c = FloatPIWithFeedforward(motor=m, Vbus=Vbus)
         c.Kp = Kp_value
         c.Ki = Ki_value
@@ -495,7 +500,7 @@ with st.expander("🔬 Diagnostics & derived values"):
     st.write(f"- KV = {motor.KV}, pole pairs = {motor.pole_pairs}")
     st.write(f"- Rs = {motor.Rs_ohm*1000:.1f} mΩ, Ls = {motor.Ls_uH} µH")
     st.write(f"- ke = {motor.ke_Vs_per_rad*1000:.3f} mV·s/rad mech")
-    st.write(f"- τ_mech (Ls/Rs) = {motor.Ls_uH / 1000 / motor.Rs_ohm:.0f} µs")
+    st.write(f"- τ_electrical (Ls/Rs) = {motor.Ls_uH / motor.Rs_ohm:.0f} µs")
     st.write("")
     st.write(f"**Filter**: R = {filt.R_ohm:.0f} Ω, C = {filt.C_F*1e9:.1f} nF, τ = {filt.tau_s*1e6:.1f} µs")
     st.write(f"- Cutoff = {1/(2*np.pi*filt.tau_s):,.0f} Hz")
