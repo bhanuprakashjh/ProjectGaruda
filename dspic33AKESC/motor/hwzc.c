@@ -705,19 +705,25 @@ void HWZC_OnPiPeriodExpired(volatile GARUDA_DATA_T *pData)
         (void)T;   /* used by clamps above; float math uses deltaF directly */
 
   #if HWZC_PI_FF_ENABLE
-        /* Feedforward: P_ff = 2π·ke·1e9 / (60·Vbus·duty·polepairs)
-         *           equivalently 1e9 / eRPM_noload, in HR ticks.
-         * ke is stored in µV·s/rad (gspParams.focKeUvSRad).
-         * Use the slow IIR period as a fallback if duty is too low to
-         * make the formula stable. */
+        /* Feedforward:
+         *   gspParams.focKeUvSRad stores λ_pm in FOC convention:
+         *     λ_pm = 60 / (√3 · 2π · KV · PP)   [V·s/rad]
+         *   For this convention, no-load electrical speed:
+         *     eRPM_noload = 60 · V_app / (2π · √3 · λ_pm)
+         *   PP cancels out — eRPM depends only on λ_pm and V.
+         *   Period in HR ticks (per sector):
+         *     P_ff = 1e9 / eRPM
+         *          = (2π√3/60) · λ_pm · 1e9 / V
+         *          = 0.18138 · λ_pm_uVsR · 1e9 / (V × 1e6)
+         *          = 181.38 · λ_pm_uVsR / (V × duty)   [HR ticks]
+         *   Fall back to slow-IIR period if any input is unsafe. */
         float dutyFrac = (float)pData->duty / (float)LOOPTIME_TCY;
         float vbus_v   = (float)pData->vbusRaw * VBUS_SCALE_V_PER_COUNT;
-        float ke_VsR   = (float)gspParams.focKeUvSRad * 1.0e-6f;
-        float pp_f     = (float)gspParams.motorPolePairs;
+        float lambdaPm = (float)gspParams.focKeUvSRad;  /* keep in µV·s/rad */
         float P_ff;
-        if (dutyFrac > 0.03f && vbus_v > 6.0f && ke_VsR > 0.0f && pp_f > 0.0f) {
-            P_ff = (2.0f * 3.14159265f * ke_VsR * 1.0e9f)
-                 / (60.0f * vbus_v * dutyFrac * pp_f);
+        if (dutyFrac > 0.03f && vbus_v > 6.0f && lambdaPm > 0.0f) {
+            /* Constant: 2π·√3 / 60 × (1e9 µV/V)/(1V) = 181.38 */
+            P_ff = (181.380f * lambdaPm) / (vbus_v * dutyFrac);
         } else {
             /* Fallback: use the slow-IIR period — known stable, no div-by-tiny */
             P_ff = (float)pData->hwzc.stepPeriodForFilterComp;

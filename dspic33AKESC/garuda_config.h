@@ -677,7 +677,7 @@ extern "C" {
  *
  * Both paths still maintain the integer integrator/timerPeriod fields
  * so existing telemetry and the reactive fallback continue to work. */
-#define FEATURE_HWZC_PI_FLOAT          0   /* 0 = original integer PI (default) */
+#define FEATURE_HWZC_PI_FLOAT          1   /* 0 = original integer PI (default) */
 #define HWZC_PI_FF_ENABLE              1   /* Add physics feedforward (requires
                                             * FEATURE_HWZC_PI_FLOAT=1 to take effect) */
 #define HWZC_PI_KP_FLOAT               0.25f  /* P gain — was bit-shift 2 = 0.25 */
