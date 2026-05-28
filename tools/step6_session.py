@@ -80,34 +80,43 @@ def crc16(data: bytes) -> int:
 
 
 def build_packet(cmd_id: int, payload: bytes = b"") -> bytes:
-    pkt_len = 2 + len(payload) + 2
+    """Frame: [START][LEN=1+payload_len][CMD][PAYLOAD][CRC_H][CRC_L]"""
+    pkt_len = 1 + len(payload)
     body = bytes([pkt_len, cmd_id]) + payload
-    crc = crc16(body)
-    return bytes([GSP_START_BYTE]) + body + bytes([(crc >> 8) & 0xFF, crc & 0xFF])
+    c = crc16(body)
+    return bytes([GSP_START_BYTE]) + body + struct.pack(">H", c)
 
 
-def read_packet(ser, timeout=0.5):
+def read_packet(ser, timeout=1.0):
+    """Returns (cmd_id, payload) or None on timeout/CRC fail."""
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
         b = ser.read(1)
-        if not b:
-            continue
-        if b[0] != GSP_START_BYTE:
-            continue
-        length = ser.read(1)
-        if not length:
-            continue
-        pkt_len = length[0]
-        rest = ser.read(pkt_len - 1)
-        if len(rest) != pkt_len - 1:
-            continue
-        return rest[0], rest[1:-2]
-    return None
+        if not b: continue
+        if b[0] == GSP_START_BYTE: break
+    else:
+        return None
+
+    ser.timeout = max(deadline - time.monotonic(), 0.01)
+    b = ser.read(1)
+    if not b: return None
+    pkt_len = b[0]
+
+    ser.timeout = max(deadline - time.monotonic(), 0.01)
+    data = ser.read(pkt_len + 2)
+    if len(data) < pkt_len + 2: return None
+
+    cmd_id = data[0]
+    payload = data[1:pkt_len]
+    rx_crc = struct.unpack(">H", data[pkt_len:pkt_len + 2])[0]
+    if crc16(bytes([pkt_len]) + data[:pkt_len]) != rx_crc:
+        return None
+    return (cmd_id, payload)
 
 
-def send_cmd(ser, cmd_id, payload=b"", timeout=0.3):
+def send_cmd(ser, cmd_id, payload=b"", timeout=1.0):
     ser.write(build_packet(cmd_id, payload))
-    return read_packet(ser, timeout)
+    return read_packet(ser, timeout=timeout)
 
 
 # ── Snapshot parser (focused on what we need for analysis) ──────────────
