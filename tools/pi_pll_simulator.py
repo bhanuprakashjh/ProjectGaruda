@@ -122,64 +122,86 @@ class MotorPlant:
     def __init__(self, motor: MotorParams, Vbus: float = 24.0):
         self.motor = motor
         self.Vbus = Vbus
-        self.theta_elec = 0.0      # rad, [0, 2π) — angle WITHIN the current sector,
-                                    # not absolute. Sector base = commanded_sector × π/3.
-        self.omega_elec = 0.0      # rad/s
+        self.theta_rotor = 0.0          # absolute rotor electrical angle [0, 2π)
+        self.total_rotation = 0.0       # cumulative rotation, for ZC event counting
+        self.omega_elec = 0.0
         self.duty = 0.0
         self.load_Nm = 0.0
-        self.commanded_sector = 0  # 0..5
-        self._intra_sector_angle = 0.0   # rad within current sector [0, π/3)
-        self._zc_emitted_this_sector = False
+        self.commanded_sector = 0
+        self.theta_commanded = np.pi / 6
+        # Diagnostics
+        self.last_lead_rad = 0.0
+        self.last_torque_eff = 1.0
+        self.last_I_phase = 0.0
 
     def on_commutation(self):
-        """Called by the simulator when the controller advances a sector.
-        Resets intra-sector phase to 0; the rotor's angular velocity is
-        unchanged. This couples the rotor's electrical phase to controller
-        commands the way the real bridge does."""
-        self._intra_sector_angle = 0.0
+        """Bridge advances to next sector. Rotor angle is unchanged
+        (rotor evolves continuously per physics; bridge just changes
+        which phases are energized)."""
+        self.theta_commanded = (self.theta_commanded + np.pi / 3) % (2 * np.pi)
         self._zc_emitted_this_sector = False
 
     def step(self, dt: float):
         """
-        Integrate plant dynamics for dt seconds.
+        Realistic BLDC plant with commutation-phase-angle torque penalty.
 
-        Simplification: assume the bridge commutates correctly (ideal
-        6-step). The simulator focuses on controller dynamics — it
-        doesn't model the commutation-misalignment feedback. Real
-        firmware bench-validates that part separately.
+          - Rotor angle evolves continuously at omega_elec
+          - Bridge commands a target angle (commanded_sector midpoint)
+          - Torque efficiency = cos(lead), where lead = θ_commanded − θ_rotor
+            (signed, wrapped to [-π, π])
+          - Best torque at lead = 0 (rotor exactly where bridge expects)
+          - Torque drops as |lead| grows: 0 at ±π/2, braking beyond
+          - Phase current still drawn even at 0 torque (I²R loss only)
+          - Soft current limit at 22 A mirrors firmware OC_SW
 
-        Plant model: first-order toward steady-state speed set by
-        applied voltage minus load.
+        This captures the failure mode bench saw on 2026-05-28: when the
+        controller commands sectors faster than the rotor can follow,
+        lead grows past π/2, torque collapses, current pegs at 22 A,
+        rotor stays stationary.
         """
         V_app = self.Vbus * self.duty
         omega_mech = self.omega_elec / self.motor.pole_pairs
         E_phase = self.motor.ke_Vs_per_rad * omega_mech
 
-        # Phase current (assuming ideal commutation, V_app - E across Rs)
+        # Phase current
         I_phase = (V_app - E_phase) / self.motor.Rs_ohm
+        I_LIMIT = 22.0
+        if I_phase >  I_LIMIT: I_phase =  I_LIMIT
+        if I_phase < -I_LIMIT: I_phase = -I_LIMIT
+        self.last_I_phase = I_phase
 
-        # Net torque (full efficiency, ideal commutation)
-        T_em = self.motor.kt_Nm_per_A * I_phase
+        # Lead angle: commanded − rotor, wrapped to [-π, π]
+        lead = self.theta_commanded - self.theta_rotor
+        while lead >  np.pi: lead -= 2 * np.pi
+        while lead < -np.pi: lead += 2 * np.pi
+        self.last_lead_rad = lead
+
+        # Torque efficiency = cos(lead). Smooth, captures wrong-angle stall.
+        torque_eff = np.cos(lead)
+        self.last_torque_eff = torque_eff
+
+        T_em = self.motor.kt_Nm_per_A * I_phase * torque_eff
         T_net = T_em - self.load_Nm - self.motor.B_Nms * omega_mech
         domega_mech = T_net / self.motor.J_kgm2
 
-        # Update state (Euler) — clamp omega to sane range
+        # Update omega (Euler)
         self.omega_elec += domega_mech * self.motor.pole_pairs * dt
         if self.omega_elec < 0:
             self.omega_elec = 0
-        # Soft cap at no-load BEMF ceiling × 1.1 to prevent runaway
+        # Soft cap at no-load BEMF ceiling × 1.1
         omega_cap = self.motor.KV * self.Vbus * 2 * np.pi / 60 * self.motor.pole_pairs * 1.1
         if self.omega_elec > omega_cap:
             self.omega_elec = omega_cap
 
-        # Advance intra-sector phase. When it overflows π/3, the rotor has
-        # naturally drifted past where the controller put it — we don't snap
-        # back here (would erase the controller's effect). Instead, leave it;
-        # the event detector sees this as "ZC consumed, awaiting next comm".
-        self._intra_sector_angle += self.omega_elec * dt
-        # Total absolute angle, just for telemetry / RPM:
-        self.theta_elec = (self.commanded_sector * np.pi / 3
-                          + self._intra_sector_angle) % (2 * np.pi)
+        # Advance absolute rotor angle (continuous)
+        dtheta = self.omega_elec * dt
+        self.theta_rotor = (self.theta_rotor + dtheta) % (2 * np.pi)
+        self.total_rotation += dtheta
+
+    @property
+    def theta_elec(self) -> float:
+        """Compatibility shim for older code/event-detector references."""
+        return self.theta_rotor
 
     @property
     def eRPM(self) -> float:
@@ -210,15 +232,15 @@ class EventDetector:
         self.filt = filt
         self.noise_std_HR = noise_std_HR
         self.miss_prob = miss_probability
-        # The ZC angle is at (advance + 30)° within the inter-commutation
-        # interval. With advance=0°, ZC is at midpoint (30°). With advance=15°,
-        # ZC is at 45° — because the commutation fired 15° earlier than the
-        # rotor's "natural" sector boundary, so it takes that much more
-        # rotor angle to reach the BEMF zero-crossing.
+        # ZC fires every π/3 of rotor rotation, at offset (30+advance)°
+        # into each sector. With advance=0°, ZC is at the sector midpoint;
+        # with advance=15° it's at 45° in.
         self.zc_fire_rad = (advance_deg + 30.0) * np.pi / 180.0
         self.rng = np.random.default_rng(rng_seed)
         self._prev_sector = plant.commanded_sector
-        self._sub_angle_prev = 0.0
+        # Count how many ZC events the rotor has passed through cumulatively.
+        # ZC #N happens when total_rotation crosses zc_fire_rad + N×(π/3).
+        self._last_zc_index = 0
 
     def check(self, t_now_s: float, dt_s: float = 0.0) -> Tuple[bool, bool, float, int]:
         """
@@ -237,33 +259,33 @@ class EventDetector:
             rotor_changed = True
             self._prev_sector = cur_sector
 
-        # ZC fires when rotor's intra-sector angle crosses (advance + 30)°,
-        # but only ONCE per sector (controller-driven). The plant resets
-        # _zc_emitted_this_sector when on_commutation() is called.
-        sub = self.plant._intra_sector_angle
-        if (not self.plant._zc_emitted_this_sector) and (sub >= self.zc_fire_rad):
+        # ZC events occur every π/3 of cumulative rotor rotation, at offset
+        # zc_fire_rad. Crossing detection is wrap-safe via the cumulative
+        # total_rotation counter.
+        cur_index = int((self.plant.total_rotation - self.zc_fire_rad)
+                        / (np.pi / 3)) if self.plant.total_rotation >= self.zc_fire_rad else -1
+
+        if cur_index > self._last_zc_index:
+            self._last_zc_index = cur_index
             if self.rng.uniform() > self.miss_prob:
-                # Linear interpolation: when did sub cross zc_fire_rad within this dt?
-                if sub > self._sub_angle_prev:
-                    frac = (self.zc_fire_rad - self._sub_angle_prev) / (sub - self._sub_angle_prev)
+                # Linear interpolation: where in this dt step did we cross?
+                # Total rotation went from (total - dtheta) to total.
+                # ZC at total = zc_fire_rad + cur_index × π/3.
+                target_rot = self.zc_fire_rad + cur_index * (np.pi / 3)
+                dtheta_step = self.plant.omega_elec * dt_s
+                if dtheta_step > 1e-12:
+                    frac = (target_rot - (self.plant.total_rotation - dtheta_step)) / dtheta_step
                     frac = max(0.0, min(1.0, frac))
                 else:
                     frac = 1.0
                 t_cross_s = (t_now_s - dt_s) + frac * dt_s
 
-                # NOTE: in firmware the PCB RC filter introduces phase lag,
-                # which the CMPLO pre-distortion (HWZC_ApplyFilterComp) is
-                # designed to cancel exactly. We model "comp on" by NOT
-                # adding the raw filter delay here. If you want to study
-                # uncompensated behavior, uncomment the delay term.
-                # delay_s = self.filt.time_delay_s(self.plant.omega_elec)
+                # Filter delay assumed compensated by firmware CMPLO pre-distortion
                 delay_s = 0.0
                 noise_s = self.rng.normal(0, self.noise_std_HR * NS_PER_TICK / 1e9)
                 cap_t_s = t_cross_s + delay_s + noise_s
                 zc_HR = cap_t_s * HR_TICK_HZ
                 zc_captured = True
-                self.plant._zc_emitted_this_sector = True
-        self._sub_angle_prev = sub
 
         return rotor_changed, zc_captured, zc_HR, cur_sector
 
