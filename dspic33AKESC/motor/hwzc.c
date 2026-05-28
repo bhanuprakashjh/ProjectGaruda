@@ -75,6 +75,12 @@ void HWZC_Init(volatile GARUDA_DATA_T *pData)
 #if FEATURE_HWZC_PI_FLOAT
     pData->hwzc.integratorF = 0.0f;
 #endif
+#if FEATURE_HWZC_PI_DEFENSIVE
+    pData->hwzc.piDefMissStreak = 0;
+    pData->hwzc.piDefGoodStreak = 0;
+    pData->hwzc.piDefActive = 0;
+    pData->hwzc.piDefEntryCount = 0;
+#endif
     pData->hwzc.lastCaptureHR = 0;
     pData->hwzc.prevCommHR = 0;
     pData->hwzc.captureValid = false;
@@ -674,6 +680,15 @@ void HWZC_OnPiPeriodExpired(volatile GARUDA_DATA_T *pData)
      * at advDeg=0 is 128. Fits comfortably in uint16. */
     uint16_t advFp8 = (uint16_t)(((30u + (uint32_t)advDeg) * 256u) / 60u);
 
+#if FEATURE_HWZC_PI_DEFENSIVE
+    /* Track whether THIS event has a capture (BEFORE the gate below
+     * consumes captureValid). Used by the defensive-mode streak counters
+     * regardless of whether the capture passes the 0<cap<T range check.
+     * A rejected capture (cap > T) is NOT silence — only "captureValid==
+     * false at entry" counts toward the defensive trigger. */
+    bool hadCaptureThisEvent = pData->hwzc.captureValid;
+#endif
+
     /* Run PI if we have a fresh capture from this sector */
     if (pData->hwzc.captureValid) {
         /* capValue = elapsed HR ticks FROM THE START OF THIS SECTOR (i.e. the
@@ -713,33 +728,29 @@ void HWZC_OnPiPeriodExpired(volatile GARUDA_DATA_T *pData)
                                           : delta);
 
 #if FEATURE_HWZC_PI_FLOAT
-        /* --- FLOAT PI (Phase 1) ---
-         * Same algorithm as the integer path below, in float with
-         * configurable Kp/Ki. The integrator IS the period (HR ticks),
-         * exactly matching the integer semantics.
-         *
-         * Feedforward (Phase 2) is applied as a one-shot SEED in
-         * HWZC_Enable, not per-iteration here. Per-iteration FF added to
-         * every output broke startup: at handoff, the rotor is well below
-         * no-load speed but FF predicts no-load speed → commands too-fast
-         * commutation → rotor can't follow → 22A stall. By seeding the
-         * integrator with the FF prediction and then running the standard
-         * integer-equivalent PI, we get the lock-time benefit without
-         * the saturation breakage.
-         */
+        /* --- FLOAT PI (Phase 1) --- */
         float deltaF = (float)delta;
         (void)T;
 
-        pData->hwzc.integratorF += HWZC_PI_KI_FLOAT * deltaF;
-        if (pData->hwzc.integratorF < (float)RT_HWZC_MIN_STEP_TICKS)
-            pData->hwzc.integratorF = (float)RT_HWZC_MIN_STEP_TICKS;
+  #if FEATURE_HWZC_PI_DEFENSIVE
+        /* In defensive mode, ignore the capture's delta — captures during
+         * a silence-recovery window can be misleading. The slow-down
+         * logic below the if/else block walks T larger. */
+        if (!pData->hwzc.piDefActive) {
+  #endif
+            pData->hwzc.integratorF += HWZC_PI_KI_FLOAT * deltaF;
+            if (pData->hwzc.integratorF < (float)RT_HWZC_MIN_STEP_TICKS)
+                pData->hwzc.integratorF = (float)RT_HWZC_MIN_STEP_TICKS;
 
-        float newPerF = pData->hwzc.integratorF + HWZC_PI_KP_FLOAT * deltaF;
-        if (newPerF < (float)RT_HWZC_MIN_STEP_TICKS)
-            newPerF = (float)RT_HWZC_MIN_STEP_TICKS;
+            float newPerF = pData->hwzc.integratorF + HWZC_PI_KP_FLOAT * deltaF;
+            if (newPerF < (float)RT_HWZC_MIN_STEP_TICKS)
+                newPerF = (float)RT_HWZC_MIN_STEP_TICKS;
 
-        pData->hwzc.timerPeriod = (uint32_t)newPerF;
-        pData->hwzc.integrator  = (uint32_t)pData->hwzc.integratorF;
+            pData->hwzc.timerPeriod = (uint32_t)newPerF;
+            pData->hwzc.integrator  = (uint32_t)pData->hwzc.integratorF;
+  #if FEATURE_HWZC_PI_DEFENSIVE
+        }
+  #endif
 #else
         /* --- ORIGINAL INTEGER BIT-SHIFT PI --- */
         /* Integrator update — slow drift correction. */
@@ -782,6 +793,54 @@ void HWZC_OnPiPeriodExpired(volatile GARUDA_DATA_T *pData)
             if (s < 6) pData->hwzc.dbgPiMissBySector[s]++;
         }
     }
+
+#if FEATURE_HWZC_PI_DEFENSIVE
+    /* --- DEFENSIVE PI streak tracking + slow-down ---
+     * Only true silence (no capture event at all) counts toward the
+     * defensive trigger. A capture that arrived but was rejected by the
+     * range gate (cap > T) is NOT silence — those are transient
+     * mismatches the PI handles normally. */
+    if (hadCaptureThisEvent) {
+        pData->hwzc.piDefMissStreak = 0;
+        if (pData->hwzc.piDefGoodStreak < 0xFFFF)
+            pData->hwzc.piDefGoodStreak++;
+    } else {
+        if (pData->hwzc.piDefMissStreak < 0xFFFF)
+            pData->hwzc.piDefMissStreak++;
+        pData->hwzc.piDefGoodStreak = 0;
+    }
+
+    /* Enter / exit defensive mode (hysteresis: 6 in / 2 out) */
+    if (!pData->hwzc.piDefActive &&
+        pData->hwzc.piDefMissStreak >= HWZC_PI_DEFENSIVE_TRIGGER) {
+        pData->hwzc.piDefActive = 1;
+        if (pData->hwzc.piDefEntryCount < 0xFFFFFFFF)
+            pData->hwzc.piDefEntryCount++;
+    } else if (pData->hwzc.piDefActive &&
+               pData->hwzc.piDefGoodStreak >= HWZC_PI_DEFENSIVE_EXIT) {
+        pData->hwzc.piDefActive = 0;
+    }
+
+    /* While defensive, walk integratorF (and timerPeriod) larger to
+     * deliberately slow the bridge so the rotor can catch up. */
+    if (pData->hwzc.piDefActive) {
+  #if FEATURE_HWZC_PI_FLOAT
+        pData->hwzc.integratorF *= (1.0f + (float)HWZC_PI_DEFENSIVE_GROW_PCT * 0.01f);
+        pData->hwzc.timerPeriod = (uint32_t)pData->hwzc.integratorF;
+        pData->hwzc.integrator  = (uint32_t)pData->hwzc.integratorF;
+  #else
+        /* Integer-PI fallback: scale by (100 + grow) / 100 */
+        uint32_t scaled = (pData->hwzc.integrator
+                           * (100UL + HWZC_PI_DEFENSIVE_GROW_PCT)) / 100UL;
+        pData->hwzc.integrator  = scaled;
+        pData->hwzc.timerPeriod = scaled;
+  #endif
+        /* Mirror to stepPeriodHR so telemetry stays consistent */
+        pData->hwzc.writeSeq++;
+        pData->hwzc.stepPeriodHR = pData->hwzc.timerPeriod;
+        pData->hwzc.writeSeq++;
+    }
+#endif /* FEATURE_HWZC_PI_DEFENSIVE */
 
 pi_commutate:
     /* Slow-IIR update of stepPeriodForFilterComp — this is the period used

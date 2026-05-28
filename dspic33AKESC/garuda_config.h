@@ -690,6 +690,24 @@ extern "C" {
 #define HWZC_PI_FF_RESIDUAL_FRAC       0.20f  /* Integrator anti-windup band:
                                                  * residual clamped to ±20% of P_ff */
 
+/* Defensive PI (Phase 2 candidate, 2026-05-28). When captures go silent
+ * (true silence — no capture event at all, not just rejected capValue),
+ * relax the controller's commutation rate instead of freezing at the
+ * stale period. Walks integratorF larger by 1% per event when defensive.
+ * Exits when 2 consecutive good captures resume.
+ *
+ * Designed to replace the HWZC_NO_CAPTURE_TICKS watchdog's hard
+ * ESC_RECOVERY behavior with a soft re-sync. Requires
+ * FEATURE_HWZC_PI_FLOAT=1 (uses integratorF).
+ *
+ * Sim results (commit f7e81f4): byte-identical to baseline on normal
+ * scenarios (0 events triggered), 5-12× lower RMS error in stress
+ * scenarios where baseline crashes. NOT YET BENCH-TESTED. */
+#define FEATURE_HWZC_PI_DEFENSIVE      1    /* 0 = disabled (default) */
+#define HWZC_PI_DEFENSIVE_TRIGGER      6    /* miss streak (sectors of true silence) to enter */
+#define HWZC_PI_DEFENSIVE_EXIT         2    /* good streak (consecutive captures) to exit */
+#define HWZC_PI_DEFENSIVE_GROW_PCT     1    /* walk T by this % per event when defensive */
+
 #define HWZC_PI_KP_SHIFT               2   /* Kp = 1/4  — proportional gain  */
 #define HWZC_PI_KI_SHIFT               4   /* Ki = 1/16 — integral gain      */
 #define HWZC_PI_DELTA_CLAMP_SHIFT      3   /* ±T/8 per-sample clamp (default).

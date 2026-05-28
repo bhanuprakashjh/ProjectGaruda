@@ -302,6 +302,12 @@ typedef struct {
     float        integratorF;          /* Float integrator state for FEATURE_HWZC_PI_FLOAT.
                                         * Unused / zero when feature off. Lives here so
                                         * the FPU never has to reload from the int field. */
+    uint16_t     piDefMissStreak;      /* Consecutive sectors of TRUE silence (no capture).
+                                        * Drives FEATURE_HWZC_PI_DEFENSIVE entry. */
+    uint16_t     piDefGoodStreak;      /* Consecutive good captures. Drives exit. */
+    uint8_t      piDefActive;          /* 1 when defensive mode currently engaged. */
+    uint8_t      piDefPad0;            /* alignment */
+    uint32_t     piDefEntryCount;      /* Telemetry: total entries into defensive mode */
     uint32_t     lastCaptureHR;        /* Most recent ZC timestamp (SCCP2 HR domain) */
     uint32_t     prevCommHR;           /* Previous commutation timestamp — base for capValue */
     bool         captureValid;         /* True after a ZC is timestamped this sector;
