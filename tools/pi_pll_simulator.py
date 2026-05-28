@@ -623,6 +623,136 @@ class FloatPINormalized(ControllerBase):
         return self.commanded_sector
 
 
+class FloatPIDefensive(ControllerBase):
+    """
+    Original algorithm — 2026-05-28.
+
+    Idea: when captures are degrading (missing or unhealthy delta
+    pattern), don't FREEZE the PI at its current (possibly wrong)
+    period — actively WALK THE PERIOD LARGER (slow the controller
+    down). This is the opposite of "predict ahead" — it's "back off
+    and let the rotor catch up".
+
+    Mechanism:
+      - Track capture validity over a sliding window of N events
+      - capture_health = (good captures) / (total events in window)
+      - When health < threshold, enter DEFENSIVE mode:
+          - Don't apply Kp×delta (the few captures might be misleading)
+          - Walk integrator larger by a small step each event
+          - This deliberately slows commutation rate
+      - Exit defensive mode when health recovers above threshold
+
+    Self-healing property:
+      If bridge over-commits → rotor stalls → captures stop →
+      defensive mode kicks in → controller slows → eventually rotor's
+      natural speed becomes faster than controller's → bridge catches
+      up → captures resume → normal mode → smooth lock.
+
+    No predictive bias is added. The algorithm only RELAXES under
+    stress; it never tightens beyond what captures justify.
+    """
+
+    Kp = 0.25
+    Ki = 0.0625
+    CLAMP_POS_FRAC_HIGH = 1/16
+    CLAMP_NEG_FRAC_HIGH = 1/32
+    CLAMP_FRAC = 1/8
+    CLAMP_HIGH_TICKS = 1e9 / 150_000
+    MIN_PERIOD_TICKS = 1e9 / 260_000
+    ADVANCE_DEG = 15
+
+    # Defensive-mode parameters — engage only on CONSECUTIVE misses
+    # (a sustained drought of captures, not the occasional dropout)
+    DEFENSIVE_TRIGGER_SECTORS = 6    # enter defensive after this many consecutive misses
+    DEFENSIVE_EXIT_SECTORS = 2       # exit when this many good captures in a row
+    DEFENSIVE_PERIOD_GROW_PCT = 0.01 # walk T 1% longer per event when defensive
+
+    def __init__(self):
+        super().__init__("Float PI defensive (self-heal under stress)")
+        self.miss_streak = 0
+        self.good_streak = 0
+        self.defensive_active = False
+        self.log_defensive = []
+
+    def log(self, t_s, delta):
+        super().log(t_s, delta)
+        self.log_defensive.append(1 if self.defensive_active else 0)
+
+    def on_commutation(self, t_now_HR):
+        T = self.timer_period_HR
+        adv_frac = (30 + self.ADVANCE_DEG) / 60.0
+
+        # Record whether we have a valid capture for this event
+        had_capture = self.capture_valid
+        delta = 0.0
+
+        if had_capture:
+            cap_value = self.last_capture_HR - self.last_comm_HR
+            set_value = adv_frac * T
+
+            if 0 < cap_value <= T:
+                # Standard delta + clamp + PI math
+                delta = cap_value - set_value
+                if T < self.CLAMP_HIGH_TICKS:
+                    pos_cap = T * self.CLAMP_POS_FRAC_HIGH
+                    neg_cap = T * self.CLAMP_NEG_FRAC_HIGH
+                else:
+                    pos_cap = T * self.CLAMP_FRAC
+                    neg_cap = pos_cap
+                if delta >  pos_cap: delta =  pos_cap
+                if delta < -neg_cap: delta = -neg_cap
+
+                # Only apply PI when not defensive
+                if not self.defensive_active:
+                    self.integrator_HR += self.Ki * delta
+                    if self.integrator_HR < self.MIN_PERIOD_TICKS:
+                        self.integrator_HR = self.MIN_PERIOD_TICKS
+                    new_per = self.integrator_HR + self.Kp * delta
+                    if new_per < self.MIN_PERIOD_TICKS:
+                        new_per = self.MIN_PERIOD_TICKS
+                    self.timer_period_HR = new_per
+                # In defensive mode, ignore captures (they may be wrong)
+                # and let the slow-down logic below run
+
+                # Count as a valid capture for health
+                valid_capture = True
+            else:
+                # Cross-sector capture — treat as missing
+                valid_capture = False
+            self.capture_valid = False
+        else:
+            valid_capture = False
+
+        # Track consecutive miss / good streaks
+        # IMPORTANT: a capture that arrived but was rejected (cap_value
+        # out of [0, T] range) is NOT a "miss" — it's a sign of transient
+        # mismatch that PI handles. Only TRUE silence (no capture event
+        # at all) counts toward the defensive trigger.
+        if had_capture:
+            self.miss_streak = 0
+            self.good_streak += 1
+        else:
+            self.miss_streak += 1
+            self.good_streak = 0
+
+        # Engage defensive when we've missed too many in a row,
+        # exit only after a few consecutive good ones.
+        if not self.defensive_active and self.miss_streak >= self.DEFENSIVE_TRIGGER_SECTORS:
+            self.defensive_active = True
+        elif self.defensive_active and self.good_streak >= self.DEFENSIVE_EXIT_SECTORS:
+            self.defensive_active = False
+
+        # While defensive, walk T LARGER (slow the controller, let rotor catch up)
+        if self.defensive_active:
+            self.integrator_HR *= (1.0 + self.DEFENSIVE_PERIOD_GROW_PCT)
+            self.timer_period_HR = self.integrator_HR
+
+        self.commanded_sector = (self.commanded_sector + 1) % 6
+        self.last_comm_HR = t_now_HR
+        self.log(t_now_HR / HR_TICK_HZ, delta)
+        return self.commanded_sector
+
+
 class FloatPIWithFeedforward(ControllerBase):
     """
     Float PI + physics-based feedforward.
