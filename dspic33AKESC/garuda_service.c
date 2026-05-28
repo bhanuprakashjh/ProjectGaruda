@@ -3016,6 +3016,24 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                                               / VBUS_REGEN_BRAKE_SLEW_DIVISOR;
                             if (effectiveDownRate == 0) effectiveDownRate = 1;
                         }
+#if FEATURE_HIGH_RPM_SLEW_DOWN
+                        /* Proactive: at high eRPM, slew-down is limited
+                         * regardless of Vbus state. Prevents the regen
+                         * pulse before it spikes the bus. Reads HWZC's
+                         * stepPeriodHR — at high RPM HWZC owns the period.
+                         * Below the threshold or before HWZC engages,
+                         * no penalty applied. */
+                        if (garudaData.hwzc.enabled
+                            && garudaData.hwzc.stepPeriodHR > 0
+                            && garudaData.hwzc.stepPeriodHR
+                               < HIGH_RPM_SLEW_THRESHOLD_HR) {
+                            uint32_t highRpmRate = RT_DUTY_SLEW_DOWN_RATE
+                                                 / HIGH_RPM_SLEW_DIVISOR;
+                            if (highRpmRate == 0) highRpmRate = 1;
+                            if (effectiveDownRate > highRpmRate)
+                                effectiveDownRate = highRpmRate;
+                        }
+#endif
                         if ((uint32_t)(-delta) > effectiveDownRate)
                             mappedDuty = prevDuty - effectiveDownRate;
 #else

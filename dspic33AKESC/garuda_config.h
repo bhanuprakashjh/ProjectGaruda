@@ -373,6 +373,30 @@ extern "C" {
                                              * normal rate to prevent over-acceleration. */
 #define POST_SYNC_SLEW_DIVISOR           4  /* Slew-up rate divisor during settle (4 = 0.5%/ms).
                                              * Raised from 2 for gentler CL entry ramp. */
+
+/* Proactive high-RPM slew-down limit (2026-05-28).
+ *
+ * At high eRPM, the standard 5%/ms slew-down rate dumps regen current
+ * into the bus fast enough to spike Vbus above the bridge's safe
+ * operating range. Bench-observed: rapid 4095→mid-throttle drops at
+ * 230k+ eRPM produce Vbus spikes to 29-33V, tripping OC_SW or
+ * BOARD_PCI within one telemetry sample.
+ *
+ * This feature gates the duty-down rate by current eRPM. Above
+ * HIGH_RPM_SLEW_THRESHOLD_HR (= ~150k eRPM in HR ticks), the
+ * effective rate is divided by HIGH_RPM_SLEW_DIVISOR. Below threshold,
+ * normal slew rate applies — no penalty for low-RPM operation.
+ *
+ * Distinct from FEATURE_VBUS_REGEN_BRAKE: that one is REACTIVE
+ * (engages after Vbus already spiked). This one is PROACTIVE
+ * (prevents the spike in the first place). Both can be on
+ * simultaneously; the more restrictive rate wins. */
+#define FEATURE_HIGH_RPM_SLEW_DOWN      1   /* Default ON — bench fix for OC_SW/BOARD_PCI */
+#define HIGH_RPM_SLEW_THRESHOLD_HR   6666   /* HR ticks (= 1e9/eRPM_threshold).
+                                             * 6666 ≈ 150k eRPM threshold. */
+#define HIGH_RPM_SLEW_DIVISOR           8   /* Divide RT_DUTY_SLEW_DOWN_RATE by this
+                                             * above the threshold. 5%/ms / 8 = 0.625%/ms,
+                                             * giving ~160 ms full-scale slew at top RPM. */
 #endif
 
 /* Desync Recovery (Phase B2) */
