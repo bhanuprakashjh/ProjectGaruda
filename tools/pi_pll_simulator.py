@@ -461,6 +461,86 @@ class FloatPI(ControllerBase):
         return self.commanded_sector
 
 
+class FloatPIWithAccelComp(ControllerBase):
+    """
+    Float PI with explicit acceleration compensation (Google's
+    "dω/dt feedforward" suggestion, 2026-05-28).
+
+    Adds a D-term on the PERIOD itself (not on delta — D-on-delta amplifies
+    per-sector noise). Period changes smoothly across events because it IS
+    the velocity estimate. So D-on-period = explicit acceleration term.
+
+    When motor is accelerating: period shrinking, T_derivative < 0,
+    Kd × T_derivative subtracts from new_per → predicts faster commutation.
+    When decelerating: opposite — predicts slower.
+
+    Question: is this useful when the PI's integrator already tracks
+    period dynamics? Or is it just D-amplified-noise in different clothes?
+    """
+
+    Kp = 0.25
+    Ki = 0.0625
+    Kd = 0.1           # D-on-period coefficient (tunable)
+    CLAMP_POS_FRAC_HIGH = 1/16
+    CLAMP_NEG_FRAC_HIGH = 1/32
+    CLAMP_FRAC = 1/8
+    CLAMP_HIGH_TICKS = 1e9 / 150_000
+    MIN_PERIOD_TICKS = 1e9 / 260_000
+    ADVANCE_DEG = 15
+
+    def __init__(self):
+        super().__init__("Float PI + accel comp (Kd × dT)")
+        self.prev_T_HR = 0.0
+
+    def seed(self, initial_period_HR, t_now_HR):
+        super().seed(initial_period_HR, t_now_HR)
+        self.prev_T_HR = initial_period_HR
+
+    def on_commutation(self, t_now_HR):
+        T = self.timer_period_HR
+        adv_frac = (30 + self.ADVANCE_DEG) / 60.0
+
+        delta = 0.0
+        if self.capture_valid:
+            cap_value = self.last_capture_HR - self.last_comm_HR
+            set_value = adv_frac * T
+
+            if 0 < cap_value <= T:
+                delta = cap_value - set_value
+
+                if T < self.CLAMP_HIGH_TICKS:
+                    pos_cap = T * self.CLAMP_POS_FRAC_HIGH
+                    neg_cap = T * self.CLAMP_NEG_FRAC_HIGH
+                else:
+                    pos_cap = T * self.CLAMP_FRAC
+                    neg_cap = pos_cap
+                if delta >  pos_cap: delta =  pos_cap
+                if delta < -neg_cap: delta = -neg_cap
+
+                # Standard PI updates
+                self.integrator_HR += self.Ki * delta
+                if self.integrator_HR < self.MIN_PERIOD_TICKS:
+                    self.integrator_HR = self.MIN_PERIOD_TICKS
+
+                # Explicit acceleration term: D on the period itself.
+                # T_deriv < 0 means accelerating; we want to predict the
+                # NEXT period will be smaller, so subtract a bit from new_per.
+                T_deriv = T - self.prev_T_HR
+                self.prev_T_HR = T
+
+                new_per = self.integrator_HR + self.Kp * delta + self.Kd * T_deriv
+                if new_per < self.MIN_PERIOD_TICKS:
+                    new_per = self.MIN_PERIOD_TICKS
+                self.timer_period_HR = new_per
+
+            self.capture_valid = False
+
+        self.commanded_sector = (self.commanded_sector + 1) % 6
+        self.last_comm_HR = t_now_HR
+        self.log(t_now_HR / HR_TICK_HZ, delta)
+        return self.commanded_sector
+
+
 class FloatPINormalized(ControllerBase):
     """
     Speed-normalized PI per IEEE 9398529 ("Fast Commutation Error
