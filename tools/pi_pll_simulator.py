@@ -461,6 +461,88 @@ class FloatPI(ControllerBase):
         return self.commanded_sector
 
 
+class FloatPINormalized(ControllerBase):
+    """
+    Speed-normalized PI per IEEE 9398529 ("Fast Commutation Error
+    Correction Method for Sensorless BLDC Motor Considering Rapidly
+    Varying Rotor Speed").
+
+    Standard PI controls raw delta (HR ticks). delta scale changes with
+    operating speed → loop's effective gain varies with speed → stability
+    margin shrinks at high RPM, and asymmetric clamps are needed to
+    paper over the speed-dependent dynamics.
+
+    Normalized PI controls delta_norm = delta/T (dimensionless, ~±0.125
+    after clamp). Per-event correction is a FIXED FRACTION of T at any
+    speed. No asymmetric clamps needed — the normalization is the
+    correct fix for "controlled variable variation" the paper identifies.
+
+    Gain semantics:
+      Kp_norm — max P contribution = T × Kp_norm × clamp_frac per event
+      Ki_norm — max I contribution = T × Ki_norm × clamp_frac per event
+      With clamp_frac=0.125, Kp_norm=0.25, the max P correction is
+      T × 0.25 × 0.125 = T/32 per event — same as current firmware's
+      max P correction. Tunable now in dimensionless units.
+    """
+
+    Kp_norm = 0.25
+    Ki_norm = 0.0625
+    CLAMP_FRAC = 0.125          # symmetric clamp (low/mid RPM)
+    CLAMP_POS_FRAC_HIGH = 1/16  # positive (rotor lagging) at high RPM
+    CLAMP_NEG_FRAC_HIGH = 1/32  # negative (rotor leading) at high RPM — critical
+    CLAMP_HIGH_TICKS = 1e9 / 150_000
+    MIN_PERIOD_TICKS = 1e9 / 260_000
+    ADVANCE_DEG = 15
+
+    def __init__(self):
+        super().__init__("Float PI normalized + asymmetric clamps")
+
+    def on_commutation(self, t_now_HR: float) -> int:
+        T = self.timer_period_HR
+        adv_frac = (30 + self.ADVANCE_DEG) / 60.0
+
+        delta = 0.0
+        if self.capture_valid:
+            cap_value = self.last_capture_HR - self.last_comm_HR
+            set_value = adv_frac * T
+
+            if 0 < cap_value <= T:
+                # Normalize the controlled variable
+                delta_norm = (cap_value - set_value) / T
+
+                # Asymmetric clamp at high RPM — preserves the bench-
+                # validated wrong-angle stall prevention. With normalization
+                # the clamp limits are simple dimensionless fractions.
+                if T < self.CLAMP_HIGH_TICKS:
+                    pos_clamp = self.CLAMP_POS_FRAC_HIGH
+                    neg_clamp = self.CLAMP_NEG_FRAC_HIGH
+                else:
+                    pos_clamp = self.CLAMP_FRAC
+                    neg_clamp = self.CLAMP_FRAC
+                if delta_norm >  pos_clamp: delta_norm =  pos_clamp
+                if delta_norm < -neg_clamp: delta_norm = -neg_clamp
+
+                # Integrator update (scaled by T)
+                self.integrator_HR += self.Ki_norm * delta_norm * T
+                if self.integrator_HR < self.MIN_PERIOD_TICKS:
+                    self.integrator_HR = self.MIN_PERIOD_TICKS
+
+                # PI output
+                new_per = self.integrator_HR + self.Kp_norm * delta_norm * T
+                if new_per < self.MIN_PERIOD_TICKS:
+                    new_per = self.MIN_PERIOD_TICKS
+                self.timer_period_HR = new_per
+
+                delta = cap_value - set_value   # for telemetry
+
+            self.capture_valid = False
+
+        self.commanded_sector = (self.commanded_sector + 1) % 6
+        self.last_comm_HR = t_now_HR
+        self.log(t_now_HR / HR_TICK_HZ, delta)
+        return self.commanded_sector
+
+
 class FloatPIWithFeedforward(ControllerBase):
     """
     Float PI + physics-based feedforward.
