@@ -290,7 +290,18 @@ typedef struct {
      * by phase-error feedback. stepPeriodHR (above) stays in use as the
      * measurement-side period (no IIR write in PI mode). */
     uint32_t     timerPeriod;          /* PI-controlled commutation period (HR ticks) */
-    uint32_t     integrator;           /* PI integrator state (HR ticks) */
+    uint32_t     integrator;           /* PI integrator state (HR ticks).
+                                        * In integer mode: tracks timerPeriod 1:1.
+                                        * In FEATURE_HWZC_PI_FLOAT mode without FF:
+                                        * same semantics, stored as int snapshot of
+                                        * the float integratorF.
+                                        * In FEATURE_HWZC_PI_FLOAT mode WITH FF:
+                                        * holds the RESIDUAL (signed-by-cast) — small
+                                        * value centered around 0; full period =
+                                        * P_ff + integrator + Kp×delta. */
+    float        integratorF;          /* Float integrator state for FEATURE_HWZC_PI_FLOAT.
+                                        * Unused / zero when feature off. Lives here so
+                                        * the FPU never has to reload from the int field. */
     uint32_t     lastCaptureHR;        /* Most recent ZC timestamp (SCCP2 HR domain) */
     uint32_t     prevCommHR;           /* Previous commutation timestamp — base for capValue */
     bool         captureValid;         /* True after a ZC is timestamped this sector;

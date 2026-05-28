@@ -29,6 +29,9 @@
 #include "../garuda_calc_params.h"
 #include "../hal/hal_adc.h"
 #include "../hal/hal_timer.h"
+#if FEATURE_HWZC_PI_FLOAT && HWZC_PI_FF_ENABLE
+#include "../garuda_foc_params.h"   /* VBUS_SCALE_V_PER_COUNT */
+#endif
 #include <xc.h>
 
 /**
@@ -69,6 +72,9 @@ void HWZC_Init(volatile GARUDA_DATA_T *pData)
 #if FEATURE_HWZC_SECTOR_PI
     pData->hwzc.timerPeriod = 0;
     pData->hwzc.integrator = 0;
+#if FEATURE_HWZC_PI_FLOAT
+    pData->hwzc.integratorF = 0.0f;
+#endif
     pData->hwzc.lastCaptureHR = 0;
     pData->hwzc.prevCommHR = 0;
     pData->hwzc.captureValid = false;
@@ -130,6 +136,15 @@ void HWZC_Enable(volatile GARUDA_DATA_T *pData)
     pData->hwzc.lastCaptureHR = now - pData->hwzc.stepPeriodHR / 2;
     pData->hwzc.captureValid  = false;
     pData->hwzc.stepPeriodForFilterComp = pData->hwzc.stepPeriodHR;
+#if FEATURE_HWZC_PI_FLOAT
+  #if HWZC_PI_FF_ENABLE
+    /* Feedforward mode: integratorF holds residual (signed). Start at 0. */
+    pData->hwzc.integratorF = 0.0f;
+  #else
+    /* Pure float port: integratorF = period (matches integer integrator). */
+    pData->hwzc.integratorF = (float)pData->hwzc.stepPeriodHR;
+  #endif
+#endif
 #endif
 
     /* Enable SCCP1 interrupt (priority already set by ServiceInit).
@@ -655,19 +670,7 @@ void HWZC_OnPiPeriodExpired(volatile GARUDA_DATA_T *pData)
         uint32_t capValue = pData->hwzc.lastCaptureHR - pData->hwzc.lastCommStamp;
         uint32_t setValue = ((uint32_t)advFp8 * T) >> 8;
 
-        /* Only reject CROSS-SECTOR captures (capValue > T means the capture
-         * is from a previous sector, not this one — most likely happens
-         * when commutation timing is significantly off and the lastCaptureHR
-         * is from the prior sector). All in-sector captures pass through
-         * to the PI; the T/8 delta clamp below provides the robustness
-         * against any single noisy event.
-         *
-         * Earlier attempt with setValue/2 ≤ capValue ≤ 1.5×setValue gate
-         * BROKE STARTUP — during throttle-driven acceleration, real captures
-         * arrive at ~20-30% of T (rotor running faster than the lagging
-         * timerPeriod), which would be rejected by the tight setValue-
-         * based bounds. The motor would idle at seed speed and refuse
-         * to accelerate. */
+        /* Cross-sector reject (same gate in both float and int paths). */
         if (capValue > T) {
             pData->hwzc.dbgPiMissCount++;
             pData->hwzc.captureValid = false;
@@ -676,22 +679,7 @@ void HWZC_OnPiPeriodExpired(volatile GARUDA_DATA_T *pData)
 
         int32_t delta = (int32_t)capValue - (int32_t)setValue;
 
-        /* Per-capture delta clamp — ASYMMETRIC at high RPM.
-         *
-         * Symmetric clamp at low/mid RPM: ±T/8 allows responsive accel both
-         * up (positive delta = need to slow) and down (negative delta = speed
-         * up). Motor has voltage headroom so either direction is physically
-         * achievable.
-         *
-         * ASYMMETRIC at high RPM (T < HWZC_PI_CLAMP_HIGH_TICKS):
-         *   Positive delta (capValue > setValue, rotor lagging): clamp at +T/16
-         *     — allow PI to grow period freely when motor genuinely slows.
-         *   Negative delta (capValue < setValue, rotor leading): clamp at -T/32
-         *     — TIGHTEN per-event period shrinkage, because at BEMF ceiling
-         *     the motor CANNOT physically accelerate. Any "rotor ahead"
-         *     reading is either measurement noise or the start of a runaway.
-         *     Halving the negative clamp blocks the cumulative ~2% drift
-         *     that causes regen pulses → Vbus sag → UV trip at 79-80% duty. */
+        /* Per-capture delta clamp — ASYMMETRIC at high RPM. */
         int32_t posDeltaCap, negDeltaCap;
         if (T < HWZC_PI_CLAMP_HIGH_TICKS) {
             posDeltaCap = (int32_t)(T >> HWZC_PI_DELTA_CLAMP_SHIFT_HIGH);
@@ -706,6 +694,63 @@ void HWZC_OnPiPeriodExpired(volatile GARUDA_DATA_T *pData)
                                           : delta < -32768 ? -32768
                                           : delta);
 
+#if FEATURE_HWZC_PI_FLOAT
+        /* --- FLOAT PI (Phase 1) + optional FEEDFORWARD (Phase 2) ---
+         * Same algorithm as the integer path below, but in float with
+         * configurable Kp/Ki and (optionally) a physics-based feedforward
+         * period from KV/Vbus/duty. Both modes write the same telemetry
+         * fields so downstream code is unaffected.
+         */
+        float deltaF = (float)delta;
+        (void)T;   /* used by clamps above; float math uses deltaF directly */
+
+  #if HWZC_PI_FF_ENABLE
+        /* Feedforward: P_ff = 2π·ke·1e9 / (60·Vbus·duty·polepairs)
+         *           equivalently 1e9 / eRPM_noload, in HR ticks.
+         * ke is stored in µV·s/rad (gspParams.focKeUvSRad).
+         * Use the slow IIR period as a fallback if duty is too low to
+         * make the formula stable. */
+        float dutyFrac = (float)pData->duty / (float)LOOPTIME_TCY;
+        float vbus_v   = (float)pData->vbusRaw * VBUS_SCALE_V_PER_COUNT;
+        float ke_VsR   = (float)gspParams.focKeUvSRad * 1.0e-6f;
+        float pp_f     = (float)gspParams.motorPolePairs;
+        float P_ff;
+        if (dutyFrac > 0.03f && vbus_v > 6.0f && ke_VsR > 0.0f && pp_f > 0.0f) {
+            P_ff = (2.0f * 3.14159265f * ke_VsR * 1.0e9f)
+                 / (60.0f * vbus_v * dutyFrac * pp_f);
+        } else {
+            /* Fallback: use the slow-IIR period — known stable, no div-by-tiny */
+            P_ff = (float)pData->hwzc.stepPeriodForFilterComp;
+            if (P_ff < (float)RT_HWZC_MIN_STEP_TICKS)
+                P_ff = (float)RT_HWZC_MIN_STEP_TICKS;
+        }
+
+        /* Integrator carries the RESIDUAL only (Phase 2 architecture).
+         * Anti-windup: clamp residual to ±HWZC_PI_FF_RESIDUAL_FRAC × P_ff. */
+        pData->hwzc.integratorF += HWZC_PI_KI_FLOAT * deltaF;
+        float residCap = P_ff * HWZC_PI_FF_RESIDUAL_FRAC;
+        if (pData->hwzc.integratorF >  residCap) pData->hwzc.integratorF =  residCap;
+        if (pData->hwzc.integratorF < -residCap) pData->hwzc.integratorF = -residCap;
+
+        float newPerF = P_ff + pData->hwzc.integratorF + HWZC_PI_KP_FLOAT * deltaF;
+  #else
+        /* Pure float port (no FF): integrator IS the period, same as int path. */
+        pData->hwzc.integratorF += HWZC_PI_KI_FLOAT * deltaF;
+        if (pData->hwzc.integratorF < (float)RT_HWZC_MIN_STEP_TICKS)
+            pData->hwzc.integratorF = (float)RT_HWZC_MIN_STEP_TICKS;
+
+        float newPerF = pData->hwzc.integratorF + HWZC_PI_KP_FLOAT * deltaF;
+  #endif
+
+        if (newPerF < (float)RT_HWZC_MIN_STEP_TICKS)
+            newPerF = (float)RT_HWZC_MIN_STEP_TICKS;
+
+        pData->hwzc.timerPeriod = (uint32_t)newPerF;
+        /* Keep integer integrator field in sync for telemetry / fallback. */
+        pData->hwzc.integrator = (uint32_t)(pData->hwzc.integratorF < 0.0f
+                                            ? 0.0f : pData->hwzc.integratorF);
+#else
+        /* --- ORIGINAL INTEGER BIT-SHIFT PI --- */
         /* Integrator update — slow drift correction. */
         int32_t newInt = (int32_t)pData->hwzc.integrator + (delta >> HWZC_PI_KI_SHIFT);
         if (newInt < (int32_t)RT_HWZC_MIN_STEP_TICKS)
@@ -719,6 +764,7 @@ void HWZC_OnPiPeriodExpired(volatile GARUDA_DATA_T *pData)
             newPer = (int32_t)RT_HWZC_MIN_STEP_TICKS;
         if (newPer < 0) newPer = (int32_t)RT_HWZC_MIN_STEP_TICKS;
         pData->hwzc.timerPeriod = (uint32_t)newPer;
+#endif /* FEATURE_HWZC_PI_FLOAT */
 
         /* Mirror to stepPeriodHR so eRPM telemetry (and the reactive
          * path's diagnostics) reflect the PI-controlled rotor period. */

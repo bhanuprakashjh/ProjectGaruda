@@ -667,6 +667,24 @@ extern "C" {
  *
  * Disabled by default. Flip to 1 for the breakthrough run. */
 #define FEATURE_HWZC_SECTOR_PI         1
+
+/* Float-port of the sector PI (Phase 1 of pi_controller_research.md).
+ * When 1, HWZC_OnPiPeriodExpired runs the same algorithm in float instead
+ * of integer bit-shifts. Allows non-power-of-2 gains. With HWZC_PI_FF
+ * also enabled, adds physics feedforward (Phase 2) — open-loop period
+ * estimate from KV / Vbus / duty so the integrator only carries the
+ * residual error. Sim shows ~5× tighter steady-state and ~2× faster lock.
+ *
+ * Both paths still maintain the integer integrator/timerPeriod fields
+ * so existing telemetry and the reactive fallback continue to work. */
+#define FEATURE_HWZC_PI_FLOAT          0   /* 0 = original integer PI (default) */
+#define HWZC_PI_FF_ENABLE              1   /* Add physics feedforward (requires
+                                            * FEATURE_HWZC_PI_FLOAT=1 to take effect) */
+#define HWZC_PI_KP_FLOAT               0.25f  /* P gain — was bit-shift 2 = 0.25 */
+#define HWZC_PI_KI_FLOAT               0.0625f /* I gain — was bit-shift 4 = 0.0625 */
+#define HWZC_PI_FF_RESIDUAL_FRAC       0.20f  /* Integrator anti-windup band:
+                                                 * residual clamped to ±20% of P_ff */
+
 #define HWZC_PI_KP_SHIFT               2   /* Kp = 1/4  — proportional gain  */
 #define HWZC_PI_KI_SHIFT               4   /* Ki = 1/16 — integral gain      */
 #define HWZC_PI_DELTA_CLAMP_SHIFT      3   /* ±T/8 per-sample clamp (default).
