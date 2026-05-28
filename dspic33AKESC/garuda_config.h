@@ -677,9 +677,14 @@ extern "C" {
  *
  * Both paths still maintain the integer integrator/timerPeriod fields
  * so existing telemetry and the reactive fallback continue to work. */
-#define FEATURE_HWZC_PI_FLOAT          1   /* 0 = original integer PI (default) */
-#define HWZC_PI_FF_ENABLE              1   /* Add physics feedforward (requires
-                                            * FEATURE_HWZC_PI_FLOAT=1 to take effect) */
+#define FEATURE_HWZC_PI_FLOAT          1   /* 1 = float PI (bench-validated 2026-05-28) */
+#define HWZC_PI_FF_ENABLE              0   /* Disabled. Per-iteration FF stalled the
+                                            * motor at CL entry (predicted no-load
+                                            * period while rotor was still at 6k eRPM
+                                            * from SW ramp). Needs to be re-engineered
+                                            * as an in-CL-only adjustment, not a
+                                            * handoff seed. See bench session
+                                            * 2026-05-28 in chat history. */
 #define HWZC_PI_KP_FLOAT               0.25f  /* P gain — was bit-shift 2 = 0.25 */
 #define HWZC_PI_KI_FLOAT               0.0625f /* I gain — was bit-shift 4 = 0.0625 */
 #define HWZC_PI_FF_RESIDUAL_FRAC       0.20f  /* Integrator anti-windup band:

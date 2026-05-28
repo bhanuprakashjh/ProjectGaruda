@@ -137,12 +137,30 @@ void HWZC_Enable(volatile GARUDA_DATA_T *pData)
     pData->hwzc.captureValid  = false;
     pData->hwzc.stepPeriodForFilterComp = pData->hwzc.stepPeriodHR;
 #if FEATURE_HWZC_PI_FLOAT
-  #if HWZC_PI_FF_ENABLE
-    /* Feedforward mode: integratorF holds residual (signed). Start at 0. */
-    pData->hwzc.integratorF = 0.0f;
-  #else
-    /* Pure float port: integratorF = period (matches integer integrator). */
+    /* integratorF = period (same semantics as integer integrator). */
     pData->hwzc.integratorF = (float)pData->hwzc.stepPeriodHR;
+  #if HWZC_PI_FF_ENABLE
+    /* Phase 2 feedforward as a ONE-SHOT SEED ONLY: if the no-load
+     * physics formula predicts a tighter period than the SW handoff
+     * value, jump-start the integrator to the physics prediction.
+     * Only safe to apply when motor is already moving (duty > 3%)
+     * AND the prediction would SLOW the controller (P_ff > stepPeriodHR).
+     * Speeding it up at handoff is what stalled the motor on the
+     * first FF attempt — don't do that. */
+    {
+        float dutyFrac = (float)pData->duty / (float)LOOPTIME_TCY;
+        float vbus_v   = (float)pData->vbusRaw * VBUS_SCALE_V_PER_COUNT;
+        float lambdaPm = (float)gspParams.focKeUvSRad;
+        if (dutyFrac > 0.03f && vbus_v > 6.0f && lambdaPm > 0.0f) {
+            float P_ff = (181.380f * lambdaPm) / (vbus_v * dutyFrac);
+            /* Only adopt FF if it predicts a SLOWER controller
+             * (longer period) than the SW handoff. Faster predictions
+             * at handoff over-commit the bridge before the rotor has
+             * caught up. */
+            if (P_ff > pData->hwzc.integratorF)
+                pData->hwzc.integratorF = P_ff;
+        }
+    }
   #endif
 #endif
 #endif
@@ -695,66 +713,33 @@ void HWZC_OnPiPeriodExpired(volatile GARUDA_DATA_T *pData)
                                           : delta);
 
 #if FEATURE_HWZC_PI_FLOAT
-        /* --- FLOAT PI (Phase 1) + optional FEEDFORWARD (Phase 2) ---
-         * Same algorithm as the integer path below, but in float with
-         * configurable Kp/Ki and (optionally) a physics-based feedforward
-         * period from KV/Vbus/duty. Both modes write the same telemetry
-         * fields so downstream code is unaffected.
+        /* --- FLOAT PI (Phase 1) ---
+         * Same algorithm as the integer path below, in float with
+         * configurable Kp/Ki. The integrator IS the period (HR ticks),
+         * exactly matching the integer semantics.
+         *
+         * Feedforward (Phase 2) is applied as a one-shot SEED in
+         * HWZC_Enable, not per-iteration here. Per-iteration FF added to
+         * every output broke startup: at handoff, the rotor is well below
+         * no-load speed but FF predicts no-load speed → commands too-fast
+         * commutation → rotor can't follow → 22A stall. By seeding the
+         * integrator with the FF prediction and then running the standard
+         * integer-equivalent PI, we get the lock-time benefit without
+         * the saturation breakage.
          */
         float deltaF = (float)delta;
-        (void)T;   /* used by clamps above; float math uses deltaF directly */
+        (void)T;
 
-  #if HWZC_PI_FF_ENABLE
-        /* Feedforward:
-         *   gspParams.focKeUvSRad stores λ_pm in FOC convention:
-         *     λ_pm = 60 / (√3 · 2π · KV · PP)   [V·s/rad]
-         *   For this convention, no-load electrical speed:
-         *     eRPM_noload = 60 · V_app / (2π · √3 · λ_pm)
-         *   PP cancels out — eRPM depends only on λ_pm and V.
-         *   Period in HR ticks (per sector):
-         *     P_ff = 1e9 / eRPM
-         *          = (2π√3/60) · λ_pm · 1e9 / V
-         *          = 0.18138 · λ_pm_uVsR · 1e9 / (V × 1e6)
-         *          = 181.38 · λ_pm_uVsR / (V × duty)   [HR ticks]
-         *   Fall back to slow-IIR period if any input is unsafe. */
-        float dutyFrac = (float)pData->duty / (float)LOOPTIME_TCY;
-        float vbus_v   = (float)pData->vbusRaw * VBUS_SCALE_V_PER_COUNT;
-        float lambdaPm = (float)gspParams.focKeUvSRad;  /* keep in µV·s/rad */
-        float P_ff;
-        if (dutyFrac > 0.03f && vbus_v > 6.0f && lambdaPm > 0.0f) {
-            /* Constant: 2π·√3 / 60 × (1e9 µV/V)/(1V) = 181.38 */
-            P_ff = (181.380f * lambdaPm) / (vbus_v * dutyFrac);
-        } else {
-            /* Fallback: use the slow-IIR period — known stable, no div-by-tiny */
-            P_ff = (float)pData->hwzc.stepPeriodForFilterComp;
-            if (P_ff < (float)RT_HWZC_MIN_STEP_TICKS)
-                P_ff = (float)RT_HWZC_MIN_STEP_TICKS;
-        }
-
-        /* Integrator carries the RESIDUAL only (Phase 2 architecture).
-         * Anti-windup: clamp residual to ±HWZC_PI_FF_RESIDUAL_FRAC × P_ff. */
-        pData->hwzc.integratorF += HWZC_PI_KI_FLOAT * deltaF;
-        float residCap = P_ff * HWZC_PI_FF_RESIDUAL_FRAC;
-        if (pData->hwzc.integratorF >  residCap) pData->hwzc.integratorF =  residCap;
-        if (pData->hwzc.integratorF < -residCap) pData->hwzc.integratorF = -residCap;
-
-        float newPerF = P_ff + pData->hwzc.integratorF + HWZC_PI_KP_FLOAT * deltaF;
-  #else
-        /* Pure float port (no FF): integrator IS the period, same as int path. */
         pData->hwzc.integratorF += HWZC_PI_KI_FLOAT * deltaF;
         if (pData->hwzc.integratorF < (float)RT_HWZC_MIN_STEP_TICKS)
             pData->hwzc.integratorF = (float)RT_HWZC_MIN_STEP_TICKS;
 
         float newPerF = pData->hwzc.integratorF + HWZC_PI_KP_FLOAT * deltaF;
-  #endif
-
         if (newPerF < (float)RT_HWZC_MIN_STEP_TICKS)
             newPerF = (float)RT_HWZC_MIN_STEP_TICKS;
 
         pData->hwzc.timerPeriod = (uint32_t)newPerF;
-        /* Keep integer integrator field in sync for telemetry / fallback. */
-        pData->hwzc.integrator = (uint32_t)(pData->hwzc.integratorF < 0.0f
-                                            ? 0.0f : pData->hwzc.integratorF);
+        pData->hwzc.integrator  = (uint32_t)pData->hwzc.integratorF;
 #else
         /* --- ORIGINAL INTEGER BIT-SHIFT PI --- */
         /* Integrator update — slow drift correction. */
