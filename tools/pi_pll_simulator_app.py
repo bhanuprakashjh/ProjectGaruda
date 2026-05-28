@@ -328,7 +328,8 @@ def run_one(ctrl_factory_key, motor_dict, Vbus, duration_s, initial_duty,
     plant.omega_elec = 0.0
     filt = FilterParams()
     events = EventDetector(plant, filt, noise_std_HR=noise_HR,
-                           miss_probability=miss_pct / 100.0)
+                           miss_probability=miss_pct / 100.0,
+                           advance_deg=advance_deg)
 
     seed_period_HR = 1e9 / (m.KV * Vbus * max(initial_duty, 0.05)
                             * m.pole_pairs) * seed_factor
@@ -366,13 +367,14 @@ def run_one(ctrl_factory_key, motor_dict, Vbus, duration_s, initial_duty,
         t += cfg.dt_s
         t_HR = t * HR_TICK_HZ
 
-        _, zc_captured, zc_HR, _ = events.check(t)
+        _, zc_captured, zc_HR, _ = events.check(t, cfg.dt_s)
         if zc_captured:
             c.on_capture(zc_HR)
 
         if t_HR >= next_comm_HR:
             new_sector = c.on_commutation(t_HR)
             plant.commanded_sector = new_sector
+            plant.on_commutation()    # reset intra-sector phase
             next_comm_HR = t_HR + c.timer_period_HR
 
         if step_idx % sample_every == 0:

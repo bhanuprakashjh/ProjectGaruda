@@ -122,11 +122,22 @@ class MotorPlant:
     def __init__(self, motor: MotorParams, Vbus: float = 24.0):
         self.motor = motor
         self.Vbus = Vbus
-        self.theta_elec = 0.0      # rad, [0, 2π)
+        self.theta_elec = 0.0      # rad, [0, 2π) — angle WITHIN the current sector,
+                                    # not absolute. Sector base = commanded_sector × π/3.
         self.omega_elec = 0.0      # rad/s
         self.duty = 0.0
         self.load_Nm = 0.0
         self.commanded_sector = 0  # 0..5
+        self._intra_sector_angle = 0.0   # rad within current sector [0, π/3)
+        self._zc_emitted_this_sector = False
+
+    def on_commutation(self):
+        """Called by the simulator when the controller advances a sector.
+        Resets intra-sector phase to 0; the rotor's angular velocity is
+        unchanged. This couples the rotor's electrical phase to controller
+        commands the way the real bridge does."""
+        self._intra_sector_angle = 0.0
+        self._zc_emitted_this_sector = False
 
     def step(self, dt: float):
         """
@@ -161,8 +172,14 @@ class MotorPlant:
         if self.omega_elec > omega_cap:
             self.omega_elec = omega_cap
 
-        self.theta_elec += self.omega_elec * dt
-        self.theta_elec %= 2 * np.pi
+        # Advance intra-sector phase. When it overflows π/3, the rotor has
+        # naturally drifted past where the controller put it — we don't snap
+        # back here (would erase the controller's effect). Instead, leave it;
+        # the event detector sees this as "ZC consumed, awaiting next comm".
+        self._intra_sector_angle += self.omega_elec * dt
+        # Total absolute angle, just for telemetry / RPM:
+        self.theta_elec = (self.commanded_sector * np.pi / 3
+                          + self._intra_sector_angle) % (2 * np.pi)
 
     @property
     def eRPM(self) -> float:
@@ -187,38 +204,66 @@ class EventDetector:
     def __init__(self, plant: MotorPlant, filt: FilterParams,
                  noise_std_HR: float = 5.0,
                  miss_probability: float = 0.0,
+                 advance_deg: float = 15.0,
                  rng_seed: int = 42):
         self.plant = plant
         self.filt = filt
         self.noise_std_HR = noise_std_HR
         self.miss_prob = miss_probability
+        # The ZC angle is at (advance + 30)° within the inter-commutation
+        # interval. With advance=0°, ZC is at midpoint (30°). With advance=15°,
+        # ZC is at 45° — because the commutation fired 15° earlier than the
+        # rotor's "natural" sector boundary, so it takes that much more
+        # rotor angle to reach the BEMF zero-crossing.
+        self.zc_fire_rad = (advance_deg + 30.0) * np.pi / 180.0
         self.rng = np.random.default_rng(rng_seed)
-        self._prev_sector = plant.rotor_sector
-        self._sub_angle_prev = plant.theta_elec % (np.pi / 3)
+        self._prev_sector = plant.commanded_sector
+        self._sub_angle_prev = 0.0
 
-    def check(self, t_now_s: float) -> Tuple[bool, bool, float, int]:
+    def check(self, t_now_s: float, dt_s: float = 0.0) -> Tuple[bool, bool, float, int]:
         """
         Returns (rotor_sector_changed, zc_captured, zc_HR_time, new_rotor_sector).
+
+        ZC time is linearly interpolated within the dt step to remove the
+        sampling-time bias that would otherwise show up as ~dt/2 systematic
+        lateness on every capture.
         """
         rotor_changed = False
         zc_captured = False
         zc_HR = 0.0
 
-        cur_sector = self.plant.rotor_sector
+        cur_sector = self.plant.commanded_sector
         if cur_sector != self._prev_sector:
             rotor_changed = True
             self._prev_sector = cur_sector
 
-        # True ZC at sector midpoint (theta mod 60° = 30°)
-        sub_angle = self.plant.theta_elec % (np.pi / 3)
-        if (sub_angle >= np.pi / 6) and (self._sub_angle_prev < np.pi / 6):
+        # ZC fires when rotor's intra-sector angle crosses (advance + 30)°,
+        # but only ONCE per sector (controller-driven). The plant resets
+        # _zc_emitted_this_sector when on_commutation() is called.
+        sub = self.plant._intra_sector_angle
+        if (not self.plant._zc_emitted_this_sector) and (sub >= self.zc_fire_rad):
             if self.rng.uniform() > self.miss_prob:
-                delay_s = self.filt.time_delay_s(self.plant.omega_elec)
+                # Linear interpolation: when did sub cross zc_fire_rad within this dt?
+                if sub > self._sub_angle_prev:
+                    frac = (self.zc_fire_rad - self._sub_angle_prev) / (sub - self._sub_angle_prev)
+                    frac = max(0.0, min(1.0, frac))
+                else:
+                    frac = 1.0
+                t_cross_s = (t_now_s - dt_s) + frac * dt_s
+
+                # NOTE: in firmware the PCB RC filter introduces phase lag,
+                # which the CMPLO pre-distortion (HWZC_ApplyFilterComp) is
+                # designed to cancel exactly. We model "comp on" by NOT
+                # adding the raw filter delay here. If you want to study
+                # uncompensated behavior, uncomment the delay term.
+                # delay_s = self.filt.time_delay_s(self.plant.omega_elec)
+                delay_s = 0.0
                 noise_s = self.rng.normal(0, self.noise_std_HR * NS_PER_TICK / 1e9)
-                cap_t_s = t_now_s + delay_s + noise_s
+                cap_t_s = t_cross_s + delay_s + noise_s
                 zc_HR = cap_t_s * HR_TICK_HZ
                 zc_captured = True
-        self._sub_angle_prev = sub_angle
+                self.plant._zc_emitted_this_sector = True
+        self._sub_angle_prev = sub
 
         return rotor_changed, zc_captured, zc_HR, cur_sector
 
@@ -249,8 +294,14 @@ class ControllerBase:
         self.last_comm_HR = t_now_HR
 
     def on_capture(self, zc_HR: float):
-        self.last_capture_HR = zc_HR
-        self.capture_valid = True
+        """Accept only the FIRST capture per inter-commutation interval.
+        Mirrors firmware's blank-then-arm semantics: after a commutation,
+        the HW comparator is disabled, then re-armed; the first edge
+        becomes the valid capture for that sector. Subsequent edges
+        (from rotor running ahead of controller) are ignored."""
+        if not self.capture_valid:
+            self.last_capture_HR = zc_HR
+            self.capture_valid = True
 
     def on_commutation(self, t_now_HR: float) -> int:
         """Run PI math; advance commanded sector; return new sector."""
@@ -602,9 +653,13 @@ def run_simulation(controller: ControllerBase, motor: MotorParams,
     plant.omega_elec = cfg.initial_omega_elec
 
     filt = FilterParams()
+    # Detector needs to know the controller's advance so the ZC fires at
+    # the correct (advance + 30)° angle within the inter-commutation interval.
+    advance = getattr(controller, 'ADVANCE_DEG', 15.0)
     events = EventDetector(plant, filt,
                            noise_std_HR=cfg.noise_std_HR,
-                           miss_probability=cfg.miss_probability)
+                           miss_probability=cfg.miss_probability,
+                           advance_deg=advance)
 
     # Seed the controller with a slightly-wrong guess. Real firmware
     # hands off from the SW path with a similar-magnitude error.
@@ -649,7 +704,7 @@ def run_simulation(controller: ControllerBase, motor: MotorParams,
         t_HR = t * HR_TICK_HZ
 
         # Detect events
-        _, zc_captured, zc_HR, _ = events.check(t)
+        _, zc_captured, zc_HR, _ = events.check(t, cfg.dt_s)
         if zc_captured:
             controller.on_capture(zc_HR)
 
@@ -657,6 +712,7 @@ def run_simulation(controller: ControllerBase, motor: MotorParams,
         if t_HR >= next_comm_HR:
             new_sector = controller.on_commutation(t_HR)
             plant.commanded_sector = new_sector
+            plant.on_commutation()    # reset intra-sector phase
             next_comm_HR = t_HR + controller.timer_period_HR
 
         # Trace
@@ -781,11 +837,104 @@ def plot_comparison(scenario_name: str, scenario_title: str,
 # Main
 # ----------------------------------------------------------------------
 def make_controllers(motor: MotorParams, Vbus: float) -> List[ControllerBase]:
+    """Default list of controllers for CLI comparisons."""
     return [
         CurrentFirmwarePI(),
         FloatPI(),
         FloatPIWithFeedforward(motor=motor, Vbus=Vbus),
+        FloatPIWithSpeedLoop(motor=motor, Vbus=Vbus, max_eRPM=240_000),
     ]
+
+
+def dump_text_summary(scenario_name: str, scenario_title: str,
+                      motor: MotorParams, Vbus: float,
+                      results: List[Tuple[str, dict, ControllerBase]]) -> str:
+    """Compact text summary of a scenario — copy-paste friendly."""
+    out = []
+    out.append("=" * 78)
+    out.append(f"SCENARIO: {scenario_name}  —  {scenario_title}")
+    out.append("-" * 78)
+    out.append(f"Motor: {motor.name}  KV={motor.KV}  PP={motor.pole_pairs}  "
+               f"Rs={motor.Rs_ohm*1000:.0f}mΩ  Ls={motor.Ls_uH}µH")
+    out.append(f"Vbus: {Vbus} V    No-load max eRPM = {motor.KV*Vbus*motor.pole_pairs:,}")
+    out.append("")
+    out.append(f"{'Controller':<35} {'SS RMS err':>11} {'Lock time':>10} {'Peak err':>10}")
+    out.append("-" * 78)
+    for label, trace, ctrl in results:
+        t_arr = np.array(trace['t'])
+        err = np.array(trace['rotor_eRPM']) - np.array(trace['estimated_eRPM'])
+        ss_mask = t_arr > t_arr[-1] * 0.7
+        ss_rms = float(np.sqrt(np.mean(err[ss_mask] ** 2))) if ss_mask.any() else 0
+        abs_err = np.abs(err)
+        lock_idx = None
+        for i in range(len(abs_err)):
+            if abs_err[i] < 5000 and i + 5 < len(abs_err) and (abs_err[i:i+5] < 5000).all():
+                lock_idx = i
+                break
+        lock_str = f"{t_arr[lock_idx]*1000:.0f}ms" if lock_idx else "no lock"
+        peak = float(np.max(abs_err))
+        out.append(f"{label:<35} {ss_rms:>9,.0f}eRPM {lock_str:>10} {peak:>8,.0f}")
+
+    # Sparse timeline — 10 evenly-spaced rows of key metrics from the first controller
+    if results:
+        out.append("")
+        out.append("Sample timeline (first controller, every ~duration/10):")
+        out.append(f"{'t(s)':>6} {'duty%':>6} {'load':>5} {'rotor':>8} {'estim':>8} {'err':>7}")
+        first_trace = results[0][1]
+        n = len(first_trace['t'])
+        for i in np.linspace(0, n - 1, 11).astype(int):
+            t_arr = first_trace['t']
+            err = first_trace['rotor_eRPM'][i] - first_trace['estimated_eRPM'][i]
+            out.append(
+                f"{t_arr[i]:6.3f} "
+                f"{first_trace['duty'][i]*100:5.1f}% "
+                f"{first_trace['load'][i]*1000:4.1f}m "
+                f"{first_trace['rotor_eRPM'][i]:8,.0f} "
+                f"{first_trace['estimated_eRPM'][i]:8,.0f} "
+                f"{err:+7,.0f}"
+            )
+
+    # Per-controller final state
+    out.append("")
+    out.append("Final controller state:")
+    for label, trace, ctrl in results:
+        final_period = ctrl.timer_period_HR
+        final_integ = ctrl.integrator_HR
+        final_est = ctrl.get_eRPM()
+        extra = ""
+        if isinstance(ctrl, FloatPIWithSpeedLoop):
+            extra = (f"  target={ctrl.target_eRPM:,.0f}  "
+                     f"duty_cmd={ctrl.duty_cmd:.3f}  "
+                     f"spd_integ={ctrl.speed_integrator:.3f}")
+        out.append(f"  {label:<35} period={final_period:>8,.0f}HR  "
+                   f"integ={final_integ:>8,.0f}  est={final_est:,.0f}eRPM{extra}")
+    out.append("=" * 78)
+    return "\n".join(out)
+
+
+def dump_csv(scenario_name: str, results: List[Tuple[str, dict, ControllerBase]]) -> str:
+    """One-row-per-sample CSV. Wide format with one column per controller per metric."""
+    if not results:
+        return ""
+    first_trace = results[0][1]
+    n = len(first_trace['t'])
+
+    header = ['t_s', 'duty', 'load_Nm']
+    for label, _, _ in results:
+        safe = label.replace(' ', '_').replace('+', 'plus').replace('(', '').replace(')', '')
+        header.extend([f'{safe}__rotor_eRPM', f'{safe}__est_eRPM', f'{safe}__err_eRPM'])
+
+    rows = [','.join(header)]
+    for i in range(n):
+        row = [f"{first_trace['t'][i]:.6f}",
+               f"{first_trace['duty'][i]:.4f}",
+               f"{first_trace['load'][i]:.4f}"]
+        for label, trace, _ in results:
+            r = trace['rotor_eRPM'][i] if i < len(trace['rotor_eRPM']) else 0
+            e = trace['estimated_eRPM'][i] if i < len(trace['estimated_eRPM']) else 0
+            row.extend([f"{r:.0f}", f"{e:.0f}", f"{r-e:.0f}"])
+        rows.append(','.join(row))
+    return '\n'.join(rows)
 
 
 def main():
@@ -794,6 +943,12 @@ def main():
                         help='Which scenario to run')
     parser.add_argument('--save', metavar='PREFIX', default=None,
                         help='Save plots to PREFIX-<scenario>.png instead of showing')
+    parser.add_argument('--text', action='store_true',
+                        help='Print text summary to stdout (always on if --no-plot)')
+    parser.add_argument('--csv', metavar='PREFIX', default=None,
+                        help='Save CSV trace data to PREFIX-<scenario>.csv')
+    parser.add_argument('--no-plot', action='store_true',
+                        help='Skip plotting entirely (faster, text-only)')
     args = parser.parse_args()
 
     motor = MotorParams()
@@ -819,14 +974,28 @@ def main():
             ss_rms_err = float(np.sqrt(np.mean(err_arr[ss_mask] ** 2)))
             print(f"    Steady-state RMS eRPM error: {ss_rms_err:.0f}")
 
-        fig = plot_comparison(sc_name, sc['title'], motor, results)
-        if args.save:
-            fname = f"{args.save}-{sc_name}.png"
-            fig.savefig(fname, dpi=120)
-            print(f"  Saved plot: {fname}")
-            plt.close(fig)
-        else:
-            plt.show()
+        # Text summary
+        if args.text or args.no_plot:
+            print()
+            print(dump_text_summary(sc_name, sc['title'], motor, Vbus, results))
+
+        # CSV trace
+        if args.csv:
+            csv_path = f"{args.csv}-{sc_name}.csv"
+            with open(csv_path, 'w') as f:
+                f.write(dump_csv(sc_name, results))
+            print(f"  Saved CSV: {csv_path}")
+
+        # Plots
+        if not args.no_plot:
+            fig = plot_comparison(sc_name, sc['title'], motor, results)
+            if args.save:
+                fname = f"{args.save}-{sc_name}.png"
+                fig.savefig(fname, dpi=120)
+                print(f"  Saved plot: {fname}")
+                plt.close(fig)
+            else:
+                plt.show()
 
 
 if __name__ == '__main__':
