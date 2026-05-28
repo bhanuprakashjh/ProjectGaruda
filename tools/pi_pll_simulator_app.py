@@ -37,7 +37,7 @@ import streamlit as st
 from pi_pll_simulator import (
     HR_TICK_HZ, NS_PER_TICK, SECTORS_PER_REV,
     MotorParams, FilterParams, MotorPlant, EventDetector,
-    CurrentFirmwarePI, FloatPI, FloatPIWithFeedforward,
+    CurrentFirmwarePI, FloatPI, FloatPIWithFeedforward, FloatPIWithSpeedLoop,
     SimConfig, run_simulation,
 )
 
@@ -107,14 +107,20 @@ with st.sidebar:
     no_load_eRPM = KV * Vbus * pole_pairs
     st.caption(f"No-load eRPM ceiling: **{no_load_eRPM:,.0f}**")
 
-    st.header("🎛️ Controller")
+    st.header("🎛️ Controllers")
     controllers_enabled = st.multiselect(
         "Variants to compare",
-        ["Current (int bit-shift)", "Float (no algo change)", "Float + feedforward"],
-        default=["Current (int bit-shift)", "Float + feedforward"],
+        ["Current (int bit-shift)", "Float (no algo change)",
+         "Float + feedforward", "Float + FF + Speed PI"],
+        default=["Current (int bit-shift)", "Float + feedforward",
+                 "Float + FF + Speed PI"],
     )
+    has_speed_pi = "Float + FF + Speed PI" in controllers_enabled
+    if has_speed_pi:
+        st.caption("ℹ️ With Speed PI: throttle slider sets target **eRPM**, "
+                   "not duty. Speed loop adjusts duty to track.")
 
-    with st.expander("PI gains (advanced)"):
+    with st.expander("Sector PI gains (inner loop)"):
         Kp_value = st.select_slider(
             "Kp (proportional)",
             options=[1/16, 1/8, 1/4, 1/2, 0.31, 0.4, 0.6],
@@ -126,6 +132,23 @@ with st.sidebar:
             value=1/16,
         )
         advance_deg = st.slider("Timing advance (deg)", 0, 30, 15)
+
+    with st.expander("Speed PI gains (outer loop)", expanded=has_speed_pi):
+        max_target_eRPM = st.slider(
+            "Max target eRPM", 50_000, 300_000, 240_000, 10_000)
+        Kp_spd_scale = st.slider(
+            "Kp_spd scale", 0.1, 5.0, 1.0, 0.1,
+            help="Multiplier on default Kp_spd=4e-6 (duty per eRPM err)")
+        Ki_spd_scale = st.slider(
+            "Ki_spd scale", 0.1, 5.0, 1.0, 0.1,
+            help="Multiplier on default Ki_spd=8e-8")
+        duty_slew_pct = st.slider(
+            "Duty slew limit (% per ZC event)", 0.1, 10.0, 1.0, 0.1)
+        idle_target_eRPM = st.slider(
+            "Idle target eRPM (throttle=0)", 0, 30_000, 8_000, 500)
+        stall_boost = st.slider(
+            "Stall boost (P-gain ×)", 1.0, 5.0, 2.0, 0.1,
+            help="When actual << target, multiply Kp by this for faster recovery")
 
     st.header("🔍 Measurement")
     noise_HR = st.slider("ZC noise σ (HR ticks)", 0, 50, 5)
@@ -222,7 +245,9 @@ def build_controllers():
 @st.cache_data(show_spinner=False)
 def run_one(ctrl_factory_key, motor_dict, Vbus, duration_s, initial_duty,
             duty_kind, duty_extra, load_kind, load_extra, noise_HR, miss_pct,
-            seed_error_pct, Kp_value, Ki_value, advance_deg):
+            seed_error_pct, Kp_value, Ki_value, advance_deg,
+            max_target_eRPM, Kp_spd_scale, Ki_spd_scale,
+            duty_slew_pct, idle_target_eRPM, stall_boost):
     """Cached single-controller run. Args are hashable; controllers built inside.
 
     Note: arg names must NOT start with underscore — Streamlit skips
@@ -269,6 +294,17 @@ def run_one(ctrl_factory_key, motor_dict, Vbus, duration_s, initial_duty,
         c.Kp = Kp_value
         c.Ki = Ki_value
         c.ADVANCE_DEG = advance_deg
+    elif ctrl_factory_key == "Float + FF + Speed PI":
+        c = FloatPIWithSpeedLoop(motor=m, Vbus=Vbus, max_eRPM=max_target_eRPM)
+        c.Kp = Kp_value
+        c.Ki = Ki_value
+        c.ADVANCE_DEG = advance_deg
+        # Speed-loop tuning
+        c.KP_SPD_BASE = 4e-6 * Kp_spd_scale
+        c.KI_SPD_BASE = 8e-8 * Ki_spd_scale
+        c.DUTY_SLEW_PER_EVENT = duty_slew_pct / 100.0
+        c.IDLE_TARGET_ERPM = idle_target_eRPM
+        c.STALL_BOOST_FACTOR = stall_boost
 
     # Apply seed error knob (the run_simulation helper uses fixed 1.1× now;
     # we just patch it by setting the controller's seed manually below)
@@ -313,9 +349,16 @@ def run_one(ctrl_factory_key, motor_dict, Vbus, duration_s, initial_duty,
     step_idx = 0
 
     while t < cfg.duration_s:
-        plant.duty = duty_sched(t)
-        if isinstance(c, FloatPIWithFeedforward):
-            c.duty = plant.duty
+        throttle_cmd = duty_sched(t)
+        if isinstance(c, FloatPIWithSpeedLoop):
+            # Speed mode: throttle command → target eRPM; controller owns duty
+            c.set_target_from_throttle(throttle_cmd)
+            plant.duty = c.duty_cmd
+        elif isinstance(c, FloatPIWithFeedforward):
+            plant.duty = throttle_cmd
+            c.duty = throttle_cmd
+        else:
+            plant.duty = throttle_cmd
         if load_sched is not None:
             plant.load_Nm = load_sched(t)
 
@@ -391,6 +434,8 @@ with st.spinner("Simulating..."):
             duty_kind, duty_extra, load_kind, load_extra,
             noise_HR, miss_pct, seed_error_pct,
             Kp_value, Ki_value, advance_deg,
+            max_target_eRPM, Kp_spd_scale, Ki_spd_scale,
+            duty_slew_pct, idle_target_eRPM, stall_boost,
         )
 
 

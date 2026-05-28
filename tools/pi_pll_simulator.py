@@ -466,6 +466,114 @@ class FloatPIWithFeedforward(ControllerBase):
         return self.commanded_sector
 
 
+class FloatPIWithSpeedLoop(FloatPIWithFeedforward):
+    """
+    Cascaded control: sector PI (inner) + speed PI (outer).
+
+    Inner loop: float PI + feedforward (same as FloatPIWithFeedforward).
+    Outer loop: speed PI that maps target eRPM to duty cycle.
+
+    Throttle command is interpreted as target eRPM fraction
+    (0..max_eRPM) instead of duty fraction. The speed PI then drives
+    duty to make actual eRPM track target.
+
+    Robustness features:
+      - Back-calculation anti-windup (not just clamp)
+      - Per-event slew limit on duty (prevents step cliffs)
+      - Only integrates when sector PI is locked (no integrator
+        runaway during desync / startup transient)
+      - Minimum duty floor (idle / arming safety)
+      - Maximum duty ceiling (MAX_DUTY safety)
+      - Stall floor: if actual eRPM crashes far below target, boost
+        duty proportionally faster (asymmetric P gain)
+    """
+
+    # Speed PI gains — designed for normalized duty (0..1) and eRPM in actual units
+    KP_SPD_BASE = 4e-6        # duty fraction per eRPM error (full step at 250k err)
+    KI_SPD_BASE = 8e-8        # 50× slower than P
+    DUTY_SLEW_PER_EVENT = 0.01   # max 1% duty change per ZC event
+    DUTY_MIN = 0.05           # 5% idle floor
+    DUTY_MAX = 0.99
+    IDLE_TARGET_ERPM = 8000   # what "throttle=zero" means in speed mode
+    LOCK_DETECT_ERPM = 5000   # need >this much eRPM before speed loop engages
+    STALL_BOOST_FACTOR = 2.0  # P-gain multiplier when actual << target
+
+    def __init__(self, motor: MotorParams, Vbus: float, max_eRPM: float = 240_000):
+        super().__init__(motor, Vbus)
+        self.name = "Float + FF + Speed PI"
+        self.max_eRPM = max_eRPM
+        self.target_eRPM = 0.0
+        self.duty_cmd = self.DUTY_MIN
+        self.speed_integrator = 0.0
+        self._was_locked = False
+        # Logs
+        self.log_target_eRPM = []
+        self.log_duty_cmd = []
+
+    def set_target_from_throttle(self, throttle_frac: float):
+        """Map [0,1] throttle to target eRPM with idle floor."""
+        if throttle_frac < 0.02:
+            self.target_eRPM = self.IDLE_TARGET_ERPM
+        else:
+            self.target_eRPM = (self.IDLE_TARGET_ERPM
+                                + throttle_frac * (self.max_eRPM - self.IDLE_TARGET_ERPM))
+
+    def seed(self, initial_period_HR: float, t_now_HR: float):
+        super().seed(initial_period_HR, t_now_HR)
+        # Seed speed-loop integrator at the current duty so output doesn't jump
+        self.speed_integrator = self.duty
+        self.duty_cmd = self.duty
+
+    def on_commutation(self, t_now_HR: float) -> int:
+        # --- INNER LOOP: sector PI (period tracking) ---
+        new_sector = super().on_commutation(t_now_HR)
+
+        # --- OUTER LOOP: speed PI (duty adjustment) ---
+        actual_eRPM = self.get_eRPM()
+
+        # Lock detection: only engage speed loop after sector PI has locked
+        if actual_eRPM > self.LOCK_DETECT_ERPM:
+            self._was_locked = True
+
+        if self._was_locked:
+            err = self.target_eRPM - actual_eRPM
+
+            # Asymmetric P gain for stall recovery (positive err = need more speed)
+            kp_eff = self.KP_SPD_BASE
+            if err > self.target_eRPM * 0.3:   # > 30% below target → stall regime
+                kp_eff *= self.STALL_BOOST_FACTOR
+
+            # 1) Unconstrained tentative output
+            self.speed_integrator += self.KI_SPD_BASE * err
+            duty_unsat = self.speed_integrator + kp_eff * err
+
+            # 2) Apply slew limit (rate-of-change on duty)
+            slew = self.DUTY_SLEW_PER_EVENT
+            duty_slewed = max(self.duty_cmd - slew,
+                              min(self.duty_cmd + slew, duty_unsat))
+
+            # 3) Apply saturation (duty floor/ceiling)
+            duty_sat = max(self.DUTY_MIN, min(self.DUTY_MAX, duty_slewed))
+
+            # 4) Back-calculation anti-windup: if ANY limit (slew OR
+            #    saturation) constrained the output below what the math
+            #    asked for, pull the integrator back so it doesn't wind
+            #    up. Kb is the back-calc gain — too high causes
+            #    oscillation, too low lets some windup through.
+            if duty_sat != duty_unsat:
+                Kb = 0.5   # back-calc strength
+                self.speed_integrator -= Kb * (duty_unsat - duty_sat)
+
+            self.duty_cmd = duty_sat
+            self.duty = duty_sat   # also update feedforward's duty input
+
+        # Log speed-loop state
+        self.log_target_eRPM.append(self.target_eRPM)
+        self.log_duty_cmd.append(self.duty_cmd)
+
+        return new_sector
+
+
 # ----------------------------------------------------------------------
 # Simulator engine
 # ----------------------------------------------------------------------
@@ -523,9 +631,16 @@ def run_simulation(controller: ControllerBase, motor: MotorParams,
     while t < cfg.duration_s:
         # Apply schedules
         if cfg.duty_schedule is not None:
-            plant.duty = cfg.duty_schedule(t)
-            if isinstance(controller, FloatPIWithFeedforward):
-                controller.duty = plant.duty
+            throttle_cmd = cfg.duty_schedule(t)
+            if isinstance(controller, FloatPIWithSpeedLoop):
+                # Speed mode: throttle command → target eRPM, controller owns duty
+                controller.set_target_from_throttle(throttle_cmd)
+                plant.duty = controller.duty_cmd   # speed PI's output
+            elif isinstance(controller, FloatPIWithFeedforward):
+                plant.duty = throttle_cmd
+                controller.duty = throttle_cmd     # for feedforward calc
+            else:
+                plant.duty = throttle_cmd
         if cfg.load_schedule is not None:
             plant.load_Nm = cfg.load_schedule(t)
 
