@@ -1982,13 +1982,23 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                                               garudaData.morph.morphStep);
                         HAL_PWM_ReleaseFloatPhase(garudaData.currentStep);
 
-                        /* Trap duty for active phase */
+                        /* COAST: hold duty at MIN_DUTY during MORPH sub-B (windowed
+                         * Hi-Z) so the bridge applies near-zero voltage to the rotor
+                         * while HWZC captures clean ZCs. Was: garudaData.duty = trap_duty
+                         * (= sineRampModPct × 16/5 clamped to RAMP_DUTY_CAP = 8%), but
+                         * 8% Vbus (1.92V) applied to a rotor at 3k eRPM (BEMF=0.31V)
+                         * = 22A across 0.05Ω. Coasting at MIN_DUTY for sub-B (~13ms
+                         * at 3k eRPM through 4 sectors) lets the rotor stay near 3k
+                         * (windage decel negligible over 13ms) while HWZC PI converges.
+                         * Then CL takes over with mappedDuty slewing up from MIN_DUTY.
+                         * The trap-duty `td` is still computed below for the float-
+                         * phase virtual-neutral, which still needs the trap reference. */
                         uint32_t td = ((uint32_t)garudaData.sine.amplitude
                             * SINE_TRAP_DUTY_NUM + SINE_TRAP_DUTY_DEN / 2)
                             / SINE_TRAP_DUTY_DEN;
                         if (td < MIN_DUTY) td = MIN_DUTY;
                         if (td > RT_RAMP_DUTY_CAP) td = RT_RAMP_DUTY_CAP;
-                        garudaData.duty = td;
+                        garudaData.duty = MIN_DUTY;
 
                         /* Float driven at trapFloat — virtual neutral */
                         uint32_t trapFloat = (td + MIN_DUTY) / 2;
@@ -3033,6 +3043,30 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                             if (effectiveDownRate > highRpmRate)
                                 effectiveDownRate = highRpmRate;
                         }
+#endif
+#if FEATURE_VBUS_EMERGENCY_HOLD
+                        /* Emergency tier: above regen brake (28V), if
+                         * Vbus hits 30V, FREEZE slew-down entirely so
+                         * the rotor stops dumping regen energy into bus.
+                         * Sticky hysteresis (30→27V) + 20ms min hold
+                         * to prevent chatter. Releases when Vbus settles
+                         * back below 27V AND min-hold has elapsed. */
+                        static bool emergencyHoldActive = false;
+                        static uint16_t emergencyHoldTicks = 0;
+                        if (emergencyHoldActive) {
+                            if (emergencyHoldTicks > 0)
+                                emergencyHoldTicks--;
+                            if (emergencyHoldTicks == 0
+                                && garudaData.vbusRaw < VBUS_EMERGENCY_HOLD_OFF_ADC)
+                                emergencyHoldActive = false;
+                        } else {
+                            if (garudaData.vbusRaw > VBUS_EMERGENCY_HOLD_ON_ADC) {
+                                emergencyHoldActive = true;
+                                emergencyHoldTicks = VBUS_EMERGENCY_HOLD_MIN_TICKS;
+                            }
+                        }
+                        if (emergencyHoldActive)
+                            effectiveDownRate = 0;
 #endif
                         if ((uint32_t)(-delta) > effectiveDownRate)
                             mappedDuty = prevDuty - effectiveDownRate;

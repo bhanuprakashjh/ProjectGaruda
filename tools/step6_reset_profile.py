@@ -41,6 +41,8 @@ PARAMS_TO_CHECK = [
     (0x22, "timingAdvMaxDeg",      25, "deg"),
     (0x51, "alignDutyPct",          3, "%"),
     (0x52, "initialErpm",         150, "eRPM"),
+    (0x54, "sineAlignModPct",       3, "%"),
+    (0x55, "sineRampModPct",        5, "%"),
 ]
 
 

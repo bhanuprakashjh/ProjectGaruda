@@ -151,8 +151,18 @@ static const GSP_PARAMS_T profileDefaults[4] = {
          * Slot name is still GSP_PROFILE_5010 for EEPROM/profile-id
          * compatibility; actual motor is 2810 here (AKESC's original
          * 5010 data is in PATA comments/backup). */
-        .rampTargetErpm     = 3000,    /* Same as A2212; sine startup exits here */
-        .rampAccelErpmPerS  = 3000,    /* Bench no-prop can follow fast ramp */
+        .rampTargetErpm     = 3000,    /* Reliable open-loop ramp endpoint on 2810 at 24V.
+                                        * Higher targets (8k, 10k) stall regardless of
+                                        * amplitude — rotor can't follow the field at the
+                                        * required acceleration. The structural ceiling is
+                                        * ~6-7k eRPM open-loop. Above that, rotor slips
+                                        * and HWZC latches onto noise → phantom telemetry.
+                                        * Tradeoff: rotor at 3k at CL takeover means a
+                                        * ~22A current pulse drives the motor up to CL
+                                        * idle (14k) in ~250ms. The pulse is bounded by
+                                        * OC_SW_LIMIT and bench shunt saturation; not
+                                        * damaging, but visible as a brief "jerk". */
+        .rampAccelErpmPerS  = 3000,    /* 1s ramp at 3k target — works reliably */
         .rampDutyPct        = 8,       /* At 24V, 8% * 24V / 0.050Ω = 38A stall.
                                         * Motor should be moving early; 8% is ramp cap */
         .clIdleDutyPct      = 6,       /* 24V * 6% / 0.050Ω = 29A stall.
@@ -176,7 +186,12 @@ static const GSP_PARAMS_T profileDefaults[4] = {
                                         * BEMF ceiling. If motor stays at <230k,
                                         * BEMF is the true limit. */
         .sineAlignModPct    = 3,       /* Conservative align — low Rs means current */
-        .sineRampModPct     = 8,       /* 2810 at 24V picks up fast — keep mod low */
+        .sineRampModPct     = 5,       /* Conservative for low-Rs 2810 (0.05Ω). At 24V,
+                                        * 5% mod produces ~5.6A peak in OL_RAMP. Raising
+                                        * to 8-9% provides more torque but doesn't help
+                                        * the CL-entry spike (rotor still ends ramp at
+                                        * 3k eRPM, structurally limited). Tested combos
+                                        * of 9%/8k and 5%/10k both slipped. */
         .zcDemagDutyThresh  = 40,      /* Same as A2212 — low L → more demag */
         .zcDemagBlankExtraPct = 20,    /* Aggressive demag blanking (low L = long tail) */
         .ocLimitMa          = 20000,   /* CMP3 chop. Slightly below sensor saturation

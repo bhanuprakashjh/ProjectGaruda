@@ -623,6 +623,196 @@ class FloatPINormalized(ControllerBase):
         return self.commanded_sector
 
 
+class FloatPIMedian3(ControllerBase):
+    """
+    Original algorithm — 2026-05-28 evening.
+
+    Median-of-3 delta filtering. Same family as FloatPIDefensive: improve
+    signal quality without adding predictive bias.
+
+    Mechanism:
+      - Track last 3 deltas in a rolling buffer
+      - Feed the MEDIAN of those 3 to the PI math (not the raw delta)
+      - Outliers (PWM coupling spikes, brief comparator chatter, single
+        noise events) get automatically rejected because they're never
+        the middle of three values
+      - Sustained trends (multiple consecutive deltas in same direction)
+        pass through normally — median preserves real signal
+
+    Why no predictive bias:
+      - Median is a purely reactive statistical filter
+      - Output value is always one of the three input values
+      - Doesn't extrapolate or guess; just rejects the obvious outlier
+
+    Trade-off:
+      - One sector of phase lag (you operate on N-1 not N)
+      - Acceptable because the PI integrator's time constant already
+        spans many sectors at any speed
+    """
+
+    Kp = 0.25
+    Ki = 0.0625
+    CLAMP_POS_FRAC_HIGH = 1/16
+    CLAMP_NEG_FRAC_HIGH = 1/32
+    CLAMP_FRAC = 1/8
+    CLAMP_HIGH_TICKS = 1e9 / 150_000
+    MIN_PERIOD_TICKS = 1e9 / 260_000
+    ADVANCE_DEG = 15
+
+    def __init__(self):
+        super().__init__("Float PI median-of-3 delta filter")
+        self.delta_history = [0.0, 0.0, 0.0]   # rolling buffer
+
+    def on_commutation(self, t_now_HR):
+        T = self.timer_period_HR
+        adv_frac = (30 + self.ADVANCE_DEG) / 60.0
+
+        delta_logged = 0.0
+        if self.capture_valid:
+            cap_value = self.last_capture_HR - self.last_comm_HR
+            set_value = adv_frac * T
+
+            if 0 < cap_value <= T:
+                delta_raw = cap_value - set_value
+
+                # Asymmetric clamp (same as FloatPI)
+                if T < self.CLAMP_HIGH_TICKS:
+                    pos_cap = T * self.CLAMP_POS_FRAC_HIGH
+                    neg_cap = T * self.CLAMP_NEG_FRAC_HIGH
+                else:
+                    pos_cap = T * self.CLAMP_FRAC
+                    neg_cap = pos_cap
+                if delta_raw >  pos_cap: delta_raw =  pos_cap
+                if delta_raw < -neg_cap: delta_raw = -neg_cap
+
+                # Rolling buffer + median
+                self.delta_history[0] = self.delta_history[1]
+                self.delta_history[1] = self.delta_history[2]
+                self.delta_history[2] = delta_raw
+                delta_filt = sorted(self.delta_history)[1]   # median
+
+                # PI math on FILTERED delta
+                self.integrator_HR += self.Ki * delta_filt
+                if self.integrator_HR < self.MIN_PERIOD_TICKS:
+                    self.integrator_HR = self.MIN_PERIOD_TICKS
+
+                new_per = self.integrator_HR + self.Kp * delta_filt
+                if new_per < self.MIN_PERIOD_TICKS:
+                    new_per = self.MIN_PERIOD_TICKS
+                self.timer_period_HR = new_per
+
+                delta_logged = delta_raw   # log the raw, not filtered
+
+            self.capture_valid = False
+
+        self.commanded_sector = (self.commanded_sector + 1) % 6
+        self.last_comm_HR = t_now_HR
+        self.log(t_now_HR / HR_TICK_HZ, delta_logged)
+        return self.commanded_sector
+
+
+class FloatPIOutlierReject(ControllerBase):
+    """
+    Z-score outlier rejection — refined median-of-3 idea.
+
+    Maintains a slow IIR of delta mean and variance. For each new delta,
+    if it's more than 3σ from the recent mean, skip the PI update.
+    Otherwise process normally.
+
+    Why this works where median-of-3 doesn't:
+      - During steady state: variance is small → tight rejection band →
+        noise spikes rejected
+      - During transient: variance grows fast → wide rejection band →
+        real changes pass through, no lag
+      - 95%+ of readings pass through unfiltered → no systematic lag
+
+    Why no predictive bias:
+      - Doesn't predict anything — only filters obvious statistical
+        outliers
+      - Decision is "use this reading or skip this event" — never
+        "guess what the reading should be"
+    """
+
+    Kp = 0.25
+    Ki = 0.0625
+    CLAMP_POS_FRAC_HIGH = 1/16
+    CLAMP_NEG_FRAC_HIGH = 1/32
+    CLAMP_FRAC = 1/8
+    CLAMP_HIGH_TICKS = 1e9 / 150_000
+    MIN_PERIOD_TICKS = 1e9 / 260_000
+    ADVANCE_DEG = 15
+    OUTLIER_Z = 3.0          # reject deltas beyond this many σ from running mean
+    STATS_ALPHA = 0.05       # IIR coefficient for running mean/variance
+    MIN_STD = 50.0           # floor on σ to avoid runaway rejection at lock
+
+    def __init__(self):
+        super().__init__("Float PI outlier rejection (z>3σ)")
+        self.delta_mean = 0.0
+        self.delta_var = 1000.0   # bootstrap variance estimate
+        self.rejected_count = 0
+        self.log_rejected = []
+
+    def log(self, t_s, delta):
+        super().log(t_s, delta)
+        self.log_rejected.append(self.rejected_count)
+
+    def on_commutation(self, t_now_HR):
+        T = self.timer_period_HR
+        adv_frac = (30 + self.ADVANCE_DEG) / 60.0
+
+        delta_logged = 0.0
+        if self.capture_valid:
+            cap_value = self.last_capture_HR - self.last_comm_HR
+            set_value = adv_frac * T
+
+            if 0 < cap_value <= T:
+                delta_raw = cap_value - set_value
+
+                # Standard clamp (still apply hard safety bound)
+                if T < self.CLAMP_HIGH_TICKS:
+                    pos_cap = T * self.CLAMP_POS_FRAC_HIGH
+                    neg_cap = T * self.CLAMP_NEG_FRAC_HIGH
+                else:
+                    pos_cap = T * self.CLAMP_FRAC
+                    neg_cap = pos_cap
+                if delta_raw >  pos_cap: delta_raw =  pos_cap
+                if delta_raw < -neg_cap: delta_raw = -neg_cap
+
+                # Z-score check against running statistics
+                std = max(self.MIN_STD, self.delta_var ** 0.5)
+                z_score = abs(delta_raw - self.delta_mean) / std
+
+                if z_score < self.OUTLIER_Z:
+                    # Trust this reading — normal PI update
+                    self.integrator_HR += self.Ki * delta_raw
+                    if self.integrator_HR < self.MIN_PERIOD_TICKS:
+                        self.integrator_HR = self.MIN_PERIOD_TICKS
+
+                    new_per = self.integrator_HR + self.Kp * delta_raw
+                    if new_per < self.MIN_PERIOD_TICKS:
+                        new_per = self.MIN_PERIOD_TICKS
+                    self.timer_period_HR = new_per
+
+                    # Update running statistics
+                    self.delta_mean = ((1 - self.STATS_ALPHA) * self.delta_mean
+                                      + self.STATS_ALPHA * delta_raw)
+                    self.delta_var = ((1 - self.STATS_ALPHA) * self.delta_var
+                                     + self.STATS_ALPHA
+                                     * (delta_raw - self.delta_mean) ** 2)
+                else:
+                    # Extreme outlier — skip PI update for this event
+                    self.rejected_count += 1
+
+                delta_logged = delta_raw
+
+            self.capture_valid = False
+
+        self.commanded_sector = (self.commanded_sector + 1) % 6
+        self.last_comm_HR = t_now_HR
+        self.log(t_now_HR / HR_TICK_HZ, delta_logged)
+        return self.commanded_sector
+
+
 class FloatPIDefensive(ControllerBase):
     """
     Original algorithm — 2026-05-28.

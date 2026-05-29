@@ -31,12 +31,14 @@ extern "C" {
 #define FEATURE_DYNAMIC_BLANKING 1  /* Phase C1: Speed+duty-aware blanking (extra blank at high duty/demag) */
 #define FEATURE_VBUS_SAG_LIMIT   1  /* Phase C2: Bus voltage sag power limiting (reduce duty on Vbus dip) */
 #define FEATURE_BEMF_INTEGRATION 1  /* Phase E: Shadow integration estimator (shadow-only, no control) */
-#define FEATURE_SINE_STARTUP     0  /* Disabled (2026-04-20) — using straight forced
-                                     * commutation for prop-start debug. When 0, ALIGN
-                                     * applies ALIGN_DUTY_PERCENT directly; OL_RAMP
-                                     * advances steps at increasing rate with RAMP_DUTY_CAP.
-                                     * Much easier to reason about current and timing
-                                     * than sine modulation. */
+#define FEATURE_SINE_STARTUP     1  /* Re-enabled (2026-05-28) — try sine startup with
+                                     * current HWZC architecture. Profile sets
+                                     * HWZC_CROSSOVER_ERPM=1500 → HWZC arms during morph.
+                                     * Code: motor/startup.c (SineInit/SineAlign/SineRamp,
+                                     * MorphInit/CheckSectorBoundary/ComputeDuties).
+                                     * Sequence: ALIGN (sine hold @ 90°) → OL_RAMP (V/f
+                                     * ramp 150→3000 eRPM) → MORPH (sine→trap blend, then
+                                     * windowed Hi-Z ZC search) → CL (HWZC + sector PI). */
 #define FEATURE_ADC_CMP_ZC       1  /* Phase F: ADC comparator-based high-speed ZC — required for 6-step (2026-05-25). */
 #define FEATURE_HW_OVERCURRENT  1  /* Phase G: Hardware overcurrent protection via CMP3+OA3 */
 
@@ -280,7 +282,11 @@ extern "C" {
                                             * see A2212 profile comment for the HWZC-IIR-
                                             * collapse bug that 2s exposed. */
 #define SINE_ALIGN_MODULATION_PCT    3     /* Conservative — low Rs → current rises fast */
-#define SINE_RAMP_MODULATION_PCT     8     /* Low because 2810 at 24V has strong BEMF */
+#define SINE_RAMP_MODULATION_PCT     5     /* Lowered 8→5 (2026-05-28): bench showed
+                                            * 12.1A end-of-ramp + 21.88A MORPH peak
+                                            * (shunt saturated). 24V/5%/0.05Ω = 24A
+                                            * stall worst-case, much safer for the
+                                            * sine→trap transition on this low-Rs motor */
 #define ZC_DEMAG_DUTY_THRESH        40     /* Same as A2212 */
 #define ZC_DEMAG_BLANK_EXTRA_PERCENT 20    /* More aggressive than A2212 (18).
                                             * Low L = longer demag tail under switching */
@@ -464,6 +470,34 @@ extern "C" {
                                             * Bus cap absorbs regen at this rate. */
 #endif
 
+/* Emergency Vbus hard-hold tier (2026-05-29).
+ *
+ * Above the regen brake (which slows the slew-down /16), this tier
+ * FREEZES the slew-down entirely. It engages at 30V — 2V above the
+ * regen brake's 28V threshold, so the brake gets a chance to do its
+ * job first. If Vbus keeps climbing past 30V, the emergency tier
+ * kicks in and the duty literally cannot decrease.
+ *
+ * Purpose: break the regen positive-feedback loop that caused the
+ * 47.8V PSU OV trip on bench (session 2026-05-28). The regen brake's
+ * /16 slowdown still allowed the bus to climb because deceleration
+ * continued — just slowly. Emergency hold prevents any further
+ * deceleration, so the rotor stops dumping regen energy into the bus.
+ *
+ * Slew-UP is NOT frozen — if the user accidentally raises throttle
+ * during emergency hold, the rising duty consumes regen energy (good
+ * for the bus). Only the regen direction (slew-down) is frozen.
+ *
+ * Wide hysteresis (30V ON, 27V OFF) prevents chatter.
+ * Minimum 20ms hold ensures the regen pulse fully dissipates before
+ * the user regains full control. */
+#define FEATURE_VBUS_EMERGENCY_HOLD  1
+#if FEATURE_VBUS_EMERGENCY_HOLD
+#define VBUS_EMERGENCY_HOLD_ON_ADC  1620   /* ~30V — engage hard freeze */
+#define VBUS_EMERGENCY_HOLD_OFF_ADC 1450   /* ~27V — release (3V hysteresis) */
+#define VBUS_EMERGENCY_HOLD_MIN_TICKS 480  /* Minimum engaged duration ~20ms at 24kHz */
+#endif
+
 /* BEMF Integration Shadow Estimator (Phase E) */
 #if FEATURE_BEMF_INTEGRATION
 #define INTEG_THRESHOLD_GAIN  256   /* Q8.8: 256=1.0x */
@@ -475,16 +509,22 @@ extern "C" {
 /* Sine Startup (Phase D) — modulation params in motor profile above */
 #if FEATURE_SINE_STARTUP
 /* SINE_PHASE_OFFSET_DEG is now per-motor-profile (above) */
-#define SINE_TRAP_DUTY_NUM           6  /* Sine->trap duty scale factor numerator. */
-#define SINE_TRAP_DUTY_DEN           5  /* Sine->trap duty scale factor denominator.
-                                         * 6/5 = 1.2x compensates for the sine-to-trap L-L
-                                         * voltage conversion at RAMP_TARGET_ERPM.
-                                         * Tune: increase NUM if motor brakes at transition,
-                                         *        decrease NUM if motor surges forward. */
+#define SINE_TRAP_DUTY_NUM          16  /* Sine->trap duty scale factor numerator.
+                                         * Math: sine.amplitude = LOOPTIME × MOD_PCT / 200
+                                         * (peak-to-center, not peak-to-peak — easy to miss).
+                                         * So with sineRampModPct=5, amplitude = 2.5% LOOPTIME.
+                                         * To make trap_duty = 8% LOOPTIME (= clIdleDutyPct),
+                                         * need ratio = 8/2.5 = 3.2 = 16/5. This gives MORPH
+                                         * displayed duty matching CL idle so the visible step
+                                         * 2%→6% goes away. RAMP_DUTY_CAP=8% clamps the result
+                                         * — anything higher gets pegged to cap. */
+#define SINE_TRAP_DUTY_DEN           5  /* Sine->trap duty scale factor denominator. */
 
 /* Waveform Morph: sine-to-trap transition (replaces coast gap) */
-#define MORPH_CONVERGE_SECTORS    6   /* Sectors for duty convergence (1 e-cycle).
-                                       * At 2000 eRPM: 6 sectors × 5ms = 30ms. */
+#define MORPH_CONVERGE_SECTORS   12   /* Sectors for duty convergence (was 6 = 1 e-cycle,
+                                       * raised 2026-05-28 to 12 = 2 e-cycles for smoother
+                                       * sine→trap blend. At 3000 eRPM: 12 sectors × 3.3ms
+                                       * = ~40ms blend, halves dV/dt on the float phase). */
 #define MORPH_HIZ_MAX_SECTORS    36   /* Max sectors in Hi-Z before fault (6 e-cycles). */
 #define MORPH_TIMEOUT_MS       2000   /* Absolute morph timeout (ms). */
 #define MORPH_ZC_THRESHOLD        4   /* goodZcCount to exit morph → CL. Lowered from 6
@@ -709,8 +749,45 @@ extern "C" {
                                             * as an in-CL-only adjustment, not a
                                             * handoff seed. See bench session
                                             * 2026-05-28 in chat history. */
-#define HWZC_PI_KP_FLOAT               0.25f  /* P gain — was bit-shift 2 = 0.25 */
-#define HWZC_PI_KI_FLOAT               0.0625f /* I gain — was bit-shift 4 = 0.0625 */
+/* PI gain specification — PLL form (2026-05-29).
+ *
+ * Express gains in terms of natural frequency ω_n and damping ratio ζ
+ * of the equivalent 2nd-order tracking loop. Easier to retune per motor:
+ *
+ *   - Raise ω_n → faster tracking, more sensitivity to capture jitter
+ *   - Raise ζ   → more damping (less overshoot, slower settle)
+ *
+ * Standard relationships for the discrete tracking-PI we use:
+ *
+ *   Kp = 2ζω_n           ← proportional (transient response)
+ *   Ki = ω_n²            ← integral     (steady-state tracking)
+ *
+ * ω_n is expressed in rad per sample-period (one PI sector event), so
+ * the absolute Hz bandwidth scales with rotor speed:
+ *   f_n(Hz) = ω_n × sector_rate / (2π)
+ *   At 14k eRPM (sector rate 1400Hz): f_n =  ~56 Hz
+ *   At 230k eRPM (sector rate 23kHz): f_n = ~915 Hz
+ * This is a desirable property for sensorless motor tracking — the loop
+ * naturally widens its bandwidth when the rotor is fast and tightens it
+ * when slow, matching the rotor's dynamic timescale.
+ *
+ * Bench-validated combination (= original Kp=0.25, Ki=0.0625):
+ *   ω_n = 0.25  (slow tracking)
+ *   ζ   = 0.5   (slightly underdamped — small overshoot, fast settle)
+ *
+ * Reverse-derive from any old Kp/Ki pair:
+ *   ω_n = sqrt(Ki)
+ *   ζ   = Kp / (2 × sqrt(Ki))
+ */
+#define HWZC_PI_OMEGA_N                0.25f
+#define HWZC_PI_DAMPING_RATIO          0.5f
+
+/* Derived gains — compile-time constant, no runtime cost. */
+#define HWZC_PI_KP_FLOAT \
+    (2.0f * HWZC_PI_DAMPING_RATIO * HWZC_PI_OMEGA_N)
+#define HWZC_PI_KI_FLOAT \
+    (HWZC_PI_OMEGA_N * HWZC_PI_OMEGA_N)
+
 #define HWZC_PI_FF_RESIDUAL_FRAC       0.20f  /* Integrator anti-windup band:
                                                  * residual clamped to ±20% of P_ff */
 
