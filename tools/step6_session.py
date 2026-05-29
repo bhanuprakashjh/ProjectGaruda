@@ -153,6 +153,13 @@ def parse_snapshot(p: bytes, t0: float) -> dict:
             return (raw - IADC_BIAS) / IADC_COUNTS_PER_AMP
         ibus_pk_pos = _to_a(ibus_win_max); ibus_pk_neg = _to_a(ibus_win_min)
 
+    # Speed PI telemetry (offsets 208-227, present in builds with the new struct)
+    sp_enabled = sp_zcs = sp_target = sp_error = sp_output = 0
+    sp_integ = 0.0
+    if len(p) >= 228:
+        (sp_enabled, _sp_pad, sp_zcs, sp_target, sp_error,
+         sp_output, sp_integ) = struct.unpack_from("<BBHIiIf", p, 208)
+
     vbus_v = vbus_raw * VBUS_SCALE_V
     ibus_a = (ibus_raw - IBUS_BIAS) * IBUS_SCALE_A
     if hwzc_en and hwzc_hr > 0:
@@ -184,6 +191,13 @@ def parse_snapshot(p: bytes, t0: float) -> dict:
         "ib_pk_mag":    max(abs(ib_pk_pos), abs(ib_pk_neg)),
         "ibus_pk_mag":  max(abs(ibus_pk_pos), abs(ibus_pk_neg)),
         "uptime":       uptime,
+        # Speed PI telemetry — non-zero when FEATURE_SPEED_PI=1 and CL active
+        "spi_en":       sp_enabled,
+        "spi_zcs":      sp_zcs,
+        "spi_target":   sp_target,
+        "spi_error":    sp_error,
+        "spi_output":   sp_output,
+        "spi_integ":    sp_integ,
     }
 
 
@@ -262,6 +276,27 @@ def summarize(samples, info=None):
         out.append(f"{st:<10} {state_time[st]:8.2f} {sp['eRPM']:>10,} "
                    f"{sp['duty']:>10}% {sp['ibus']:>10.2f}A "
                    f"{sp['ia_pk']:>8.2f}A {sp['ibus_pk']:>12.2f}A")
+
+    # Speed PI summary — only when at least one sample has it enabled
+    spi_samples = [s for s in samples if s.get('spi_en', 0) == 1]
+    if spi_samples:
+        out.append("")
+        out.append("SPEED PI (v2: eRPM control + feedforward + deadband)")
+        out.append("-" * 78)
+        n_locked = sum(1 for s in spi_samples
+                       if s.get('spi_zcs', 0) >= 100)  # past integral-disable window
+        err_abs = [abs(s.get('spi_error', 0)) for s in spi_samples]
+        err_max = max(err_abs) if err_abs else 0
+        err_avg = sum(err_abs) / len(err_abs) if err_abs else 0
+        out.append(f"Enabled samples : {len(spi_samples)}  "
+                   f"(past integral-window: {n_locked})")
+        out.append(f"|error| eRPM    : max {err_max:,}  avg {err_avg:,.1f}")
+        if spi_samples:
+            last = spi_samples[-1]
+            out.append(f"Last sample     : target {last['spi_target']:,} eRPM  "
+                       f"error {last['spi_error']:+,} eRPM  "
+                       f"output {last['spi_output']:,} ticks  "
+                       f"correction {last['spi_integ']:+.1f}")
 
     # Top eRPM moments
     out.append("")
@@ -455,12 +490,18 @@ def main():
             if do_print:
                 marker = "◀" if (len(samples) >= 2 and
                                   samples[-2]['state'] != snap['state']) else ""
+                spi_tag = ""
+                if snap.get('spi_en', 0) == 1:
+                    # v2: target/error are in eRPM units, integrator is correction
+                    spi_tag = (f" spi tgt={snap['spi_target']:>6,} "
+                               f"err={snap['spi_error']:>+6} "
+                               f"corr={int(snap['spi_integ']):>+5}")
                 print(f"{snap['t']:6.2f} {snap['state_name']:<10} "
                       f"{snap['throttle']:>4} {snap['duty']:>4}% "
                       f"{snap['eRPM']:>8,} "
                       f"{snap['vbus_V']:>4.1f}V {snap['ibus_A']:>+5.2f}A "
                       f"{snap['ia_pk_mag']:>5.1f}A "
-                      f"{snap['fault_name']} {marker}")
+                      f"{snap['fault_name']}{spi_tag} {marker}")
                 last_print_t = snap['t']
 
     finally:

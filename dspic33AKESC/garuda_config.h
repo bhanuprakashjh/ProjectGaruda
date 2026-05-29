@@ -870,6 +870,146 @@ extern "C" {
 #define HWZC_FILTER_MAX_OFFSET      600   /* Cap CMPLO shift in ADC counts (12-bit ADC, ~15% FS) */
 #endif
 
+/* Speed PI — per-ZC interval-based speed PID (Phase 2 of CLAUDE.md roadmap).
+ *
+ * v2 architecture (2026-05-29, after bench data analysis):
+ *
+ *   throttle → target_eRPM (linear)
+ *        │
+ *        ├─→ duty_ff = K_ff × target_eRPM + offset  (covers ~95% of duty)
+ *        │
+ *        └─→ error_eRPM = target − measured  (in eRPM units)
+ *                │
+ *                ├─→ deadband (fractional, kills HWZC capture noise)
+ *                │
+ *                └─→ PI (gains operate on RESIDUAL eRPM error)
+ *                          │
+ *                          ▼
+ *           output_duty = duty_ff + PI_correction  (clamped CL_IDLE..MAX)
+ *
+ * Why eRPM, not period?
+ *   - Plant gain in (eRPM, duty_ticks) is constant: 3.2 eRPM/tick across the
+ *     14k–230k eRPM range. Constant-gain plant + constant-gain PI = uniform
+ *     loop dynamics at every operating point.
+ *   - Plant gain in (period, duty) varies as 1/ω² — 16× difference between
+ *     idle and top. PI tuned for one extreme blows up at the other.
+ *   - Costs one FPU division per PI event to compute measured_eRPM from
+ *     stepPeriodHR. Negligible on dsPIC33AK FPU.
+ *
+ * Why feedforward?
+ *   - Without it, integrator alone has to build up to operating duty (6-89%).
+ *     At idle's slow event rate, this takes seconds.
+ *   - Linear duty(eRPM) fit from bench data covers 95%+ of the steady-state
+ *     duty. PI only has to trim the residual ±1-2%. Much faster convergence.
+ *
+ * Why deadband?
+ *   - HWZC capture noise is bimodal: 3-4% in the mid range, 10% at extremes.
+ *   - Per-event Kp × noise causes the PI to chase its own noise → limit cycle.
+ *   - 3% deadband on the eRPM error suppresses noise hunting while leaving
+ *     real load disturbances (>3% deviation) free to drive the loop.
+ *
+ * Calibration (re-measure for a different motor or supply voltage):
+ *   - SPEED_PI_FF_SLOPE/OFFSET: fit duty(eRPM) from a bench sweep
+ *   - SPEED_PI_TARGET_ERPM_IDLE/MAX: choose throttle endpoints
+ *   - Gains tuned for plant K=3.2 eRPM/tick (which holds across speeds)
+ *
+ * Default ON (FEATURE_SPEED_PI=1).
+ */
+#define FEATURE_SPEED_PI                  0     /* DISABLED 2026-05-29 — v2 architecture
+                                                   * (eRPM control + FF + deadband + tight
+                                                   * integrator clamp) bench-validated at
+                                                   * IDLE/MID but triggers PSU OV cascade
+                                                   * at high RPM (>80k). Per-event duty
+                                                   * wobble + regen sensitivity = fault.
+                                                   *
+                                                   * Code retained for future iteration:
+                                                   *   - Add output slew limiter (max ±200
+                                                   *     PWM ticks/event regardless of PI)
+                                                   *   - Freeze integral above HIGH_RPM
+                                                   *   - Vbus-dip detection to fold back PI
+                                                   * Multi-session integration with the
+                                                   * existing Vbus protection stack. */
+
+#if FEATURE_SPEED_PI
+
+/* Throttle → target eRPM mapping. Linear from idle to max.
+ *
+ * MAX lowered from 230k to 200k (2026-05-29) — the motor's actual
+ * BEMF ceiling at 24V is ~200k. Commanding 230k creates persistent
+ * positive error at top throttle → integrator winds up → catastrophic
+ * transient on throttle changes. 200k is reachable, leaves margin. */
+#define SPEED_PI_TARGET_ERPM_IDLE         14000u   /* at throttle = 0 */
+#define SPEED_PI_TARGET_ERPM_MAX          200000u  /* at throttle = 4095 */
+
+/* eRPM ↔ stepPeriodHR conversion. HR clock = 100 MHz (10 ns/tick). */
+#define SPEED_PI_ERPM_FROM_TICKS          1000000000UL
+
+/* Linear feedforward: duty_ticks ≈ FF_SLOPE × eRPM + FF_OFFSET
+ *
+ * Bench-fit values for 2810 1350KV at 24V, MIN_DUTY=3840 (Phase E,
+ * 2026-05-29 session step6_20260529_140654). At eRPM=14k → 4970 ticks;
+ * at 200k → 61700 ticks. Within ±2% of bench across the full sweep.
+ *
+ * To recalibrate on a different motor:
+ *   1. Run a step6_session.py with FEATURE_SPEED_PI=0 (direct duty)
+ *   2. Sweep throttle slowly across the full range
+ *   3. Filter samples to steady-state (e.g., |spi_error| < 1000)
+ *   4. Linear regression on (eRPM, output_duty)
+ *   5. Plug in slope and offset here, rebuild
+ */
+#define SPEED_PI_FF_SLOPE                 0.310f  /* +1.6% — bench v2 run showed
+                                                   * corr drifting to +600 at top.
+                                                   * Slightly steeper slope absorbs it. */
+#define SPEED_PI_FF_OFFSET                400.0f  /* Lowered from 700 (bench v2 fit). */
+
+/* Throttle deadband: ADC counts below this map to target=IDLE eRPM.
+ * Above this, linear interpolation up to MAX. Matches the arming
+ * logic's ARM_THROTTLE_ZERO_ADC threshold (typically 200). */
+#define SPEED_PI_THROTTLE_DEADBAND        200u
+
+/* Deadband: ignore eRPM errors smaller than this fraction of target.
+ * Raised from 3% to 5% (2026-05-29) — bench v2 showed motor genuinely
+ * oscillates ±4-5% at mid-range as PI chases capture noise that partially
+ * exceeds 3%. 5% silences the PI when motor is "close enough" to target. */
+#define SPEED_PI_DEADBAND_PCT             5u
+
+/* PI gains operating on RESIDUAL eRPM error (= remaining after FF).
+ *
+ * Plant gain K_plant = 3.2 eRPM/tick is constant across speeds (bench
+ * data 2026-05-29). For a unity-loop-gain proportional response:
+ *   Kp_max = 1/K_plant = 0.31 PWM tick per eRPM
+ *
+ * Lowered Kp 0.1 → 0.03 (2026-05-29) — bench v2 showed per-event Kp×err
+ * was driving visible duty oscillation at mid-range. Smaller Kp means
+ * each capture contributes less to output change → smoother feel.
+ * Trade-off: slightly slower transient response (~300ms vs ~100ms).
+ *
+ * Ki kept at 0.001 — integrator does the heavy lifting now. */
+#define SPEED_PI_KP_FLOAT                 0.03f
+#define SPEED_PI_KI_FLOAT                 0.001f
+
+/* Integrator clamp — TIGHTER than the v1 ±max_integ.
+ * Bench v2 ran integrator to −12700 ticks (−18% LOOPTIME) over 50s at
+ * high RPM because FF overshoots actual duty there. When throttle then
+ * stepped, the recovery to 0 caused a +18% duty jump → OC_SW fault.
+ *
+ * ±8000 ticks (= ±11% LOOPTIME) allows compensating for normal FF
+ * inaccuracy without enabling catastrophic transients. */
+#define SPEED_PI_INTEGRATOR_CLAMP         8000.0f
+
+/* Integral disable window: ZCs after CL entry during which I-term is
+ * frozen (only FF + P-term active). Lets the system settle without
+ * integral windup during the CL-entry transient (rotor accelerating
+ * from sine ramp endpoint to operating point). */
+#define SPEED_PI_INTEGRAL_DISABLE_ZCS     100
+
+/* Back-calculation anti-windup gain. When PI output saturates, pull
+ * integrator back by K_aw × (clamped − unclamped) so the next tick
+ * doesn't have a runaway I-term to dig out of. 1/Kp is the standard. */
+#define SPEED_PI_AW_KBC                   (1.0f / SPEED_PI_KP_FLOAT)
+
+#endif
+
 /* Hardware Overcurrent Protection (Phase G) — current thresholds in motor profile above */
 #if FEATURE_HW_OVERCURRENT
 

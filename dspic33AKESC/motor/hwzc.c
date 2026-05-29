@@ -25,6 +25,7 @@
 #if FEATURE_ADC_CMP_ZC
 
 #include "hwzc.h"
+#include "speed_pi.h"
 #include "commutation.h"
 #include "../garuda_calc_params.h"
 #include "../hal/hal_adc.h"
@@ -868,6 +869,14 @@ pi_commutate:
     pData->hwzc.commSeq++;
     pData->hwzc.stepsSinceLastHwZc = 0;
     HWZC_OnCommutation(pData);
+
+#if FEATURE_SPEED_PI
+    /* Speed PI runs after the timing PI has updated stepPeriodHR.
+     * Per-ZC interval-based: this fires every sector (variable rate
+     * scaling with rotor speed). No-op until SPEED_PI_Enable() called
+     * by CL state entry. */
+    SPEED_PI_OnZcEvent(pData);
+#endif
 }
 #endif /* FEATURE_HWZC_SECTOR_PI */
 

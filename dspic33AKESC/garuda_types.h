@@ -809,6 +809,19 @@ typedef struct
     uint16_t rxPulseUs;
     uint8_t  rxDshotRate;       /* 0=none, 150/300/600 */
     uint16_t rxDroppedFrames;
+
+    /* Speed PI state (2026-05-29) — per-ZC interval-based speed PID.
+     * Runs in HWZC ISR per sector event. Throttle → target_period,
+     * error = measured_period − target_period, output → mappedDuty.
+     * Gated by FEATURE_SPEED_PI (compile-time) and per-bench testing. */
+    struct {
+        bool     enabled;            /* True while CL state is active */
+        uint16_t zcsSinceEnable;     /* ZC count since CL entry (gate for integral) */
+        float    integratorF;        /* I-term accumulator (PWM tick units) */
+        uint32_t outputDuty;         /* Latest PI output, used by CL state */
+        int32_t  lastError;          /* Telemetry: last error (period HR ticks) */
+        uint32_t lastTarget;         /* Telemetry: last target period HR */
+    } speedPi;
 } GARUDA_DATA_T;
 
 #ifdef __cplusplus

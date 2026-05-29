@@ -31,6 +31,7 @@
 #endif
 #if FEATURE_ADC_CMP_ZC
 #include "motor/hwzc.h"
+#include "motor/speed_pi.h"
 #include "hal/hal_timer.h"
 #endif
 
@@ -496,6 +497,7 @@ void GARUDA_ServiceInit(void)
 
 #if FEATURE_ADC_CMP_ZC
     HWZC_Init(&garudaData);
+    SPEED_PI_Init(&garudaData);
     HAL_ADC_InitHighSpeedBEMF();
     HAL_SCCP1_Init();
     HAL_SCCP2_Init();
@@ -2965,8 +2967,21 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                     if (postSyncCounter < RT_POST_SYNC_SETTLE_TICKS)
                         postSyncCounter++;
 #endif
+#if FEATURE_SPEED_PI
+                    /* Speed PI: throttle controls TARGET SPEED via target
+                     * stepPeriodHR; PI regulates duty to track. Replaces
+                     * the direct throttle→duty scaling below. The output
+                     * is updated per HWZC event (see SPEED_PI_OnZcEvent).
+                     *
+                     * SPEED_PI_Enable on first sync tick — bumpless transfer
+                     * (integrator seeded from garudaData.duty). */
+                    if (!garudaData.speedPi.enabled)
+                        SPEED_PI_Enable(&garudaData);
+                    mappedDuty = garudaData.speedPi.outputDuty;
+#else
                     mappedDuty = RT_CL_IDLE_DUTY +
                         ((uint32_t)garudaData.throttle * (cap - RT_CL_IDLE_DUTY)) / 4096;
+#endif
                 }
                 if (mappedDuty < MIN_DUTY) mappedDuty = MIN_DUTY;
                 if (mappedDuty > cap) mappedDuty = cap;
@@ -3180,6 +3195,15 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
     /* Track state for transition detection (must be last before flag clear).
      * Use entryState (not garudaData.state) so mid-ISR state changes
      * (e.g. morph→CL) are visible on the NEXT tick. */
+#if FEATURE_SPEED_PI
+    /* Disable speed PI when leaving CL state. Cleanup so SPEED_PI_OnZcEvent
+     * (called from HWZC ISR) no-ops until next CL re-entry. Bumpless on
+     * re-enable because Enable seeds integrator from current duty. */
+    if (entryState == ESC_CLOSED_LOOP
+        && garudaData.state != ESC_CLOSED_LOOP
+        && garudaData.speedPi.enabled)
+        SPEED_PI_Disable(&garudaData);
+#endif
     prevAdcState = entryState;
 #endif
 

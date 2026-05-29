@@ -225,9 +225,20 @@ typedef struct __attribute__((packed)) {
     uint16_t ibusAtFault;
     uint16_t ibusMaxAtFault;
     uint16_t ibusMinAtFault;
+
+    /* Speed PI telemetry (20B) — zero unless FEATURE_SPEED_PI=1.
+     * v2 architecture (2026-05-29): error/target are in eRPM units,
+     * integrator is the PI CORRECTION around feedforward (centered ~0). */
+    uint8_t  speedPiEnabled;       /* 1 if speed PI is engaged */
+    uint8_t  speedPiPad0;
+    uint16_t speedPiZcsSinceEnable;/* Counts integral-disable window progress */
+    uint32_t speedPiTarget;        /* Target eRPM from throttle map */
+    int32_t  speedPiLastError;     /* error = target - measured (eRPM, signed) */
+    uint32_t speedPiOutputDuty;    /* PI output (PWM ticks) = FF + correction */
+    float    speedPiIntegratorF;   /* I-term correction (PWM ticks, may be ±) */
 } GSP_SNAPSHOT_T;
 
-_Static_assert(sizeof(GSP_SNAPSHOT_T) == 208, "GSP_SNAPSHOT_T wire size mismatch");
+_Static_assert(sizeof(GSP_SNAPSHOT_T) == 228, "GSP_SNAPSHOT_T wire size mismatch");
 
 /* GSP_RX_STATUS_T — 12 bytes, returned by GET_RX_STATUS */
 typedef struct __attribute__((packed)) {

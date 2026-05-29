@@ -204,6 +204,15 @@ void GSP_CaptureSnapshot(GSP_SNAPSHOT_T *dst)
     dst->ibusMaxAtFault = src->phaseCurrent.ibusMaxAtFault;
     dst->ibusMinAtFault = src->phaseCurrent.ibusMinAtFault;
 #endif
+
+    /* Speed PI telemetry (zero unless FEATURE_SPEED_PI=1; the struct
+     * fields exist either way, sourced from GARUDA_DATA_T.speedPi). */
+    dst->speedPiEnabled        = src->speedPi.enabled ? 1u : 0u;
+    dst->speedPiZcsSinceEnable = src->speedPi.zcsSinceEnable;
+    dst->speedPiTarget         = src->speedPi.lastTarget;
+    dst->speedPiLastError      = src->speedPi.lastError;
+    dst->speedPiOutputDuty     = src->speedPi.outputDuty;
+    dst->speedPiIntegratorF    = src->speedPi.integratorF;
 }
 
 #endif /* FEATURE_GSP */

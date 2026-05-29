@@ -151,6 +151,7 @@
         <itemPath>../motor/startup.c</itemPath>
         <itemPath>../motor/bemf_zc.c</itemPath>
         <itemPath>../motor/hwzc.c</itemPath>
+        <itemPath>../motor/speed_pi.c</itemPath>
       </logicalFolder>
       <logicalFolder name="scope" displayName="scope" projectFiles="true">
         <itemPath>../scope/scope_burst.c</itemPath>
