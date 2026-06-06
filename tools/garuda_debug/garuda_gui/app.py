@@ -29,7 +29,9 @@ from . import diagnose as DIAG
 from . import wizard as WIZ
 
 STATES = ["IDLE", "ARMED", "ALIGN", "OL_RAMP", "MORPH", "CL"]
-WINDOW_S = 20.0          # rolling plot window
+WINDOW_S = 20.0          # default rolling plot window
+MAX_WINDOW_S = 60.0      # largest selectable time base (sizes the ring buffers)
+SCOPE_DIVS = 4           # vertical half-span: Y axis runs -SCOPE_DIVS..+SCOPE_DIVS
 POLL_HZ = 30
 
 # Param group code -> human label (matches gsp_params.h PARAM_GROUP_*)
@@ -207,8 +209,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self._populating = False
         self._row_name = {}
         # one buffer per selectable channel (+ time)
-        self.buf = {k: deque(maxlen=int(WINDOW_S * POLL_HZ)) for k in
+        self.buf = {k: deque(maxlen=int(MAX_WINDOW_S * POLL_HZ)) for k in
                     (["t"] + [s[0] for s in SIGNALS])}
+        self.scope_window_s = WINDOW_S
+        self.scope_frozen = False
         self.map_pts = deque(maxlen=2000)        # (eRPM, Ia_pk) operating-point scatter
         self.live = deque(maxlen=4000)           # rolling samples for on-demand diagnosis
         self._prev_rej = None                    # (zc, reject) for windowed reject-rate
@@ -300,46 +304,138 @@ class MainWindow(QtWidgets.QMainWindow):
             rr.addWidget(x)
         v.addLayout(rr)
 
-        # one scope: channel-selector column + single normalized plot + X-Y map
-        prow = QtWidgets.QHBoxLayout()
-        sel = QtWidgets.QWidget()
-        selv = QtWidgets.QVBoxLayout(sel)
-        selv.setContentsMargins(2, 2, 2, 2)
-        selv.addWidget(QtWidgets.QLabel("Channels"))
-        sel.setFixedWidth(150)
-        self.checks = {}
+        # ── oscilloscope: per-channel vertical controls (gain/position) +
+        #    time base + freeze, like a bench scope. Y axis is in DIVISIONS;
+        #    each trace = value / (units-per-div) + position. ──
+        scope_box = QtWidgets.QHBoxLayout()
+
+        rack = QtWidgets.QWidget()
+        grid = QtWidgets.QGridLayout(rack)
+        grid.setContentsMargins(2, 2, 2, 2)
+        grid.setHorizontalSpacing(4); grid.setVerticalSpacing(2)
+        for c, h in enumerate(("Ch", "units/div", "pos", "")):
+            lab = QtWidgets.QLabel(h)
+            lab.setStyleSheet("color:#9e9e9e;font-size:10px;")
+            grid.addWidget(lab, 0, c)
+        self.checks, self.ch_scale, self.ch_pos = {}, {}, {}
         self.sigcfg = {s[0]: s for s in SIGNALS}
-        for key, label, color, _scale, _bip, _fmt, on in SIGNALS:
+        for i, (key, label, color, scale, bip, fmt, on) in enumerate(SIGNALS, start=1):
             cb = QtWidgets.QCheckBox(label)
             cb.setChecked(on)
             cb.setStyleSheet(f"color:{color}; font-weight:bold;")
             cb.stateChanged.connect(self._refresh_curve_visibility)
-            selv.addWidget(cb)
-            self.checks[key] = cb
-        selv.addStretch(1)
-        prow.addWidget(sel)
+            sc = QtWidgets.QDoubleSpinBox()
+            sc.setDecimals(3); sc.setRange(0.001, 1e7)
+            sc.setValue(self._nice_scale(scale / 3.0))
+            sc.setMaximumWidth(92)
+            ps = QtWidgets.QDoubleSpinBox()
+            ps.setDecimals(1); ps.setRange(-SCOPE_DIVS, SCOPE_DIVS); ps.setSingleStep(0.5)
+            ps.setValue(0.0 if bip else -float(SCOPE_DIVS - 1))
+            ps.setMaximumWidth(52)
+            ab = QtWidgets.QToolButton(); ab.setText("A")
+            ab.setToolTip("autoscale this channel to fit")
+            ab.clicked.connect(lambda _=False, k=key: self._autoscale_channel(k))
+            grid.addWidget(cb, i, 0); grid.addWidget(sc, i, 1)
+            grid.addWidget(ps, i, 2); grid.addWidget(ab, i, 3)
+            self.checks[key] = cb; self.ch_scale[key] = sc; self.ch_pos[key] = ps
+        grid.setRowStretch(len(SIGNALS) + 1, 1)
+        scr = QtWidgets.QScrollArea()
+        scr.setWidget(rack); scr.setWidgetResizable(True)
+        scr.setFixedWidth(252)
+        scr.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarAlwaysOff)
+        scope_box.addWidget(scr)
 
-        self.p_main = pg.PlotWidget(title="Signals (normalized — live values in the selectors)")
-        self.p_main.showGrid(x=True, y=True, alpha=0.2)
-        self.p_main.enableAutoRange(axis="y", enable=True)
-        self.p_main.getAxis("left").setStyle(showValues=False)
+        pcol = QtWidgets.QVBoxLayout()
+        ctl = QtWidgets.QHBoxLayout()
+        ctl.addWidget(QtWidgets.QLabel("Time window:"))
+        self.tb = QtWidgets.QComboBox()
+        for s in ("2 s", "5 s", "10 s", "20 s", "60 s"):
+            self.tb.addItem(s)
+        self.tb.setCurrentText("20 s")
+        self.tb.currentTextChanged.connect(self._set_window)
+        ctl.addWidget(self.tb)
+        self.btn_freeze = QtWidgets.QPushButton("⏸ Freeze")
+        self.btn_freeze.setCheckable(True)
+        self.btn_freeze.toggled.connect(self._toggle_freeze)
+        ctl.addWidget(self.btn_freeze)
+        self.btn_autoall = QtWidgets.QPushButton("Autoscale all")
+        self.btn_autoall.clicked.connect(self._autoscale_all)
+        ctl.addWidget(self.btn_autoall)
+        ctl.addStretch(1)
+        pcol.addLayout(ctl)
+
+        self.p_main = pg.PlotWidget()
+        self.p_main.showGrid(x=True, y=True, alpha=0.25)
+        self.p_main.setYRange(-SCOPE_DIVS, SCOPE_DIVS, padding=0)
+        self.p_main.setMouseEnabled(x=False, y=False)
+        self.p_main.getAxis("left").setTicks(
+            [[(d, "") for d in range(-SCOPE_DIVS, SCOPE_DIVS + 1)]])
+        self.p_main.setLabel("bottom", "time (s)")
         self.curves = {}
         for key, label, color, _s, _b, _f, _on in SIGNALS:
             self.curves[key] = self.p_main.plot(pen=pg.mkPen(color, width=2))
-        prow.addWidget(self.p_main, 4)
+        pcol.addWidget(self.p_main, 1)
+        scope_box.addLayout(pcol, 1)
 
-        self.p_map = pg.PlotWidget(title="Operating map: Ia_pk (A) vs eRPM")
+        self.p_map = pg.PlotWidget(title="Ia_pk (A) vs eRPM")
         self.p_map.showGrid(x=True, y=True, alpha=0.2)
         self.p_map.enableAutoRange(enable=True)
         self.scatter_map = pg.ScatterPlotItem(size=4, pen=None,
                                               brush=pg.mkBrush(66, 165, 245, 90))
         self.p_map.addItem(self.scatter_map)
-        prow.addWidget(self.p_map, 1)
+        mapw = QtWidgets.QWidget(); mapl = QtWidgets.QVBoxLayout(mapw)
+        mapl.setContentsMargins(0, 0, 0, 0); mapl.addWidget(self.p_map)
+        mapw.setFixedWidth(260)
+        scope_box.addWidget(mapw)
 
-        pw2 = QtWidgets.QWidget(); pw2.setLayout(prow)
-        v.addWidget(pw2, 1)
+        v.addLayout(scope_box, 1)
         self._refresh_curve_visibility()
         return w
+
+    # ── oscilloscope controls ───────────────────────────────────────────
+    @staticmethod
+    def _nice_scale(x):
+        import math
+        if x <= 0:
+            return 1.0
+        e = math.floor(math.log10(x))
+        f = x / (10 ** e)
+        nf = 1 if f < 1.5 else 2 if f < 3.5 else 5 if f < 7.5 else 10
+        return nf * (10 ** e)
+
+    def _set_window(self, txt):
+        try:
+            self.scope_window_s = float(txt.split()[0])
+        except ValueError:
+            pass
+
+    def _toggle_freeze(self, on):
+        self.scope_frozen = on
+        self.btn_freeze.setText("▶ Run" if on else "⏸ Freeze")
+
+    def _autoscale_channel(self, key):
+        vals = list(self.buf[key])
+        if not vals:
+            return
+        lo, hi = min(vals), max(vals)
+        span = (hi - lo) or abs(hi) or 1.0
+        scale = self._nice_scale(span / (2.0 * SCOPE_DIVS - 1)) or 1.0
+        self.ch_scale[key].setValue(scale)
+        mid = (hi + lo) / 2.0
+        self.ch_pos[key].setValue(max(-SCOPE_DIVS, min(SCOPE_DIVS, -mid / scale)))
+
+    def _autoscale_all(self):
+        enabled = [k for k in self.checks if self.checks[k].isChecked()]
+        n = len(enabled) or 1
+        top = SCOPE_DIVS - 1
+        for i, key in enumerate(enabled):
+            vals = list(self.buf[key])
+            if vals:
+                lo, hi = min(vals), max(vals)
+                span = (hi - lo) or abs(hi) or 1.0
+                self.ch_scale[key].setValue(self._nice_scale(span / 1.5) or 1.0)
+            pos = top - (2.0 * top * i / (n - 1)) if n > 1 else 0.0
+            self.ch_pos[key].setValue(round(pos * 2) / 2.0)
 
     def _build_tune_tab(self):
         w = QtWidgets.QWidget()
@@ -764,14 +860,13 @@ class MainWindow(QtWidgets.QMainWindow):
         ts = list(self.buf["t"])
         for key, label, color, scale, bip, fmt, _on in SIGNALS:
             cb = self.checks[key]
-            cb.setText(f"{label}  {fmt(raw[key])}")
-            if cb.isChecked():
-                vals = self.buf[key]
-                if bip:
-                    norm = [0.5 + (x / (2.0 * scale)) for x in vals]
-                else:
-                    norm = [x / scale for x in vals]
-                self.curves[key].setData(ts, norm)
+            cb.setText(f"{label}  {fmt(raw[key])}")     # selector doubles as live readout
+            if cb.isChecked() and not self.scope_frozen:
+                sdiv = self.ch_scale[key].value() or 1.0
+                pos = self.ch_pos[key].value()
+                self.curves[key].setData(ts, [vv / sdiv + pos for vv in self.buf[key]])
+        if ts and not self.scope_frozen:
+            self.p_main.setXRange(max(0.0, ts[-1] - self.scope_window_s), ts[-1], padding=0)
         if s["eRPM"] > 100:
             self.map_pts.append((s["eRPM"], ia))
             self.scatter_map.setData([p[0] for p in self.map_pts],
