@@ -361,6 +361,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.btn_autoall = QtWidgets.QPushButton("Autoscale all")
         self.btn_autoall.clicked.connect(self._autoscale_all)
         ctl.addWidget(self.btn_autoall)
+        self.cb_zclink = QtWidgets.QCheckBox("🔗 BEMF↔ZC")
+        self.cb_zclink.setChecked(True)
+        self.cb_zclink.setToolTip("Gang the ZC-thresh trace to BEMF's gain+position so the "
+                                  "threshold sits on the BEMF where the zero-cross happens "
+                                  "(they're the same physical signal).")
+        ctl.addWidget(self.cb_zclink)
         ctl.addStretch(1)
         pcol.addLayout(ctl)
 
@@ -831,25 +837,27 @@ class MainWindow(QtWidgets.QMainWindow):
 
         rej_tot = s["hwzc_zc"] + s["hwzc_reject"]
         if self._prev_rej is not None:
-            d_acc = s["hwzc_zc"] - self._prev_rej[0]
-            d_rej = s["hwzc_reject"] - self._prev_rej[1]
+            d_acc = max(0, s["hwzc_zc"] - self._prev_rej[0])
+            d_rej = max(0, s["hwzc_reject"] - self._prev_rej[1])
             denom = d_acc + d_rej
             rejrate = (100.0 * d_rej / denom) if denom > 0 else 0.0
         else:
             rejrate = (100.0 * s["hwzc_reject"] / rej_tot) if rej_tot else 0.0
+        rejrate = max(0.0, min(100.0, rejrate))   # can't exceed 100%
         self._prev_rej = (s["hwzc_zc"], s["hwzc_reject"])
 
         ia = s.get("ia_pk_mag", 0.0)
+        ibus = s.get("ibus_win_A", s["ibus_A"])   # windowed = trustworthy (not valley artifact)
         self.ro["eRPM"].set(f"{s['eRPM']:,}")
         self.ro["duty"].set(s["duty"])
         self.ro["vbus"].set(f"{s['vbus_V']:.1f}", "#ef5350" if s["vbus_V"] > 30 else None)
-        self.ro["ibus"].set(f"{s['ibus_A']:.1f}")
+        self.ro["ibus"].set(f"{ibus:.1f}")
         self.ro["thr"].set(s["throttle"])
         self.ro["iapk"].set(f"{ia:.1f}", "#ef5350" if ia > 18 else None)
         self.ro["hwzc"].set(f"{rejrate:.0f}",
                             "#ef5350" if rejrate > 80 else ("#ffa726" if rejrate > 50 else None))
 
-        raw = {"eRPM": s["eRPM"], "ia": ia, "ibus": s["ibus_A"],
+        raw = {"eRPM": s["eRPM"], "ia": ia, "ibus": ibus,
                "rejrate": rejrate, "vbus": s["vbus_V"],
                "bemf": s.get("bemf_raw", 0), "zcthr": s.get("zc_thresh", 0),
                "goodzc": s.get("good_zc", 0),
@@ -862,8 +870,13 @@ class MainWindow(QtWidgets.QMainWindow):
             cb = self.checks[key]
             cb.setText(f"{label}  {fmt(raw[key])}")     # selector doubles as live readout
             if cb.isChecked() and not self.scope_frozen:
-                sdiv = self.ch_scale[key].value() or 1.0
-                pos = self.ch_pos[key].value()
+                if key == "zcthr" and self.cb_zclink.isChecked():
+                    # gang to BEMF so the threshold sits on the BEMF (same signal)
+                    sdiv = self.ch_scale["bemf"].value() or 1.0
+                    pos = self.ch_pos["bemf"].value()
+                else:
+                    sdiv = self.ch_scale[key].value() or 1.0
+                    pos = self.ch_pos[key].value()
                 self.curves[key].setData(ts, [vv / sdiv + pos for vv in self.buf[key]])
         if ts and not self.scope_frozen:
             self.p_main.setXRange(max(0.0, ts[-1] - self.scope_window_s), ts[-1], padding=0)
@@ -882,7 +895,7 @@ class MainWindow(QtWidgets.QMainWindow):
                             self.live[-2]["state_name"] != s["state_name"]) else ""
             self._log(f"{t:6.2f} {s['state_name']:<8} thr={s['throttle']:>4} "
                       f"duty={s['duty']:>3}% eRPM={s['eRPM']:>7,} Vbus={s['vbus_V']:4.1f} "
-                      f"Ibus={s['ibus_A']:+5.1f} Ia={ia:4.1f} rej={rejrate:3.0f}% "
+                      f"Ibus={ibus:+5.1f} Ia={ia:4.1f} rej={rejrate:3.0f}% "
                       f"{s['fault_name']}{mark}")
 
     # ── recording ───────────────────────────────────────────────────────

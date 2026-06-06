@@ -79,7 +79,19 @@ def decode_snapshot(p: bytes, t: float = 0.0) -> dict:
          sp_output, sp_integ) = struct.unpack_from("<BBHIiIf", p, 208)
 
     vbus_v = vbus_raw * P.VBUS_SCALE_V
+    # Instantaneous bus current: valley-sampled, so it lands wherever the bus
+    # happens to be during freewheel — UNRELIABLE (gives a phantom ~-20A at idle
+    # when ibus_raw drifts off the 2048 bias). Kept for compatibility.
     ibus_a = (ibus_raw - P.IBUS_BIAS) * P.IBUS_SCALE_A
+    # Trustworthy bus current: the firmware's windowed min/max captured over the
+    # PWM cycle. Signed by the dominant excursion (motoring +, regen -). At idle
+    # the window sits at bias → ~0, no phantom. Falls back to instantaneous when
+    # the window field isn't in this snapshot length.
+    if n >= 208:
+        ibus_win = (-abs(ibus_pk_neg) if abs(ibus_pk_neg) > abs(ibus_pk_pos)
+                    else abs(ibus_pk_pos))
+    else:
+        ibus_win = ibus_a
     if hwzc_en and hwzc_hr > 0:
         erpm = P.HWZC_ERPM_FROM_TICKS // hwzc_hr
     elif step_period > 0:
@@ -92,7 +104,7 @@ def decode_snapshot(p: bytes, t: float = 0.0) -> dict:
         "state": state, "state_name": P.STATE_NAMES.get(state, f"?{state}"),
         "fault": fault, "fault_name": P.FAULT_NAMES.get(fault, f"?{fault}"),
         "throttle": throttle, "duty": duty,
-        "vbus_V": vbus_v, "ibus_A": ibus_a, "eRPM": erpm,
+        "vbus_V": vbus_v, "ibus_A": ibus_a, "ibus_win_A": ibus_win, "eRPM": erpm,
         "bemf_raw": bemf_raw, "zc_thresh": zc_thresh, "step_period": step_period,
         "good_zc": good_zc, "synced": synced,
         "zc_confirmed": zc_confirmed, "zc_timeout": zc_timeout,

@@ -26,9 +26,9 @@ def summarize(session) -> dict:
     # commutation-health: reject rate over the run
     zc0, zc1 = s[0], s[-1]
     span = max(zc1.get("t", 0) - zc0.get("t", 0), 1e-3)
-    acc = zc1.get("hwzc_zc", 0) - zc0.get("hwzc_zc", 0)
-    rej = zc1.get("hwzc_reject", 0) - zc0.get("hwzc_reject", 0)
-    rej_pct = 100.0 * rej / max(acc + rej, 1)
+    acc = max(0, zc1.get("hwzc_zc", 0) - zc0.get("hwzc_zc", 0))
+    rej = max(0, zc1.get("hwzc_reject", 0) - zc0.get("hwzc_reject", 0))
+    rej_pct = min(100.0, 100.0 * rej / max(acc + rej, 1))   # can't exceed 100%
 
     per_state = {}
     for x in s:
@@ -123,7 +123,8 @@ def local_diagnose(session) -> dict:
     import statistics
     cl = [x for x in session.samples if x.get("state_name") == "CL"]
     if len(cl) >= 10:
-        ibus_mean = sum(x.get("ibus_A", 0) for x in cl) / len(cl)
+        # windowed bus current — NOT the valley-sampled ibus_A (phantom -20A artifact)
+        ibus_mean = sum(x.get("ibus_win_A", x.get("ibus_A", 0)) for x in cl) / len(cl)
         erpms = [x.get("eRPM", 0) for x in cl]
         emean = sum(erpms) / len(erpms)
         estd = statistics.pstdev(erpms) if len(erpms) > 1 else 0
