@@ -25,8 +25,18 @@ CMD_TELEM_START     = 0x14
 CMD_TELEM_STOP      = 0x15
 CMD_GET_PARAM_LIST  = 0x16
 CMD_LOAD_PROFILE    = 0x17
+CMD_SCOPE_ARM       = 0x30   # burst scope: arm + trigger config
+CMD_SCOPE_STATUS    = 0x31   # burst scope: state/trigIdx/sampleCount
+CMD_SCOPE_READ      = 0x32   # burst scope: page out samples
 CMD_TELEM_FRAME     = 0x80   # unsolicited
 CMD_ERROR           = 0xFF
+
+# ── Burst scope (24 kHz, 128-sample triggered ring) ─────────────────────
+SCOPE_SAMPLE_SIZE   = 26
+SCOPE_BUF_SIZE      = 128
+SCOPE_MAX_CHUNK     = 9
+SCOPE_TRIG = {"Manual": 0, "On fault": 1, "On state change": 2, "Threshold": 3}
+SCOPE_STATE_NAMES = {0: "IDLE", 1: "ARMED", 2: "FILLING", 3: "READY"}
 
 # ── Error codes ─────────────────────────────────────────────────────────
 ERR_NAMES = {

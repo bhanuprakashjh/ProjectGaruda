@@ -151,6 +151,37 @@ class GspClient:
     def load_profile(self, profile_id: int):
         self._cmd(P.CMD_LOAD_PROFILE, bytes([profile_id]))
 
+    # ── burst scope (24 kHz triggered ring) ─────────────────────────────
+    def scope_arm(self, trig_mode=0, pre_pct=25, trig_ch=0, trig_edge=0, threshold=0):
+        """Arm the scope. Payload: [trigMode,prePct,trigCh,trigEdge,thr(2),rsv(2)]."""
+        payload = struct.pack("<BBBBhH", trig_mode, pre_pct, trig_ch, trig_edge,
+                              int(threshold), 0)
+        self._cmd(P.CMD_SCOPE_ARM, payload, expect=P.CMD_SCOPE_ARM)
+
+    def scope_status(self) -> dict:
+        rpl = self._cmd(P.CMD_SCOPE_STATUS, b"", expect=P.CMD_SCOPE_STATUS)
+        state, trig_mode, pre_pct, trig_idx, count, size = struct.unpack_from("<BBBBBB", rpl, 0)
+        return {"state": state, "trig_mode": trig_mode, "pre_pct": pre_pct,
+                "trig_idx": trig_idx, "sample_count": count, "sample_size": size}
+
+    def scope_read_all(self) -> list:
+        """Page out the whole frozen buffer; returns decoded samples in order."""
+        st = self.scope_status()
+        n = st.get("sample_count") or P.SCOPE_BUF_SIZE
+        from .decode import decode_scope_sample
+        out, off = [], 0
+        while off < n:
+            rpl = self._cmd(P.CMD_SCOPE_READ, struct.pack("<BB", off, P.SCOPE_MAX_CHUNK),
+                            expect=P.CMD_SCOPE_READ)
+            _r_off, actual = rpl[0], rpl[1]
+            if actual == 0:
+                break
+            for i in range(actual):
+                base = 2 + i * P.SCOPE_SAMPLE_SIZE
+                out.append(decode_scope_sample(rpl[base:base + P.SCOPE_SAMPLE_SIZE]))
+            off += actual
+        return out
+
     # ── telemetry / motor (guarded) ─────────────────────────────────────
     def telem_start(self):
         self.ser.write(build_packet(P.CMD_TELEM_START))

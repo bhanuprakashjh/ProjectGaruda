@@ -42,6 +42,25 @@ def _adc_to_amp(raw):
     return (raw - P.IADC_BIAS) / P.IADC_COUNTS_PER_AMP
 
 
+def decode_scope_sample(b: bytes) -> dict:
+    """One 26-byte SCOPE_SAMPLE_T, decoded with the 6-step field repurposing
+    (garuda_service.c streams these into the FOC-shaped struct):
+      ia/ib = phase A/B current ×1000 (mA) ; id = bus current ×1000 (mA)
+      vd = Vbus raw ; vq = zcThreshold raw ; theta = sector(0-5)
+      obs_x1 = bemf raw ; omega = eRPM/10 ; mod_index = duty% ×100
+      flags bit0=HWZC en, bit1=fault ; state = ESC state ; tick_lsb"""
+    (ia, ib, idc, iq, vd, vq, theta, ox1, ox2,
+     omega, mod, flags, state, tick) = struct.unpack("<hhhhhhhhhhhBBH", b[:26])
+    return {
+        "ia_A": ia / 1000.0, "ib_A": ib / 1000.0, "ibus_A": idc / 1000.0,
+        "vbus_raw": vd, "zc_thresh": vq, "sector": theta, "bemf_raw": ox1,
+        "eRPM": omega * 10, "duty_pct": mod / 100.0,
+        "hwzc_en": bool(flags & 0x01), "fault": bool(flags & 0x02),
+        "state": state, "state_name": P.STATE_NAMES.get(state, f"?{state}"),
+        "tick": tick,
+    }
+
+
 def decode_snapshot(p: bytes, t: float = 0.0) -> dict:
     """GSP_SNAPSHOT_T, length-tolerant. Base 68B; optional extensions decoded
     only when present: hwzc_reject@170, phase peaks@174, ibus window@198,

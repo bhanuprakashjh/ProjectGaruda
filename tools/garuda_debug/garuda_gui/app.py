@@ -71,6 +71,7 @@ class SerialWorker(QtCore.QThread):
     params_ready = QtCore.Signal(dict)
     snapshot = QtCore.Signal(dict)
     param_written = QtCore.Signal(dict)   # {ok, pid, name, value} | {ok:False, ..., error}
+    scope_ready = QtCore.Signal(dict)     # {ok, samples, status}
     failed = QtCore.Signal(str)
     stopped = QtCore.Signal()
 
@@ -98,6 +99,17 @@ class SerialWorker(QtCore.QThread):
                                              "name": kw.get("name", ""), "value": rb})
                 elif action == "refresh_params":
                     self.params_ready.emit(c.dump_params())
+                elif action == "scope_capture":
+                    c.scope_arm(trig_mode=kw.get("mode", 0), pre_pct=kw.get("pre", 25))
+                    st, ready = {"state": 0}, False
+                    for _ in range(150):          # ~3s waiting for the trigger
+                        st = c.scope_status()
+                        if st.get("state") == 3:  # READY
+                            ready = True
+                            break
+                        self.msleep(20)
+                    samples = c.scope_read_all() if ready else []
+                    self.scope_ready.emit({"ok": ready, "samples": samples, "status": st})
             except Exception as e:  # noqa
                 self.param_written.emit({"ok": False, "pid": kw.get("pid"),
                                          "name": kw.get("name", ""), "error": str(e)})
@@ -256,6 +268,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tabs.addTab(self._build_monitor_tab(), "📈 Monitor")
         self.tabs.addTab(self._build_tune_tab(), "🎛 Tune")
         self.tabs.addTab(self._build_wizard_tab(), "🧙 Wizard")
+        self.tabs.addTab(self._build_scope_tab(), "🔬 ZC Explainer")
         root.addWidget(self.tabs, 1)
 
         # console dock (shared across tabs)
@@ -537,6 +550,124 @@ class MainWindow(QtWidgets.QMainWindow):
         v.addLayout(split, 1)
         return w
 
+    def _build_scope_tab(self):
+        w = QtWidgets.QWidget()
+        v = QtWidgets.QVBoxLayout(w)
+        hint = QtWidgets.QLabel(
+            "24 kHz triggered capture — 128 samples (~5.3 ms) of the REAL waveform, "
+            "un-aliased. See BEMF vs the ZC threshold (where they cross IS the zero-cross), "
+            "plus phase current and sector. 'On fault' freezes the buffer at a desync; "
+            "'On state change' catches the MORPH→CL handoff.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color:#9e9e9e;font-size:11px;")
+        v.addWidget(hint)
+
+        bar = QtWidgets.QHBoxLayout()
+        bar.addWidget(QtWidgets.QLabel("Trigger:"))
+        self.scope_mode = QtWidgets.QComboBox()
+        for k in P.SCOPE_TRIG:
+            self.scope_mode.addItem(k)
+        bar.addWidget(self.scope_mode)
+        self.scope_pre = QtWidgets.QSpinBox()
+        self.scope_pre.setRange(0, 90); self.scope_pre.setValue(25)
+        self.scope_pre.setSuffix(" % pre")
+        bar.addWidget(self.scope_pre)
+        self.btn_scope = QtWidgets.QPushButton("◉ Arm & Capture")
+        self.btn_scope.clicked.connect(self._capture_scope)
+        bar.addWidget(self.btn_scope)
+        self.btn_scope_save = QtWidgets.QPushButton("Save CSV")
+        self.btn_scope_save.clicked.connect(self._save_scope)
+        bar.addWidget(self.btn_scope_save)
+        self.scope_status_lbl = QtWidgets.QLabel("idle")
+        self.scope_status_lbl.setStyleSheet("color:#9e9e9e;")
+        bar.addWidget(self.scope_status_lbl)
+        bar.addStretch(1)
+        v.addLayout(bar)
+
+        glw = pg.GraphicsLayoutWidget()
+        self.sc_p1 = glw.addPlot(row=0, col=0, title="BEMF vs ZC threshold (raw ADC) — crossings = zero-cross")
+        self.sc_p1.showGrid(x=True, y=True, alpha=0.2)
+        self.sc_p1.addLegend(offset=(10, 10))
+        self.sc_bemf = self.sc_p1.plot(pen=pg.mkPen("#90caf9", width=2), name="BEMF")
+        self.sc_zc = self.sc_p1.plot(pen=pg.mkPen("#ffb74d", width=2,
+                                     style=QtCore.Qt.DashLine), name="ZC thresh")
+        self.sc_zcross = pg.ScatterPlotItem(size=10, brush=pg.mkBrush("#ef5350"), pen=None)
+        self.sc_p1.addItem(self.sc_zcross)
+        self.sc_p2 = glw.addPlot(row=1, col=0, title="Phase current Ia (A)")
+        self.sc_p2.showGrid(x=True, y=True, alpha=0.2)
+        self.sc_ia = self.sc_p2.plot(pen=pg.mkPen("#ffa726", width=2))
+        self.sc_p3 = glw.addPlot(row=2, col=0, title="Sector (0-5)")
+        self.sc_p3.showGrid(x=True, y=True, alpha=0.2)
+        self.sc_sec = self.sc_p3.plot(pen=pg.mkPen("#80cbc4", width=2))
+        self.sc_p2.setXLink(self.sc_p1); self.sc_p3.setXLink(self.sc_p1)
+        self.sc_p3.setLabel("bottom", "time (µs)")
+        self.sc_trig_lines = []
+        for pl in (self.sc_p1, self.sc_p2, self.sc_p3):
+            ln = pg.InfiniteLine(angle=90, movable=False,
+                                 pen=pg.mkPen("#66bb6a", style=QtCore.Qt.DotLine))
+            ln.setVisible(False); pl.addItem(ln); self.sc_trig_lines.append(ln)
+        v.addWidget(glw, 1)
+        self._scope_samples = []
+        return w
+
+    def _capture_scope(self):
+        if not self.worker:
+            self._log("scope: not connected"); return
+        mode = P.SCOPE_TRIG[self.scope_mode.currentText()]
+        self.scope_status_lbl.setText("arming / waiting for trigger…")
+        self.btn_scope.setEnabled(False)
+        self._log(f"scope: arm ({self.scope_mode.currentText()}, {self.scope_pre.value()}% pre)")
+        self.worker.submit("scope_capture", mode=mode, pre=self.scope_pre.value())
+
+    def on_scope_ready(self, data):
+        self.btn_scope.setEnabled(True)
+        if not data.get("ok"):
+            self.scope_status_lbl.setText("no trigger (timed out)")
+            self._log("scope: timed out waiting for trigger"); return
+        samples = data.get("samples", [])
+        self._scope_samples = samples
+        if not samples:
+            self.scope_status_lbl.setText("empty buffer"); return
+        n = len(samples)
+        dt_us = 1e6 / 24000.0
+        xs = [i * dt_us for i in range(n)]
+        bemf = [s["bemf_raw"] for s in samples]
+        zc = [s["zc_thresh"] for s in samples]
+        self.sc_bemf.setData(xs, bemf)
+        self.sc_zc.setData(xs, zc)
+        self.sc_ia.setData(xs, [s["ia_A"] for s in samples])
+        self.sc_sec.setData(xs, [s["sector"] for s in samples])
+        # zero-cross = where (BEMF - threshold) changes sign
+        zx, zy = [], []
+        for i in range(1, n):
+            d0, d1 = bemf[i - 1] - zc[i - 1], bemf[i] - zc[i]
+            if d0 == 0 or (d0 < 0) != (d1 < 0):
+                zx.append(xs[i]); zy.append(zc[i])
+        self.sc_zcross.setData(zx, zy)
+        st = data.get("status", {})
+        trig = st.get("trig_idx", 0)
+        for ln in self.sc_trig_lines:
+            ln.setPos(trig * dt_us); ln.setVisible(True)
+        self.scope_status_lbl.setText(
+            f"{n} samples · {len(zx)} zero-crossings · trig idx {trig}")
+        self._log(f"scope: {n} samples, {len(zx)} ZC, "
+                  f"state={P.SCOPE_STATE_NAMES.get(st.get('state'), '?')}")
+
+    def _save_scope(self):
+        if not self._scope_samples:
+            self._log("scope: capture first"); return
+        os.makedirs("sessions", exist_ok=True)
+        path = os.path.join("sessions", f"scope_{time.strftime('%Y%m%d_%H%M%S')}.csv")
+        cols = ["ia_A", "ib_A", "ibus_A", "bemf_raw", "zc_thresh", "sector",
+                "eRPM", "duty_pct", "state_name", "fault", "tick"]
+        with open(path, "w") as f:
+            f.write("idx,t_us," + ",".join(cols) + "\n")
+            for i, s in enumerate(self._scope_samples):
+                f.write(f"{i},{i*1e6/24000.0:.2f}," +
+                        ",".join(str(s.get(c, "")) for c in cols) + "\n")
+        self._log(f"scope: wrote {path}")
+        self.scope_status_lbl.setText(f"saved {path}")
+
     def _wizard_spec(self):
         ls = self.wz["ls"].value()
         return WIZ.MotorSpec(
@@ -599,6 +730,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.worker.params_ready.connect(self.on_params)
         self.worker.snapshot.connect(self.on_snapshot)
         self.worker.param_written.connect(self.on_param_written)
+        self.worker.scope_ready.connect(self.on_scope_ready)
         self.worker.failed.connect(self.on_failed)
         self.worker.start()
         self.btn_connect.setText("Disconnect")
