@@ -191,12 +191,24 @@ like AM32/BLHeli. Enable it in `garuda_config.h`:
 ```
 
 This switches ALIGN→`STARTUP_Align` and OL_RAMP→`STARTUP_OpenLoopRamp`→CL (no sine, no
-MORPH). Fewer knobs (`alignDutyPct`, `rampDutyPct`, `rampAccelErpmPerS`, `rampTargetErpm`).
+MORPH — its absence is correct, not a fault). Fewer knobs (`alignDutyPct`, `rampDutyPct`,
+`rampAccelErpmPerS`, `rampTargetErpm`).
 
-**Caveat:** this path is much less exercised on this board than the sine path — it's a
-fallback to try if sine startup is fighting you, not the recommended default. If you use
-it, tune `alignDutyPct` (rotor lock) and `rampDutyPct` (ramp torque) the same way as the
-Mod% knobs above, using the same current math (`duty% × Vbus / R`).
+**Bench-validated 2026-06-06** on the 2810: trap startup reaches CL cleanly, no faults, no
+tuning — it just brute-forces the rotor up to handoff speed. So it's a *tested* fallback,
+not a gamble. Two things to know:
+- **It's rougher than sine** — forced commutation steps are audible and it pulls higher
+  ramp current (the 2810 hit ~22 A in OL_RAMP vs sine's gentler ramp). Expect a harsher
+  spin-up sound.
+- **Roughness scales with 1/resistance.** The 2810 is low-R (0.05 Ω) so the ramp current
+  is high — worst case. On the **higher-resistance Cobra (0.188 Ω) the same duty makes
+  ~4× less current**, so trap is *gentler* there. **For the Cobra, trap is worth trying
+  first if sine won't lock** — its brute-force nature suits an uncharacterized motor and
+  the high R keeps the current civilized.
+
+Tune `alignDutyPct` (rotor lock) and `rampDutyPct` (ramp torque) with the same current
+math (`duty% × Vbus / R`). If OL_RAMP trips `OC_SW`, lower `rampDutyPct`; if it stalls,
+raise it or slow `rampAccelErpmPerS`.
 
 ---
 
