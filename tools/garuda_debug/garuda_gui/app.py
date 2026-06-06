@@ -1,19 +1,24 @@
 #!/usr/bin/env python3
 """
-Garuda Debug GUI (v1) — live, monitor-focused.
+Garuda Studio GUI (v2) — monitor + live tuning workbench.
 
-Connects over GSP, shows the state machine, live readouts, real-time plots and the
-parameter table. Read-only/safe: NO motor-start or param-write in v1 (those land
-later, behind guards). Record button saves a shareable session bundle.
+Tabbed shell (pillars land as tabs):
+  • Monitor  — state machine, live readouts, normalized scope, operating map.
+  • Tune     — read AND edit every parameter; edits push to the board live via
+               SET_PARAM (RAM-only under FORCE_DEFAULTS=1), with an over-current
+               safety check, and export the live set as a C profile block.
+Console dock (shared) mirrors telemetry and takes commands.
 
     garuda-gui            # auto-detect port
     garuda-gui --port /dev/ttyACM0
 """
 import argparse
+import os
 import platform
 import sys
 import time
 from collections import deque
+from queue import Queue, Empty
 
 from PySide6 import QtCore, QtGui, QtWidgets
 import pyqtgraph as pg
@@ -25,6 +30,13 @@ from . import diagnose as DIAG
 STATES = ["IDLE", "ARMED", "ALIGN", "OL_RAMP", "MORPH", "CL"]
 WINDOW_S = 20.0          # rolling plot window
 POLL_HZ = 30
+
+# Param group code -> human label (matches gsp_params.h PARAM_GROUP_*)
+GROUP_NAMES = {
+    0: "Startup", 1: "Closed-loop", 2: "Over-current", 3: "ZC detect",
+    4: "Duty slew", 5: "Voltage", 6: "Recovery", 7: "Motor HW",
+    8: "FOC motor", 9: "FOC tuning", 10: "FOC startup", 11: "AN1078",
+}
 
 # Selectable scope channels: key, label, color, full-scale (for normalization),
 # bipolar?, live-value formatter, default-on?
@@ -41,13 +53,21 @@ SIGNALS = [
     ("throttle", "Throttle", "#ffee58", 4096,   False, lambda v: f"{v:.0f}",   False),
 ]
 
+# Params whose value implies a startup/standing current = (modPct or duty%) of Vbus
+# over phase-to-phase resistance. Used for the OC-safety estimate in the tuner.
+AMPLITUDE_PARAMS = {"sineAlignModPct", "sineRampModPct"}     # peak = pct/200
+DUTY_PARAMS = {"rampDutyPct", "alignDutyPct", "clIdleDutyPct"}  # = pct/100
+
 
 # ─────────────────────────────────────────────────────────────────────────
 class SerialWorker(QtCore.QThread):
-    """Owns the GspClient on a background thread so the UI never blocks."""
+    """Owns the GspClient on a background thread so the UI never blocks.
+    UI-thread code must NEVER touch the port directly — it enqueues actions via
+    submit(); the worker drains them between snapshot polls (one owner, no race)."""
     connected = QtCore.Signal(dict)
     params_ready = QtCore.Signal(dict)
     snapshot = QtCore.Signal(dict)
+    param_written = QtCore.Signal(dict)   # {ok, pid, name, value} | {ok:False, ..., error}
     failed = QtCore.Signal(str)
     stopped = QtCore.Signal()
 
@@ -55,6 +75,29 @@ class SerialWorker(QtCore.QThread):
         super().__init__()
         self.port = port
         self._run = True
+        self._q = Queue()
+
+    def submit(self, action, **kw):
+        """Thread-safe: enqueue an action for the worker to run on the port."""
+        self._q.put((action, kw))
+
+    def _drain(self, c):
+        while True:
+            try:
+                action, kw = self._q.get_nowait()
+            except Empty:
+                break
+            try:
+                if action == "set_param":
+                    c.set_param(kw["pid"], kw["value"])
+                    rb = c.get_param(kw["pid"])           # read back what stuck
+                    self.param_written.emit({"ok": True, "pid": kw["pid"],
+                                             "name": kw.get("name", ""), "value": rb})
+                elif action == "refresh_params":
+                    self.params_ready.emit(c.dump_params())
+            except Exception as e:  # noqa
+                self.param_written.emit({"ok": False, "pid": kw.get("pid"),
+                                         "name": kw.get("name", ""), "error": str(e)})
 
     def run(self):
         try:
@@ -71,6 +114,7 @@ class SerialWorker(QtCore.QThread):
             period = 1.0 / POLL_HZ
             while self._run:
                 t = time.monotonic()
+                self._drain(c)                            # writes first, then read
                 try:
                     snap = c.get_snapshot()
                     self.snapshot.emit(snap)
@@ -149,8 +193,8 @@ class Readout(QtWidgets.QFrame):
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, port):
         super().__init__()
-        self.setWindowTitle("Garuda Debug — v1")
-        self.resize(1180, 720)
+        self.setWindowTitle("Garuda Studio — v2")
+        self.resize(1180, 760)
         self.port = port
         self.worker = None
         self.info = {}
@@ -158,12 +202,15 @@ class MainWindow(QtWidgets.QMainWindow):
         self.recording = False
         self.session = None
         self.t0 = None
+        self._last_vbus = None
+        self._populating = False
+        self._row_name = {}
         # one buffer per selectable channel (+ time)
         self.buf = {k: deque(maxlen=int(WINDOW_S * POLL_HZ)) for k in
                     (["t"] + [s[0] for s in SIGNALS])}
-        self.map_pts = deque(maxlen=2000)        # (eRPM, Ibus) operating-point scatter
+        self.map_pts = deque(maxlen=2000)        # (eRPM, Ia_pk) operating-point scatter
         self.live = deque(maxlen=4000)           # rolling samples for on-demand diagnosis
-        self._prev_rej = None                    # (t, hwzc_reject) for reject-rate
+        self._prev_rej = None                    # (zc, reject) for windowed reject-rate
         self._console_paused = False
 
         pg.setConfigOptions(antialias=True, background="#101418", foreground="#ccc")
@@ -175,7 +222,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.setCentralWidget(central)
         root = QtWidgets.QVBoxLayout(central)
 
-        # top bar
+        # top bar (global, above tabs)
         top = QtWidgets.QHBoxLayout()
         self.portbox = QtWidgets.QComboBox()
         self.portbox.setEditable(True)
@@ -199,84 +246,13 @@ class MainWindow(QtWidgets.QMainWindow):
         top.addWidget(self.lbl_id, 3)
         root.addLayout(top)
 
-        # state bar + fault banner
-        self.statebar = StateBar()
-        root.addWidget(self.statebar)
-        self.fault = QtWidgets.QLabel("")
-        self.fault.setAlignment(QtCore.Qt.AlignCenter)
-        self.fault.setStyleSheet("font-weight:bold;")
-        root.addWidget(self.fault)
+        # tabbed pillars
+        self.tabs = QtWidgets.QTabWidget()
+        self.tabs.addTab(self._build_monitor_tab(), "📈 Monitor")
+        self.tabs.addTab(self._build_tune_tab(), "🎛 Tune")
+        root.addWidget(self.tabs, 1)
 
-        # readouts
-        rr = QtWidgets.QHBoxLayout()
-        self.ro = {
-            "eRPM": Readout("eRPM"), "duty": Readout("Duty", "%"),
-            "vbus": Readout("Vbus", " V"), "ibus": Readout("Ibus", " A"),
-            "thr": Readout("Throttle"), "iapk": Readout("Ia peak", " A"),
-            "hwzc": Readout("HWZC rej", "%"),
-        }
-        for w in self.ro.values():
-            rr.addWidget(w)
-        root.addLayout(rr)
-
-        # plots + param table
-        split = QtWidgets.QSplitter()
-        plots = QtWidgets.QWidget()
-        pv = QtWidgets.QVBoxLayout(plots)
-        pv.setContentsMargins(0, 0, 0, 0)
-        # One scope: a channel-selector column + a single normalized plot + the
-        # X-Y operating map (kept separate — it doesn't share the time axis).
-        prow = QtWidgets.QHBoxLayout()
-
-        sel = QtWidgets.QWidget()
-        selv = QtWidgets.QVBoxLayout(sel)
-        selv.setContentsMargins(2, 2, 2, 2)
-        selv.addWidget(QtWidgets.QLabel("Channels"))
-        sel.setFixedWidth(150)
-        self.checks = {}
-        self.sigcfg = {s[0]: s for s in SIGNALS}
-        for key, label, color, _scale, _bip, _fmt, on in SIGNALS:
-            cb = QtWidgets.QCheckBox(label)
-            cb.setChecked(on)
-            cb.setStyleSheet(f"color:{color}; font-weight:bold;")
-            cb.stateChanged.connect(self._refresh_curve_visibility)
-            selv.addWidget(cb)
-            self.checks[key] = cb
-        selv.addStretch(1)
-        prow.addWidget(sel)
-
-        self.p_main = pg.PlotWidget(title="Signals (normalized — live values in the selectors)")
-        self.p_main.showGrid(x=True, y=True, alpha=0.2)
-        self.p_main.enableAutoRange(axis="y", enable=True)   # auto-scale Y to active band
-        self.p_main.getAxis("left").setStyle(showValues=False)
-        self.curves = {}
-        for key, label, color, _s, _b, _f, _on in SIGNALS:
-            self.curves[key] = self.p_main.plot(pen=pg.mkPen(color, width=2))
-        prow.addWidget(self.p_main, 4)
-
-        self.p_map = pg.PlotWidget(title="Operating map: Ia_pk (A) vs eRPM")
-        self.p_map.showGrid(x=True, y=True, alpha=0.2)
-        self.p_map.enableAutoRange(enable=True)   # auto-fit the cloud
-        self.scatter_map = pg.ScatterPlotItem(size=4, pen=None,
-                                              brush=pg.mkBrush(66, 165, 245, 90))
-        self.p_map.addItem(self.scatter_map)
-        prow.addWidget(self.p_map, 1)
-
-        pw2 = QtWidgets.QWidget(); pw2.setLayout(prow)
-        pv.addWidget(pw2)
-        self._refresh_curve_visibility()
-        split.addWidget(plots)
-
-        self.tbl = QtWidgets.QTableWidget(0, 4)
-        self.tbl.setHorizontalHeaderLabels(["Parameter", "Value", "Min", "Max"])
-        self.tbl.horizontalHeader().setSectionResizeMode(
-            0, QtWidgets.QHeaderView.Stretch)
-        self.tbl.setEditTriggers(QtWidgets.QAbstractItemView.NoEditTriggers)
-        split.addWidget(self.tbl)
-        split.setSizes([760, 420])
-        root.addWidget(split, 1)
-
-        # ── embedded terminal/console (telemetry stream + command line) ──
+        # console dock (shared across tabs)
         dock = QtWidgets.QDockWidget("Console", self)
         dock.setAllowedAreas(QtCore.Qt.BottomDockWidgetArea | QtCore.Qt.TopDockWidgetArea)
         cw = QtWidgets.QWidget()
@@ -300,12 +276,103 @@ class MainWindow(QtWidgets.QMainWindow):
         self.status = self.statusBar()
         self.status.showMessage("Select a port and Connect.")
 
-    def _plot(self, parent_layout, title, color):
-        pw = pg.PlotWidget(title=title)
-        pw.showGrid(x=True, y=True, alpha=0.2)
-        pw.setMouseEnabled(x=False, y=True)
-        parent_layout.addWidget(pw)
-        return pw
+    def _build_monitor_tab(self):
+        w = QtWidgets.QWidget()
+        v = QtWidgets.QVBoxLayout(w)
+
+        self.statebar = StateBar()
+        v.addWidget(self.statebar)
+        self.fault = QtWidgets.QLabel("")
+        self.fault.setAlignment(QtCore.Qt.AlignCenter)
+        self.fault.setStyleSheet("font-weight:bold;")
+        v.addWidget(self.fault)
+
+        rr = QtWidgets.QHBoxLayout()
+        self.ro = {
+            "eRPM": Readout("eRPM"), "duty": Readout("Duty", "%"),
+            "vbus": Readout("Vbus", " V"), "ibus": Readout("Ibus", " A"),
+            "thr": Readout("Throttle"), "iapk": Readout("Ia peak", " A"),
+            "hwzc": Readout("HWZC rej", "%"),
+        }
+        for x in self.ro.values():
+            rr.addWidget(x)
+        v.addLayout(rr)
+
+        # one scope: channel-selector column + single normalized plot + X-Y map
+        prow = QtWidgets.QHBoxLayout()
+        sel = QtWidgets.QWidget()
+        selv = QtWidgets.QVBoxLayout(sel)
+        selv.setContentsMargins(2, 2, 2, 2)
+        selv.addWidget(QtWidgets.QLabel("Channels"))
+        sel.setFixedWidth(150)
+        self.checks = {}
+        self.sigcfg = {s[0]: s for s in SIGNALS}
+        for key, label, color, _scale, _bip, _fmt, on in SIGNALS:
+            cb = QtWidgets.QCheckBox(label)
+            cb.setChecked(on)
+            cb.setStyleSheet(f"color:{color}; font-weight:bold;")
+            cb.stateChanged.connect(self._refresh_curve_visibility)
+            selv.addWidget(cb)
+            self.checks[key] = cb
+        selv.addStretch(1)
+        prow.addWidget(sel)
+
+        self.p_main = pg.PlotWidget(title="Signals (normalized — live values in the selectors)")
+        self.p_main.showGrid(x=True, y=True, alpha=0.2)
+        self.p_main.enableAutoRange(axis="y", enable=True)
+        self.p_main.getAxis("left").setStyle(showValues=False)
+        self.curves = {}
+        for key, label, color, _s, _b, _f, _on in SIGNALS:
+            self.curves[key] = self.p_main.plot(pen=pg.mkPen(color, width=2))
+        prow.addWidget(self.p_main, 4)
+
+        self.p_map = pg.PlotWidget(title="Operating map: Ia_pk (A) vs eRPM")
+        self.p_map.showGrid(x=True, y=True, alpha=0.2)
+        self.p_map.enableAutoRange(enable=True)
+        self.scatter_map = pg.ScatterPlotItem(size=4, pen=None,
+                                              brush=pg.mkBrush(66, 165, 245, 90))
+        self.p_map.addItem(self.scatter_map)
+        prow.addWidget(self.p_map, 1)
+
+        pw2 = QtWidgets.QWidget(); pw2.setLayout(prow)
+        v.addWidget(pw2, 1)
+        self._refresh_curve_visibility()
+        return w
+
+    def _build_tune_tab(self):
+        w = QtWidgets.QWidget()
+        v = QtWidgets.QVBoxLayout(w)
+        hint = QtWidgets.QLabel(
+            "Edit a Value cell and press Enter — it pushes to the board live (SET_PARAM). "
+            "Red = outside [min,max] or estimated to exceed the OC soft limit. Under "
+            "FORCE_DEFAULTS=1 edits are RAM-only (lost on power-cycle) — use Export to bake "
+            "the tuned set into a C profile block.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color:#9e9e9e;font-size:11px;")
+        v.addWidget(hint)
+
+        bar = QtWidgets.QHBoxLayout()
+        self.btn_reload = QtWidgets.QPushButton("↻ Reload from board")
+        self.btn_reload.clicked.connect(self._reload_params)
+        self.btn_export = QtWidgets.QPushButton("⤓ Export as C profile")
+        self.btn_export.clicked.connect(self._export_profile_c)
+        self.tune_filter = QtWidgets.QLineEdit()
+        self.tune_filter.setPlaceholderText("filter parameters…")
+        self.tune_filter.textChanged.connect(self._apply_tune_filter)
+        bar.addWidget(self.btn_reload)
+        bar.addWidget(self.btn_export)
+        bar.addSpacing(12)
+        bar.addWidget(self.tune_filter, 1)
+        v.addLayout(bar)
+
+        self.tbl = QtWidgets.QTableWidget(0, 5)
+        self.tbl.setHorizontalHeaderLabels(
+            ["Parameter", "Value", "Min", "Max", "Group · est."])
+        self.tbl.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.Stretch)
+        self.tbl.verticalHeader().setVisible(False)
+        self.tbl.itemChanged.connect(self._on_tune_edit)
+        v.addWidget(self.tbl, 1)
+        return w
 
     def _refresh_ports(self):
         from garuda_gsp import list_ports_human
@@ -336,6 +403,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.worker.connected.connect(self.on_connected)
         self.worker.params_ready.connect(self.on_params)
         self.worker.snapshot.connect(self.on_snapshot)
+        self.worker.param_written.connect(self.on_param_written)
         self.worker.failed.connect(self.on_failed)
         self.worker.start()
         self.btn_connect.setText("Disconnect")
@@ -362,27 +430,207 @@ class MainWindow(QtWidgets.QMainWindow):
         self.btn_connect.setText("Connect")
         self.btn_record.setEnabled(False)
 
+    # ── parameters / live tuning ────────────────────────────────────────
     def on_params(self, params):
         self.params = params
-        self.tbl.setRowCount(len(params))
-        for r, (name, p) in enumerate(sorted(params.items())):
-            val, mn, mx = p.get("value"), p.get("min"), p.get("max")
-            out_of_range = (val is not None and mn is not None and mx is not None
-                            and not (mn <= val <= mx))
-            cells = [name, str(val), str(mn), str(mx)]
-            for col, text in enumerate(cells):
-                it = QtWidgets.QTableWidgetItem(text)
-                if out_of_range and col in (1,):
-                    it.setForeground(QtGui.QColor("#ef5350"))
-                    it.setToolTip("value is outside descriptor [min,max] "
-                                  "(profileDefaults bypasses SET_PARAM limits)")
-                self.tbl.setItem(r, col, it)
+        self._populating = True
+        rows = sorted(params.items(), key=lambda kv: (kv[1].get("group", 99), kv[0]))
+        self.tbl.setRowCount(len(rows))
+        self._row_name = {}
+        for r, (name, p) in enumerate(rows):
+            self._row_name[r] = name
+            self._fill_tune_row(r, name, p)
+        self._populating = False
+        self._apply_tune_filter(self.tune_filter.text() if hasattr(self, "tune_filter") else "")
+
+    def _fill_tune_row(self, r, name, p):
+        """Populate one tuner row. Caller must set self._populating around bulk fills."""
+        val, mn, mx = p.get("value"), p.get("min"), p.get("max")
+        grp = GROUP_NAMES.get(p.get("group"), "")
+        est = self._est_current(name, val) if val is not None else None
+        note = grp if est is None else f"{grp} · ~{est:.0f}A"
+
+        name_it = QtWidgets.QTableWidgetItem(name)
+        name_it.setFlags(name_it.flags() & ~QtCore.Qt.ItemIsEditable)
+        val_it = QtWidgets.QTableWidgetItem("" if val is None else str(val))
+        val_it.setTextAlignment(QtCore.Qt.AlignCenter)
+        mn_it = QtWidgets.QTableWidgetItem("" if mn is None else str(mn))
+        mn_it.setFlags(mn_it.flags() & ~QtCore.Qt.ItemIsEditable)
+        mn_it.setForeground(QtGui.QColor("#777"))
+        mx_it = QtWidgets.QTableWidgetItem("" if mx is None else str(mx))
+        mx_it.setFlags(mx_it.flags() & ~QtCore.Qt.ItemIsEditable)
+        mx_it.setForeground(QtGui.QColor("#777"))
+        note_it = QtWidgets.QTableWidgetItem(note)
+        note_it.setFlags(note_it.flags() & ~QtCore.Qt.ItemIsEditable)
+        note_it.setForeground(QtGui.QColor("#9e9e9e"))
+
+        warn = self._param_warn(name, val)
+        if warn:
+            val_it.setForeground(QtGui.QColor("#ef5350"))
+            val_it.setToolTip(warn)
+        for col, it in enumerate((name_it, val_it, mn_it, mx_it, note_it)):
+            self.tbl.setItem(r, col, it)
+
+    def _est_current(self, name, val):
+        """Estimated peak current (A) a startup amplitude/duty value implies, else None.
+        peak ≈ frac × Vbus / R_phase-to-phase ; R_pp ≈ 2 × focRsMilliOhm/1000."""
+        if val is None:
+            return None
+        rs = self.params.get("focRsMilliOhm", {}).get("value")
+        if not rs:
+            return None
+        r_pp = 2.0 * rs / 1000.0
+        if r_pp <= 0:
+            return None
+        vbus = self._last_vbus or 24.0
+        if name in AMPLITUDE_PARAMS:
+            frac = val / 200.0
+        elif name in DUTY_PARAMS:
+            frac = val / 100.0
+        else:
+            return None
+        return frac * vbus / r_pp
+
+    def _param_warn(self, name, val):
+        if val is None:
+            return None
+        p = self.params.get(name, {})
+        mn, mx = p.get("min"), p.get("max")
+        if mn is not None and mx is not None and not (mn <= val <= mx):
+            return (f"outside [{mn},{mx}] — profileDefaults bypasses SET_PARAM limits, "
+                    "so the board may have shipped a value the SET_PARAM path will reject")
+        est = self._est_current(name, val)
+        if est is not None:
+            ocsw = self.params.get("ocSwLimitMa", {}).get("value")
+            if ocsw and est > ocsw / 1000.0:
+                return (f"~{est:.0f}A estimated peak > OC soft limit {ocsw/1000.0:.0f}A "
+                        "— likely to trip OC_SW")
+        return None
+
+    def _on_tune_edit(self, item):
+        if self._populating or item.column() != 1:
+            return
+        r = item.row()
+        name = self._row_name.get(r)
+        if not name:
+            return
+        p = self.params.get(name, {})
+        txt = item.text().strip()
+        try:
+            value = int(txt)
+        except ValueError:
+            self._log(f"tune: '{txt}' is not an integer")
+            self._restore_cell(r, name)
+            return
+        if not self.worker:
+            self._log("tune: not connected")
+            self._restore_cell(r, name)
+            return
+        # OC-safety pre-check — warn, allow override
+        est = self._est_current(name, value)
+        ocsw = self.params.get("ocSwLimitMa", {}).get("value")
+        if est is not None and ocsw and est > ocsw / 1000.0:
+            ret = QtWidgets.QMessageBox.warning(
+                self, "Over-current risk",
+                f"{name} = {value} ≈ {est:.0f} A peak, above the OC soft limit "
+                f"{ocsw/1000.0:.0f} A.\nThis is likely to trip OC_SW. Push it anyway?",
+                QtWidgets.QMessageBox.Yes | QtWidgets.QMessageBox.No,
+                QtWidgets.QMessageBox.No)
+            if ret != QtWidgets.QMessageBox.Yes:
+                self._restore_cell(r, name)
+                return
+        self._log(f"tune → {name} = {value} (pushing…)")
+        self.worker.submit("set_param", pid=p.get("id"), name=name, value=value)
+
+    def on_param_written(self, res):
+        if not res.get("ok"):
+            self._log(f"tune ✗ {res.get('name')}: {res.get('error')}")
+            if self.worker:
+                self.worker.submit("refresh_params")     # restore truth
+            return
+        name, val = res.get("name"), res.get("value")
+        self._log(f"tune ✓ {name} = {val}")
+        if name in self.params:
+            self.params[name]["value"] = val
+        # re-fill just that row (value text + warning colour + est.)
+        for r, n in self._row_name.items():
+            if n == name:
+                self._populating = True
+                self._fill_tune_row(r, name, self.params[name])
+                self._populating = False
+                break
+
+    def _restore_cell(self, r, name):
+        self._populating = True
+        v = self.params.get(name, {}).get("value")
+        it = self.tbl.item(r, 1)
+        if it is not None:
+            it.setText("" if v is None else str(v))
+        self._populating = False
+
+    def _reload_params(self):
+        if self.worker:
+            self._log("reloading params from board…")
+            self.worker.submit("refresh_params")
+        else:
+            self._log("reload: not connected")
+
+    def _apply_tune_filter(self, text):
+        text = (text or "").lower()
+        for r, name in self._row_name.items():
+            grp = GROUP_NAMES.get(self.params.get(name, {}).get("group"), "").lower()
+            self.tbl.setRowHidden(r, bool(text) and text not in name.lower() and text not in grp)
+
+    def _export_profile_c(self):
+        if not self.params:
+            self._log("export: no params loaded"); return
+        prof = self.info.get("motorProfile", "?")
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        lines = [f"/* Garuda Studio live-param export — {time.strftime('%Y-%m-%d %H:%M:%S')}",
+                 f" * fw v{self.info.get('fwVersion','?')} profile {prof} "
+                 f"build {('0x%08X' % self.info['buildHash']) if self.info.get('buildHash') else 'n/a'}",
+                 " * Field names follow GSP param names = GSP_PARAMS_T members. Reconcile",
+                 " * with the [GSP_PROFILE_*] block in gsp/gsp_params.c. */",
+                 "{"]
+        for name in sorted(self.params):
+            p = self.params[name]
+            v = p.get("value")
+            if v is None:
+                continue
+            warn = self._param_warn(name, v)
+            tag = f"   // ⚠ {warn}" if warn else ""
+            lines.append(f"    .{name:<22} = {v},{tag}")
+        lines.append("},")
+        text = "\n".join(lines)
+
+        os.makedirs("sessions", exist_ok=True)
+        path = os.path.join("sessions", f"profile_export_p{prof}_{ts}.c")
+        with open(path, "w") as f:
+            f.write(text + "\n")
+        self._log(f"exported {path}")
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle(f"C profile export → {path}")
+        dlg.resize(620, 520)
+        dv = QtWidgets.QVBoxLayout(dlg)
+        te = QtWidgets.QPlainTextEdit(text)
+        te.setReadOnly(True)
+        te.setStyleSheet("font-family:monospace;font-size:11px;")
+        dv.addWidget(te)
+        bb = QtWidgets.QHBoxLayout()
+        btn_copy = QtWidgets.QPushButton("Copy")
+        btn_copy.clicked.connect(lambda: QtWidgets.QApplication.clipboard().setText(text))
+        btn_close = QtWidgets.QPushButton("Close")
+        btn_close.clicked.connect(dlg.accept)
+        bb.addStretch(1); bb.addWidget(btn_copy); bb.addWidget(btn_close)
+        dv.addLayout(bb)
+        dlg.exec()
 
     # ── live data ───────────────────────────────────────────────────────
     def on_snapshot(self, s):
         if self.t0 is None:
             self.t0 = time.monotonic()
         t = time.monotonic() - self.t0
+        self._last_vbus = s.get("vbus_V")
         self.statebar.set_state(s["state_name"], s["fault"] != 0)
         if s["fault"]:
             self.fault.setText(f"⚠  FAULT: {s['fault_name']}")
@@ -392,7 +640,6 @@ class MainWindow(QtWidgets.QMainWindow):
             self.fault.setText("")
             self.fault.setStyleSheet("")
 
-        # windowed HWZC reject rate (leading desync indicator), from deltas
         rej_tot = s["hwzc_zc"] + s["hwzc_reject"]
         if self._prev_rej is not None:
             d_acc = s["hwzc_zc"] - self._prev_rej[0]
@@ -419,12 +666,12 @@ class MainWindow(QtWidgets.QMainWindow):
                "goodzc": s.get("good_zc", 0),
                "duty": s["duty"], "throttle": s["throttle"]}
         self.buf["t"].append(t)
-        for k, v in raw.items():
-            self.buf[k].append(v)
+        for k, vv in raw.items():
+            self.buf[k].append(vv)
         ts = list(self.buf["t"])
         for key, label, color, scale, bip, fmt, _on in SIGNALS:
             cb = self.checks[key]
-            cb.setText(f"{label}  {fmt(raw[key])}")     # selector doubles as live legend
+            cb.setText(f"{label}  {fmt(raw[key])}")
             if cb.isChecked():
                 vals = self.buf[key]
                 if bip:
@@ -432,8 +679,8 @@ class MainWindow(QtWidgets.QMainWindow):
                 else:
                     norm = [x / scale for x in vals]
                 self.curves[key].setData(ts, norm)
-        if s["eRPM"] > 100:                       # operating-point map (skip idle clutter)
-            self.map_pts.append((s["eRPM"], ia))  # Ia_pk varies (Ibus is valley-sampled ≈0)
+        if s["eRPM"] > 100:
+            self.map_pts.append((s["eRPM"], ia))
             self.scatter_map.setData([p[0] for p in self.map_pts],
                                      [p[1] for p in self.map_pts])
 
@@ -442,7 +689,6 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.recording and self.session is not None:
             self.session.add(s2)
 
-        # mirror to console (step6-style line), unless paused
         if not self._console_paused:
             mark = " ◀" if (self.live and len(self.live) >= 2 and
                             self.live[-2]["state_name"] != s["state_name"]) else ""
@@ -468,8 +714,7 @@ class MainWindow(QtWidgets.QMainWindow):
             self.session.save(name)
             self.status.showMessage(
                 f"Saved bundle: {name}  ({len(self.session.samples)} samples)")
-            QtWidgets.QMessageBox.information(self, "Recorded",
-                                              f"Saved {name}")
+            QtWidgets.QMessageBox.information(self, "Recorded", f"Saved {name}")
 
     def _refresh_curve_visibility(self):
         for key, cb in self.checks.items():
@@ -489,7 +734,8 @@ class MainWindow(QtWidgets.QMainWindow):
         op = parts[0].lower()
         if op in ("help", "?"):
             self._log("commands: help · clear · pause · resume · mark <text> · "
-                      "diagnose · params · save")
+                      "diagnose · params · get <param> · set <param> <value> · "
+                      "export · reload · save")
         elif op == "clear":
             self.console.clear()
         elif op == "pause":
@@ -503,6 +749,29 @@ class MainWindow(QtWidgets.QMainWindow):
                 p = self.params[name]
                 flag = "" if p.get("min") is None or p["min"] <= (p.get("value") or 0) <= p["max"] else "  ⚠ out-of-range"
                 self._log(f"  {name:24} = {p.get('value')}{flag}")
+        elif op == "get":
+            if len(parts) < 2 or parts[1] not in self.params:
+                self._log("usage: get <paramName>"); return
+            self._log(f"  {parts[1]} = {self.params[parts[1]].get('value')}")
+        elif op == "set":
+            if len(parts) < 3:
+                self._log("usage: set <paramName> <value>"); return
+            name = parts[1]
+            if name not in self.params:
+                self._log(f"unknown param: {name}"); return
+            try:
+                value = int(parts[2])
+            except ValueError:
+                self._log(f"'{parts[2]}' is not an integer"); return
+            if not self.worker:
+                self._log("set: not connected"); return
+            self._log(f"tune → {name} = {value} (pushing…)")
+            self.worker.submit("set_param", pid=self.params[name].get("id"),
+                               name=name, value=value)
+        elif op == "export":
+            self._export_profile_c()
+        elif op == "reload":
+            self._reload_params()
         elif op == "diagnose":
             self.run_diagnosis()
         elif op == "save":
@@ -530,7 +799,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self._log(f"╔═ DIAGNOSIS [{sev}]  via {r.get('engine','?')}")
         self._log(f"║ {r.get('summary','')}")
         for f in r.get("findings", []):
-            self._log(f"║")
+            self._log("║")
             self._log(f"║ • [{f.get('confidence','?')}] {f.get('cause','')}")
             self._log(f"║   evidence: {f.get('evidence','')}")
             for fx in f.get("fixes", []):
@@ -547,12 +816,11 @@ class MainWindow(QtWidgets.QMainWindow):
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Garuda Debug GUI")
+    ap = argparse.ArgumentParser(description="Garuda Studio GUI")
     ap.add_argument("--port", default=None)
     args = ap.parse_args()
     app = QtWidgets.QApplication(sys.argv)
     app.setStyle("Fusion")
-    # dark palette
     pal = QtGui.QPalette()
     pal.setColor(QtGui.QPalette.Window, QtGui.QColor("#181c20"))
     pal.setColor(QtGui.QPalette.Base, QtGui.QColor("#101418"))

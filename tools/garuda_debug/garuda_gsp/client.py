@@ -141,7 +141,8 @@ class GspClient:
             except GspError:
                 v = None
             result[d["name"]] = {"id": d["id"], "value": v,
-                                 "min": d["min"], "max": d["max"]}
+                                 "min": d["min"], "max": d["max"],
+                                 "type": d["type"], "group": d["group"]}
         return result
 
     def save_config(self):
