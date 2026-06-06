@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "garuda-debug"
+version = "0.1.0"
+description = "Garuda ESC serial-protocol library + debug tooling (cross-platform)"
+requires-python = ">=3.8"
+dependencies = ["pyserial>=3.5"]
+
+[project.optional-dependencies]
+# GUI extras land here in v1 (PySide6 + pyqtgraph).
+gui = ["PySide6>=6.5", "pyqtgraph>=0.13", "numpy>=1.21"]
+ai  = ["anthropic>=0.69"]   # optional: enables "Diagnose with Claude" (claude-opus-4-8)
+
+[project.scripts]
+garuda-gsp-info = "scripts.gsp_info:main"
+garuda-gsp-record = "scripts.gsp_record:main"
+garuda-gui = "garuda_gui.app:main"
+
+[tool.setuptools]
+packages = ["garuda_gsp", "scripts", "garuda_gui"]

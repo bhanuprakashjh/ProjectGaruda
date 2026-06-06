@@ -401,6 +401,70 @@
  * LPF cutoff ~ 2x max elec freq = 2228 Hz -> alpha = 0.58 */
 #define SMO_LPF_ALPHA           0.58f
 
+#elif MOTOR_PROFILE == 4
+/* ----------------------------------------------------------------
+ * Cobra CM-2814/36 470 KV — 24 V/6S bench. 12N14P, 7PP.
+ * Rs(pp)=0.188Ω → L-N 0.094Ω. Ls UNMEASURED (est 30µH L-N). Max cont 17A.
+ * FOC UNUSED in the 6-step build — these only need to compile/be sane.
+ * Mirror garuda_config.h Profile 4 / profileDefaults[GSP_PROFILE_COBRA]. */
+#define MOTOR_RS_OHM            0.094f
+#define MOTOR_LS_H              30.0e-6f      /* ESTIMATE — measure */
+#define MOTOR_KE_VPEAK          0.001674f     /* 60/(√3×2π×470×7) */
+#define MOTOR_POLE_PAIRS_FOC    7
+#define MOTOR_VBUS_NOM_V        24.0f
+#define MOTOR_MAX_CURRENT_A     17.0f         /* rated continuous */
+#define MOTOR_MAX_ELEC_RAD_S    9000.0f       /* 470×24×7 ≈ 79k eRPM */
+#define MOTOR_FLUX_LINKAGE      0.001674f
+#define KP_DQ                   0.188f        /* 2π×1000×30µH */
+#define KI_DQ                   590.0f        /* 2π×1000×0.094Ω */
+#define KP_SPD                  0.003f
+#define KI_SPD                  0.3f
+#define STARTUP_ALIGN_IQ_A      4.0f
+#define STARTUP_RAMP_IQ_A       5.0f
+#define STARTUP_IQ_RAMP_TICKS   12000U
+#define STARTUP_ALIGN_TICKS     24000U        /* heavy rotor needs time */
+#define STARTUP_RAMP_RATE_RPS2  200.0f        /* slow — heavy rotor */
+#define STARTUP_HANDOFF_RAD_S   400.0f
+#define STARTUP_MIN_OL_RAD_S    600.0f
+#define STARTUP_MAX_OL_RAD_S    MOTOR_MAX_ELEC_RAD_S
+#define STARTUP_USE_VF          0
+#define FAULT_OC_A              22.0f
+#define FAULT_STALL_RAD_S       30.0f
+#define OBS_LPF_ALPHA           0.20f
+#define SMO_LPF_ALPHA           0.30f
+
+#elif MOTOR_PROFILE == 5
+/* ----------------------------------------------------------------
+ * Hobbywing XRotor 3110 1150 KV — 24 V/6S bench. 12N14P, 7PP.
+ * Rs(pp)=0.045Ω → L-N 0.022Ω. Ls UNMEASURED (est 10µH L-N). Same regime
+ * as the 2810 (Profile 2) — this mirrors it with Ke scaled for 1150 KV.
+ * FOC UNUSED in the 6-step build. */
+#define MOTOR_RS_OHM            0.022f
+#define MOTOR_LS_H              10.0e-6f       /* ESTIMATE — measure */
+#define MOTOR_KE_VPEAK          0.000685f      /* 60/(√3×2π×1150×7) */
+#define MOTOR_POLE_PAIRS_FOC    7
+#define MOTOR_VBUS_NOM_V        24.0f
+#define MOTOR_MAX_CURRENT_A     10.0f          /* bench cap */
+#define MOTOR_MAX_ELEC_RAD_S    22000.0f       /* 1150×24×7 ≈ 193k eRPM */
+#define MOTOR_FLUX_LINKAGE      0.000685f
+#define KP_DQ                   0.063f         /* 2π×1000×10µH */
+#define KI_DQ                   138.0f         /* 2π×1000×0.022Ω */
+#define KP_SPD                  0.00010f
+#define KI_SPD                  0.004f
+#define STARTUP_ALIGN_IQ_A      2.0f
+#define STARTUP_RAMP_IQ_A       3.0f
+#define STARTUP_IQ_RAMP_TICKS   4800U
+#define STARTUP_ALIGN_TICKS     4800U
+#define STARTUP_RAMP_RATE_RPS2  800.0f
+#define STARTUP_HANDOFF_RAD_S   1000.0f
+#define STARTUP_MIN_OL_RAD_S    1500.0f
+#define STARTUP_MAX_OL_RAD_S    MOTOR_MAX_ELEC_RAD_S
+#define STARTUP_USE_VF          0
+#define FAULT_OC_A              9.0f
+#define FAULT_STALL_RAD_S       50.0f
+#define OBS_LPF_ALPHA           0.35f
+#define SMO_LPF_ALPHA           0.15f
+
 #else
 #error "Unknown MOTOR_PROFILE for FOC params -- see garuda_config.h"
 #endif

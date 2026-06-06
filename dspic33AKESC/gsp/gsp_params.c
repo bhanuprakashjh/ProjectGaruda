@@ -48,7 +48,7 @@ static uint8_t activeProfile;
     .desyncCoastMs        = 200,  \
     .desyncMaxRestarts    = 3
 
-static const GSP_PARAMS_T profileDefaults[4] = {
+static const GSP_PARAMS_T profileDefaults[6] = {
     [GSP_PROFILE_HURST] = {
         .rampTargetErpm     = 2000,
         .rampAccelErpmPerS  = 1000,
@@ -299,6 +299,115 @@ static const GSP_PARAMS_T profileDefaults[4] = {
         .an1078ThetaKE7        = 800,
         .an1078KslideMv        = 6000,  /* 6 V */
         .an1078IdFwMaxDecia    = 50,    /* 5 A FW */
+    },
+    [GSP_PROFILE_COBRA] = {
+        /* === Cobra CM-2814/36 470KV (12N14P, 7PP, 4-6S, 117g, 36T delta) ===
+         * Rs(phase-phase)=0.188Ω, KV=470, max cont 17A. Numbers for 24V/6S bench.
+         * OPPOSITE regime to the 2810: ~4× the resistance + heavy 117g rotor +
+         * low KV. So the sine startup needs MUCH more amplitude (the real torque
+         * knob is sineAlign/RampModPct, NOT the trap duty %) and a slower ramp.
+         * Low KV = strong BEMF = ZC detection is easy. These are PHYSICS-BASED
+         * STARTING values — Ls is UNMEASURED; iterate from the GSP fault code
+         * (ALIGN/OL_RAMP stall → raise sineRampModPct; desync → lower rampAccel;
+         * OC → lower amplitude). Built from the 2810 entry; only regime fields
+         * changed. With FEATURE_GSP=1 this table is the runtime source. */
+        .rampTargetErpm     = 3000,    /* keep — strong BEMF at 470KV, easy handoff */
+        .rampAccelErpmPerS  = 1000,    /* slow: heavy rotor needs dwell per step (~3s ramp) */
+        .rampDutyPct        = 12,      /* MORPH/trap duty cap — higher R needs more */
+        .clIdleDutyPct      = 8,       /* 24V*8%/0.188Ω idle authority for heavy rotor */
+        .timingAdvMaxDeg    = 18,      /* lower top speed than 2810 → less advance */
+        .hwzcCrossoverErpm  = 1500,
+        .ocSwLimitMa        = 16000,   /* soft limit ≈ rated 17A continuous */
+        .ocFaultMa          = 21000,
+        .motorPolePairs     = 7,
+        .alignDutyPct       = 8,       /* trap align cap (sine path uses sineAlignModPct) */
+        .initialErpm        = 100,     /* gentle first step for high inertia */
+        .maxClosedLoopErpm  = 83000,   /* 470 * 24V * 7pp ≈ 79k; cap just above */
+        .sineAlignModPct    = 15,      /* ~4× the 2810 (4× R) to hold the heavy rotor */
+        .sineRampModPct     = 20,      /* CURRENT-MATCHED to proven 2810 ramp (~12-13A):
+                                        * 20/200=10% peak * 24V / 0.188Ω = 12.8A, safely under
+                                        * ocSwLimit=16A. (Was 30 = 19A = guaranteed OC_SW trip.)
+                                        * 2810 uses 5 into 0.05Ω = same ~12A. If the heavy Cobra
+                                        * rotor STALLS in OL_RAMP raise toward 24-26 (keep Ia_pk
+                                        * < 16A); if it OC_SW trips in OL_RAMP lower toward 16. */
+        .zcDemagDutyThresh  = 45,
+        .zcDemagBlankExtraPct = 18,    /* Ls unmeasured — near 2810; raise if early ZC miss */
+        .ocLimitMa          = 20000,   /* CMP3 chop */
+        .ocStartupMa        = 22000,
+        .rampCurrentGateMa  = 12000,   /* heavy rotor draws more in accel; keep < ocLimitMa */
+        TUNING_DEFAULTS,
+        /* FOC motor model — ESTIMATES (FOC unused in 6-step). VERIFY Ls before any FOC. */
+        .focRsMilliOhm       = 94,     /* 0.188Ω pp / 2 */
+        .focLsMicroH          = 30,     /* ESTIMATE — measure */
+        .focKeUvSRad          = 1674,   /* 60/(√3×2π×470×7) */
+        .focVbusNomCentiV     = 2400,
+        .focMaxCurrentCentiA  = 1700,   /* 17.0A rated */
+        .focMaxElecRadS       = 9000,
+        .focKpDqMilli         = 188,    /* 2π×1000×30µH */
+        .focKiDq              = 590,    /* 2π×1000×0.094Ω */
+        .focObsLpfAlphaMilli  = 200,
+        .focAlignIqCentiA     = 400,
+        .focRampIqCentiA      = 500,
+        .focAlignTimeMs       = 800,
+        .focIqRampTimeMs      = 300,
+        .focRampRateRps2      = 200,
+        .focHandoffRadS       = 400,
+        .focFaultOcCentiA     = 2200,
+        .focFaultStallDeciRadS = 300,
+        .an1078ThetaBaseDegX10 = 100,
+        .an1078ThetaKE7        = 800,
+        .an1078KslideMv        = 5000,
+        .an1078IdFwMaxDecia    = 0,
+    },
+    [GSP_PROFILE_XROTOR] = {
+        /* === Hobbywing XRotor 3110 1150KV (12N14P, 7PP, 4-6S, 88g) ===
+         * Rs(phase-phase)=0.045Ω, KV=1150. SAME regime as the 2810 (profile 2):
+         * low R, high KV, light rotor. This is the 2810 entry with only the
+         * KV-driven fields changed (maxClosedLoopErpm + FOC Ke). Should bring up
+         * almost exactly like the 2810 — start here. maxClosedLoopErpm anchored
+         * just above the 1150KV theoretical ceiling; raise once it runs clean. */
+        .rampTargetErpm     = 3000,
+        .rampAccelErpmPerS  = 3000,    /* light rotor — same fast ramp as 2810 */
+        .rampDutyPct        = 8,
+        .clIdleDutyPct      = 6,
+        .timingAdvMaxDeg    = 25,
+        .hwzcCrossoverErpm  = 1500,
+        .ocSwLimitMa        = 18000,
+        .ocFaultMa          = 21000,
+        .motorPolePairs     = 7,
+        .alignDutyPct       = 3,
+        .initialErpm        = 150,
+        .maxClosedLoopErpm  = 210000,  /* 1150 * 24V * 7pp ≈ 193k; cap just above */
+        .sineAlignModPct    = 3,       /* same low-R regime as 2810 */
+        .sineRampModPct     = 5,
+        .zcDemagDutyThresh  = 40,
+        .zcDemagBlankExtraPct = 20,
+        .ocLimitMa          = 20000,
+        .ocStartupMa        = 22000,
+        .rampCurrentGateMa  = 10000,
+        TUNING_DEFAULTS,
+        /* FOC motor model — Ke scaled for 1150KV; rest mirror 2810 estimates. */
+        .focRsMilliOhm       = 22,     /* 0.045Ω pp / 2 */
+        .focLsMicroH          = 10,     /* ESTIMATE — measure */
+        .focKeUvSRad          = 685,    /* 60/(√3×2π×1150×7) */
+        .focVbusNomCentiV     = 2400,
+        .focMaxCurrentCentiA  = 500,
+        .focMaxElecRadS       = 22000,
+        .focKpDqMilli         = 63,
+        .focKiDq              = 138,
+        .focObsLpfAlphaMilli  = 350,
+        .focAlignIqCentiA     = 500,
+        .focRampIqCentiA      = 600,
+        .focAlignTimeMs       = 1000,
+        .focIqRampTimeMs      = 500,
+        .focRampRateRps2      = 80,
+        .focHandoffRadS       = 400,
+        .focFaultOcCentiA     = 1500,
+        .focFaultStallDeciRadS = 500,
+        .an1078ThetaBaseDegX10 = 200,
+        .an1078ThetaKE7        = 800,
+        .an1078KslideMv        = 2500,
+        .an1078IdFwMaxDecia    = 120,
     },
 };
 
@@ -842,9 +951,54 @@ static void FallbackToProfileDefaults(void)
     activeProfile = fallback;
 }
 
+/* ── Defaults signature (Tier 3 auto-invalidation) ───────────────────────
+ * A CRC16 over this build's profileDefaults[MOTOR_PROFILE] is stored in EEPROM
+ * on save and re-checked on load. If a developer edits that profile's compiled
+ * defaults (or changes MOTOR_PROFILE) and reflashes, the signature no longer
+ * matches → the EEPROM overlay is rejected and the fresh compiled defaults win,
+ * with no manual marker bump or NVM reset. Live GSP tuning still persists across
+ * power cycles for an unchanged build (the saved values match the signature).
+ *
+ * Stored at a fixed offset in GARUDA_CONFIG_T.reserved, clear of the 82-byte V3
+ * persist struct (offsets 16..97). Reserved spans 16..127, so 100 is free. */
+#define GSP_DEFAULTS_SIG_OFFSET  100
+
+/* CRC16-CCITT (poly 0x1021, init 0xFFFF). Local to this file; only needs to be
+ * stable within a single build, not match the GSP framing CRC. */
+static uint16_t GSP_Crc16(const uint8_t *data, uint16_t len)
+{
+    uint16_t crc = 0xFFFF;
+    for (uint16_t i = 0; i < len; i++) {
+        crc ^= (uint16_t)data[i] << 8;
+        for (uint8_t b = 0; b < 8; b++)
+            crc = (crc & 0x8000) ? (uint16_t)((crc << 1) ^ 0x1021)
+                                 : (uint16_t)(crc << 1);
+    }
+    return crc;
+}
+
+/* Signature of this firmware's compiled defaults for the active build profile. */
+static uint16_t GSP_DefaultsSignature(void)
+{
+    uint8_t idx = (MOTOR_PROFILE < GSP_PROFILE_COUNT)
+                  ? (uint8_t)MOTOR_PROFILE : (uint8_t)GSP_PROFILE_A2212;
+    return GSP_Crc16((const uint8_t *)&profileDefaults[idx],
+                     (uint16_t)sizeof(profileDefaults[0]));
+}
+
 void GSP_ParamsLoadFromConfig(const void *cfg)
 {
     const uint8_t *base = (const uint8_t *)cfg;
+
+    /* Tier 3: reject stale EEPROM whose stored defaults-signature does not match
+     * this build's compiled defaults. Blank/old EEPROM (no signature) also fails
+     * this check → compiled defaults are kept. After the next save, the correct
+     * signature is written and same-build tuning persists normally. */
+    uint16_t storedSig;
+    memcpy(&storedSig, base + GSP_DEFAULTS_SIG_OFFSET, sizeof(storedSig));
+    if (storedSig != GSP_DefaultsSignature())
+        return;  /* keep compile-time defaults from GSP_ParamsInitDefaults() */
+
     uint8_t marker;
     memcpy(&marker, base + GSP_PERSIST_OFFSET, 1);
 
@@ -1034,6 +1188,11 @@ void GSP_ParamsSaveToConfig(void *cfg)
     persist.focFaultStallDeciRadS  = gspParams.focFaultStallDeciRadS;
 
     memcpy(base + GSP_PERSIST_OFFSET, &persist, sizeof(persist));
+
+    /* Tier 3: stamp this build's defaults-signature so the saved values are
+     * accepted on reload only while profileDefaults[MOTOR_PROFILE] is unchanged. */
+    uint16_t sig = GSP_DefaultsSignature();
+    memcpy(base + GSP_DEFAULTS_SIG_OFFSET, &sig, sizeof(sig));
 }
 
 #endif /* FEATURE_GSP */

@@ -1,0 +1,12 @@
+# Python virtualenv (675MB — never commit)
+.venv/
+venv/
+# Bytecode / caches
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+*.egg-info/
+# Runtime output — recorded bench sessions / bundles
+sessions/
+*.gspbundle

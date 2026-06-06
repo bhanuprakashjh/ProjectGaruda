@@ -53,6 +53,13 @@ extern "C" {
 #define FEATURE_ADAPTATION       0  /* requires FEATURE_LEARN_MODULES */
 #define FEATURE_COMMISSION       0  /* requires FEATURE_LEARN_MODULES */
 #define FEATURE_EEPROM_V2        1  /* NVM persistent storage for GSP params */
+#define FEATURE_PARAMS_FORCE_DEFAULTS 1 /* Bring-up: 1 = skip the EEPROM overlay so
+                                         * compiled profileDefaults[]/.h edits ALWAYS
+                                         * win on reflash (NVM save still builds). Set
+                                         * back to 0 for normal persistence. See also
+                                         * the automatic defaults-signature guard in
+                                         * gsp_params.c, which invalidates stale EEPROM
+                                         * whenever profileDefaults[MOTOR_PROFILE] changes. */
 #define FEATURE_X2CSCOPE         0  /* X2CScope via UART1 (bring-up debug) */
 #define FEATURE_GSP              1  /* Garuda Serial Protocol via UART1 */
 
@@ -131,11 +138,13 @@ extern "C" {
  * 1 = A2212 1400KV (14-pole 7PP, 12V drone motor)
  * 2 = 2810 1350KV (14-pole 7PP, 5-6S drone motor, ~226k eRPM ceiling at 24V)
  * 3 = 5055 ~580KV (14-pole 7PP, 4S, 0.05 ohm L-N, 17.5 uH L-N)
+ * 4 = Cobra CM-2814/36 470KV (12N14P 7PP, 4-6S, 0.188Ω pp, 117g — high-R/heavy)
+ * 5 = Hobbywing XRotor 3110 1150KV (12N14P 7PP, 4-6S, 0.045Ω pp, 88g — ~2810)
  *
  * All motor-dependent parameters are grouped here for easy swapping.
  * Board-specific and feature-tuning parameters are below.
  *──────────────────────────────────────────────────────────────────────────*/
-#define MOTOR_PROFILE  2
+#define MOTOR_PROFILE  2   /* 2 = 2810 (bench baseline). Set 5 = XRotor or 4 = Cobra to test those. */
 
 #if MOTOR_PROFILE == 0
 /* === Hurst DMB2424B10002 (long Hurst, MCLV-48V-300W bench motor) ===
@@ -339,6 +348,65 @@ extern "C" {
                                             * runaway current during forced comm. */
 #define FEATURE_PRESYNC_RAMP       0
 #define OC_CLPCI_ENABLE            0       /* CLPCI disabled: OA3 ringing issue */
+
+#elif MOTOR_PROFILE == 4
+/* === Cobra CM-2814/36 470KV (12N14P, 7PP, 4-6S, 117g, 36T delta) ===
+ * Rs(pp)=0.188Ω, KV=470, max cont 17A, 24V/6S. Opposite regime to the 2810:
+ * ~4× R + heavy rotor + low KV → needs much higher sine amplitude + slow ramp.
+ * Low KV = strong BEMF = easy ZC. PHYSICS-BASED STARTING values; iterate from
+ * the GSP fault code. NOTE: with FEATURE_GSP=1 these are overridden by
+ * profileDefaults[GSP_PROFILE_COBRA] in gsp_params.c — keep the two in sync. */
+#define MOTOR_POLE_PAIRS             7
+#define DEADTIME_NS                400
+#define ALIGN_DUTY_PERCENT           8
+#define RAMP_DUTY_PERCENT           12
+#define INITIAL_ERPM               100
+#define RAMP_TARGET_ERPM          3000
+#define MAX_CLOSED_LOOP_ERPM     83000     /* 470 * 24V * 7pp ≈ 79k */
+#define RAMP_ACCEL_ERPM_PER_S     1000     /* slow — heavy rotor needs dwell */
+#define SINE_ALIGN_MODULATION_PCT   15
+#define SINE_RAMP_MODULATION_PCT    30     /* high field: 4× R + heavy + low KV */
+#define ZC_DEMAG_DUTY_THRESH        45
+#define ZC_DEMAG_BLANK_EXTRA_PERCENT 18
+#define HWZC_CROSSOVER_ERPM       1500
+#define CL_IDLE_DUTY_PERCENT         8
+#define SINE_PHASE_OFFSET_DEG       60
+#define OC_LIMIT_MA              20000
+#define OC_STARTUP_MA            22000
+#define OC_FAULT_MA              21000
+#define OC_SW_LIMIT_MA           16000     /* ≈ rated 17A continuous */
+#define RAMP_CURRENT_GATE_MA     12000
+#define FEATURE_PRESYNC_RAMP       0
+#define OC_CLPCI_ENABLE            0
+
+#elif MOTOR_PROFILE == 5
+/* === Hobbywing XRotor 3110 1150KV (12N14P, 7PP, 4-6S, 88g) ===
+ * Rs(pp)=0.045Ω, KV=1150. Same regime as the 2810 (profile 2): low R, high KV,
+ * light rotor — brings up almost identically. Only KV-driven fields differ.
+ * NOTE: with FEATURE_GSP=1 these are overridden by
+ * profileDefaults[GSP_PROFILE_XROTOR] in gsp_params.c — keep the two in sync. */
+#define MOTOR_POLE_PAIRS             7
+#define DEADTIME_NS                300
+#define ALIGN_DUTY_PERCENT           3
+#define RAMP_DUTY_PERCENT            8
+#define INITIAL_ERPM               150
+#define RAMP_TARGET_ERPM          3000
+#define MAX_CLOSED_LOOP_ERPM    210000     /* 1150 * 24V * 7pp ≈ 193k */
+#define RAMP_ACCEL_ERPM_PER_S     3000
+#define SINE_ALIGN_MODULATION_PCT    3
+#define SINE_RAMP_MODULATION_PCT     5
+#define ZC_DEMAG_DUTY_THRESH        40
+#define ZC_DEMAG_BLANK_EXTRA_PERCENT 20
+#define HWZC_CROSSOVER_ERPM       1500
+#define CL_IDLE_DUTY_PERCENT         6
+#define SINE_PHASE_OFFSET_DEG       60
+#define OC_LIMIT_MA              20000
+#define OC_STARTUP_MA            22000
+#define OC_FAULT_MA              21000
+#define OC_SW_LIMIT_MA           18000
+#define RAMP_CURRENT_GATE_MA     10000
+#define FEATURE_PRESYNC_RAMP       0
+#define OC_CLPCI_ENABLE            0
 
 #else
 #error "Unknown MOTOR_PROFILE — see garuda_config.h"
@@ -552,7 +620,11 @@ extern "C" {
 
 /* ADC Comparator ZC (Phase F) — crossover eRPM in motor profile above */
 #if FEATURE_ADC_CMP_ZC
-#define HWZC_USE_SW_COMPARE      0   /* 0 = ADC digital comparator @ 1 MHz (HW path).
+#define HWZC_USE_SW_COMPARE      0   /* Reverted to known-good HW path after the 2026-06-06
+                                      * valley-sample PROOF: SW path gave 0% reject (vs 98%) but
+                                      * desyncs the 2810 on acceleration (Hurst-tuned). Concept
+                                      * validated; needs tuning or speed-adaptive crossover.
+                                      * 0 = ADC digital comparator @ 1 MHz (HW path).
                                       * 1 = software compare on mid-ON ADC sample (SW path).
                                       *
                                       * SW mode: the 24 kHz ADC ISR reads the floating phase
