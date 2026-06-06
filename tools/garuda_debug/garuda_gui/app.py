@@ -229,6 +229,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.live = deque(maxlen=4000)           # rolling samples for on-demand diagnosis
         self._prev_rej = None                    # (zc, reject) for windowed reject-rate
         self._console_paused = False
+        self._was_running = False                 # gate console mirror to run-only
 
         pg.setConfigOptions(antialias=True, background="#101418", foreground="#ccc")
         self._build()
@@ -1022,13 +1023,23 @@ class MainWindow(QtWidgets.QMainWindow):
         if self.recording and self.session is not None:
             self.session.add(s2)
 
+        # Console mirror is RUN-ONLY: idle is silent (the continuous idle stream is
+        # a waste). Stream from start (leaving IDLE) to stop (back to IDLE), with
+        # banners. FAULT still streams so a desync is visible.
+        running = s["state_name"] != "IDLE"
         if not self._console_paused:
-            mark = " ◀" if (self.live and len(self.live) >= 2 and
-                            self.live[-2]["state_name"] != s["state_name"]) else ""
-            self._log(f"{t:6.2f} {s['state_name']:<8} thr={s['throttle']:>4} "
-                      f"duty={s['duty']:>3}% eRPM={s['eRPM']:>7,} Vbus={s['vbus_V']:4.1f} "
-                      f"Ibus={ibus:+5.1f} Ia={ia:4.1f} rej={rejrate:3.0f}% "
-                      f"{s['fault_name']}{mark}")
+            if running and not self._was_running:
+                self._log(f"▶──────── RUN START @ {t:6.2f}s ────────")
+            if running:
+                mark = " ◀" if (self.live and len(self.live) >= 2 and
+                                self.live[-2]["state_name"] != s["state_name"]) else ""
+                self._log(f"{t:6.2f} {s['state_name']:<8} thr={s['throttle']:>4} "
+                          f"duty={s['duty']:>3}% eRPM={s['eRPM']:>7,} Vbus={s['vbus_V']:4.1f} "
+                          f"Ibus={ibus:+5.1f} Ia={ia:4.1f} rej={rejrate:3.0f}% "
+                          f"{s['fault_name']}{mark}")
+            elif self._was_running:
+                self._log(f"■──────── STOPPED @ {t:6.2f}s ────────")
+        self._was_running = running
 
     # ── recording ───────────────────────────────────────────────────────
     def toggle_record(self):

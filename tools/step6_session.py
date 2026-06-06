@@ -444,6 +444,7 @@ def main():
 
     poll_interval = 1.0 / args.rate
     next_poll = time.monotonic()
+    was_running = False   # run-only telemetry gate
 
     try:
         while not stop_flag["stop"]:
@@ -468,6 +469,18 @@ def main():
                 snap = parse_snapshot(resp[1], t0)
 
             if not snap:
+                continue
+
+            # Run-only telemetry: the continuous idle stream is a waste. Stream
+            # (print + CSV + summary samples) only from start (leaving IDLE) to
+            # stop (back to IDLE), with banners. FAULT still streams.
+            running = snap['state'] != 0   # 0 = IDLE
+            if running and not was_running:
+                print(f"\n▶──────── RUN START @ {snap['t']:6.2f}s ────────")
+            elif was_running and not running:
+                print(f"■──────── STOPPED @ {snap['t']:6.2f}s ────────\n")
+            was_running = running
+            if not running:
                 continue
 
             samples.append(snap)
