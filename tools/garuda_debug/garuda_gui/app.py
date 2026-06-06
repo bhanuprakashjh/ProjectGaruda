@@ -26,6 +26,7 @@ import pyqtgraph as pg
 from garuda_gsp import GspClient, GspError, Session, __version__ as GSP_VER
 from garuda_gsp import protocol as P
 from . import diagnose as DIAG
+from . import wizard as WIZ
 
 STATES = ["IDLE", "ARMED", "ALIGN", "OL_RAMP", "MORPH", "CL"]
 WINDOW_S = 20.0          # rolling plot window
@@ -250,6 +251,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tabs = QtWidgets.QTabWidget()
         self.tabs.addTab(self._build_monitor_tab(), "📈 Monitor")
         self.tabs.addTab(self._build_tune_tab(), "🎛 Tune")
+        self.tabs.addTab(self._build_wizard_tab(), "🧙 Wizard")
         root.addWidget(self.tabs, 1)
 
         # console dock (shared across tabs)
@@ -373,6 +375,97 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tbl.itemChanged.connect(self._on_tune_edit)
         v.addWidget(self.tbl, 1)
         return w
+
+    def _build_wizard_tab(self):
+        w = QtWidgets.QWidget()
+        v = QtWidgets.QVBoxLayout(w)
+        hint = QtWidgets.QLabel(
+            "Enter the motor's datasheet numbers → generate a complete, current-safe "
+            "profile for all four firmware files. The heuristics are calibrated to the "
+            "proven 2810 profile, so the output sits in the same trusted regime, scaled "
+            "by this motor's physics. It will not emit an OC-tripping startup value.")
+        hint.setWordWrap(True)
+        hint.setStyleSheet("color:#9e9e9e;font-size:11px;")
+        v.addWidget(hint)
+
+        form = QtWidgets.QFormLayout()
+        self.wz = {}
+        self.wz["name"] = QtWidgets.QLineEdit("MyMotor")
+        self.wz["enum"] = QtWidgets.QLineEdit("CUSTOM")
+        self.wz["kv"] = QtWidgets.QSpinBox(); self.wz["kv"].setRange(1, 5000); self.wz["kv"].setValue(1000)
+        self.wz["r"] = QtWidgets.QDoubleSpinBox(); self.wz["r"].setRange(0.001, 2.0)
+        self.wz["r"].setDecimals(3); self.wz["r"].setSingleStep(0.005); self.wz["r"].setValue(0.050)
+        self.wz["poles"] = QtWidgets.QSpinBox(); self.wz["poles"].setRange(2, 28); self.wz["poles"].setValue(14)
+        self.wz["weight"] = QtWidgets.QDoubleSpinBox(); self.wz["weight"].setRange(1, 2000); self.wz["weight"].setValue(100)
+        self.wz["imax"] = QtWidgets.QDoubleSpinBox(); self.wz["imax"].setRange(1, 200); self.wz["imax"].setValue(20)
+        self.wz["vbus"] = QtWidgets.QDoubleSpinBox(); self.wz["vbus"].setRange(5, 60); self.wz["vbus"].setValue(24)
+        self.wz["ls"] = QtWidgets.QDoubleSpinBox(); self.wz["ls"].setRange(0, 2000); self.wz["ls"].setValue(0)
+        self.wz["ls"].setSuffix(" µH (0 = unknown)")
+        self.wz["profile"] = QtWidgets.QSpinBox(); self.wz["profile"].setRange(0, 15); self.wz["profile"].setValue(6)
+        form.addRow("Name", self.wz["name"])
+        form.addRow("KV (RPM/V)", self.wz["kv"])
+        form.addRow("Resistance ph-ph (Ω)", self.wz["r"])
+        form.addRow("Magnet poles", self.wz["poles"])
+        form.addRow("Weight (g)", self.wz["weight"])
+        form.addRow("Max continuous (A)", self.wz["imax"])
+        form.addRow("Bus voltage (V)", self.wz["vbus"])
+        form.addRow("Inductance", self.wz["ls"])
+        form.addRow("Profile id", self.wz["profile"])
+        form.addRow("Enum suffix (GSP_PROFILE_…)", self.wz["enum"])
+        fw = QtWidgets.QWidget(); fw.setLayout(form); fw.setMaximumWidth(360)
+
+        right = QtWidgets.QVBoxLayout()
+        bar = QtWidgets.QHBoxLayout()
+        btn_gen = QtWidgets.QPushButton("⚙ Generate profile")
+        btn_gen.clicked.connect(self._run_wizard)
+        self.btn_wz_copy = QtWidgets.QPushButton("Copy"); self.btn_wz_copy.clicked.connect(
+            lambda: QtWidgets.QApplication.clipboard().setText(self.wz_out.toPlainText()))
+        self.btn_wz_save = QtWidgets.QPushButton("Save .c"); self.btn_wz_save.clicked.connect(self._save_wizard)
+        bar.addWidget(btn_gen); bar.addStretch(1); bar.addWidget(self.btn_wz_copy); bar.addWidget(self.btn_wz_save)
+        right.addLayout(bar)
+        self.wz_out = QtWidgets.QPlainTextEdit()
+        self.wz_out.setReadOnly(True)
+        self.wz_out.setStyleSheet("font-family:monospace;font-size:11px;")
+        self.wz_out.setPlaceholderText("Generated C blocks for all 4 files appear here…")
+        right.addWidget(self.wz_out, 1)
+        rw = QtWidgets.QWidget(); rw.setLayout(right)
+
+        split = QtWidgets.QHBoxLayout()
+        split.addWidget(fw); split.addWidget(rw, 1)
+        v.addLayout(split, 1)
+        return w
+
+    def _wizard_spec(self):
+        ls = self.wz["ls"].value()
+        return WIZ.MotorSpec(
+            name=self.wz["name"].text().strip() or "MyMotor",
+            kv=self.wz["kv"].value(), r_pp_ohm=self.wz["r"].value(),
+            poles=self.wz["poles"].value(), weight_g=self.wz["weight"].value(),
+            max_current_a=self.wz["imax"].value(), vbus_nom=self.wz["vbus"].value(),
+            inductance_uh=(ls if ls > 0 else None),
+            profile_id=self.wz["profile"].value(),
+            enum_name=self.wz["enum"].text().strip() or "CUSTOM")
+
+    def _run_wizard(self):
+        try:
+            p = WIZ.compute_profile(self._wizard_spec())
+        except Exception as e:  # noqa
+            self.wz_out.setPlainText(f"error: {e}"); return
+        self.wz_out.setPlainText(WIZ.render_all(p))
+        self._log("wizard: " + WIZ.report(p).replace("\n", " | "))
+
+    def _save_wizard(self):
+        text = self.wz_out.toPlainText()
+        if not text.strip():
+            self._log("wizard: generate first"); return
+        os.makedirs("sessions", exist_ok=True)
+        name = self.wz["name"].text().strip() or "motor"
+        path = os.path.join("sessions",
+                            f"wizard_{name}_{time.strftime('%Y%m%d_%H%M%S')}.c")
+        with open(path, "w") as f:
+            f.write(text + "\n")
+        self._log(f"wizard: wrote {path}")
+        self.status.showMessage(f"Saved {path}")
 
     def _refresh_ports(self):
         from garuda_gsp import list_ports_human
