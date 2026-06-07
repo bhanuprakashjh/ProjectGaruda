@@ -362,6 +362,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.recording = False
         self.session = None
         self._auto_session = None   # auto-records every run -> CSV, no button
+        self._ml_file = None        # ML dataset collection (ZC Lab tab)
         self.t0 = None
         self._last_vbus = None
         self._populating = False
@@ -491,6 +492,30 @@ class MainWindow(QtWidgets.QMainWindow):
         self.lab_speed_lbl.setStyleSheet("font-weight:bold;")
         s.addWidget(self.lab_speed_lbl)
         v.addLayout(s)
+
+        # --- ML data collection (uses the live burst-scope, NOT the slider model) ---
+        ml = QtWidgets.QHBoxLayout()
+        self.ml_btn = QtWidgets.QPushButton("⏺ Collect ML dataset")
+        self.ml_btn.setCheckable(True)
+        self.ml_btn.setToolTip(
+            "While the motor runs, repeatedly grab the 24 kHz burst scope and log each "
+            "128-sample window (bemf/zcthr/sector + eRPM/duty) to sessions/ml_*.jsonl. "
+            "The offline trainer extracts the TRUE ZC per sector as the label.")
+        self.ml_btn.toggled.connect(self._ml_toggle_collect)
+        ml.addWidget(self.ml_btn)
+        self.ml_lbl = QtWidgets.QLabel("dataset: idle")
+        self.ml_lbl.setStyleSheet("color:#9e9e9e;font-family:monospace;")
+        ml.addWidget(self.ml_lbl)
+        ml.addStretch(1)
+        self.ml_train_btn = QtWidgets.QPushButton("🧠 Train / Eval")
+        self.ml_train_btn.setToolTip(
+            "Train the pure-numpy MLP on all sessions/ml_*.jsonl and print the "
+            "ZC-prediction MAE (elec deg) vs eRPM, rising vs falling, to the log.")
+        self.ml_train_btn.clicked.connect(self._ml_train)
+        ml.addWidget(self.ml_train_btn)
+        v.addLayout(ml)
+        self._ml_file = None
+        self._ml_count = 0
 
         split = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
         left = QtWidgets.QWidget(); lv = QtWidgets.QVBoxLayout(left)
@@ -1023,6 +1048,9 @@ class MainWindow(QtWidgets.QMainWindow):
             f"{n} samples · {len(zx)} zero-crossings · trig idx {trig}")
         self._log(f"scope: {n} samples, {len(zx)} ZC, "
                   f"state={P.SCOPE_STATE_NAMES.get(st.get('state'), '?')}")
+        # ML collect: append this window + operating point, then grab the next one
+        if self._ml_file is not None:
+            self._ml_record(samples)
 
     def _save_scope(self):
         if not self._scope_samples:
@@ -1038,6 +1066,80 @@ class MainWindow(QtWidgets.QMainWindow):
                         ",".join(str(s.get(c, "")) for c in cols) + "\n")
         self._log(f"scope: wrote {path}")
         self.scope_status_lbl.setText(f"saved {path}")
+
+    # ---- ML dataset collection / training ---------------------------------
+    def _ml_toggle_collect(self, on):
+        if on:
+            if not self.worker:
+                self._log("ml: not connected"); self.ml_btn.setChecked(False); return
+            os.makedirs("sessions", exist_ok=True)
+            path = os.path.join("sessions", f"ml_{time.strftime('%Y%m%d_%H%M%S')}.jsonl")
+            self._ml_file = open(path, "w")
+            self._ml_path = path
+            self._ml_count = 0
+            self.ml_btn.setText("⏹ Stop collecting")
+            self.ml_lbl.setText(f"recording → {os.path.basename(path)}  (0)")
+            self._log(f"ml: collecting to {path} (run the motor across a speed sweep)")
+            # kick the capture loop (Manual = immediate trigger, free-running)
+            self.worker.submit("scope_capture", mode=P.SCOPE_TRIG["Manual"], pre=25)
+        else:
+            if self._ml_file is not None:
+                self._ml_file.close()
+                self._log(f"ml: saved {self._ml_count} windows → {self._ml_path}")
+                self.ml_lbl.setText(f"saved {self._ml_count} windows: "
+                                    f"{os.path.basename(self._ml_path)}")
+                self._ml_file = None
+            self.ml_btn.setText("⏺ Collect ML dataset")
+
+    def _ml_record(self, samples):
+        """Write one capture window as a JSONL line, then request the next."""
+        import json as _json
+        try:
+            erpm = float(np.median([s.get("eRPM", 0) for s in samples]))
+            duty = float(np.median([s.get("duty_pct", 0) for s in samples]))
+            rec = {
+                "erpm": erpm, "duty": duty,
+                "motor": self.lab_motor.currentText(),
+                "bemf": [s.get("bemf_raw", 0) for s in samples],
+                "zcthr": [s.get("zc_thresh", 0) for s in samples],
+                "sector": [s.get("sector", 0) for s in samples],
+            }
+            self._ml_file.write(_json.dumps(rec) + "\n")
+            self._ml_file.flush()
+            self._ml_count += 1
+            self.ml_lbl.setText(f"recording → {os.path.basename(self._ml_path)}  "
+                                f"({self._ml_count})  last {erpm:.0f} eRPM")
+        except Exception as e:  # noqa
+            self._log(f"ml: record error {e}")
+        # request the next window (keeps the loop running while collecting)
+        if self._ml_file is not None and self.worker:
+            self.worker.submit("scope_capture", mode=P.SCOPE_TRIG["Manual"], pre=25)
+
+    def _ml_train(self):
+        """Train the numpy MLP on all sessions/ml_*.jsonl; report MAE to the log."""
+        import glob as _glob
+        from . import zcml
+        paths = sorted(_glob.glob(os.path.join("sessions", "ml_*.jsonl")))
+        if not paths:
+            self._log("ml: no sessions/ml_*.jsonl yet — collect a run first"); return
+        caps = zcml.load_jsonl(paths)
+        X, y, meta = zcml.extract_examples(caps)
+        self._log(f"ml: {len(caps)} windows from {len(paths)} files → "
+                  f"{len(X)} sector examples")
+        if len(X) < 30:
+            self._log("ml: too few examples (need varied speeds; >90k eRPM is too "
+                      "coarse for the 24 kHz scope to resolve a sector)"); return
+        rng = np.random.default_rng(0)
+        idx = rng.permutation(len(X))
+        ntr = int(0.8 * len(X))
+        tr, te = idx[:ntr], idx[ntr:]
+        model = zcml.MLP(X.shape[1]).fit(X[tr], y[tr])
+        import io, contextlib
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            zcml.evaluate(model, X[te], y[te], [meta[i] for i in te])
+        for line in buf.getvalue().rstrip().splitlines():
+            self._log("ml: " + line)
 
     def _wizard_spec(self):
         ls = self.wz["ls"].value()
