@@ -1,8 +1,10 @@
-# Python virtualenv (675MB — never commit)
+# Python virtualenvs (never commit)
 .venv/
 venv/
+.venv-spice/
 # Bytecode / caches
 __pycache__/
+**/__pycache__/
 *.pyc
 *.pyo
 .pytest_cache/

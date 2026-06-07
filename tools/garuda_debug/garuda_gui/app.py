@@ -21,12 +21,14 @@ from collections import deque
 from queue import Queue, Empty
 
 from PySide6 import QtCore, QtGui, QtWidgets
+import numpy as np
 import pyqtgraph as pg
 
 from garuda_gsp import GspClient, GspError, Session, __version__ as GSP_VER
 from garuda_gsp import protocol as P
 from . import diagnose as DIAG
 from . import wizard as WIZ
+from . import zcsim as ZCSIM
 
 STATES = ["IDLE", "ARMED", "ALIGN", "OL_RAMP", "MORPH", "CL"]
 WINDOW_S = 20.0          # default rolling plot window
@@ -274,6 +276,80 @@ class SectorMissBar(QtWidgets.QFrame):
 
 
 # ─────────────────────────────────────────────────────────────────────────
+class RotorWidget(QtWidgets.QWidget):
+    """Animated rotor + 6-sector commutation wheel. Sectors colored by per-sector
+    ZC capture probability (green=detected, red=guessed); the rotor bar spins at a
+    (scaled) rate and a pointer marks the live electrical angle / floating phase."""
+    PHASE_NAME = ["A", "B", "C"]
+    # firmware commutationTable: (floating phase, zc polarity) per 60deg sector
+    SEC = [(2, +1), (0, -1), (1, +1), (2, -1), (0, +1), (1, -1)]
+
+    def __init__(self):
+        super().__init__()
+        self.setMinimumSize(280, 280)
+        self.angle = 0.0                 # electrical deg 0..360
+        self.per_sector = [0.0] * 6
+        self.erpm = 0
+        self.cap_n = 0
+        self.guess_n = 0
+
+    def set_capture(self, per_sector, erpm):
+        self.per_sector = list(per_sector)
+        self.erpm = erpm
+        self.update()
+
+    def reset_tally(self):
+        self.cap_n = self.guess_n = 0
+
+    def paintEvent(self, _ev):
+        import math
+        p = QtGui.QPainter(self)
+        p.setRenderHint(QtGui.QPainter.Antialiasing)
+        w, h = self.width(), self.height()
+        cx, cy = w / 2.0, h / 2.0
+        R = min(w, h) * 0.44
+        rect = QtCore.QRectF(cx - R, cy - R, 2 * R, 2 * R)
+        # sector wedges (Qt: angle in 1/16 deg, 0=3 o'clock, CCW)
+        for i in range(6):
+            pr = self.per_sector[i]
+            col = QtGui.QColor(int(235 * (1 - pr)) + 20, int(190 * pr) + 25, 55)
+            p.setBrush(QtGui.QBrush(col))
+            p.setPen(QtGui.QPen(QtGui.QColor("#202020"), 1))
+            p.drawPie(rect, int(i * 60 * 16), int(60 * 16))
+            # sector label (R/F)
+            mid = math.radians(i * 60 + 30)
+            lx, ly = cx + math.cos(mid) * R * 0.78, cy - math.sin(mid) * R * 0.78
+            p.setPen(QtGui.QPen(QtGui.QColor("#111")))
+            p.drawText(QtCore.QRectF(lx - 12, ly - 8, 24, 16),
+                       QtCore.Qt.AlignCenter, "R" if self.SEC[i][1] > 0 else "F")
+        # rotor hub
+        rr = R * 0.5
+        p.setBrush(QtGui.QBrush(QtGui.QColor("#161616")))
+        p.setPen(QtGui.QPen(QtGui.QColor("#333"), 1))
+        p.drawEllipse(QtCore.QRectF(cx - rr, cy - rr, 2 * rr, 2 * rr))
+        # rotor bar N(red)/S(blue) at electrical angle
+        ang = math.radians(self.angle)
+        dx, dy = math.cos(ang), -math.sin(ang)
+        lw = max(5, int(R * 0.10))
+        penN = QtGui.QPen(QtGui.QColor("#ef5350"), lw); penN.setCapStyle(QtCore.Qt.RoundCap)
+        p.setPen(penN)
+        p.drawLine(QtCore.QPointF(cx, cy), QtCore.QPointF(cx + dx * rr * 0.92, cy + dy * rr * 0.92))
+        penS = QtGui.QPen(QtGui.QColor("#42a5f5"), lw); penS.setCapStyle(QtCore.Qt.RoundCap)
+        p.setPen(penS)
+        p.drawLine(QtCore.QPointF(cx, cy), QtCore.QPointF(cx - dx * rr * 0.92, cy - dy * rr * 0.92))
+        # center text
+        sec = int(self.angle // 60) % 6
+        fphase = self.PHASE_NAME[self.SEC[sec][0]]
+        p.setPen(QtGui.QPen(QtGui.QColor("#e0e0e0")))
+        f = p.font(); f.setPointSize(10); f.setBold(True); p.setFont(f)
+        p.drawText(QtCore.QRectF(cx - rr, cy - 22, 2 * rr, 16),
+                   QtCore.Qt.AlignCenter, "%s sector" % ("rising" if self.SEC[sec][1] > 0 else "falling"))
+        f.setPointSize(8); f.setBold(False); p.setFont(f)
+        p.drawText(QtCore.QRectF(cx - rr, cy - 2, 2 * rr, 14),
+                   QtCore.Qt.AlignCenter, "float %s | %d eRPM" % (fphase, self.erpm))
+        p.end()
+
+
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, port):
         super().__init__()
@@ -340,6 +416,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tabs.addTab(self._build_tune_tab(), "🎛 Tune")
         self.tabs.addTab(self._build_wizard_tab(), "🧙 Wizard")
         self.tabs.addTab(self._build_scope_tab(), "🔬 ZC Explainer")
+        self.tabs.addTab(self._build_sim_tab(), "🧪 ZC Lab")
         root.addWidget(self.tabs, 1)
 
         # console dock (shared across tabs)
@@ -365,6 +442,219 @@ class MainWindow(QtWidgets.QMainWindow):
 
         self.status = self.statusBar()
         self.status.showMessage("Select a port and Connect.")
+
+    def _build_sim_tab(self):
+        w = QtWidgets.QWidget()
+        v = QtWidgets.QVBoxLayout(w)
+        hint = QtWidgets.QLabel(
+            "ZC Lab — live model of sensorless zero-cross detection. Pick a motor, drag the "
+            "speed slider, and watch which commutation sectors get a real measured timestamp "
+            "(green) vs coast on a guess (red). The capture model encodes the validated "
+            "mechanism (rising always seen in PWM-ON; falling via the RC-filtered OFF-center "
+            "sample, limited by samples-per-sector + RC lag) calibrated to the bench. "
+            "'Deep-dive' runs the switching-level waveform; the SPICE engine is EXPERIMENTAL "
+            "(runs, but does not yet reproduce the masking from first principles).")
+        hint.setWordWrap(True); hint.setStyleSheet("color:#9e9e9e;font-size:11px;")
+        v.addWidget(hint)
+
+        c = QtWidgets.QHBoxLayout()
+        c.addWidget(QtWidgets.QLabel("Motor:"))
+        self.lab_motor = QtWidgets.QComboBox()
+        self.lab_motor.addItems(list(ZCSIM.MOTORS.keys()))
+        self.lab_motor.currentIndexChanged.connect(self._lab_set_motor)
+        c.addWidget(self.lab_motor)
+        self.lab_mlabel = QtWidgets.QLabel("")
+        self.lab_mlabel.setStyleSheet("color:#9e9e9e;")
+        c.addWidget(self.lab_mlabel)
+        c.addStretch(1)
+        c.addWidget(QtWidgets.QLabel("waveform engine:"))
+        self.sim_engine = QtWidgets.QComboBox()
+        self.sim_engine.addItems(["lumped (numpy)", "SPICE (experimental)"])
+        self.sim_engine.setToolTip("SPICE is an experimental switching-physics sandbox — "
+                                   "it runs but does NOT yet quantitatively reproduce the "
+                                   "bench masking. The live capture model (and the bench data) "
+                                   "are the trustworthy parts.")
+        c.addWidget(self.sim_engine)
+        b_spice = QtWidgets.QPushButton("⚡ Deep-dive")
+        b_spice.clicked.connect(self._lab_waveform)
+        c.addWidget(b_spice)
+        v.addLayout(c)
+
+        s = QtWidgets.QHBoxLayout()
+        s.addWidget(QtWidgets.QLabel("Speed"))
+        self.lab_speed = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.lab_speed.setRange(0, 235000)
+        self.lab_speed.valueChanged.connect(self._lab_update)
+        s.addWidget(self.lab_speed, 1)
+        self.lab_speed_lbl = QtWidgets.QLabel("0 eRPM")
+        self.lab_speed_lbl.setMinimumWidth(180)
+        self.lab_speed_lbl.setStyleSheet("font-weight:bold;")
+        s.addWidget(self.lab_speed_lbl)
+        v.addLayout(s)
+
+        split = QtWidgets.QSplitter(QtCore.Qt.Horizontal)
+        left = QtWidgets.QWidget(); lv = QtWidgets.QVBoxLayout(left)
+        self.lab_rotor = RotorWidget()
+        lv.addWidget(self.lab_rotor, 1)
+        self.lab_cap = QtWidgets.QLabel("measured —")
+        self.lab_cap.setAlignment(QtCore.Qt.AlignCenter)
+        self.lab_cap.setStyleSheet("font-size:20px;font-weight:bold;")
+        lv.addWidget(self.lab_cap)
+        self.lab_split = QtWidgets.QLabel("rising — / falling —")
+        self.lab_split.setAlignment(QtCore.Qt.AlignCenter)
+        lv.addWidget(self.lab_split)
+        self.lab_tally = QtWidgets.QLabel("captured 0 / guessed 0")
+        self.lab_tally.setAlignment(QtCore.Qt.AlignCenter)
+        self.lab_tally.setStyleSheet("color:#9e9e9e;font-family:monospace;")
+        lv.addWidget(self.lab_tally)
+        split.addWidget(left)
+
+        right = QtWidgets.QWidget(); rv = QtWidgets.QVBoxLayout(right)
+        glw1 = pg.GraphicsLayoutWidget()
+        self.lab_curve = glw1.addPlot(title="ZC capture vs eRPM (marker = slider)")
+        self.lab_curve.showGrid(x=True, y=True, alpha=0.2); self.lab_curve.addLegend(offset=(10, 10))
+        self.lab_curve.setLabel('left', 'capture %'); self.lab_curve.setLabel('bottom', 'eRPM')
+        self.lab_curve.setYRange(0, 105)
+        self.lab_c_meas = self.lab_curve.plot(pen=pg.mkPen("#42a5f5", width=2), name="measured %")
+        self.lab_c_fall = self.lab_curve.plot(pen=pg.mkPen("#ffa726", width=2), name="falling %")
+        self.lab_marker = pg.InfiniteLine(angle=90, pen=pg.mkPen("#e0e0e0", style=QtCore.Qt.DashLine))
+        self.lab_curve.addItem(self.lab_marker)
+        rv.addWidget(glw1, 1)
+
+        glw2 = pg.GraphicsLayoutWidget()
+        self.sim_p = glw2.addPlot(title="Floating-phase waveform through the ZC (ADC) — Deep-dive")
+        self.sim_p.showGrid(x=True, y=True, alpha=0.2); self.sim_p.addLegend(offset=(10, 10))
+        self.sim_raw = self.sim_p.plot(pen=pg.mkPen("#90caf9", width=1), name="V_node (ON spikes)")
+        self.sim_filt = self.sim_p.plot(pen=pg.mkPen("#66bb6a", width=2), name="V_sense (RC-filtered)")
+        self.sim_thr = self.sim_p.plot(pen=pg.mkPen("#bdbdbd", width=1, style=QtCore.Qt.DashLine), name="threshold")
+        self.sim_p.setLabel('bottom', 'time', 's', siPrefix=True)
+        rv.addWidget(glw2, 1)
+        split.addWidget(right); split.setSizes([360, 660])
+        v.addWidget(split, 1)
+
+        self._lab_last_sector = -1
+        self._lab_timer = QtCore.QTimer(self)
+        self._lab_timer.timeout.connect(self._lab_tick)
+        self._lab_timer.start(33)
+        QtCore.QTimer.singleShot(0, self._lab_set_motor)
+        return w
+
+    def _run_sim_spice(self, erpm, duty, sector):
+        """Call the isolated SPICE venv as a subprocess; return the result dict."""
+        import subprocess, json as _json
+        here = os.path.dirname(os.path.abspath(__file__))     # garuda_gui/
+        base = os.path.dirname(here)                           # garuda_debug/
+        venv_py = os.path.join(base, ".venv-spice", "bin", "python")
+        nglib = os.path.join(base, ".venv-spice", "nglib")
+        script = os.path.join(here, "spice_engine.py")
+        if not os.path.exists(venv_py):
+            return {"ok": False, "error": "SPICE venv not found (.venv-spice). "
+                    "See spice_engine.py header for setup."}
+        env = dict(os.environ)
+        env["LD_LIBRARY_PATH"] = nglib + os.pathsep + env.get("LD_LIBRARY_PATH", "")
+        params = _json.dumps({"erpm": erpm, "duty": duty, "sector": sector})
+        try:
+            p = subprocess.run([venv_py, script, params], capture_output=True,
+                               text=True, env=env, timeout=90)
+        except Exception as e:
+            return {"ok": False, "error": "subprocess: %s" % e}
+        out = (p.stdout or "").strip().splitlines()
+        if not out:
+            return {"ok": False, "error": "no output\n" + (p.stderr or "")[-400:]}
+        try:
+            return _json.loads(out[-1])
+        except Exception as e:
+            return {"ok": False, "error": "parse: %s\n%s" % (e, (p.stderr or "")[-400:])}
+
+    def _lab_set_motor(self):
+        m = ZCSIM.MOTORS[self.lab_motor.currentText()]
+        self.lab_mlabel.setText("KV %d | %d pole-pairs | %.0f V | max %d eRPM"
+                                % (m["kv"], m["poles_pp"], m["vbus"], m["erpm_max"]))
+        self.lab_speed.blockSignals(True)
+        self.lab_speed.setRange(0, m["erpm_max"])
+        if self.lab_speed.value() == 0:
+            self.lab_speed.setValue(int(m["erpm_max"] * 0.3))
+        self.lab_speed.blockSignals(False)
+        erpms = np.linspace(2000, m["erpm_max"], 120)
+        meas, fall = [], []
+        for e in erpms:
+            cm = ZCSIM.capture_model(int(e), m)
+            meas.append(cm["measured"] * 100); fall.append(cm["falling"] * 100)
+        self.lab_c_meas.setData(erpms, meas)
+        self.lab_c_fall.setData(erpms, fall)
+        self.lab_curve.setXRange(0, m["erpm_max"])
+        self._lab_update()
+
+    def _lab_update(self):
+        m = ZCSIM.MOTORS[self.lab_motor.currentText()]
+        erpm = self.lab_speed.value()
+        cm = ZCSIM.capture_model(erpm, m)
+        self._lab_cm = cm
+        self.lab_speed_lbl.setText("%d eRPM  (duty %.0f%%)" % (erpm, cm["duty"] * 100))
+        self.lab_marker.setValue(erpm)
+        self.lab_rotor.set_capture(cm["per_sector"], erpm)
+        self.lab_rotor.reset_tally(); self._lab_last_sector = -1
+        col = "#66bb6a" if cm["measured"] >= 0.9 else ("#ffa726" if cm["measured"] >= 0.7 else "#ef5350")
+        self.lab_cap.setText("measured %.0f%%" % (cm["measured"] * 100))
+        self.lab_cap.setStyleSheet("font-size:20px;font-weight:bold;color:%s;" % col)
+        self.lab_split.setText("rising %.0f%%  /  falling %.0f%%   (%.1f samples/sector)"
+                               % (cm["rising"] * 100, cm["falling"] * 100, cm["spp"]))
+        if self.sim_engine.currentIndex() == 0:
+            self._lab_waveform_lumped(erpm, cm["duty"])
+
+    def _lab_tick(self):
+        if not hasattr(self, "_lab_cm"):
+            return
+        import random
+        m = ZCSIM.MOTORS[self.lab_motor.currentText()]
+        erpm = self.lab_speed.value()
+        if erpm < 1:
+            return
+        rev_s = 0.2 + 2.3 * min(1.0, erpm / max(1, m["erpm_max"]))   # watchable spin
+        self.lab_rotor.angle = (self.lab_rotor.angle + 360.0 * rev_s * 0.033) % 360.0
+        sec = int(self.lab_rotor.angle // 60) % 6
+        if sec != self._lab_last_sector and self._lab_last_sector >= 0:
+            prob = self._lab_cm["per_sector"][self._lab_last_sector]
+            if random.random() < prob:
+                self.lab_rotor.cap_n += 1
+            else:
+                self.lab_rotor.guess_n += 1
+            self.lab_tally.setText("captured %d / guessed %d"
+                                   % (self.lab_rotor.cap_n, self.lab_rotor.guess_n))
+        self._lab_last_sector = sec
+        self.lab_rotor.update()
+
+    def _lab_waveform_lumped(self, erpm, duty):
+        if erpm < 1500:
+            return
+        r = ZCSIM.simulate(int(erpm), float(duty), sector_index=1)   # falling sector
+        t = r["t_us"] * 1e-6
+        self.sim_raw.setData(t, r["v_node"]); self.sim_filt.setData(t, r["v_sense"])
+        self.sim_thr.setData([t[0], t[-1]], [r["thr_adc"], r["thr_adc"]])
+
+    def _lab_waveform(self):
+        erpm = self.lab_speed.value()
+        duty = getattr(self, "_lab_cm", {}).get("duty", 0.4)
+        if self.sim_engine.currentIndex() == 1:
+            self.lab_tally.setText("running SPICE …")
+            QtWidgets.QApplication.processEvents()
+            d = self._run_sim_spice(erpm, duty, "falling")
+            if not d.get("ok"):
+                self.lab_tally.setText("SPICE error: " + str(d.get("error"))[:90])
+                return
+            t = np.array(d["t_us"]) * 1e-6
+            self.sim_raw.setData(t, np.array(d["v_node_adc"]))
+            self.sim_filt.setData(t, np.array(d["v_sense_adc"]))
+            self.sim_thr.setData([t[0], t[-1]], [d["thr_adc"], d["thr_adc"]])
+            ce, oe = d["comp_on_env"], d["offc_env"]
+            self.lab_tally.setText(
+                "SPICE falling: comparator %s (%d crossings) | OFF-center %s | "
+                "ON-env %.0f..%.0f RC %.0f..%.0f (bench 12..2559 / 54..1282)"
+                % ("DETECT" if d.get("comp_detect") else "MISS", d.get("comp_ncross", 0),
+                   "DETECT" if d.get("offc_detect") else "MISS",
+                   ce[0], ce[1], oe[0], oe[1]))
+        else:
+            self._lab_waveform_lumped(erpm, duty)
 
     def _build_monitor_tab(self):
         w = QtWidgets.QWidget()
