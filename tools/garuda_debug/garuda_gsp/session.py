@@ -24,6 +24,9 @@ CORE_COLS = [
     "eRPM", "good_zc", "synced", "hwzc_zc", "hwzc_miss", "hwzc_reject",
     "ia_pk_mag", "ib_pk_mag", "ibus_pk_mag", "step_period", "uptime",
     "spi_en", "spi_target", "spi_error", "spi_output", "spi_integ",
+    "cpu_load_pct",
+    "miss_s0", "miss_s1", "miss_s2", "miss_s3", "miss_s4", "miss_s5",
+    "zc_thresh", "fall_off_min", "fall_off_max",
 ]
 
 
@@ -73,14 +76,25 @@ class Session:
             json.dump(self.params, f, indent=2)
         with open(os.path.join(path, "faults.json"), "w") as f:
             json.dump(self.faults, f, indent=2)
+        # Auto-extra columns: scalar keys only (skip list/dict-valued fields
+        # like miss_by_sector, which we flatten into miss_s0..5 below).
+        extra = {k for s in self.samples for k, v in s.items()
+                 if not isinstance(v, (list, dict, tuple))}
         cols = CORE_COLS + sorted(
-            {k for s in self.samples for k in s} - set(CORE_COLS)
+            extra - set(CORE_COLS)
             - {"state", "fault", "state_name", "fault_name"})
         with open(os.path.join(path, "telemetry.csv"), "w", newline="") as f:
             w = csv.DictWriter(f, fieldnames=cols, extrasaction="ignore")
             w.writeheader()
             for s in self.samples:
-                w.writerow(s)
+                mbs = s.get("miss_by_sector")
+                if mbs:
+                    row = dict(s)
+                    for i in range(min(6, len(mbs))):
+                        row[f"miss_s{i}"] = mbs[i]
+                    w.writerow(row)
+                else:
+                    w.writerow(s)
         return path
 
     @classmethod

@@ -437,6 +437,8 @@ void GARUDA_ServiceInit(void)
     garudaData.bemf.bemfRaw = 0;
     garudaData.bemf.zcThreshold = 0;
     garudaData.bemf.zcAmpForFilterComp = 0;
+    garudaData.bemf.fallOffBemfMin = 0xFFFF;  /* falling OFF-center envelope */
+    garudaData.bemf.fallOffBemfMax = 0;
     garudaData.bemf.zeroCrossDetected = false;
     garudaData.bemf.cmpPrev = 0xFF;
     garudaData.bemf.cmpExpected = 0;
@@ -754,6 +756,66 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
             garudaData.bemf.bemfRaw = phaseAC_val;
             garudaData.bemf.bemfSampleValid = true;
         }
+
+#if FEATURE_ADC_CMP_ZC
+        /* Diagnostic: falling-sector OFF-center BEMF envelope. Capture bemfRaw
+         * (OFF-center floating sample) only while a FALLING sector is in the
+         * WATCHING window — proves whether the falling crossing is visible at
+         * OFF-center (envelope brackets zcThreshold) vs the silent ON-time
+         * comparator. Cheap: 2 compares per tick, diagnostic only. */
+        if (garudaData.hwzc.enabled
+            && garudaData.hwzc.phase == HWZC_WATCHING
+            && garudaData.bemf.bemfSampleValid
+            && commutationTable[garudaData.currentStep].zcPolarity < 0)
+        {
+            uint16_t vfo = garudaData.bemf.bemfRaw;
+            if (vfo < garudaData.bemf.fallOffBemfMin) garudaData.bemf.fallOffBemfMin = vfo;
+            if (vfo > garudaData.bemf.fallOffBemfMax) garudaData.bemf.fallOffBemfMax = vfo;
+
+#if FEATURE_HWZC_FALLING_SW && FEATURE_HWZC_SECTOR_PI
+            /* Hybrid falling detector: the rotor's falling ZC is invisible to
+             * the ON-time comparator but present here at OFF-center. Detect the
+             * downward crossing of zcThreshold (one accept per sector) and record
+             * it into the sector-PI path exactly as the HW comparator does
+             * (hwzc.c:549) — OnPiPeriodExpired then uses it. Plausibility floor:
+             * only past 1/4 of the period (the falling ZC sits ~mid-sector;
+             * rejects early demag dips). Optional speed cap for coarse-resolution
+             * top end. */
+            if (!garudaData.hwzc.captureValid)
+            {
+                /* RC-lag compensation, falling branch (added 2026-06-07) — the
+                 * HW rising path applies this (hwzc.c:251 / live refresh :726)
+                 * but the falling SW path historically didn't, so falling drifted
+                 * late vs rising as ω·τ grew. Apply the same per-polarity offset
+                 * (falling: thresh + offset) then the falling deadband, so both
+                 * polarities are phase-consistent. Magnitude tunes via
+                 * HWZC_FILTER_AMP_PCT_FALLING. */
+                uint16_t fth = HWZC_ApplyFilterComp(&garudaData,
+                                                    garudaData.bemf.zcThreshold,
+                                                    false /* falling */);
+                fth = (fth > HWZC_CMP_DEADBAND) ? (uint16_t)(fth - HWZC_CMP_DEADBAND) : 0;
+                uint32_t zc = HAL_SCCP2_ReadTimestamp();
+                uint32_t intoSector = zc - garudaData.hwzc.lastCommStamp;
+                bool plausible = intoSector > (garudaData.hwzc.timerPeriod >> 2);
+#if HWZC_FALLING_SW_MAX_ERPM > 0
+                uint32_t erpmNow = garudaData.hwzc.stepPeriodHR
+                    ? HWZC_TICKS_TO_ERPM(garudaData.hwzc.stepPeriodHR) : 0;
+                if (erpmNow > HWZC_FALLING_SW_MAX_ERPM) plausible = false;
+#endif
+                if (plausible && vfo < fth)
+                {
+                    garudaData.hwzc.lastCaptureHR = zc;
+                    garudaData.hwzc.captureValid  = true;
+                    garudaData.hwzc.lastZcStamp   = zc;
+                    if (garudaData.hwzc.goodZcCount < 0xFFFE)
+                        garudaData.hwzc.goodZcCount++;
+                    garudaData.hwzc.missCount = 0;
+                    garudaData.hwzc.totalZcCount++;
+                }
+            }
+#endif
+        }
+#endif
     }
     adcIsrTick++;
 

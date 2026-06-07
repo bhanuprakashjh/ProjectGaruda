@@ -80,6 +80,14 @@ typedef struct
     uint8_t  filterCount;       /* Consecutive reads matching cmpExpected */
     uint8_t  ad2SettleCount;    /* Samples to discard after AD2 PINSEL change (0=settled) */
     bool     bemfSampleValid;   /* false when bemfRaw is stale after mux switch */
+    /* Diagnostic 2026-06-07: OFF-center BEMF envelope captured ONLY during
+     * falling-ZC sectors' WATCHING window. The HW comparator (ON-time) goes
+     * silent on falling sectors at speed; this proves whether the floating BEMF
+     * actually sweeps through neutral (zcThreshold) at the OFF-center sample
+     * (bemfRaw) — i.e. whether a per-polarity OFF-window detector is viable.
+     * Windowed: reset to {0xFFFF,0} on each snapshot read. */
+    uint16_t fallOffBemfMin;
+    uint16_t fallOffBemfMax;
     /* P1: Measured neutral from active-rail tracking + ZC events */
     uint16_t phaseBHigh;         /* Phase B ADC reading when B=PWM (high rail) */
     uint16_t phaseBLow;          /* Phase B ADC reading when B=LOW (low rail) */
@@ -619,6 +627,10 @@ typedef struct
     uint32_t rampCounter;       /* counts down within current step */
     uint32_t systemTick;        /* 1ms tick counter */
     uint16_t armCounter;        /* counts up during arming phase */
+    uint16_t cpuLoadPermille;   /* main-loop CPU load 0..1000 (‰), relative to
+                                 * the motor-off idle baseline. Computed in
+                                 * main()'s while(1) from a spin counter — see
+                                 * main.c. Diagnostic only; 0 when uncalibrated. */
 
     /* Run command and recovery */
     bool     runCommandActive;       /* SW1-driven latch: true = user wants motor running */

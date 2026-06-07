@@ -97,6 +97,21 @@ def decode_snapshot(p: bytes, t: float = 0.0) -> dict:
         (sp_en, _pad, sp_zcs, sp_target, sp_error,
          sp_output, sp_integ) = struct.unpack_from("<BBHIiIf", p, 208)
 
+    # Diagnostics added 2026-06-06: CPU load (‰) + per-sector miss tally.
+    cpu_load_pct = 0.0
+    miss_by_sector = [0, 0, 0, 0, 0, 0]
+    if n >= 242:
+        cpu_load_permille = struct.unpack_from("<H", p, 228)[0]
+        cpu_load_pct = cpu_load_permille / 10.0
+        miss_by_sector = list(struct.unpack_from("<6H", p, 230))
+
+    # Falling-sector OFF-center BEMF envelope (242B+). min==0xFFFF → no samples.
+    fall_off_min = fall_off_max = None
+    if n >= 246:
+        _fmin, _fmax = struct.unpack_from("<HH", p, 242)
+        if _fmin != 0xFFFF:
+            fall_off_min, fall_off_max = _fmin, _fmax
+
     vbus_v = vbus_raw * P.VBUS_SCALE_V
     # Instantaneous bus current: valley-sampled, so it lands wherever the bus
     # happens to be during freewheel — UNRELIABLE (gives a phantom ~-20A at idle
@@ -135,5 +150,8 @@ def decode_snapshot(p: bytes, t: float = 0.0) -> dict:
         "uptime": uptime,
         "spi_en": sp_en, "spi_zcs": sp_zcs, "spi_target": sp_target,
         "spi_error": sp_error, "spi_output": sp_output, "spi_integ": sp_integ,
+        "cpu_load_pct": cpu_load_pct,
+        "miss_by_sector": miss_by_sector,
+        "fall_off_min": fall_off_min, "fall_off_max": fall_off_max,
         "snapBytes": n,
     }

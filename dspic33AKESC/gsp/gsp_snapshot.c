@@ -171,7 +171,28 @@ void GSP_CaptureSnapshot(GSP_SNAPSHOT_T *dst)
     dst->hwzcTotalZcCount   = ReadU32Consistent(&src->hwzc.totalZcCount);
     dst->hwzcTotalMissCount = ReadU32Consistent(&src->hwzc.totalMissCount);
     dst->hwzcNoiseReject    = ReadU32Consistent(&src->hwzc.noiseRejectCount);
+
+    /* Per-sector "guess" tally — low 16 bits (host diffs consecutive frames,
+     * per-frame delta << 65536 so truncation is delta-safe). Shows WHERE the
+     * misses fall across the 6 commutation sectors. */
+    {
+        int i;
+        for (i = 0; i < 6; i++)
+            dst->hwzcMissBySector[i] =
+                (uint16_t)ReadU32Consistent(&src->hwzc.dbgPiMissBySector[i]);
+    }
 #endif
+
+    /* Main-loop CPU load (‰) — computed in main()'s while(1). Plain 16-bit
+     * read is atomic on dsPIC33AK. */
+    dst->cpuLoadPermille = src->cpuLoadPermille;
+
+    /* Falling-sector OFF-center BEMF envelope — read then reset the window so
+     * each snapshot reports the swing over the most recent ~20 ms. */
+    dst->fallOffBemfMin = src->bemf.fallOffBemfMin;
+    dst->fallOffBemfMax = src->bemf.fallOffBemfMax;
+    src->bemf.fallOffBemfMin = 0xFFFF;
+    src->bemf.fallOffBemfMax = 0;
 
 #if !FEATURE_FOC && !FEATURE_FOC_V2 && !FEATURE_FOC_V3 && !FEATURE_FOC_AN1078
     /* Phase-current monitor (16-bit fields are atomic on dsPIC33AK).

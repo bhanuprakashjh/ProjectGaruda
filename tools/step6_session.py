@@ -160,6 +160,18 @@ def parse_snapshot(p: bytes, t0: float) -> dict:
         (sp_enabled, _sp_pad, sp_zcs, sp_target, sp_error,
          sp_output, sp_integ) = struct.unpack_from("<BBHIiIf", p, 208)
 
+    # Diagnostics added 2026-06-06: CPU load (‰) + per-sector miss tally (242B).
+    cpu_load_pct = 0.0
+    miss_by_sector = [0, 0, 0, 0, 0, 0]
+    if len(p) >= 242:
+        cpu_load_pct = struct.unpack_from("<H", p, 228)[0] / 10.0
+        miss_by_sector = list(struct.unpack_from("<6H", p, 230))
+    fall_off_min = fall_off_max = None
+    if len(p) >= 246:
+        _fmin, _fmax = struct.unpack_from("<HH", p, 242)
+        if _fmin != 0xFFFF:
+            fall_off_min, fall_off_max = _fmin, _fmax
+
     vbus_v = vbus_raw * VBUS_SCALE_V
     ibus_a = (ibus_raw - IBUS_BIAS) * IBUS_SCALE_A
     if hwzc_en and hwzc_hr > 0:
@@ -198,6 +210,10 @@ def parse_snapshot(p: bytes, t0: float) -> dict:
         "spi_error":    sp_error,
         "spi_output":   sp_output,
         "spi_integ":    sp_integ,
+        "cpu_load_pct":   cpu_load_pct,
+        "miss_by_sector": miss_by_sector,
+        "fall_off_min":   fall_off_min,
+        "fall_off_max":   fall_off_max,
     }
 
 
@@ -343,6 +359,39 @@ def summarize(samples, info=None):
                    f"({100.0 * miss / max(1, total + miss):.2f}%)")
         out.append(f"hwzc rejections : {rej:>10,}   "
                    f"({100.0 * rej / max(1, total + rej):.2f}%)")
+        out.append(f"  -> note: rejections = comparator noise-fires FILTERED "
+                   f"(per fire); they are NOT guesses.")
+        out.append(f"     measured-vs-guess is accepted vs misses (per sector): "
+                   f"{100.0 * total / max(1, total + miss):.1f}% measured.")
+
+    # Per-sector "where do the guesses fall" — diff first→last cumulative miss.
+    first = next((s for s in samples if s.get('miss_by_sector')), None)
+    if first and last.get('miss_by_sector'):
+        d = [(last['miss_by_sector'][i] - first['miss_by_sector'][i]) & 0xFFFF
+             for i in range(6)]
+        tot_miss = sum(d)
+        out.append("")
+        out.append("PER-SECTOR GUESSES (misses by commutation sector, session)")
+        out.append("-" * 78)
+        out.append("  sector :  " + "  ".join(f"S{i}" for i in range(6)))
+        out.append("  misses :  " + "  ".join(f"{v}" for v in d))
+        if tot_miss > 0:
+            pct = [100.0 * v / tot_miss for v in d]
+            out.append("  share% :  " + "  ".join(f"{v:.0f}" for v in pct))
+            hi = max(range(6), key=lambda i: d[i])
+            even = max(pct) < 30.0   # 6 sectors even ~16.7% each
+            out.append(f"  -> {'EVEN (state-driven, not structural)' if even else f'CLUSTERED on S{hi} ({pct[hi]:.0f}%) — structural, a windowed comparator would target this'}")
+        else:
+            out.append("  -> zero guesses this session (every sector measured)")
+
+    # CPU load (main-loop) over CL samples
+    cpu_cl = [s['cpu_load_pct'] for s in samples
+              if s.get('state_name') == 'CL' and s.get('cpu_load_pct', 0) > 0]
+    if cpu_cl:
+        out.append("")
+        out.append(f"CPU LOAD (CL)   : avg {sum(cpu_cl)/len(cpu_cl):.0f}%  "
+                   f"peak {max(cpu_cl):.0f}%   "
+                   f"(main-loop, vs motor-off baseline; idle headroom = 100-load)")
 
     # Lock acquisition (rough)
     cl_entries = [(i, s) for i, s in enumerate(samples)
@@ -485,12 +534,18 @@ def main():
 
             samples.append(snap)
 
-            # CSV
+            # CSV — flatten miss_by_sector list -> miss_s0..5 scalar columns so
+            # the list's internal commas don't corrupt the CSV. Drop the raw list.
+            row = {k: v for k, v in snap.items() if k != "miss_by_sector"}
+            mbs = snap.get("miss_by_sector")
+            if mbs is not None:
+                for i in range(min(6, len(mbs))):
+                    row[f"miss_s{i}"] = mbs[i]
             if csv_writer is None and csv_file:
-                csv_writer = csv.DictWriter(csv_file, fieldnames=list(snap.keys()))
+                csv_writer = csv.DictWriter(csv_file, fieldnames=list(row.keys()))
                 csv_writer.writeheader()
             if csv_writer:
-                csv_writer.writerow(snap)
+                csv_writer.writerow(row)
 
             # Print every ~250ms or on state/fault change
             do_print = False

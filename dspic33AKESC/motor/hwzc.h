@@ -82,9 +82,13 @@ static inline uint16_t HWZC_ApplyFilterComp(volatile GARUDA_DATA_T *pData,
     uint16_t amp = pData->bemf.zcAmpForFilterComp;
     if (amp == 0) amp = thresh;
 
-    /* offset = (amp × ω·τ) >> 15  ×  AMP_PCT / 100   (staged for no overflow) */
+    /* offset = (amp × ω·τ) >> 15  ×  AMP_PCT / 100   (staged for no overflow).
+     * Per-polarity: rising uses HWZC_FILTER_AMP_PCT (bench-proven to 232k),
+     * falling uses HWZC_FILTER_AMP_PCT_FALLING (the masked branch — see config).
+     * AMP_PCT_FALLING=0 → falling offset is 0 → falling returns bare thresh. */
+    uint32_t ampPct = risingZc ? HWZC_FILTER_AMP_PCT : HWZC_FILTER_AMP_PCT_FALLING;
     uint32_t offset = ((uint32_t)amp * omegaTauQ15) >> 15;
-    offset = (offset * HWZC_FILTER_AMP_PCT) / 100UL;
+    offset = (offset * ampPct) / 100UL;
     if (offset > HWZC_FILTER_MAX_OFFSET) offset = HWZC_FILTER_MAX_OFFSET;
     pData->hwzc.dbgFilterOffset = (uint16_t)offset;
 

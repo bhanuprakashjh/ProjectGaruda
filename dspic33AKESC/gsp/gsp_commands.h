@@ -236,9 +236,27 @@ typedef struct __attribute__((packed)) {
     int32_t  speedPiLastError;     /* error = target - measured (eRPM, signed) */
     uint32_t speedPiOutputDuty;    /* PI output (PWM ticks) = FF + correction */
     float    speedPiIntegratorF;   /* I-term correction (PWM ticks, may be ±) */
+
+    /* Diagnostics added 2026-06-06 (14B) — per-sector ZC + CPU load.
+     * cpuLoadPermille: main-loop CPU load 0..1000 (‰) vs motor-off baseline.
+     * hwzcMissBySector: per-sector "guess" tally (PI period expired with NO
+     * captured ZC that sector) — low 16 bits of hwzc.dbgPiMissBySector[]. The
+     * host diffs consecutive frames to see WHERE the guesses fall (clustered on
+     * a polarity/phase = structural; spread = state-driven). Pair with
+     * hwzcTotalZcCount/hwzcTotalMissCount for the aggregate measured:guess. */
+    uint16_t cpuLoadPermille;
+    uint16_t hwzcMissBySector[6];
+
+    /* Diagnostic 2026-06-07 (4B) — falling-sector OFF-center BEMF envelope.
+     * min/max of bemfRaw captured only during falling-ZC WATCHING windows.
+     * If [min..max] brackets zc_thresh (neutral), the falling crossing IS
+     * visible at the OFF-center sample → per-polarity OFF-window detector is
+     * viable. min==0xFFFF means no falling-WATCHING samples this window. */
+    uint16_t fallOffBemfMin;
+    uint16_t fallOffBemfMax;
 } GSP_SNAPSHOT_T;
 
-_Static_assert(sizeof(GSP_SNAPSHOT_T) == 228, "GSP_SNAPSHOT_T wire size mismatch");
+_Static_assert(sizeof(GSP_SNAPSHOT_T) == 246, "GSP_SNAPSHOT_T wire size mismatch");
 
 /* GSP_RX_STATUS_T — 12 bytes, returned by GET_RX_STATUS */
 typedef struct __attribute__((packed)) {

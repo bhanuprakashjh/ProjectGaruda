@@ -54,6 +54,7 @@ SIGNALS = [
     ("goodzc",   "good_zc",  "#80cbc4", 8,      False, lambda v: f"{v:.0f}",   False),
     ("duty",     "Duty",     "#26c6da", 100,    False, lambda v: f"{v:.0f}%",  False),
     ("throttle", "Throttle", "#ffee58", 4096,   False, lambda v: f"{v:.0f}",   False),
+    ("cpu",      "CPU load", "#f06292", 100,    False, lambda v: f"{v:.0f}%",  False),
 ]
 
 # Params whose value implies a startup/standing current = (modPct or duty%) of Vbus
@@ -204,6 +205,74 @@ class Readout(QtWidgets.QFrame):
                                f"{'color:'+color+';' if color else ''}")
 
 
+class SectorMissBar(QtWidgets.QFrame):
+    """Six bars showing per-sector 'guess' rate (PI period with no captured ZC).
+
+    Fed cumulative hwzcMissBySector[6] each frame; tracks the delta-per-second
+    so the bars read 'guesses/s' in each commutation sector. An EVEN row means
+    misses are spread (state-driven / healthy); a CLUSTERED row (one or two
+    tall bars) means a sector/polarity the comparator structurally can't see —
+    the signature that windowed-comparator sampling would fix. Also prints the
+    aggregate measured:guess ratio."""
+    def __init__(self):
+        super().__init__()
+        self.setFrameShape(QtWidgets.QFrame.StyledPanel)
+        v = QtWidgets.QVBoxLayout(self)
+        v.setContentsMargins(8, 4, 8, 4); v.setSpacing(2)
+        self.hdr = QtWidgets.QLabel("Per-sector guesses/s  (measured-vs-guess)")
+        self.hdr.setStyleSheet("color:#9e9e9e;font-size:11px;")
+        v.addWidget(self.hdr)
+        row = QtWidgets.QHBoxLayout(); row.setSpacing(6)
+        self.bars, self.labs = [], []
+        for i in range(6):
+            col = QtWidgets.QVBoxLayout(); col.setSpacing(1)
+            bar = QtWidgets.QProgressBar()
+            bar.setOrientation(QtCore.Qt.Vertical)
+            bar.setRange(0, 100); bar.setValue(0); bar.setTextVisible(False)
+            bar.setFixedSize(26, 56)
+            lab = QtWidgets.QLabel(f"S{i}")
+            lab.setAlignment(QtCore.Qt.AlignCenter)
+            lab.setStyleSheet("color:#9e9e9e;font-size:10px;")
+            col.addWidget(bar, 0, QtCore.Qt.AlignHCenter); col.addWidget(lab)
+            row.addLayout(col)
+            self.bars.append(bar); self.labs.append(lab)
+        v.addLayout(row)
+        self._prev = None          # (miss_by_sector tuple, t)
+        self._prev_acc = None      # (hwzc_zc, hwzc_miss)
+
+    def update_from(self, s: dict):
+        miss = s.get("miss_by_sector") or [0]*6
+        t = s.get("t", 0.0)
+        # aggregate measured:guess (per-sector misses sum could wrap u16; use
+        # the full u32 totals from hwzc_zc/hwzc_miss for the headline ratio).
+        acc, mss = s.get("hwzc_zc", 0), s.get("hwzc_miss", 0)
+        if self._prev_acc is not None:
+            d_acc = max(0, acc - self._prev_acc[0])
+            d_mss = max(0, mss - self._prev_acc[1])
+            tot = d_acc + d_mss
+            if tot > 0:
+                pct = 100.0 * d_acc / tot
+                col = "#66bb6a" if pct >= 90 else ("#ffa726" if pct >= 70 else "#ef5350")
+                self.hdr.setText(
+                    f"Per-sector guesses/s — measured {pct:.0f}% / guess {100-pct:.0f}%")
+                self.hdr.setStyleSheet(f"color:{col};font-size:11px;font-weight:bold;")
+        self._prev_acc = (acc, mss)
+
+        if self._prev is not None:
+            dt = max(1e-3, t - self._prev[1])
+            rates = [max(0, (miss[i] - self._prev[0][i]) & 0xFFFF) / dt for i in range(6)]
+            peak = max(rates) if max(rates) > 0 else 1.0
+            for i in range(6):
+                pctbar = int(100 * rates[i] / peak)
+                self.bars[i].setValue(pctbar)
+                hot = rates[i] > 0.5 * peak and peak > 1.0
+                self.bars[i].setStyleSheet(
+                    "QProgressBar::chunk{background:%s;}" %
+                    ("#ef5350" if hot else "#42a5f5"))
+                self.labs[i].setText(f"S{i}\n{rates[i]:.0f}")
+        self._prev = (list(miss), t)
+
+
 # ─────────────────────────────────────────────────────────────────────────
 class MainWindow(QtWidgets.QMainWindow):
     def __init__(self, port):
@@ -216,6 +285,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.params = {}
         self.recording = False
         self.session = None
+        self._auto_session = None   # auto-records every run -> CSV, no button
         self.t0 = None
         self._last_vbus = None
         self._populating = False
@@ -312,11 +382,21 @@ class MainWindow(QtWidgets.QMainWindow):
             "eRPM": Readout("eRPM"), "duty": Readout("Duty", "%"),
             "vbus": Readout("Vbus", " V"), "ibus": Readout("Ibus", " A"),
             "thr": Readout("Throttle"), "iapk": Readout("Ia peak", " A"),
-            "hwzc": Readout("HWZC rej", "%"),
+            "hwzc": Readout("HWZC rej", "%"), "cpu": Readout("CPU", "%"),
         }
         for x in self.ro.values():
             rr.addWidget(x)
         v.addLayout(rr)
+
+        # ── Per-sector ZC: where measured timestamps vs guesses fall ──
+        # The reject% above is comparator noise-fires filtered; THIS shows
+        # which of the 6 commutation sectors are guessing (PI period expired
+        # with no captured ZC). Bars = per-second guess count per sector;
+        # an even row = healthy/state-driven, a clustered row = structural
+        # (a polarity/phase the comparator can't see) → the case the windowed
+        # comparator would actually fix.
+        self.sector_box = SectorMissBar()
+        v.addWidget(self.sector_box)
 
         # ── oscilloscope: per-channel vertical controls (gain/position) +
         #    time base + freeze, like a bench scope. Y axis is in DIVISIONS;
@@ -989,8 +1069,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.ro["iapk"].set(f"{ia:.1f}", "#ef5350" if ia > 18 else None)
         self.ro["hwzc"].set(f"{rejrate:.0f}",
                             "#ef5350" if rejrate > 80 else ("#ffa726" if rejrate > 50 else None))
+        cpu = s.get("cpu_load_pct", 0.0)
+        self.ro["cpu"].set(f"{cpu:.0f}",
+                           "#ef5350" if cpu > 85 else ("#ffa726" if cpu > 60 else "#66bb6a"))
+        self.sector_box.update_from(s)
 
-        raw = {"eRPM": s["eRPM"], "ia": ia, "ibus": ibus,
+        raw = {"eRPM": s["eRPM"], "ia": ia, "ibus": ibus, "cpu": cpu,
                "rejrate": rejrate, "vbus": s["vbus_V"],
                "bemf": s.get("bemf_raw", 0), "zcthr": s.get("zc_thresh", 0),
                "goodzc": s.get("good_zc", 0),
@@ -1027,6 +1111,29 @@ class MainWindow(QtWidgets.QMainWindow):
         # a waste). Stream from start (leaving IDLE) to stop (back to IDLE), with
         # banners. FAULT still streams so a desync is visible.
         running = s["state_name"] != "IDLE"
+        # Auto-record every run to a CSV bundle (with per-sector miss + CPU) so
+        # each run is analyzable without manually toggling Record. Starts on
+        # leaving IDLE, saves on return to IDLE. Skipped while manually
+        # recording (that path saves its own bundle).
+        if (running and not self._was_running
+                and self._auto_session is None and not self.recording):
+            self._auto_session = Session(
+                info=self.info, params=self.params,
+                host={"os": platform.system()}, tool_version=GSP_VER,
+                started_at=time.strftime("%Y-%m-%dT%H:%M:%S"))
+        if running and self._auto_session is not None:
+            self._auto_session.add(s2)
+        if (not running and self._was_running
+                and self._auto_session is not None):
+            name = f"sessions/gui_auto_{time.strftime('%Y%m%d_%H%M%S')}"
+            try:
+                self._auto_session.save(name)
+                self._log(f"💾 auto-saved {name}/telemetry.csv "
+                          f"({len(self._auto_session.samples)} samples)")
+            except Exception as e:
+                self._log(f"auto-save failed: {e}")
+            self._auto_session = None
+
         if not self._console_paused:
             if running and not self._was_running:
                 self._log(f"▶──────── RUN START @ {t:6.2f}s ────────")

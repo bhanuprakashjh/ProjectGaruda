@@ -53,7 +53,7 @@ extern "C" {
 #define FEATURE_ADAPTATION       0  /* requires FEATURE_LEARN_MODULES */
 #define FEATURE_COMMISSION       0  /* requires FEATURE_LEARN_MODULES */
 #define FEATURE_EEPROM_V2        1  /* NVM persistent storage for GSP params */
-#define FEATURE_PARAMS_FORCE_DEFAULTS 1 /* Bring-up: 1 = skip the EEPROM overlay so
+#define FEATURE_PARAMS_FORCE_DEFAULTS 0 /* Bring-up: 1 = skip the EEPROM overlay so
                                          * compiled profileDefaults[]/.h edits ALWAYS
                                          * win on reflash (NVM save still builds). Set
                                          * back to 0 for normal persistence. See also
@@ -804,6 +804,43 @@ extern "C" {
  * Disabled by default. Flip to 1 for the breakthrough run. */
 #define FEATURE_HWZC_SECTOR_PI         1
 
+/* Hybrid per-polarity ZC detection (2026-06-07). Bench-proven root cause: the
+ * ON-time HW comparator detects RISING sectors (even 0/2/4) perfectly at all
+ * speeds but is SILENT on FALLING sectors (odd 1/3/5) above ~20k eRPM — the
+ * falling crossing isn't in the ON-time window. Per-sector OFF-center telemetry
+ * confirmed the falling ZC IS visible at the OFF-center sample (bemfRaw brackets
+ * zcThreshold, swing GROWS with speed 118→1247 counts).
+ *
+ * When 1: RISING sectors keep the HW comparator (untouched, 232k-proven);
+ * FALLING sectors are detected by a software compare of the OFF-center sample
+ * (bemfRaw vs zcThreshold) in the 24 kHz ADC ISR, recording the capture into the
+ * same sector-PI path (lastCaptureHR/captureValid). This restores real feedback
+ * on the falling half (today coasted) — the low-speed-transient robustness win.
+ * STATIC per-polarity routing by commutationTable.zcPolarity — NOT a dynamic
+ * speed/duty handoff (see akesc_dual_window_zc_deadend). Requires SECTOR_PI.
+ *
+ * CAVEAT: OFF-center resolution is ~1 PWM period. Fine at low/mid speed (the
+ * target regime); at the very top a sector is ~1-2 PWM periods so falling
+ * timestamps are coarse — if that jitters the PI vs the precise rising captures,
+ * gate falling-SW to engage only below HWZC_FALLING_SW_MAX_ERPM (0 = no gate).
+ * Set 0 to revert to rising-only/coast (the proven 232k baseline). */
+#define FEATURE_HWZC_FALLING_SW        1   /* falling ZC via SW OFF-center sample */
+#define HWZC_FALLING_SW_MAX_ERPM       0   /* 0 = falling-SW at all speeds; else cap */
+/* Falling-polarity ZC fix (2026-06-07, investigation closed). Root cause
+ * (measured): the ON-time HW comparator detects RISING perfectly but is silent
+ * on FALLING above ~20k — during PWM-ON the driven phase couples into the
+ * floating phase and biases it up, assisting the rising crossing but swamping
+ * the falling one. Clean falling BEMF only exists in the PWM-OFF/freewheel
+ * window, captured by the RC-filtered OFF-center sample (bemfRaw). FEATURE_
+ * HWZC_FALLING_SW detects falling there in the ADC ISR, into the same sector-PI
+ * path, restoring falling feedback idle→~90k (the low-speed-transient win); it
+ * coasts above ~90k where the 24kHz sample rate runs out (rising untouched →
+ * 232k unaffected). Set 0 to revert to rising-only/coast (baseline).
+ * Dead-ends tried & dropped: (1) symmetric filter-comp offset — refuted (falling
+ * is silent, not mis-thresholded); (2) per-polarity comparator OFF-window gate —
+ * underperformed (~50k: the 1 MHz comparator sees the UNFILTERED freewheel/edge
+ * ring; the RC-filtered period-boundary sample is cleaner despite 24kHz). */
+
 /* Float-port of the sector PI (Phase 1 of pi_controller_research.md).
  * When 1, HWZC_OnPiPeriodExpired runs the same algorithm in float instead
  * of integer bit-shifts. Allows non-power-of-2 gains. With HWZC_PI_FF
@@ -940,6 +977,33 @@ extern "C" {
                                            * comp track the full 200-220k band. Caller still
                                            * limits absolute offset via HWZC_FILTER_MAX_OFFSET. */
 #define HWZC_FILTER_MAX_OFFSET      600   /* Cap CMPLO shift in ADC counts (12-bit ADC, ~15% FS) */
+
+/* Per-polarity filter-comp scale for the FALLING-ZC branch (odd sectors 1/3/5).
+ *
+ * 2026-06-06 root cause: per-sector miss telemetry proved the rising-ZC sectors
+ * (even 0/2/4) NEVER miss at any speed, while the falling-ZC sectors (odd 1/3/5)
+ * carry 100% of the guesses, speed-progressively (clean at idle → fully masked
+ * ≥90k eRPM, a perfect 50% measured). The two polarities sit under opposite
+ * freewheel/demag conditions, so the SYMMETRIC offset (rising thresh−offset,
+ * falling thresh+offset) over-shifts falling: as ω grows the falling CMPLO is
+ * pushed toward 4095 until the downward crossing can't register.
+ *
+ * This scales ONLY the falling-branch offset (rising still uses
+ * HWZC_FILTER_AMP_PCT). 0 = falling filter-comp OFF (first bench point — confirm
+ * via tools/analyze_sectors.py that odd-sector misses collapse). If falling
+ * recovers but tops out below rising, sweep this UP (e.g. 15, 25) toward the
+ * sweet spot. If misses DON'T collapse at 0, the masking is physical (ON-time
+ * window can't see the falling crossing at speed) → per-polarity SAMPLE POINT,
+ * not a threshold tweak. Rising at AMP_PCT=50 is bench-proven to 232k — leave it.
+ *
+ * 2026-06-06 BENCH RESULT: set to 0 (falling comp OFF) — per-sector telemetry
+ * showed ZERO change (odd sectors still 100% of guesses, still 50% measured
+ * ≥90k). This REFUTED the offset hypothesis. Reject count (~650) ≪ falling
+ * misses (10,223) at ≥90k proved the falling sectors are SILENT (comparator
+ * never crosses), not firing-and-rejected → pure visibility problem. Restored
+ * to 50 (symmetric, identical to the proven 232k build). The knob stays for the
+ * eventual per-polarity SAMPLE-POINT fix; filter-comp is NOT that fix. */
+#define HWZC_FILTER_AMP_PCT_FALLING 50
 #endif
 
 /* Speed PI — per-ZC interval-based speed PID (Phase 2 of CLAUDE.md roadmap).

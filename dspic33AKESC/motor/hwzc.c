@@ -322,9 +322,21 @@ void HWZC_OnBlankingExpired(volatile GARUDA_DATA_T *pData)
 #if !HWZC_USE_SW_COMPARE
     uint8_t core = pData->hwzc.activeCore;
 
+#if FEATURE_HWZC_FALLING_SW
+    /* Hybrid per-polarity: arm the HW comparator ONLY for rising sectors.
+     * Falling sectors are detected via the OFF-center SW compare in the ADC ISR
+     * (the HW comparator is silent on falling at speed). Leaving its IE off for
+     * falling avoids phantom ON-time fires competing with the SW capture. */
+    if (commutationTable[pData->currentStep].zcPolarity > 0)
+    {
+        HAL_ADC_ClearComparatorFlag(core);
+        HAL_ADC_EnableComparatorIE(core);
+    }
+#else
     /* Clear any stale comparator events, then enable interrupt */
     HAL_ADC_ClearComparatorFlag(core);
     HAL_ADC_EnableComparatorIE(core);
+#endif
 #else
     /* SW compare mode: leave the HW digital comparator IE disabled.
      * ZC detection runs in the 24 kHz ADC ISR via HWZC_OnSoftwareSample(). */

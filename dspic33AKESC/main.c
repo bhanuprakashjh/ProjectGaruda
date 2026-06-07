@@ -118,6 +118,34 @@ int main(void)
     /* Main loop — all real work happens in ISRs */
     while (1)
     {
+        /* --- CPU-load diagnostic (main-loop only, zero hot-ISR cost) ---
+         * Count loop spins; once per second compare the spin rate to the
+         * highest rate seen while the motor is NOT commutating (idle
+         * baseline). load‰ = 1000·(1 - rate/baseline). Rises as ISR + GSP
+         * work steals cycles from this loop. Relative to the motor-off
+         * baseline, so it answers "how much bandwidth is running the motor
+         * eating", not an absolute kernel %. */
+        static uint32_t cpuSpins = 0, cpuLastSpins = 0, cpuLastTick = 0;
+        static uint32_t cpuBaselineRate = 1;  /* spins/ms, !=0 to avoid div0 */
+        cpuSpins++;
+        {
+            uint32_t nowTick = garudaData.systemTick;
+            uint32_t dt = nowTick - cpuLastTick;
+            if (dt >= 1000u)            /* ~1 s window */
+            {
+                uint32_t rate = (cpuSpins - cpuLastSpins) / dt;   /* spins/ms */
+                if (garudaData.state <= ESC_ARMED && rate > cpuBaselineRate)
+                    cpuBaselineRate = rate;   /* auto-calibrate idle baseline */
+                if (rate >= cpuBaselineRate)
+                    garudaData.cpuLoadPermille = 0;
+                else
+                    garudaData.cpuLoadPermille =
+                        (uint16_t)(1000UL - (1000UL * rate) / cpuBaselineRate);
+                cpuLastSpins = cpuSpins;
+                cpuLastTick  = nowTick;
+            }
+        }
+
 #ifdef ENABLE_DIAGNOSTICS
         DiagnosticsStepMain();  /* X2CScope serial communication */
 #endif
