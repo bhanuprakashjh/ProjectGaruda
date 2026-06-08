@@ -66,6 +66,21 @@ DUTY_PARAMS = {"rampDutyPct", "alignDutyPct", "clIdleDutyPct"}  # = pct/100
 
 
 # ─────────────────────────────────────────────────────────────────────────
+def _port_hint() -> str:
+    """Human hint listing the serial ports we can see — shown on connect failure
+    so a Windows user knows which COM to pick (and to avoid the debug COM)."""
+    try:
+        from garuda_gsp.client import candidate_ports
+        cs = candidate_ports()
+        if not cs:
+            return "No serial ports found — check the USB cable and the UART driver."
+        return ("Ports seen: " + ", ".join(d for d, _ in cs) +
+                ".  Try 'Auto-detect', or pick each port until one connects "
+                "(the board is whichever answers GET_INFO).")
+    except Exception:
+        return ""
+
+
 class SerialWorker(QtCore.QThread):
     """Owns the GspClient on a background thread so the UI never blocks.
     UI-thread code must NEVER touch the port directly — it enqueues actions via
@@ -119,11 +134,13 @@ class SerialWorker(QtCore.QThread):
 
     def run(self):
         try:
-            c = GspClient(self.port)
+            c = GspClient(self.port)        # port=None -> probes for the board
             if not c.ping():
-                self.failed.emit("no PING response (port / baud / power?)")
+                self.failed.emit(f"No response on {c.port} (baud/power/wrong port?).  "
+                                 f"{_port_hint()}")
                 return
             info = c.get_info()
+            info["_port"] = c.port          # the port actually connected
             self.connected.emit(info)
             try:
                 self.params_ready.emit(c.dump_params())
@@ -143,7 +160,7 @@ class SerialWorker(QtCore.QThread):
                     self.msleep(int(dt * 1000))
             c.close()
         except Exception as e:  # noqa
-            self.failed.emit(str(e))
+            self.failed.emit(f"{e}.  {_port_hint()}")
         finally:
             self.stopped.emit()
 
@@ -276,6 +293,100 @@ class SectorMissBar(QtWidgets.QFrame):
 
 
 # ─────────────────────────────────────────────────────────────────────────
+class SectorAcceptGuessBar(QtWidgets.QFrame):
+    """Per-sector ACCEPTED (green) vs GUESSED (blue) commutations, plus a
+    COMPOSITE stacked bar of the aggregate accepted/guessed split.
+
+    The board only sends per-sector GUESS counters (hwzcMissBySector[6]) and
+    the aggregate accept/guess totals (hwzc_zc / hwzc_miss).  The 6 commutation
+    sectors are visited uniformly each electrical revolution, so per-sector
+    accepted is recovered as:
+        accept[i] ≈ (Δacc + Δmiss)/6 − guess[i]
+    Bars read events/second (delta over dt).  The composite is the aggregate
+    accepted% stacked over guessed% (sums to 100), same headline as the run."""
+    GREEN = (102, 187, 106)
+    BLUE = (66, 165, 245)
+
+    def __init__(self):
+        super().__init__()
+        self.setFrameShape(QtWidgets.QFrame.StyledPanel)
+        v = QtWidgets.QVBoxLayout(self)
+        v.setContentsMargins(8, 4, 8, 4); v.setSpacing(2)
+        self.hdr = QtWidgets.QLabel(
+            "Per-sector accepted vs guessed  —  🟩 accepted   🟦 guessed")
+        self.hdr.setStyleSheet("color:#9e9e9e;font-size:11px;")
+        v.addWidget(self.hdr)
+
+        row = QtWidgets.QHBoxLayout(); row.setSpacing(6)
+
+        # ── per-sector grouped bars (green accepted | blue guessed) ──
+        self.p = pg.PlotWidget()
+        self.p.setMouseEnabled(x=False, y=False)
+        self.p.setMenuEnabled(False); self.p.hideButtons()
+        self.p.showGrid(x=False, y=True, alpha=0.2)
+        self.p.setLabel("left", "events/s")
+        self.p.getAxis("bottom").setTicks([[(i, f"S{i}") for i in range(6)]])
+        self.p.setXRange(-0.6, 5.6, padding=0)
+        self.bar_acc = pg.BarGraphItem(
+            x=[i - 0.2 for i in range(6)], height=[0] * 6, width=0.36,
+            brush=pg.mkBrush(*self.GREEN), pen=None)
+        self.bar_gss = pg.BarGraphItem(
+            x=[i + 0.2 for i in range(6)], height=[0] * 6, width=0.36,
+            brush=pg.mkBrush(*self.BLUE), pen=None)
+        self.p.addItem(self.bar_acc); self.p.addItem(self.bar_gss)
+        row.addWidget(self.p, 1)
+
+        # ── composite: accepted% stacked over guessed% ──
+        self.pc = pg.PlotWidget()
+        self.pc.setMouseEnabled(x=False, y=False)
+        self.pc.setMenuEnabled(False); self.pc.hideButtons()
+        self.pc.showGrid(x=False, y=True, alpha=0.2)
+        self.pc.setLabel("left", "%")
+        self.pc.setYRange(0, 100, padding=0)
+        self.pc.setXRange(-0.7, 0.7, padding=0)
+        self.pc.getAxis("bottom").setTicks([[(0, "ALL")]])
+        self.pc.setFixedWidth(96)
+        self.c_gss = pg.BarGraphItem(x=[0], y0=[0], height=[0], width=0.8,
+                                     brush=pg.mkBrush(*self.BLUE), pen=None)
+        self.c_acc = pg.BarGraphItem(x=[0], y0=[0], height=[0], width=0.8,
+                                     brush=pg.mkBrush(*self.GREEN), pen=None)
+        self.pc.addItem(self.c_gss); self.pc.addItem(self.c_acc)
+        row.addWidget(self.pc)
+
+        v.addLayout(row)
+        self.setMaximumHeight(180)
+        self._prev = None          # (acc, miss, [sector misses], t)
+
+    def update_from(self, s: dict):
+        acc = int(s.get("hwzc_zc", 0)); mss = int(s.get("hwzc_miss", 0))
+        sect = s.get("miss_by_sector") or [0] * 6
+        t = float(s.get("t", 0.0))
+        if self._prev is not None:
+            d_acc = max(0, acc - self._prev[0])
+            d_mss = max(0, mss - self._prev[1])
+            dt = max(1e-3, t - self._prev[3])
+            guess = [max(0, (sect[i] - self._prev[2][i]) & 0xFFFF) for i in range(6)]
+            total = d_acc + d_mss
+            per_sector = total / 6.0
+            accept = [max(0.0, per_sector - guess[i]) for i in range(6)]
+            self.bar_acc.setOpts(height=[a / dt for a in accept])
+            self.bar_gss.setOpts(height=[g / dt for g in guess])
+            if total > 0:
+                acc_pct = 100.0 * d_acc / total
+                gss_pct = 100.0 - acc_pct
+                self.c_gss.setOpts(y0=[0], height=[gss_pct])
+                self.c_acc.setOpts(y0=[gss_pct], height=[acc_pct])
+                col = ("#66bb6a" if acc_pct >= 90 else
+                       "#ffa726" if acc_pct >= 70 else "#ef5350")
+                self.hdr.setText(
+                    f"Per-sector accepted vs guessed  —  "
+                    f"🟩 accepted {acc_pct:.0f}%   🟦 guessed {gss_pct:.0f}%")
+                self.hdr.setStyleSheet(
+                    f"color:{col};font-size:11px;font-weight:bold;")
+        self._prev = (acc, mss, list(sect), t)
+
+
+# ─────────────────────────────────────────────────────────────────────────
 class RotorWidget(QtWidgets.QWidget):
     """Animated rotor + 6-sector commutation wheel. Sectors colored by per-sector
     ZC capture probability (green=detected, red=guessed); the rotor bar spins at a
@@ -392,6 +503,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.portbox = QtWidgets.QComboBox()
         self.portbox.setEditable(True)
         self._refresh_ports()
+        self.btn_rescan = QtWidgets.QPushButton("⟳")
+        self.btn_rescan.setToolTip("Rescan serial ports")
+        self.btn_rescan.setFixedWidth(32)
+        self.btn_rescan.clicked.connect(self._refresh_ports)
         self.btn_connect = QtWidgets.QPushButton("Connect")
         self.btn_connect.clicked.connect(self.toggle_connect)
         self.btn_record = QtWidgets.QPushButton("● Record")
@@ -404,6 +519,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.lbl_id.setStyleSheet("color:#9e9e9e;")
         top.addWidget(QtWidgets.QLabel("Port:"))
         top.addWidget(self.portbox, 2)
+        top.addWidget(self.btn_rescan)
         top.addWidget(self.btn_connect)
         top.addWidget(self.btn_record)
         top.addWidget(self.btn_diag)
@@ -710,7 +826,7 @@ class MainWindow(QtWidgets.QMainWindow):
         # an even row = healthy/state-driven, a clustered row = structural
         # (a polarity/phase the comparator can't see) → the case the windowed
         # comparator would actually fix.
-        self.sector_box = SectorMissBar()
+        self.sector_box = SectorAcceptGuessBar()
         v.addWidget(self.sector_box)
 
         # ── oscilloscope: per-channel vertical controls (gain/position) +
@@ -1174,19 +1290,32 @@ class MainWindow(QtWidgets.QMainWindow):
         self.status.showMessage(f"Saved {path}")
 
     def _refresh_ports(self):
-        from garuda_gsp import list_ports_human
+        from garuda_gsp.client import candidate_ports, _score
+        from serial.tools import list_ports
         self.portbox.clear()
-        for dev, desc in list_ports_human():
+        # "Auto-detect" probes every port for the one that answers GET_INFO —
+        # the reliable default on Windows (data=None signals probe).
+        self.portbox.addItem("Auto-detect (probe)", None)
+        # Only list real USB devices; hide the dozens of phantom legacy ttyS*
+        # ports. (Box is editable, so a custom port can still be typed.)
+        usb = [(p.device, p.description or p.device)
+               for p in sorted(list_ports.comports(), key=_score) if _score(p) < 6]
+        for dev, desc in (usb or candidate_ports()):
             self.portbox.addItem(f"{dev}  ({desc})", dev)
-        if self.port:
-            self.portbox.insertItem(0, self.port, self.port)
+        if self.port:                       # explicit --port from the CLI wins
+            self.portbox.insertItem(1, f"{self.port}  (cmdline)", self.port)
+            self.portbox.setCurrentIndex(1)
+        else:
             self.portbox.setCurrentIndex(0)
 
     def _selected_port(self):
+        txt = self.portbox.currentText().strip()
+        if txt.lower().startswith("auto"):
+            return None                     # -> GspClient probes
         data = self.portbox.currentData()
         if data:
             return data
-        return self.portbox.currentText().split()[0]
+        return txt.split()[0] if txt else None
 
     # ── connection ──────────────────────────────────────────────────────
     def toggle_connect(self):
@@ -1200,6 +1329,7 @@ class MainWindow(QtWidgets.QMainWindow):
         port = self._selected_port()
         self.worker = SerialWorker(port)
         self.worker.connected.connect(self.on_connected)
+        self._pending_port = port
         self.worker.params_ready.connect(self.on_params)
         self.worker.snapshot.connect(self.on_snapshot)
         self.worker.param_written.connect(self.on_param_written)
@@ -1207,10 +1337,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.worker.failed.connect(self.on_failed)
         self.worker.start()
         self.btn_connect.setText("Disconnect")
-        self.status.showMessage(f"Connecting to {port}…")
+        self.status.showMessage("Auto-detecting board…" if port is None
+                                else f"Connecting to {port}…")
 
     def on_connected(self, info):
         self.info = info
+        self.port = info.get("_port", self.port)   # the port the probe landed on
         bh = ("0x%08X" % info["buildHash"]) if info.get("buildHash") else "n/a"
         self.lbl_id.setText(
             f"fw v{info['fwVersion']}  build={bh}  "
