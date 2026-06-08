@@ -51,6 +51,41 @@ sessions/<name>/
 Load it back with `Session.load(path)`. The diagnostic engine (v2) will read a
 bundle and append `diagnosis.json` (ranked root causes + the exact param fixes).
 
+## AI-assisted debugging — analyzers + MCP server
+
+`garuda_gsp.analyze` encodes the recurring bench signatures as pure functions
+(no deps), so they're flagged instantly with zero AI tokens:
+
+- **phantom** — commanded eRPM above what the duty can physically produce (PLL
+  harmonic false-lock / pot-zero phantom)
+- **half_period** — scope sector cadence vs reported eRPM ≈ 2× (the benign,
+  stable form of the same mechanism)
+- **current_offset** — Ia ≠ 0 at standstill (phase-A sense DC offset)
+- **polarity_miss** — odd(falling)/even(rising) ZC-miss clustering
+
+```python
+from garuda_gsp import analyze as A
+A.analyze("sessions/<run>/telemetry.csv")     # telemetry findings
+A.analyze_scope("sessions/scope_*.csv")       # scope findings (half-period etc.)
+```
+
+The **MCP server** exposes the live board + these analyzers as tools, so an MCP
+client (Claude Code/Desktop) can drive the loop directly — capture → flag →
+suggest/apply a param → re-capture — with no copy-paste:
+
+```bash
+pip install -e ".[mcp]"
+# tools: connect, status, snapshot, stream, scope, params, get_param,
+#        set_param, save_config, list_sessions, analyze_session
+```
+
+Read-only by default; `set_param`/`save_config` refuse unless the server is
+started with `GARUDA_MCP_ALLOW_WRITE=1` (they change motor behaviour). Register
+it in the project `.mcp.json` (stdio), pointing `command` at this venv's python,
+`cwd` at this folder. The "Diagnose with Claude" button (`garuda_gui/diagnose.py`,
+needs `.[ai]` + `ANTHROPIC_API_KEY`) calls the same analyzers plus `claude-opus-4-8`
+for the novel cases.
+
 ## Why a shared library
 
 - **One protocol.** `garuda_gsp.protocol` is the single source of truth for

@@ -13,11 +13,13 @@ dependencies = ["pyserial>=3.5"]
 # GUI extras land here in v1 (PySide6 + pyqtgraph).
 gui = ["PySide6>=6.5", "pyqtgraph>=0.13", "numpy>=1.21"]
 ai  = ["anthropic>=0.69"]   # optional: enables "Diagnose with Claude" (claude-opus-4-8)
+mcp = ["mcp>=1.0"]          # optional: garuda-mcp server (drive the board from an MCP client)
 
 [project.scripts]
 garuda-gsp-info = "scripts.gsp_info:main"
 garuda-gsp-record = "scripts.gsp_record:main"
 garuda-gui = "garuda_gui.app:main"
+garuda-mcp = "garuda_gsp.garuda_mcp:main"
 
 [tool.setuptools]
 packages = ["garuda_gsp", "scripts", "garuda_gui"]
