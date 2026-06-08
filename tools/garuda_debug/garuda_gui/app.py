@@ -27,6 +27,7 @@ import pyqtgraph as pg
 from garuda_gsp import GspClient, GspError, Session, __version__ as GSP_VER
 from garuda_gsp import protocol as P
 from . import diagnose as DIAG
+from garuda_gsp import analyze as ANALYZE
 from . import wizard as WIZ
 from . import zcsim as ZCSIM
 
@@ -1165,6 +1166,13 @@ class MainWindow(QtWidgets.QMainWindow):
             f"{n} samples · {len(zx)} zero-crossings · trig idx {trig}")
         self._log(f"scope: {n} samples, {len(zx)} ZC, "
                   f"state={P.SCOPE_STATE_NAMES.get(st.get('state'), '?')}")
+        # signal checks on the burst (half-period 2×, current offset)
+        try:
+            for i, s in enumerate(samples):
+                s.setdefault("t_us", i * dt_us)
+            self._render_findings(ANALYZE.analyze_scope(samples))
+        except Exception as e:  # noqa
+            self._log(f"scope checks error: {e}")
         # ML collect: append this window + operating point, then grab the next one
         if self._ml_file is not None:
             self._ml_record(samples)
@@ -1769,6 +1777,24 @@ class MainWindow(QtWidgets.QMainWindow):
         except Exception as e:  # noqa
             self._log(f"diagnosis error: {e}"); return
         self._render_diag(r)
+        # shared analyzers (phantom / half-period / Ia-offset / polarity-lock)
+        try:
+            self._render_findings(ANALYZE.analyze(self.live))
+        except Exception as e:  # noqa
+            self._log(f"signal checks error: {e}")
+
+    def _render_findings(self, findings):
+        icon = {"critical": "🔴", "warn": "🟠", "info": "🔵"}
+        self._log("╔═ SIGNAL CHECKS  (analyze.py)")
+        for f in findings:
+            self._log(f"║ {icon.get(f['severity'], '•')} {f['title']}")
+            if f.get("detail"):
+                self._log(f"║   {f['detail']}")
+            if f.get("evidence"):
+                self._log(f"║   evidence: {f['evidence']}")
+            if f.get("fix"):
+                self._log(f"║   → fix: {f['fix']}")
+        self._log("╚" + "═" * 40)
 
     def _render_diag(self, r):
         sev = r.get("severity", "?").upper()
