@@ -25,7 +25,7 @@ import numpy as np
 import pyqtgraph as pg
 
 from garuda_gsp import GspClient, GspError, Session, __version__ as GSP_VER
-from garuda_gsp.broker import connect_auto
+from garuda_gsp.broker import connect_auto, ensure_broker
 from garuda_gsp import protocol as P
 from . import diagnose as DIAG
 from garuda_gsp import analyze as ANALYZE
@@ -100,6 +100,7 @@ class SerialWorker(QtCore.QThread):
         self.port = port
         self._run = True
         self._q = Queue()
+        self._broker_proc = None
 
     def submit(self, action, **kw):
         """Thread-safe: enqueue an action for the worker to run on the port."""
@@ -136,8 +137,11 @@ class SerialWorker(QtCore.QThread):
 
     def run(self):
         try:
-            c = connect_auto(self.port)     # share via broker if one is running,
-            try:                            # else open the port directly
+            # Auto-start a broker (if none) so the GUI owns the port THROUGH the
+            # broker — then the MCP/analyzers can share the live board too.
+            self._broker_proc = ensure_broker(self.port)
+            c = connect_auto(self.port)     # -> broker client if up, else direct
+            try:
                 info = c.connect()          # GET_INFO with retry (Windows-safe)
             except GspError:
                 self.failed.emit(f"No response on {c.port} (baud/power/wrong port?).  "
@@ -165,6 +169,12 @@ class SerialWorker(QtCore.QThread):
         except Exception as e:  # noqa
             self.failed.emit(f"{e}.  {_port_hint()}")
         finally:
+            if self._broker_proc is not None:   # only if WE started the broker
+                try:
+                    self._broker_proc.terminate()
+                except Exception:
+                    pass
+                self._broker_proc = None
             self.stopped.emit()
 
     def stop(self):

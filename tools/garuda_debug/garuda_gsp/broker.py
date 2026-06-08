@@ -17,6 +17,8 @@ localhost only. Not authenticated — bench tool.
 """
 import json
 import socket
+import subprocess
+import sys
 import threading
 import time
 
@@ -232,6 +234,32 @@ def broker_running(host=HOST, port=PORT) -> bool:
             return True
     except OSError:
         return False
+
+
+def ensure_broker(port=None, wait=5.0):
+    """If no broker is running, spawn one (so the port owner is the broker, not
+    us) and wait until it's ready. Returns the Popen if WE started it (caller
+    should terminate it on exit), or None if one was already running / it
+    couldn't come up (caller then falls back to a direct port via connect_auto).
+    The board's port must be free — close any direct connection first."""
+    if broker_running():
+        return None
+    args = [sys.executable, "-m", "garuda_gsp.broker"]
+    if port:
+        args += ["--port", str(port)]
+    try:
+        proc = subprocess.Popen(args, stdout=subprocess.DEVNULL,
+                                stderr=subprocess.DEVNULL)
+    except Exception:
+        return None
+    end = time.time() + wait
+    while time.time() < end:
+        if broker_running():
+            return proc
+        if proc.poll() is not None:          # broker exited (port busy / no board)
+            return None
+        time.sleep(0.1)
+    return proc if broker_running() else None
 
 
 def connect_auto(port=None, baud=115200, timeout=1.0, probe=True):
