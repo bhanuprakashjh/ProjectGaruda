@@ -90,8 +90,20 @@ garuda-gui           # connects via the broker  ┐ both live on the same board
 garuda-mcp           # connects via the broker  ┘ at the same time
 ```
 
-Read-only by default; `set_param`/`save_config` refuse unless the server is
-started with `GARUDA_MCP_ALLOW_WRITE=1` (they change motor behaviour). Register
+**Autonomous auto-tune** (`autotune.py`, MCP tool `autotune`): drives the motor
+over GSP (throttle→GSP, start, **heartbeat dead-man**), sweeps ONE whitelisted
+param over a range at a fixed throttle, measures a cost (`miss_rate` /
+`erpm_stability` / `top_speed`), restores the original, and returns the cost
+curve + best value. Hard rails: aborts + stops on any fault, `Ibus` over limit,
+or eRPM over cap; only `SAFE_PARAMS` (never OC/UV/OV/maxRPM); `Ia` not used for
+safety (the offset issue) — `Ibus` is. The `motor` tool gives direct
+start/stop/throttle/source control. **Supervise it — it spins a real motor**,
+and apply the result yourself (`set_param` + `save_config`); the sweep only
+measures, it doesn't keep the change.
+
+Read-only by default; `set_param`/`save_config`/`motor`/`autotune` refuse unless
+the server is started with `GARUDA_MCP_ALLOW_WRITE=1` (they change motor
+behaviour). Register
 it in the project `.mcp.json` (stdio), pointing `command` at this venv's python,
 `cwd` at this folder. The "Diagnose with Claude" button (`garuda_gui/diagnose.py`,
 needs `.[ai]` + `ANTHROPIC_API_KEY`) calls the same analyzers plus `claude-opus-4-8`

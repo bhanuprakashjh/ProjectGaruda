@@ -20,6 +20,7 @@ from mcp.server.fastmcp import FastMCP
 
 from . import protocol as P
 from . import analyze as A
+from . import autotune as AT
 from .client import GspClient, candidate_ports, _score
 from .broker import connect_auto, broker_running
 from serial.tools import list_ports as _list_ports
@@ -202,6 +203,64 @@ def analyze_session(path: str) -> dict:
     s = Session.load(path)
     return {"kind": "bundle", "n": len(s.samples), "info": s.info,
             "findings": A.analyze(s.samples)}
+
+
+# ── motor control + auto-tune (all require GARUDA_MCP_ALLOW_WRITE=1) ─────────
+def _need_write():
+    return None if WRITE_OK else {
+        "ok": False, "error": "motor control disabled — start the server with "
+        "GARUDA_MCP_ALLOW_WRITE=1 (these spin a real motor; supervise the bench)"}
+
+
+@mcp.tool()
+def motor(action: str, throttle: int = 0, source: int = 1) -> dict:
+    """Direct motor control (CHANGES MOTOR STATE — gated by GARUDA_MCP_ALLOW_WRITE).
+    action ∈ {start, stop, clear_fault, throttle, source}. For 'throttle' the
+    board must be on GSP source (call action='source', source=1 first while IDLE);
+    throttle is 0..2000. While running on GSP throttle you must keep calling motor
+    (or heartbeat) within the firmware timeout or it safe-stops."""
+    block = _need_write()
+    if block:
+        return block
+    c = _c()
+    a = action.lower()
+    if a == "start":        c.start_motor()
+    elif a == "stop":       c.stop_motor()
+    elif a == "clear_fault": c.clear_fault()
+    elif a == "throttle":   c.set_throttle(throttle)
+    elif a == "source":     c.set_throttle_src(source)
+    elif a == "heartbeat":  c.heartbeat()
+    else:
+        return {"ok": False, "error": f"unknown action '{action}'"}
+    return {"ok": True, "action": a, "snapshot": c.get_snapshot()}
+
+
+@mcp.tool()
+def autotune(param: str, lo: int, hi: int, steps: int = 5, throttle: int = 300,
+             cost: str = "miss_rate", settle_s: float = 2.5,
+             ibus_abort: float = 20.0) -> dict:
+    """Closed-loop tune: spin the motor at `throttle` (0..2000) and sweep `param`
+    over [lo,hi] in `steps`, measuring `cost` ∈ {miss_rate, erpm_stability,
+    top_speed}. Returns the cost curve + best value; the ORIGINAL value is
+    restored (nothing is applied — apply 'best' yourself via set_param +
+    save_config). SAFETY: refuses non-whitelisted params, aborts + stops on any
+    fault / Ibus>ibus_abort / eRPM over cap, heartbeat dead-man throughout.
+    Requires GARUDA_MCP_ALLOW_WRITE=1. SUPERVISE — it spins a real motor."""
+    block = _need_write()
+    if block:
+        return block
+    try:
+        return AT.sweep_param(_c(), param, lo, hi, steps=steps, throttle=throttle,
+                              cost=cost, settle_s=settle_s, ibus_abort=ibus_abort)
+    except ValueError as e:
+        return {"ok": False, "error": str(e)}
+
+
+@mcp.tool()
+def safe_params() -> dict:
+    """The parameters the auto-tuner is allowed to sweep (protection/limit params
+    are excluded), and the available cost metrics."""
+    return {"safe_params": sorted(AT.SAFE_PARAMS), "costs": sorted(AT.COSTS)}
 
 
 def main():

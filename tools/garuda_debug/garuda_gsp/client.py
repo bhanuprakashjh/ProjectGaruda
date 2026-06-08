@@ -271,6 +271,30 @@ class GspClient:
     def load_profile(self, profile_id: int):
         self._cmd(P.CMD_LOAD_PROFILE, bytes([profile_id]))
 
+    # ── motor control (remote drive — used by the auto-tuner) ────────────
+    def start_motor(self):
+        self._cmd(P.CMD_START_MOTOR)
+
+    def stop_motor(self):
+        self._cmd(P.CMD_STOP_MOTOR)
+
+    def clear_fault(self):
+        self._cmd(P.CMD_CLEAR_FAULT)
+
+    def set_throttle_src(self, src: int):
+        """0=ADC/pot, 1=GSP/remote, 2=PWM, 3=DShot, 4=auto. IDLE-only."""
+        self._cmd(P.CMD_SET_THROTTLE_SRC, bytes([int(src) & 0xFF]))
+
+    def set_throttle(self, val: int):
+        """0..2000, GSP source only. Clamped."""
+        v = max(0, min(2000, int(val)))
+        self._cmd(P.CMD_SET_THROTTLE, struct.pack("<H", v))
+
+    def heartbeat(self):
+        """Dead-man's-switch — must be sent within GSP_HEARTBEAT_TIMEOUT_MS while
+        running on GSP throttle, or the firmware safe-stops the motor."""
+        self._cmd(P.CMD_HEARTBEAT)
+
     # ── burst scope (24 kHz triggered ring) ─────────────────────────────
     def scope_arm(self, trig_mode=0, pre_pct=25, trig_ch=0, trig_edge=0, threshold=0):
         """Arm the scope. Payload: [trigMode,prePct,trigCh,trigEdge,thr(2),rsv(2)]."""
