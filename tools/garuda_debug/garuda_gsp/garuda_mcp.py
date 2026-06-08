@@ -170,11 +170,18 @@ def save_config() -> dict:
 
 
 # ── offline analysis ────────────────────────────────────────────────────────
+# sessions/ lives next to this package (tools/garuda_debug/sessions), resolved
+# absolutely so it works no matter what cwd the MCP runner launches us in.
+_SESSIONS = os.environ.get("GARUDA_SESSIONS_DIR") or os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "sessions")
+
+
 @mcp.tool()
 def list_sessions() -> list:
-    """Saved telemetry/scope CSVs under sessions/ (relative to the server cwd)."""
-    return sorted(glob.glob("sessions/**/telemetry.csv", recursive=True)
-                  + glob.glob("sessions/*.csv"))
+    """Saved telemetry/scope CSVs under the sessions/ folder (absolute path)."""
+    return sorted(glob.glob(os.path.join(_SESSIONS, "**", "telemetry.csv"),
+                            recursive=True)
+                  + glob.glob(os.path.join(_SESSIONS, "*.csv")))
 
 
 @mcp.tool()
