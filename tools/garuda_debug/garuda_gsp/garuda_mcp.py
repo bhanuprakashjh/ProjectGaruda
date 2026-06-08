@@ -21,6 +21,7 @@ from mcp.server.fastmcp import FastMCP
 from . import protocol as P
 from . import analyze as A
 from .client import GspClient, candidate_ports, _score
+from .broker import connect_auto, broker_running
 from serial.tools import list_ports as _list_ports
 from .session import Session
 
@@ -35,7 +36,7 @@ def _c() -> GspClient:
     """Lazily connect (probes for the board if no port forced)."""
     global _client
     if _client is None:
-        _client = GspClient(_port)
+        _client = connect_auto(_port)        # via broker if running, else direct
         _client.connect()
     return _client
 
@@ -85,8 +86,11 @@ def status() -> dict:
     """Connection state and, if disconnected, the serial ports seen."""
     if _client is None:
         usb = [p.device for p in _list_ports.comports() if _score(p) < 6]
-        return {"connected": False, "ports": usb or [d for d, _ in candidate_ports()]}
-    return {"connected": True, "port": _client.port, "info": _client.info}
+        return {"connected": False, "broker": broker_running(),
+                "ports": usb or [d for d, _ in candidate_ports()]}
+    return {"connected": True, "port": _client.port,
+            "via_broker": str(_client.port).startswith("broker://"),
+            "info": _client.info}
 
 
 @mcp.tool()

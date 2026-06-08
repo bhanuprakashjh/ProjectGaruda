@@ -20,6 +20,7 @@ garuda-gsp-info = "scripts.gsp_info:main"
 garuda-gsp-record = "scripts.gsp_record:main"
 garuda-gui = "garuda_gui.app:main"
 garuda-mcp = "garuda_gsp.garuda_mcp:main"
+garuda-broker = "garuda_gsp.broker:main"
 
 [tool.setuptools]
 packages = ["garuda_gsp", "scripts", "garuda_gui"]

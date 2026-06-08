@@ -25,6 +25,7 @@ import numpy as np
 import pyqtgraph as pg
 
 from garuda_gsp import GspClient, GspError, Session, __version__ as GSP_VER
+from garuda_gsp.broker import connect_auto
 from garuda_gsp import protocol as P
 from . import diagnose as DIAG
 from garuda_gsp import analyze as ANALYZE
@@ -135,8 +136,8 @@ class SerialWorker(QtCore.QThread):
 
     def run(self):
         try:
-            c = GspClient(self.port)        # port=None -> probes for the board
-            try:
+            c = connect_auto(self.port)     # share via broker if one is running,
+            try:                            # else open the port directly
                 info = c.connect()          # GET_INFO with retry (Windows-safe)
             except GspError:
                 self.failed.emit(f"No response on {c.port} (baud/power/wrong port?).  "

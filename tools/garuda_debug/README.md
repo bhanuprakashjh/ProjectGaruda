@@ -79,6 +79,17 @@ pip install -e ".[mcp]"
 #        set_param, save_config, list_sessions, analyze_session
 ```
 
+**Sharing one board between the GUI and the MCP/analyzers** — a USB-CDC port is
+single-reader, so start the **broker** first and everything connects through it
+concurrently (`connect_auto()` uses the broker if it's up, else opens the port
+directly):
+
+```bash
+garuda-broker        # owns the port, caches telemetry, serializes commands
+garuda-gui           # connects via the broker  ┐ both live on the same board
+garuda-mcp           # connects via the broker  ┘ at the same time
+```
+
 Read-only by default; `set_param`/`save_config` refuse unless the server is
 started with `GARUDA_MCP_ALLOW_WRITE=1` (they change motor behaviour). Register
 it in the project `.mcp.json` (stdio), pointing `command` at this venv's python,
