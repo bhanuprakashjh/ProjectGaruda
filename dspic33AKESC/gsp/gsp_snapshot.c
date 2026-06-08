@@ -69,6 +69,20 @@ void GSP_CaptureSnapshot(GSP_SNAPSHOT_T *dst)
     dst->bemfRaw     = src->bemf.bemfRaw;
     dst->zcThreshold = src->bemf.zcThreshold;
     dst->stepPeriod  = src->timing.stepPeriod;
+#if FEATURE_SINE_STARTUP
+    /* The SW timing.stepPeriod is stale during open-loop spin-up (it holds a
+     * frozen init value), so the host mislabels idle/OL eRPM as a constant
+     * ~5k. Report the TRUE state-appropriate speed instead, so the OL->CL
+     * hand-off speed is actually visible for tuning. Encoding matches the host
+     * (displayed eRPM = 450000 / stepPeriod). The CL path is untouched — in
+     * ESC_CLOSED_LOOP the host reads eRPM from the HWZC HR period, not this. */
+    if (src->state == ESC_OL_RAMP || src->state == ESC_MORPH) {
+        uint32_t olErpm = (uint32_t)(src->sine.erpmFrac >> 16);  /* commanded eRPM */
+        dst->stepPeriod = (olErpm >= 1u) ? (uint16_t)(450000UL / olErpm) : 0u;
+    } else if (src->state < ESC_OL_RAMP) {
+        dst->stepPeriod = 0u;   /* IDLE/ARMED/DETECT/ALIGN: not yet spinning */
+    }
+#endif
     dst->goodZcCount = src->timing.goodZcCount;
 
     /* ZC flags */

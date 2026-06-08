@@ -30,8 +30,8 @@
 #include "../garuda_calc_params.h"
 #include "../hal/hal_adc.h"
 #include "../hal/hal_timer.h"
-#if FEATURE_HWZC_PI_FLOAT && HWZC_PI_FF_ENABLE
-#include "../garuda_foc_params.h"   /* VBUS_SCALE_V_PER_COUNT */
+#if (FEATURE_HWZC_PI_FLOAT && HWZC_PI_FF_ENABLE) || FEATURE_HWZC_ABS_FLOOR
+#include "../garuda_foc_params.h"   /* VBUS_SCALE_V_PER_COUNT, focKeUvSRad scaling */
 #endif
 #include <xc.h>
 
@@ -734,6 +734,19 @@ void HWZC_OnPiPeriodExpired(volatile GARUDA_DATA_T *pData)
             posDeltaCap = (int32_t)(T >> HWZC_PI_DELTA_CLAMP_SHIFT);
             negDeltaCap = posDeltaCap;
         }
+#if FEATURE_HWZC_HANDOFF_DAMP
+        /* Hand-off damp: during the first window after CL entry, hard-limit how
+         * much a single capture can SHRINK the period (negative delta only), so a
+         * too-early first capture can't collapse to the half-period phantom. Legit
+         * acceleration is gradual and proceeds at the damped rate; the runaway is
+         * blocked. negative delta = capture earlier than setpoint = period shrink. */
+        if (pData->hwzc.handoffDamp > 0) {
+            pData->hwzc.handoffDamp--;
+            int32_t damped = (int32_t)(T >> HWZC_HANDOFF_NEG_SHIFT);
+            if (damped < 1) damped = 1;
+            if (negDeltaCap > damped) negDeltaCap = damped;
+        }
+#endif
         if (delta >  posDeltaCap) delta =  posDeltaCap;
         if (delta < -negDeltaCap) delta = -negDeltaCap;
         pData->hwzc.dbgPiDelta = (int16_t)(delta > 32767 ? 32767
@@ -780,6 +793,42 @@ void HWZC_OnPiPeriodExpired(volatile GARUDA_DATA_T *pData)
         if (newPer < 0) newPer = (int32_t)RT_HWZC_MIN_STEP_TICKS;
         pData->hwzc.timerPeriod = (uint32_t)newPer;
 #endif /* FEATURE_HWZC_PI_FLOAT */
+
+#if FEATURE_HWZC_ABS_FLOOR
+        /* Absolute operating-point floor — block the harmonic false-lock that
+         * the relative gates can't (cumulative ratchet → phantom). The rotor
+         * cannot spin faster than the no-load physics for the present duty/Vbus,
+         * so the commanded period cannot be shorter than P_ff/(overspeed margin).
+         * Reuses the FF-seed no-load-period formula (see HWZC_Enable). */
+        {
+            float dutyFrac = (float)pData->duty / (float)LOOPTIME_TCY;
+            float vbus_v   = (float)pData->vbusRaw * VBUS_SCALE_V_PER_COUNT;
+            float lambdaPm = (float)gspParams.focKeUvSRad;
+            if (dutyFrac > HWZC_ABS_FLOOR_MIN_DUTYFRAC && vbus_v > 6.0f
+                && lambdaPm > 0.0f) {
+                float P_ff = (181.380f * lambdaPm) / (vbus_v * dutyFrac);
+                uint32_t floorP = (uint32_t)(P_ff *
+                    (100.0f / (float)HWZC_ABS_FLOOR_OVERSPEED_PCT));
+                /* SHRINK-ONLY: clamp only when the PI is DRIVING the period
+                 * below the floor (commutating FASTER — the phantom). A period
+                 * already below the floor but GROWING (T_new > T_entry) is a
+                 * legitimate high-speed decel coasting down through the floor —
+                 * the rotor really is that fast — so let it track. The rotor
+                 * cannot ACCELERATE at idle duty, so a shrink below floor is
+                 * provably a false-lock. */
+                if (pData->hwzc.timerPeriod < floorP
+                    && pData->hwzc.timerPeriod < T) {
+                    pData->hwzc.timerPeriod = floorP;
+  #if FEATURE_HWZC_PI_FLOAT
+                    if (pData->hwzc.integratorF < (float)floorP)
+                        pData->hwzc.integratorF = (float)floorP;
+  #endif
+                    if (pData->hwzc.integrator < floorP)
+                        pData->hwzc.integrator = floorP;
+                }
+            }
+        }
+#endif
 
         /* Mirror to stepPeriodHR so eRPM telemetry (and the reactive
          * path's diagnostics) reflect the PI-controlled rotor period. */

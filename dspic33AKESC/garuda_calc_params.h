@@ -37,6 +37,11 @@ extern "C" {
 
 /* Duty cycle limits */
 #define MIN_DUTY                    (uint32_t)(DEADTIME_COUNTS + DEADTIME_COUNTS)
+#if FEATURE_CL_LOW_IDLE
+/* Lower CL-idle-only floor (< MIN_DUTY). Deadtime unchanged; H-pulse shorter. */
+#define CL_LOW_IDLE_FLOOR           (uint32_t)((DEADTIME_COUNTS * CL_LOW_IDLE_DT_PCT) / 100)
+_Static_assert(CL_LOW_IDLE_DT_PCT >= 100, "CL idle floor must exceed 1x deadtime (else no H-pulse)");
+#endif
 /* Raised to 99% (2026-05-26): old formula reserved 2×deadtime of L-side on-time
  * (max 94.6% at 45kHz × 300ns DT). Past ~94% the L-FET is going to be suppressed
  * anyway (PWM peripheral handles deadtime internally — when requested H-pulse
@@ -157,6 +162,15 @@ _Static_assert(ZC_FILTER_MAX >= ZC_FILTER_MIN, "ZC_FILTER_MAX must be >= ZC_FILT
     / (PWMFREQUENCY_HZ / 1000))
 /* Post-sync duty settle period in ADC ISR ticks */
 #define POST_SYNC_SETTLE_TICKS ((uint16_t)(POST_SYNC_SETTLE_MS * PWMFREQUENCY_HZ / 1000))
+#if FEATURE_CL_SOFT_ENTRY
+/* Soft CL-entry window in ADC ISR ticks */
+#define CL_SOFT_ENTRY_TICKS ((uint16_t)(CL_SOFT_ENTRY_MS * PWMFREQUENCY_HZ / 1000))
+_Static_assert(CL_SOFT_ENTRY_DIVISOR >= 1, "CL_SOFT_ENTRY_DIVISOR must be >= 1");
+#endif
+#else /* !FEATURE_DUTY_SLEW */
+#if FEATURE_CL_SOFT_ENTRY
+#error "FEATURE_CL_SOFT_ENTRY requires FEATURE_DUTY_SLEW=1"
+#endif
 #endif
 
 /* Phase B2: Desync recovery coast-down counts (Timer1 = 100us ticks) */
@@ -423,6 +437,26 @@ _Static_assert(HWZC_BLANKING_PERCENT >= 1 && HWZC_BLANKING_PERCENT <= 20,
 /* Software thresholds (ADC readback comparison): */
 #define OC_SW_LIMIT_ADC     OC_MV_TO_COUNTS(OC_TRIP_MV(OC_SW_LIMIT_MA))
 #define OC_FAULT_ADC_VAL    OC_MV_TO_COUNTS(OC_TRIP_MV(OC_FAULT_MA))
+
+/* Option D: I-f current-limited hand-off bridge thresholds (frequency-independent).
+ * IF_BRIDGE_LIMIT_ADC uses the same bias+scale as OC_SW_LIMIT_ADC, so it's
+ * directly comparable to garudaData.ibusRaw. */
+#if FEATURE_IF_BRIDGE
+#define IF_BRIDGE_LIMIT_ADC  OC_MV_TO_COUNTS(OC_TRIP_MV(IF_BRIDGE_LIMIT_MA))
+#define IF_BRIDGE_TICKS      ((uint16_t)((uint32_t)IF_BRIDGE_MS * PWMFREQUENCY_HZ / 1000))
+#define IF_BRIDGE_UP_RATE    (uint32_t)((uint64_t)MAX_DUTY * IF_BRIDGE_UP_PCT_PER_MS \
+                                        / 100 / (PWMFREQUENCY_HZ / 1000))
+#define IF_BRIDGE_DOWN_RATE  (uint32_t)((uint64_t)MAX_DUTY * IF_BRIDGE_DOWN_PCT_PER_MS \
+                                        / 100 / (PWMFREQUENCY_HZ / 1000))
+/* Cap expressed as a MAGNITUDE delta from the zero-current bias, so the limiter
+ * backs off on BOTH motoring (+) and regen (-) excursions. During the unlocked
+ * hand-off the bus current swings strongly negative (phase-mismatch slosh) — a
+ * SIGNED compare is fooled into "current is low" and ramps duty up. */
+#define IF_BRIDGE_LIMIT_DELTA ((int32_t)IF_BRIDGE_LIMIT_ADC - (int32_t)OC_BIAS_COUNTS)
+_Static_assert(IF_BRIDGE_LIMIT_ADC < OC_FAULT_ADC_VAL,
+               "IF_BRIDGE_LIMIT must be below the OC fault threshold");
+_Static_assert(IF_BRIDGE_LIMIT_DELTA > 0, "IF_BRIDGE_LIMIT must exceed the zero bias");
+#endif
 
 /* Static asserts — all integer constant expressions */
 _Static_assert(OC_CMP3_DAC_VAL < 4096, "CMP3 operational threshold exceeds 12-bit DAC range");

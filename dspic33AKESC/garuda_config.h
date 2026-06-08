@@ -19,6 +19,33 @@ extern "C" {
 #define FEATURE_VBUS_FAULT       1  /* Phase A4: Bus voltage OV/UV fault enforcement */
 #define FEATURE_DESYNC_RECOVERY  1  /* Phase B2: Controlled restart-on-desync (ESC_RECOVERY) */
 #define FEATURE_DUTY_SLEW        1  /* Phase B1: Asymmetric duty slew rate limiter */
+#define FEATURE_CL_SOFT_ENTRY    0  /* Smooth OL->CL hand-off: gentle duty ramp at CL entry.
+                                     * Default OFF (232k path untouched). When 1, for the
+                                     * first CL_SOFT_ENTRY_MS after hand-off the duty slews up
+                                     * far more gently so the motor accelerates from the
+                                     * low-BEMF hand-off speed to the idle equilibrium with
+                                     * bounded current, instead of the structural ~22A slam.
+                                     * Requires FEATURE_DUTY_SLEW=1. */
+#define CL_SOFT_ENTRY_MS       500  /* Soft-entry window after CL entry (ms). Must exceed the
+                                     * time the motor needs to accelerate hand-off->idle. */
+#define CL_SOFT_ENTRY_DIVISOR   64  /* Entry up-rate = DUTY_SLEW_UP_RATE / this. Bigger =
+                                     * gentler (lower current, slower spin-up). Bench-tune. */
+#define FEATURE_IF_BRIDGE        0  /* Option D: I-f current-limited OL->CL hand-off bridge.
+                                     * MOTOR-AGNOSTIC smoothing. At CL entry, ramp duty up
+                                     * from MIN_DUTY but BACK OFF whenever bus current
+                                     * exceeds IF_BRIDGE_LIMIT_MA — so the motor accelerates
+                                     * from the (low-BEMF) hand-off speed to the idle
+                                     * equilibrium at a BOUNDED current instead of the
+                                     * structural ~22A slam. One knob (the current cap)
+                                     * scales across motors — no per-motor speed/duty tune.
+                                     * Final cap (after OC limiter); only lowers duty, so
+                                     * regen/OV/OC protections still win. Default OFF. */
+#define IF_BRIDGE_LIMIT_MA   10000  /* Bridge bus-current cap. Keep < active ocSwLimitMa
+                                     * (18A on profile 2). Lower = gentler/slower spin-up. */
+#define IF_BRIDGE_MS           800  /* Safety: max bridge duration after CL entry (ms).
+                                     * Must exceed the hand-off->idle spin-up time. */
+#define IF_BRIDGE_UP_PCT_PER_MS   2 /* Duty ramp-up rate while UNDER the current cap. */
+#define IF_BRIDGE_DOWN_PCT_PER_MS 8 /* Duty back-off rate when OVER the cap (faster). */
 #define FEATURE_THROTTLE_ZERO_AUTO_DISARM 0  /* When 1, motor disarms to IDLE state if
                                               * throttle stays below ARM_THROTTLE_ZERO_ADC
                                               * for 50ms. When 0, motor keeps running at
@@ -841,6 +868,52 @@ extern "C" {
  * underperformed (~50k: the 1 MHz comparator sees the UNFILTERED freewheel/edge
  * ring; the RC-filtered period-boundary sample is cleaner despite 24kHz). */
 
+/* --- Phase 1 of the OL->CL smooth-handoff plan (2026-06-07) ---------------
+ * Low-speed floating-phase ZC for BOTH polarities. The committed FALLING_SW
+ * already detects falling on the RC-filtered OFF-center (PWM-OFF) sample; this
+ * extends the SAME mechanism to RISING below a crossover eRPM, so that at low
+ * speed neither polarity needs the PWM-ON comparator window. That removes the
+ * reason for the ~6% duty floor (PWM-ON ZC detectability) and is the enabler
+ * for a low-duty, current-bounded hand-off (Phase 2). Above the crossover,
+ * rising keeps using the HW comparator unchanged (232k path untouched).
+ * Reference basis: AM32/ESCape32 both detect ZC on the floating phase during
+ * PWM-OFF (see akesc_ol_cl_reference_study). Default OFF — additive (runs
+ * alongside the rising comparator; first capture per sector wins via
+ * captureValid), so enabling it cannot remove existing detection, only add a
+ * PWM-OFF rising path. Gate: bench at idle, confirm lock holds + rising
+ * OFF-center captures appear, before Phase 2 lowers the duty. */
+#define FEATURE_HWZC_LOWSPD_OFFCTR     1   /* rising ZC via SW OFF-center at low speed */
+#define HWZC_LOWSPD_OFFCTR_MAX_ERPM 40000  /* rising OFF-center engages below this eRPM */
+
+/* Hand-off period-collapse damp (OL->CL smooth plan, 2026-06-07). For the first
+ * HWZC_HANDOFF_DAMP_EVENTS commutations after CL entry, tightly clamp how fast the
+ * PI may SHRINK the period (negative delta), so a single too-early first capture
+ * can't collapse timerPeriod to the half-period phantom (observed 2/3 of starts at
+ * a 5k hand-off: first CL frame read 2x eRPM, then ran away to ~150k). Legit
+ * acceleration is gradual and survives the damped rate; the phantom (sudden 2x in
+ * a few events) is blocked. Releases after the window. Purely protective — only
+ * limits period DECREASE during the entry window. Default ON. */
+#define FEATURE_HWZC_HANDOFF_DAMP       1   /* clamp period-shrink rate at CL entry */
+#define HWZC_HANDOFF_DAMP_EVENTS       24   /* # commutations the damp stays active */
+#define HWZC_HANDOFF_NEG_SHIFT          6   /* period may shrink <= T>>this per event in window */
+
+/* Lower the CL idle duty floor below MIN_DUTY (=2xdeadtime) to drop the idle
+ * equilibrium and shrink the OL->CL gap/pulse (2026-06-07). SAFE: the PWM
+ * peripheral still inserts the full deadtime (shoot-through guard unchanged) —
+ * only the requested H-pulse gets shorter. Floor = deadtime x CL_LOW_IDLE_DT_PCT
+ * /100. Lower = slower idle + smaller pulse, until the H-pulse is too short to
+ * drive the FET cleanly and the motor won't hold (graceful: just back off). Only
+ * touches the CL idle floor; commutation/morph/OC still use MIN_DUTY. Set
+ * clIdleDutyPct at/below this so the floor governs. Default OFF.
+ * BENCH RESULT 2026-06-07 (DEAD END): with the sag-block re-floor fixed to
+ * respect this, idle duty did drop 5%->4% — but idle eRPM stayed ~10.5k and the
+ * hand-off pulse stayed ~19A (idle Ia ripple slightly worse). Root: MIN_DUTY is
+ * baked into the trap commutation waveform (low phase + virtual neutral), so the
+ * effective differential drive barely changes. The deadtime floor is structural
+ * in the waveform, not just this clamp. Left OFF (=0): no benefit. */
+#define FEATURE_CL_LOW_IDLE             0   /* allow CL idle below MIN_DUTY (dead end, see above) */
+#define CL_LOW_IDLE_DT_PCT            150   /* idle floor as % of one deadtime (150=1.5xDT) */
+
 /* Float-port of the sector PI (Phase 1 of pi_controller_research.md).
  * When 1, HWZC_OnPiPeriodExpired runs the same algorithm in float instead
  * of integer bit-shifts. Allows non-power-of-2 gains. With HWZC_PI_FF
@@ -952,6 +1025,27 @@ extern "C" {
                                             * responsiveness to real slowdowns. */
 #define HWZC_PI_CLAMP_HIGH_ERPM      150000 /* Switch to tight clamp above this eRPM */
 #define HWZC_PI_CLAMP_HIGH_TICKS     (1000000000UL / HWZC_PI_CLAMP_HIGH_ERPM)
+
+/* ── Absolute, operating-point-aware period floor (PLL anti-harmonic-lock) ──
+ * The relative gates above (70% interval, ±T/N delta clamp) bound the per-STEP
+ * change but NOT cumulative drift, so a run of slightly-short captures can
+ * ratchet the float PLL onto a noise harmonic — the pot-zero "phantom": the
+ * controller spins the commutation fast (e.g. 150k+) while the rotor has
+ * coasted to idle. Literature calls this PLL false/harmonic lock; the standard
+ * cure is an ABSOLUTE plausibility bound in ADDITION to the relative gates.
+ *
+ * This clamps the commanded period so it can't imply a speed faster than the
+ * no-load physics allows for the present duty/Vbus (× a margin). Motor-agnostic:
+ * reuses the SAME no-load-period formula already used for the FF seed,
+ *   P_ff = 181.380 * lambda / (Vbus * dutyFrac)   [HR ticks],
+ * lambda = gspParams.focKeUvSRad. Floor = P_ff * 100/OVERSPEED_PCT (shorter
+ * period = faster, so dividing by the margin sets the speed ceiling). Only
+ * bites when the PLL commands > OVERSPEED_PCT% of no-load — i.e. the phantom;
+ * legitimate operation (≈ no-load at full duty) sits above the floor untouched.
+ * Validated offline in tools/garuda_debug/garuda_gui/pisim.py. Needs valid lambda. */
+#define FEATURE_HWZC_ABS_FLOOR          1
+#define HWZC_ABS_FLOOR_OVERSPEED_PCT  130   /* allow eRPM up to this % of no-load */
+#define HWZC_ABS_FLOOR_MIN_DUTYFRAC  0.03f  /* skip below this duty (P_ff invalid) */
 /* Plausibility gate on capValue. Reject any capture more than this fraction
  * BELOW setValue — at lock, real capValue ≈ setValue (within a few %); a
  * capture <50% of setValue is almost certainly a phantom or accel transient.

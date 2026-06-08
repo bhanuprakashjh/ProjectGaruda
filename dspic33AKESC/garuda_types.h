@@ -318,6 +318,10 @@ typedef struct {
     uint32_t     piDefEntryCount;      /* Telemetry: total entries into defensive mode */
     uint32_t     lastCaptureHR;        /* Most recent ZC timestamp (SCCP2 HR domain) */
     uint32_t     prevCommHR;           /* Previous commutation timestamp — base for capValue */
+    uint16_t     handoffDamp;          /* >0 for the first N commutations after CL entry;
+                                        * tightly clamps the per-event period DECREASE so a
+                                        * too-early first capture can't collapse the period
+                                        * to the half-period phantom (OL->CL smooth, 2026-06-07). */
     bool         captureValid;         /* True after a ZC is timestamped this sector;
                                         * cleared at commutation when PI consumes it. */
     uint32_t     stepPeriodForFilterComp; /* Slow-IIR period for filter-comp ω·τ

@@ -151,22 +151,24 @@ static const GSP_PARAMS_T profileDefaults[6] = {
          * Slot name is still GSP_PROFILE_5010 for EEPROM/profile-id
          * compatibility; actual motor is 2810 here (AKESC's original
          * 5010 data is in PATA comments/backup). */
-        .rampTargetErpm     = 3000,    /* Reliable open-loop ramp endpoint on 2810 at 24V.
-                                        * Higher targets (8k, 10k) stall regardless of
-                                        * amplitude — rotor can't follow the field at the
-                                        * required acceleration. The structural ceiling is
-                                        * ~6-7k eRPM open-loop. Above that, rotor slips
-                                        * and HWZC latches onto noise → phantom telemetry.
-                                        * Tradeoff: rotor at 3k at CL takeover means a
-                                        * ~22A current pulse drives the motor up to CL
-                                        * idle (14k) in ~250ms. The pulse is bounded by
-                                        * OC_SW_LIMIT and bench shunt saturation; not
-                                        * damaging, but visible as a brief "jerk". */
-        .rampAccelErpmPerS  = 3000,    /* 1s ramp at 3k target — works reliably */
+        .rampTargetErpm     = 3000,    /* Reliable OL ramp endpoint on 2810 at 24V.
+                                        * The iron is the ceiling, not the accel: low-L
+                                        * (25µH)/low-Rs(50mΩ) 2810 can't be open-loop-
+                                        * dragged past ~3-4k synced (5k/6k retries with
+                                        * gentler accel still slipped -> 184k phantom +
+                                        * stall, 2026-06-07). The ~19-22A CL-entry pulse
+                                        * (3k rotor vs ~10.4k CL idle) is the accepted
+                                        * tradeoff; bounded by OC_SW, brief, non-damaging. */
+        .rampAccelErpmPerS  = 3000,    /* ~1s ramp 200->3000 eRPM on 2810 at 24V. */
         .rampDutyPct        = 8,       /* At 24V, 8% * 24V / 0.050Ω = 38A stall.
                                         * Motor should be moving early; 8% is ramp cap */
-        .clIdleDutyPct      = 6,       /* 24V * 6% / 0.050Ω = 29A stall.
-                                        * Bare motor needs minimal idle torque */
+        .clIdleDutyPct      = 4,       /* With FEATURE_HWZC_LOWSPD_OFFCTR=1, rising ZC no
+                                        * longer needs the PWM-ON window, so idle holds
+                                        * below the old 6% floor: this clamps to MIN_DUTY
+                                        * -> ~10.4k idle (was ~14.3k at 6%), shrinking the
+                                        * 3k-handoff gap and trimming the pulse ~22->~19.6A.
+                                        * Lowering further is a dead end (idle is floored
+                                        * by MIN_DUTY in the trap waveform). Was 6. */
         .timingAdvMaxDeg    = 25,      /* 2810 low-L (25µH) needs more advance than
                                         * A2212 (30µH) at extreme eRPM. 25° close to
                                         * max safe; PATA used level-3 = 22.5° */
@@ -186,12 +188,10 @@ static const GSP_PARAMS_T profileDefaults[6] = {
                                         * BEMF ceiling. If motor stays at <230k,
                                         * BEMF is the true limit. */
         .sineAlignModPct    = 3,       /* Conservative align — low Rs means current */
-        .sineRampModPct     = 5,       /* Conservative for low-Rs 2810 (0.05Ω). At 24V,
-                                        * 5% mod produces ~5.6A peak in OL_RAMP. Raising
-                                        * to 8-9% provides more torque but doesn't help
-                                        * the CL-entry spike (rotor still ends ramp at
-                                        * 3k eRPM, structurally limited). Tested combos
-                                        * of 9%/8k and 5%/10k both slipped. */
+        .sineRampModPct     = 5,       /* Conservative for low-Rs 2810 (0.05Ω). 5% mod ~5.6A
+                                        * peak in OL_RAMP. Retry at 8% (2026-06-07) raised
+                                        * peak to ~12.5A but rotor still slipped past ~4k —
+                                        * amplitude is not the limit, the iron is. Was 5. */
         .zcDemagDutyThresh  = 40,      /* Same as A2212 — low L → more demag */
         .zcDemagBlankExtraPct = 20,    /* Aggressive demag blanking (low L = long tail) */
         .ocLimitMa          = 20000,   /* CMP3 chop. Slightly below sensor saturation

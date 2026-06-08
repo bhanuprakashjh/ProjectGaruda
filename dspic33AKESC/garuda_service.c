@@ -815,6 +815,51 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
             }
 #endif
         }
+
+#if FEATURE_HWZC_LOWSPD_OFFCTR && FEATURE_HWZC_FALLING_SW && FEATURE_HWZC_SECTOR_PI
+        /* Phase 1 (OL->CL smooth-handoff plan): detect RISING ZC on the SAME
+         * RC-filtered OFF-center (PWM-OFF) sample at low speed, so neither
+         * polarity needs the PWM-ON comparator window. This is the enabler for a
+         * low-duty hand-off (it removes the reason for the ~6% duty floor).
+         * Mirrors the falling detector above with opposite sign. ADDITIVE: the
+         * rising HW comparator still runs; first capture per sector wins
+         * (!captureValid). Speed-gated (OFF-center res is ~1 PWM period). */
+        if (garudaData.hwzc.enabled
+            && garudaData.hwzc.phase == HWZC_WATCHING
+            && garudaData.bemf.bemfSampleValid
+            && commutationTable[garudaData.currentStep].zcPolarity > 0
+            && !garudaData.hwzc.captureValid)
+        {
+            uint32_t erpmNow = garudaData.hwzc.stepPeriodHR
+                ? HWZC_TICKS_TO_ERPM(garudaData.hwzc.stepPeriodHR) : 0;
+            if (erpmNow > 0 && erpmNow < HWZC_LOWSPD_OFFCTR_MAX_ERPM)
+            {
+                uint16_t vfo = garudaData.bemf.bemfRaw;
+                /* rising threshold: filter-comp + deadband on the HIGH side
+                 * (mirror of the falling fth - deadband). Clamp to ADC range. */
+                uint16_t rth = HWZC_ApplyFilterComp(&garudaData,
+                                                    garudaData.bemf.zcThreshold,
+                                                    true /* rising */);
+                {
+                    uint32_t r = (uint32_t)rth + HWZC_CMP_DEADBAND;
+                    rth = (r > 4095u) ? 4095u : (uint16_t)r;
+                }
+                uint32_t zc = HAL_SCCP2_ReadTimestamp();
+                uint32_t intoSector = zc - garudaData.hwzc.lastCommStamp;
+                bool plausible = intoSector > (garudaData.hwzc.timerPeriod >> 2);
+                if (plausible && vfo > rth)
+                {
+                    garudaData.hwzc.lastCaptureHR = zc;
+                    garudaData.hwzc.captureValid  = true;
+                    garudaData.hwzc.lastZcStamp   = zc;
+                    if (garudaData.hwzc.goodZcCount < 0xFFFE)
+                        garudaData.hwzc.goodZcCount++;
+                    garudaData.hwzc.missCount = 0;
+                    garudaData.hwzc.totalZcCount++;
+                }
+            }
+        }
+#endif
 #endif
     }
     adcIsrTick++;
@@ -2475,6 +2520,11 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
             /* Detect first entry into CLOSED_LOOP (state transition) */
             if (prevAdcState != ESC_CLOSED_LOOP)
             {
+#if FEATURE_ADC_CMP_ZC && FEATURE_HWZC_HANDOFF_DAMP
+                /* Arm the hand-off period-collapse damp for the first N
+                 * commutations (prevents the half-period phantom at entry). */
+                garudaData.hwzc.handoffDamp = HWZC_HANDOFF_DAMP_EVENTS;
+#endif
 #if FEATURE_SINE_STARTUP
                 /* Morph hot handoff: ZC already locked, skip re-init.
                  * Gate on prevAdcState == ESC_MORPH (not just zcSynced)
@@ -3045,7 +3095,13 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                         ((uint32_t)garudaData.throttle * (cap - RT_CL_IDLE_DUTY)) / 4096;
 #endif
                 }
+#if FEATURE_CL_LOW_IDLE
+                /* Lower CL idle floor (deadtime unchanged → no shoot-through risk;
+                 * only shortens the H-pulse). Drops idle equilibrium + handoff gap. */
+                if (mappedDuty < CL_LOW_IDLE_FLOOR) mappedDuty = CL_LOW_IDLE_FLOOR;
+#else
                 if (mappedDuty < MIN_DUTY) mappedDuty = MIN_DUTY;
+#endif
                 if (mappedDuty > cap) mappedDuty = cap;
 
 #if FEATURE_DUTY_SLEW
@@ -3062,6 +3118,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                     uint32_t upRate = RT_DUTY_SLEW_UP_RATE;
                     if (postSyncCounter < RT_POST_SYNC_SETTLE_TICKS)
                         upRate = RT_DUTY_SLEW_UP_RATE / RT_POST_SYNC_SLEW_DIVISOR;
+
 
                     int32_t delta = (int32_t)mappedDuty - (int32_t)prevDuty;
                     if (delta > 0)
@@ -3208,8 +3265,16 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                     }
 #endif
 
+#if FEATURE_CL_LOW_IDLE
+                    /* respect the lowered CL idle floor (this sag block's
+                     * re-floor would otherwise clobber CL_LOW_IDLE_FLOOR
+                     * back up to MIN_DUTY every tick) */
+                    if (mappedDuty < CL_LOW_IDLE_FLOOR)
+                        mappedDuty = CL_LOW_IDLE_FLOOR;
+#else
                     if (mappedDuty < MIN_DUTY)
                         mappedDuty = MIN_DUTY;
+#endif
                 }
 #endif
 
@@ -3229,6 +3294,82 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                 }
 #endif
 
+#if FEATURE_CL_SOFT_ENTRY
+                /* Option A — soft OL->CL hand-off. MORPH leaves the duty already
+                 * at operating level (~6%), so a slew-RATE limiter has no upward
+                 * step to catch. Instead OWN an explicit cap that starts at
+                 * MIN_DUTY on CL entry and ramps up gently, so the motor walks
+                 * from the low-BEMF hand-off speed (~3k) to the idle equilibrium
+                 * (~14k) with bounded current instead of the ~22A torque slam.
+                 * Final cap (after OC limiter) so protections still win; only
+                 * limits the UPPER bound during the entry window. */
+                {
+                    static uint32_t softCap = 0;
+                    static uint16_t softCtr = 0;
+                    if (prevAdcState != ESC_CLOSED_LOOP) {
+                        softCtr  = 0;
+                        softCap  = MIN_DUTY;        /* begin LOW, ignore morph-exit duty */
+                    }
+                    if (softCtr < CL_SOFT_ENTRY_TICKS) {
+                        softCtr++;
+                        uint32_t step = RT_DUTY_SLEW_UP_RATE / CL_SOFT_ENTRY_DIVISOR;
+                        if (step == 0) step = 1;
+                        softCap += step;
+                        if (mappedDuty > softCap)
+                            mappedDuty = softCap;
+                    }
+                }
+#endif
+#if FEATURE_IF_BRIDGE
+                /* Option D — I-f current-limited OL->CL hand-off bridge.
+                 * Ramp duty up from MIN_DUTY, but back off whenever bus current
+                 * exceeds the cap, so the motor accelerates from the (low-BEMF)
+                 * hand-off speed to the idle equilibrium at BOUNDED current
+                 * instead of the structural ~22A slam. Motor-agnostic: the cap
+                 * is the only knob. Only ever LOWERS mappedDuty (exits, leaving
+                 * normal control, once the regulated duty catches up to demand),
+                 * so OC/regen/OV protections above still win. */
+                {
+                    static uint32_t ifDuty = 0;
+                    static uint16_t ifCtr  = 0;
+                    static bool ifActive   = false;
+                    if (prevAdcState != ESC_CLOSED_LOOP) {
+                        ifActive = true;
+                        ifDuty   = MIN_DUTY;
+                        ifCtr    = 0;
+                    }
+                    if (ifActive) {
+                        ifCtr++;
+                        /* back off on current MAGNITUDE (both motoring + and regen -
+                         * excursions); the bus current swings negative during the
+                         * unlocked hand-off, which a signed compare would miss. */
+                        int32_t iMag = (int32_t)garudaData.ibusRaw
+                                     - (int32_t)OC_BIAS_COUNTS;
+                        if (iMag < 0) iMag = -iMag;
+                        if (iMag > IF_BRIDGE_LIMIT_DELTA) {
+                            /* over the current cap — back off fast */
+                            if (ifDuty > MIN_DUTY + IF_BRIDGE_DOWN_RATE)
+                                ifDuty -= IF_BRIDGE_DOWN_RATE;
+                            else
+                                ifDuty = MIN_DUTY;
+                        } else {
+                            /* under the cap — ramp up toward normal demand */
+                            ifDuty += IF_BRIDGE_UP_RATE;
+                        }
+                        /* Never exceed the normal demand, but DON'T exit just
+                         * because the ramp caught up — a single PWM-gated low
+                         * current sample must not let the bridge bail before the
+                         * real overcurrent develops. Stay active for the whole
+                         * window; once the motor reaches idle, ifDuty simply sits
+                         * at the demand (harmless) until the window expires. */
+                        if (ifDuty > mappedDuty)
+                            ifDuty = mappedDuty;
+                        if (ifCtr >= IF_BRIDGE_TICKS)
+                            ifActive = false;        /* window elapsed -> hand back */
+                        mappedDuty = ifDuty;         /* apply the bounded-current duty */
+                    }
+                }
+#endif
                 garudaData.duty = mappedDuty;
             }
             HAL_PWM_SetDutyCycle(garudaData.duty);
