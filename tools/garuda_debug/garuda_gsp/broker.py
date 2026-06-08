@@ -22,6 +22,8 @@ import sys
 import threading
 import time
 
+import serial as _serial
+
 from .client import GspClient
 
 HOST = "127.0.0.1"
@@ -44,24 +46,52 @@ class _Conn:
 
 
 class Broker:
-    def __init__(self, gsp):
+    def __init__(self, gsp, baud=115200):
         self.gsp = gsp                   # the single GspClient that owns the port
+        self._port = getattr(gsp, "port", None)
+        self._baud = baud
         self.lock = threading.Lock()     # serialize all UART transactions
         self.conns = []
         self.last_snap = {}
         self.running = True
+
+    def _reconnect(self):
+        """Reopen the board after a serial I/O error (USB glitch / replug). Tries
+        the same port first, then re-probes in case it re-enumerated elsewhere."""
+        try:
+            self.gsp.close()
+        except Exception:
+            pass
+        try:
+            self.gsp = GspClient(self._port, baud=self._baud)
+            self.gsp.connect()
+        except Exception:
+            self.gsp = GspClient(None, baud=self._baud)   # device may have moved
+            self.gsp.connect()
+            self._port = self.gsp.port
+        print(f"garuda-broker: reconnected to {self.gsp.port}", flush=True)
+
+    def _uart(self, method, params):
+        """Run one UART transaction under the lock; on a serial I/O error
+        (Errno 5 / SerialException — a dead fd after a USB glitch) reconnect once
+        and retry, so the daemon self-heals instead of failing forever."""
+        with self.lock:
+            try:
+                return getattr(self.gsp, method)(*params)
+            except (OSError, _serial.SerialException):
+                self._reconnect()
+                return getattr(self.gsp, method)(*params)
 
     def _poll(self):
         period = 1.0 / POLL_HZ
         while self.running:
             t = time.monotonic()
             try:
-                with self.lock:
-                    snap = self.gsp.get_snapshot()
+                snap = self._uart("get_snapshot", [])        # reconnects on IO error
                 self.last_snap = snap
                 self._broadcast({"telem": snap})
             except Exception:
-                pass
+                time.sleep(0.5)                              # backoff if board's down
             dt = period - (time.monotonic() - t)
             if dt > 0:
                 time.sleep(dt)
@@ -101,8 +131,7 @@ class Broker:
                     elif method == "info":
                         resp["result"] = self.gsp.info
                     else:
-                        with self.lock:                          # serialized UART
-                            resp["result"] = getattr(self.gsp, method)(*params)
+                        resp["result"] = self._uart(method, params)   # +reconnect
                 except Exception as e:                           # noqa
                     resp["error"] = f"{type(e).__name__}: {e}"
                 c.send(resp)
@@ -134,7 +163,7 @@ def serve(port=None, baud=115200, host=HOST, tcp_port=PORT, gsp=None):
     if gsp is None:
         gsp = GspClient(port, baud=baud)
         gsp.connect()
-    Broker(gsp).serve(host, tcp_port)
+    Broker(gsp, baud=baud).serve(host, tcp_port)
 
 
 # ── client shim (GspClient-compatible) ─────────────────────────────────────
