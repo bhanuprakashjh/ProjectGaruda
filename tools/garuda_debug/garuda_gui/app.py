@@ -135,11 +135,12 @@ class SerialWorker(QtCore.QThread):
     def run(self):
         try:
             c = GspClient(self.port)        # port=None -> probes for the board
-            if not c.ping():
+            try:
+                info = c.connect()          # GET_INFO with retry (Windows-safe)
+            except GspError:
                 self.failed.emit(f"No response on {c.port} (baud/power/wrong port?).  "
                                  f"{_port_hint()}")
                 return
-            info = c.get_info()
             info["_port"] = c.port          # the port actually connected
             self.connected.emit(info)
             try:

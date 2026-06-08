@@ -77,7 +77,7 @@ def find_port(preferred: str = None) -> str:
 
 
 def probe_ports(preferred: str = None, baud: int = 115200,
-                timeout: float = 0.4, on_try=None) -> str:
+                timeout: float = 0.5, on_try=None) -> str:
     """Open each candidate port and send GET_INFO; return the device that
     actually answers (the real board), or None if none do. This is what makes
     auto-connect reliable on Windows, where COM names carry no hint and the
@@ -100,10 +100,14 @@ def probe_ports(preferred: str = None, baud: int = 115200,
             # immediately instead of blocking the probe.
             with serial.Serial(dev, baud, timeout=timeout, exclusive=True) as ser:
                 # leave DTR/RTS at default (asserted) — the PKoB bridge needs it
-                time.sleep(0.05)
+                time.sleep(0.15)            # Windows settle after open
                 ser.reset_input_buffer()
-                resp = send_cmd(ser, P.CMD_GET_INFO, b"", timeout=timeout)
-                ok = resp is not None and resp[0] == P.CMD_GET_INFO
+                for _ in range(2):          # first cmd is often dropped on Windows
+                    resp = send_cmd(ser, P.CMD_GET_INFO, b"", timeout=timeout)
+                    if resp is not None and resp[0] == P.CMD_GET_INFO:
+                        ok = True
+                        break
+                    ser.reset_input_buffer()
         except Exception:
             ok = False
         if on_try:
@@ -139,6 +143,16 @@ class GspClient:
         # instead of blocking the worker thread forever (the QThread warning).
         self.ser = serial.Serial(self.port, baud, timeout=timeout,
                                  write_timeout=max(timeout, 1.0))
+        # Windows USB-serial needs a moment after open before the first byte is
+        # reliable, and the first TX/RX often gets dropped — settle and flush so
+        # the handshake doesn't fail on the first command (Linux cdc_acm is fine
+        # without this, but it's harmless there).
+        time.sleep(0.15)
+        try:
+            self.ser.reset_input_buffer()
+            self.ser.reset_output_buffer()
+        except Exception:
+            pass
         self.info = None            # cached GET_INFO
         self.protocol_version = None
 
@@ -182,6 +196,23 @@ class GspClient:
         self.info = decode_info(rpl)
         self.protocol_version = self.info.get("protocolVersion")
         return self.info
+
+    def connect(self, retries: int = 5, delay: float = 0.15) -> dict:
+        """Handshake with retry. The first GET_INFO after open is frequently
+        dropped on Windows USB-serial, so we flush and retry a few times before
+        giving up. Returns the info dict or raises the last GspError."""
+        last = None
+        for _ in range(max(1, retries)):
+            try:
+                return self.get_info()
+            except GspError as e:
+                last = e
+                try:
+                    self.ser.reset_input_buffer()
+                except Exception:
+                    pass
+                time.sleep(delay)
+        raise last or GspError("no response")
 
     def get_snapshot(self) -> dict:
         rpl = self._cmd(P.CMD_GET_SNAPSHOT, expect=P.CMD_GET_SNAPSHOT)
