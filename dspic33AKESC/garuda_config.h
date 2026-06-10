@@ -110,7 +110,18 @@ extern "C" {
                                     * Until the first arm completes calibration, bias stays 2048 =
                                     * exactly the legacy behavior (graceful fallback). */
 #define OC_AUTOZERO_SAMPLES    64  /* ARMED rest samples (~1.4ms @45kHz) */
-
+#define FEATURE_CL_COAST_VERIFY 1  /* 2026-06-10 (step 1a of the baseline plan): at morph→CL
+                                    * hand-off, coast the bridge 1-2 e-cycles and listen to
+                                    * phase B's clean BEMF (no PWM = perfect signal), then enter
+                                    * CL with the MEASURED sector + period instead of trusting
+                                    * the morph's lock. Coast-listen bench-proven (it exposed
+                                    * the morph dragging a slipping rotor at ~900 eRPM while
+                                    * claiming 3k lock — those fiction hand-offs are the worst
+                                    * slams / failed starts). Engage always uses the measured
+                                    * truth (rotor slow → correct-angle drive at its real speed
+                                    * beats a wrong-angle slam); listen timeout (~100ms) falls
+                                    * back to today's hot hand-off. Conventional waveform only —
+                                    * none of the CL_DIFF_IDLE machinery activates. */
 /* FOC (Field-Oriented Control) — compile-time alternative to 6-step */
 #define FEATURE_FOC              0  /* Phase I: OLD FOC v1 (reference, deprecated) */
 #define FEATURE_FOC_V2           0  /* Phase I v2: closed-loop current control + MXLEMMING */
@@ -999,7 +1010,10 @@ extern "C" {
  * Prop-safe: continuous drive every cycle, full torque authority (this is
  * NOT pulse skipping). Float phase / ZC handling unchanged; the duty-
  * proportional zcThreshold is floored at its proven MIN_DUTY level. */
-#define FEATURE_CL_DIFF_IDLE            0   /* PARKED 2026-06-10 (bus-ADC analog instability blocks bench; see memory). */
+#define FEATURE_CL_DIFF_IDLE            0   /* PARKED 2026-06-10 (steady-state diff idle: BEMF-quality
+                                             * floor ~8-9k makes it marginal vs the 10.3k baseline;
+                                             * see memory). Briefly revived as machinery for
+                                             * FEATURE_CL_ENTRY_GLIDE — refuted same day, see below. */
 #define CL_DIFF_IDLE_PCT_X10           34   /* idle floor: EFFECTIVE duty, 0.1% units (34 = 3.4%
                                              * ≈ 0.82V → idle ~8-9k on the 2810: the bench-measured
                                              * smooth zone. BENCH 2026-06-10 ladder: 1.0% → ~2.5k,
@@ -1011,6 +1025,27 @@ extern "C" {
                                              * the ~10-11k MIN_DUTY wall. */
 #define CL_DIFF_EXIT_HYST_DIV           4   /* swap to conventional drive at duty ≥ MIN_DUTY +
                                              * MIN_DUTY/DIV; re-enter diff below MIN_DUTY */
+
+#define FEATURE_CL_ENTRY_GLIDE          0   /* REFUTED ON BENCH 2026-06-10 — keep 0. Idea: coast
+                                             * engage starts the DIFF waveform at speed-matched
+                                             * volts, ramps to MIN_DUTY over ~300ms → linear climb.
+                                             * Reality: the glide starts at ~5.5k, BELOW the diff
+                                             * BEMF-quality floor (~8-9k, bench ladder) → SW ZC
+                                             * never locked (rej=0%, deadline-forced eRPM crawl)
+                                             * → open-loop drag at Ia 22A SATURATED for ~450ms
+                                             * (more charge than the 250ms ballistic it replaced),
+                                             * exits randomly: OC_SW fault, or phantom 18.7k lock
+                                             * at 20A. Matched volts didn't stay matched: the
+                                             * +2×MIN_DUTY deadtime comp is calibrated near zero
+                                             * current; at real current the DT error flips →
+                                             * overdrive → positive feedback to the OC limiter.
+                                             * Also shifted idle 10.4k→12.6k (pinned-floor mapping
+                                             * adds ~1% duty). Don't retry without a ZC source
+                                             * that works below 8k in diff mode. */
+#define CL_GLIDE_EQ_ERPM            10400u  /* bench-measured MIN_DUTY equilibrium speed (2810@24V).
+                                             * Matched engage duty = MIN_DUTY × erpm_meas / this. */
+#define CL_GLIDE_DIV                    8   /* glide ramp rate: +1 duty tick per N ADC ISR ticks.
+                                             * 8 → ~0.47×MIN_DUTY span in ~320ms @45kHz. */
 
 /* Float-port of the sector PI (Phase 1 of pi_controller_research.md).
  * When 1, HWZC_OnPiPeriodExpired runs the same algorithm in float instead

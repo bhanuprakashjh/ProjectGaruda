@@ -467,19 +467,21 @@ static void IF_StartupTick(uint16_t raw_ia, uint16_t raw_ib)
 }
 #endif /* FEATURE_IF_STARTUP */
 
-#if FEATURE_CL_DIFF_IDLE
+#if FEATURE_CL_DIFF_IDLE || FEATURE_CL_COAST_VERIFY
 /* ── Coast-listen lock acquisition (2026-06-10) ──────────────────────────
- * At diff-idle CL entry, instead of force-commutating at the morph period
- * and detecting ZC through switching noise at ~0.5V drive (bench: noise-
- * confirms, frozen period, hunting), CUT THE BRIDGE for up to ~2 electrical
- * cycles and listen to phase B's clean BEMF — no PWM means no threshold
- * model at all. The median of the crossing intervals is the true period
- * (one B-crossing every half e-cycle = 3 sector periods); the last
- * crossing's polarity gives the sector exactly (B floats rising in step 2,
- * falling in step 5; ZC = sector center). Re-engage the differential drive
- * SYNCED at the crossing instant. Same primitive AM32/BLHeli use to catch
- * a spinning motor. Windage decel over the window is negligible (morph
- * coast measurements). direction!=0 → blind fallback engage. */
+ * At CL entry, instead of trusting the morph's lock (bench: the morph can
+ * drag a SLIPPING rotor while its gate claims 3k lock — coast-listen caught
+ * it at ~900 real), CUT THE BRIDGE for up to ~2 electrical cycles and listen
+ * to phase B's clean BEMF — no PWM means no threshold model at all. The
+ * median of the crossing intervals is the true period (one B-crossing every
+ * half e-cycle = 3 sector periods); the last crossing's polarity gives the
+ * sector exactly (B floats rising in step 2, falling in step 5; ZC = sector
+ * center). Engage SYNCED at the crossing instant — differential drive when
+ * FEATURE_CL_DIFF_IDLE, the conventional waveform otherwise (verify mode).
+ * Same primitive AM32/BLHeli use to catch a spinning motor. Windage decel
+ * over the window is negligible (morph coast measurements). The first ~3ms
+ * after bridge-cut freewheel through the body diodes and ring the phases —
+ * settle past it and reject impossible intervals. direction!=0 → no coast. */
 #define CL_COAST_MIN_CROSS      3     /* crossings needed (=> 2 valid intervals) */
 #define CL_COAST_MAX_IV         4     /* intervals stored for the median */
 #define CL_COAST_TIMEOUT_TICKS  4500  /* ~100ms @45kHz — then blind fallback engage */
@@ -506,8 +508,20 @@ static struct {
     uint16_t iv[CL_COAST_MAX_IV];
 } s_clCoast;
 
+#if FEATURE_CL_ENTRY_GLIDE
+/* Entry-glide state: after the coast engage, effective duty (diff waveform)
+ * ramps linearly from the speed-matched level to MIN_DUTY, then the drive
+ * force-swaps to the conventional waveform (baseline from there on). */
+static uint8_t  s_glideActive;
+static uint8_t  s_glideDivCtr;
+static uint16_t s_glideDuty;
+#endif
+
 static void CL_CoastBegin(void)
 {
+#if FEATURE_CL_ENTRY_GLIDE
+    s_glideActive = 0;
+#endif
     s_clCoast.active = 1;
     s_clCoast.side = 0xFF;
     s_clCoast.nCross = 0;
@@ -518,10 +532,28 @@ static void CL_CoastBegin(void)
     HAL_MC1PWMDisableOutputs();   /* true coast: all phases Hi-Z (clears diff flag) */
 }
 
-/* Re-engage drive in diff mode at `sector`, period `p`, next commutation in
- * `dl` ticks, marked synced. Mirrors the morph→CL exit seeding. */
+/* Re-engage drive at `sector`, period `p`, next commutation in `dl` ticks,
+ * marked synced. Mirrors the morph→CL exit seeding. */
 static void CL_CoastEngage(uint8_t sector, uint16_t p, uint16_t dl, uint16_t now)
 {
+#if FEATURE_CL_ENTRY_GLIDE
+    /* Glide engage: diff waveform at effective volts MATCHED to the measured
+     * speed (duty = MIN_DUTY × erpm / equilibrium-erpm) — torque step at
+     * engage ≈ 0, then the per-tick glide ramps duty to MIN_DUTY. */
+    {
+        uint32_t erpm = ERPM_FROM_ADC_STEP_NUM / p;
+        uint32_t d = ((uint32_t)MIN_DUTY * erpm) / CL_GLIDE_EQ_ERPM;
+        if (d > (uint32_t)MIN_DUTY)      d = MIN_DUTY;
+        if (d < (uint32_t)MIN_DUTY / 4u) d = (uint32_t)MIN_DUTY / 4u;
+        g_pwmDiffLow = 1;
+        COMMUTATION_ApplyStep(&garudaData, sector);
+        garudaData.duty = (uint16_t)d;
+        HAL_PWM_SetDutyCycle(garudaData.duty);
+        s_glideDuty   = (uint16_t)d;
+        s_glideDivCtr = 0;
+        s_glideActive = 1;
+    }
+#elif FEATURE_CL_DIFF_IDLE
     g_pwmDiffLow = 1;
     COMMUTATION_ApplyStep(&garudaData, sector);
     /* Engage GENTLY at the idle floor: the rotor is already at speed and only
@@ -529,6 +561,15 @@ static void CL_CoastEngage(uint8_t sector, uint16_t p, uint16_t dl, uint16_t now
      * turns into a ~16% active pulse — caused a −21A blip at engage.) */
     garudaData.duty = CL_DIFF_IDLE_FLOOR;
     HAL_PWM_SetDutyCycle(garudaData.duty);
+#else
+    /* Verify mode: conventional waveform, same entry duty the morph coast
+     * used (MIN_DUTY) — identical volts to today's hot hand-off, but at the
+     * MEASURED sector and period instead of the morph's possibly-fictional
+     * lock state. */
+    COMMUTATION_ApplyStep(&garudaData, sector);
+    garudaData.duty = MIN_DUTY;
+    HAL_PWM_SetDutyCycle(garudaData.duty);
+#endif
     BEMF_ZC_OnCommutation(&garudaData, now);
 
     garudaData.timing.stepPeriod = p;
@@ -629,7 +670,7 @@ static bool CL_CoastListenTick(uint16_t vB, uint16_t now)
                        (uint16_t)(garudaData.timing.stepPeriod / 2u), now);
     return true;
 }
-#endif /* FEATURE_CL_DIFF_IDLE */
+#endif /* FEATURE_CL_DIFF_IDLE || FEATURE_CL_COAST_VERIFY */
 
 #if FEATURE_OC_AUTOZERO
 /* OC auto-zero (2026-06-10): measured bus-ADC rest bias. 2048 = uncalibrated
@@ -3050,23 +3091,31 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                 }
             }
 
-#if FEATURE_CL_DIFF_IDLE
-            /* Diff-idle entry: coast-listen first (clean-BEMF lock), then the
-             * per-tick gate owns the bridge until engage. Entry-init above has
-             * already run; HWZC is forced off for the diff regime. */
+#if FEATURE_CL_DIFF_IDLE || FEATURE_CL_COAST_VERIFY
+            /* CL entry: coast-listen first (clean-BEMF measurement of the TRUE
+             * rotor sector/period), then the per-tick gate owns the bridge
+             * until engage. Entry-init above has already run. HWZC stays off
+             * during the coast (bridge-off signals would be garbage); in
+             * verify mode it re-enables via the normal crossover logic right
+             * after engage. CCW: sector math not implemented — no coast. */
             if (prevAdcState != ESC_CLOSED_LOOP)
             {
+#if FEATURE_ADC_CMP_ZC
                 garudaData.hwzc.enablePending = false;
                 if (garudaData.hwzc.enabled)
                     HWZC_Disable(&garudaData);
+#endif
                 if (garudaData.direction == 0)
                     CL_CoastBegin();
+#if FEATURE_CL_DIFF_IDLE && !FEATURE_CL_ENTRY_GLIDE
                 else
                 {
-                    /* CCW: sector math not implemented — blind diff engage */
+                    /* CCW: blind diff engage (steady-state diff idle only;
+                     * glide mode falls through to the baseline hot hand-off) */
                     g_pwmDiffLow = 1;
                     HAL_PWM_SetCommutationStep(garudaData.currentStep);
                 }
+#endif
             }
             if (CL_CoastListenTick(phaseB_val, adcIsrTick))
                 break;   /* coasting: bridge off, skip normal CL this tick */
@@ -3899,6 +3948,39 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                         if (ifCtr >= IF_BRIDGE_TICKS)
                             ifActive = false;        /* window elapsed -> hand back */
                         mappedDuty = ifDuty;         /* apply the bounded-current duty */
+                    }
+                }
+#endif
+
+#if FEATURE_CL_ENTRY_GLIDE
+                /* Entry glide: ramp effective duty linearly from the matched
+                 * engage level to MIN_DUTY (~320ms), overriding the mapping
+                 * (placed LAST so the MIN_DUTY floors above can't undo the
+                 * sub-MIN cap). Speed follows quasi-statically → near-linear
+                 * climb to the MIN_DUTY equilibrium at a few amps instead of
+                 * the ballistic 22A slam. At MIN_DUTY, force-swap to the
+                 * conventional waveform — bit-identical baseline after. */
+                if (s_glideActive)
+                {
+                    if (++s_glideDivCtr >= CL_GLIDE_DIV)
+                    {
+                        s_glideDivCtr = 0;
+                        s_glideDuty++;
+                    }
+                    if (s_glideDuty >= MIN_DUTY)
+                    {
+                        s_glideActive = 0;
+                        if (g_pwmDiffLow)
+                        {
+                            /* hand back to the baseline waveform (HWZC then
+                             * re-enables via the normal crossover logic) */
+                            g_pwmDiffLow = 0;
+                            HAL_PWM_SetCommutationStep(garudaData.currentStep);
+                        }
+                    }
+                    else if (mappedDuty > s_glideDuty)
+                    {
+                        mappedDuty = s_glideDuty;
                     }
                 }
 #endif

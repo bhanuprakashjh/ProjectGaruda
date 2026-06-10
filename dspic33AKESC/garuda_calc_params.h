@@ -46,8 +46,16 @@ _Static_assert(CL_LOW_IDLE_DT_PCT >= 100, "CL idle floor must exceed 1x deadtime
 /* Differential-low CL idle floor — EFFECTIVE duty (line-line volts fraction).
  * Applied as active = MIN_DUTY + duty, low = MIN_DUTY (complementary), so the
  * physical H-pulses always exceed the deadtime swallow. */
+#if FEATURE_CL_ENTRY_GLIDE
+/* Glide mode: steady-state diff idle NEUTRALIZED — floor pinned to MIN_DUTY
+ * makes the CL idle mapping numerically identical to the baseline (pot-0
+ * target = MIN_DUTY → 10.4k equilibrium, never re-enters diff at idle). The
+ * diff waveform only runs during the post-coast entry glide. */
+#define CL_DIFF_IDLE_FLOOR          ((uint32_t)MIN_DUTY)
+#else
 #define CL_DIFF_IDLE_FLOOR          (uint32_t)(((uint32_t)LOOPTIME_TCY * CL_DIFF_IDLE_PCT_X10) / 1000UL)
 _Static_assert(CL_DIFF_IDLE_PCT_X10 >= 1, "diff idle floor must be > 0 (0V idle would stall)");
+#endif
 #endif
 /* Raised to 99% (2026-05-26): old formula reserved 2×deadtime of L-side on-time
  * (max 94.6% at 45kHz × 300ns DT). Past ~94% the L-FET is going to be suppressed
