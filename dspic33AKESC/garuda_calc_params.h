@@ -42,6 +42,13 @@ extern "C" {
 #define CL_LOW_IDLE_FLOOR           (uint32_t)((DEADTIME_COUNTS * CL_LOW_IDLE_DT_PCT) / 100)
 _Static_assert(CL_LOW_IDLE_DT_PCT >= 100, "CL idle floor must exceed 1x deadtime (else no H-pulse)");
 #endif
+#if FEATURE_CL_DIFF_IDLE
+/* Differential-low CL idle floor — EFFECTIVE duty (line-line volts fraction).
+ * Applied as active = MIN_DUTY + duty, low = MIN_DUTY (complementary), so the
+ * physical H-pulses always exceed the deadtime swallow. */
+#define CL_DIFF_IDLE_FLOOR          (uint32_t)(((uint32_t)LOOPTIME_TCY * CL_DIFF_IDLE_PCT_X10) / 1000UL)
+_Static_assert(CL_DIFF_IDLE_PCT_X10 >= 1, "diff idle floor must be > 0 (0V idle would stall)");
+#endif
 /* Raised to 99% (2026-05-26): old formula reserved 2×deadtime of L-side on-time
  * (max 94.6% at 45kHz × 300ns DT). Past ~94% the L-FET is going to be suppressed
  * anyway (PWM peripheral handles deadtime internally — when requested H-pulse
@@ -458,6 +465,26 @@ _Static_assert(IF_BRIDGE_LIMIT_ADC < OC_FAULT_ADC_VAL,
 _Static_assert(IF_BRIDGE_LIMIT_DELTA > 0, "IF_BRIDGE_LIMIT must exceed the zero bias");
 #endif
 
+/* Hand-off CMP3 chop: a LOW cycle-by-cycle current threshold held for a window
+ * at CL entry. Same DAC scale as OC_CMP3_DAC_VAL / OC_CMP3_STARTUP_DAC. */
+#if FEATURE_HANDOFF_CHOP
+#define OC_CMP3_HANDOFF_DAC  OC_MV_TO_COUNTS(OC_TRIP_MV(OC_CMP3_HANDOFF_MA))
+#define HANDOFF_CHOP_TICKS   ((uint16_t)((uint32_t)HANDOFF_CHOP_MS * PWMFREQUENCY_HZ / 1000))
+_Static_assert(OC_CMP3_HANDOFF_DAC < OC_CMP3_STARTUP_DAC,
+               "hand-off chop must be below the startup chop threshold");
+_Static_assert(OC_CMP3_HANDOFF_DAC > OC_BIAS_COUNTS,
+               "hand-off chop must be above the zero-current bias");
+#endif
+
+/* I-f spin-up derived constants (the control loop runs in the 24kHz ADC ISR). */
+#if FEATURE_IF_STARTUP
+#define IF_ERPM_TO_RAD_S(e)  ((float)(e) * 0.104719755f)   /* eRPM → elec rad/s */
+#define IF_HANDOFF_RAD_S     IF_ERPM_TO_RAD_S(IF_HANDOFF_ERPM)
+#define IF_ALIGN_TICKS       ((uint16_t)((uint32_t)IF_ALIGN_MS * 24u))  /* 24kHz */
+#define IF_DT_S              (1.0f / 24000.0f)
+#define IF_INV_SQRT3         0.57735027f
+#endif
+
 /* Static asserts — all integer constant expressions */
 _Static_assert(OC_CMP3_DAC_VAL < 4096, "CMP3 operational threshold exceeds 12-bit DAC range");
 _Static_assert(OC_CMP3_STARTUP_DAC < 4096, "CMP3 startup threshold exceeds 12-bit DAC range");
@@ -521,6 +548,10 @@ _Static_assert(RAMP_CURRENT_GATE_ADC < OC_CMP3_DAC_VAL,
   #define RT_ZC_DEMAG_BLANK_EXTRA_PERCENT gspParams.zcDemagBlankExtraPct
   #define RT_POST_SYNC_SLEW_DIVISOR       gspParams.postSyncSlewDivisor
   #define RT_DESYNC_MAX_RESTARTS          gspParams.desyncMaxRestarts
+  #define RT_MORPH_LOCK_ZC_COUNT          gspParams.morphLockZcCount
+  #define RT_MORPH_LOCK_TOL_PCT           gspParams.morphLockTolPct
+  #define RT_IF_CURRENT_CA                gspParams.ifCurrentCa
+  #define RT_IF_RAMP_ERPM_PER_S           gspParams.ifRampErpmPerS
   #define RT_VBUS_OVERVOLTAGE_ADC         gspParams.vbusOvAdc
   #define RT_VBUS_UNDERVOLTAGE_ADC        gspParams.vbusUvAdc
   /* Precomputed derived (set from main context only) */
@@ -563,6 +594,10 @@ _Static_assert(RAMP_CURRENT_GATE_ADC < OC_CMP3_DAC_VAL,
   #define RT_ZC_DEMAG_BLANK_EXTRA_PERCENT ZC_DEMAG_BLANK_EXTRA_PERCENT
   #define RT_POST_SYNC_SLEW_DIVISOR       POST_SYNC_SLEW_DIVISOR
   #define RT_DESYNC_MAX_RESTARTS          DESYNC_MAX_RESTARTS
+  #define RT_MORPH_LOCK_ZC_COUNT          MORPH_LOCK_ZC_COUNT
+  #define RT_MORPH_LOCK_TOL_PCT           MORPH_LOCK_TOL_PCT
+  #define RT_IF_CURRENT_CA                600
+  #define RT_IF_RAMP_ERPM_PER_S           12000
   #define RT_VBUS_OVERVOLTAGE_ADC         VBUS_OVERVOLTAGE_ADC
   #define RT_VBUS_UNDERVOLTAGE_ADC        VBUS_UNDERVOLTAGE_ADC
   #define RT_RAMP_DUTY_CAP                RAMP_DUTY_CAP

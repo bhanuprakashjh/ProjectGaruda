@@ -60,6 +60,12 @@ extern "C" {
 #define PARAM_ID_VBUS_UV_ADC            0x69
 #define PARAM_ID_DESYNC_COAST_MS        0x6A
 #define PARAM_ID_DESYNC_MAX_RESTARTS    0x6B
+/* Morph→CL lock gate (live-tunable) */
+#define PARAM_ID_MORPH_LOCK_ZC_COUNT    0x6C
+#define PARAM_ID_MORPH_LOCK_TOL_PCT     0x6D
+/* I-f spin-up (live-tunable) */
+#define PARAM_ID_IF_CURRENT_CA          0x6E
+#define PARAM_ID_IF_RAMP_ERPM_PER_S     0x6F
 
 /* FOC motor model params (17 new — runtime-configurable motor profiles) */
 #define PARAM_ID_FOC_RS_MOHM            0x70
@@ -139,12 +145,14 @@ typedef struct {
     uint8_t  zcAdcDeadband;
     uint8_t  zcSyncThreshold;
     uint8_t  zcFilterThreshold;
-    uint8_t  _pad1;
+    uint8_t  morphLockZcCount;    /* (was _pad1) consecutive STABLE Hi-Z ZC intervals
+                                   * required to exit morph → CL (strict lock gate) */
     uint16_t vbusOvAdc;
     uint16_t vbusUvAdc;
     uint16_t desyncCoastMs;
     uint8_t  desyncMaxRestarts;
-    uint8_t  _pad2;
+    uint8_t  morphLockTolPct;     /* (was _pad2) max % deviation between consecutive
+                                   * Hi-Z ZC intervals to count as "stable" */
     /* FOC motor model params (17 new) — u16 integer-scaled */
     uint16_t focRsMilliOhm;          /* Rs × 1000 (mΩ) */
     uint16_t focLsMicroH;            /* Ls × 1e6 (µH) */
@@ -170,6 +178,9 @@ typedef struct {
     uint16_t an1078ThetaKE7;         /* SMC theta offset K × 1e7 — 0-1000 */
     uint16_t an1078KslideMv;         /* SMC sliding gain × 1000 (mV) — 100-30000 */
     uint16_t an1078IdFwMaxDecia;     /* |Id_fw_max| × 10 (dA) — 0-200, sign forced negative */
+    /* I-f spin-up (FEATURE_IF_STARTUP) — appended at end (no layout shift above) */
+    uint16_t ifCurrentCa;            /* I-f forced current × 100 (cA) — the spin-up cap */
+    uint16_t ifRampErpmPerS;         /* I-f open-loop accel (eRPM/s) — rotor-follow knob */
 } GSP_PARAMS_T;
 
 /* ── Derived values (precomputed from params, ISR reads these) ───────── */

@@ -85,6 +85,13 @@ void ChargeBootstrapCapacitors(void);
 void HAL_PWM_SetCommutationStep(uint8_t step);
 void HAL_PWM_SetDutyCycle(uint32_t duty);
 
+#if FEATURE_CL_DIFF_IDLE
+/* Differential-low CL drive mode flag (hal_pwm.c). 1 = LOW phase complementary
+ * at MIN_DUTY, effective volts = duty − base. Service code owns the swaps;
+ * cleared on HAL_MC1PWMDisableOutputs / STARTUP_Init. */
+extern volatile uint8_t g_pwmDiffLow;
+#endif
+
 #if (FEATURE_SINE_STARTUP || FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3 || FEATURE_FOC_AN1078)
 void HAL_PWM_SetDutyCycle3Phase(uint32_t dutyA, uint32_t dutyB, uint32_t dutyC);
 void HAL_PWM_ReleaseAllOverrides(void);

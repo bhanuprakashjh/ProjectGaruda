@@ -21,8 +21,10 @@
 #include "../garuda_calc_params.h"
 #endif
 
+#if 0   /* see InitializeCMPs — CMP1/CMP2 removed (railed the OA1/OA2 op-amps) */
 static void CMP1_Initialize(void);
 static void CMP2_Initialize(void);
+#endif
 #if FEATURE_HW_OVERCURRENT
 static void CMP3_InitOvercurrent(void);
 #else
@@ -58,9 +60,14 @@ void InitializeCMPs(void)
     DACCTRL2bits.SSTIME = 0;
 
     /* Initialize comparators */
-#if !FEATURE_FOC && !FEATURE_FOC_V2 && !FEATURE_FOC_V3 && !FEATURE_FOC_AN1078
-    /* CMP1 (RA4) and CMP2 (RB2) — BEMF ZC comparators.
-     * SKIPPED in FOC modes: RA4=OA1IN+, RB2=OA2IN+ (pin conflict). */
+#if 0   /* 2026-06-10: CMP1/CMP2 init REMOVED — root cause of the railed phase-
+         * current op-amps in the 6-step build. These are DEAD CODE (file header:
+         * comparators are NOT used for BEMF on this DIM; HAL_CMP_EnableFloating-
+         * Phase has zero call sites), but their input muxes sit on CMP1B=RA4=
+         * OA1IN+ and CMP2B=RB2=OA2IN+. Initializing them ONLY in the 6-step
+         * build correlated exactly with OA1/OA2 resting at opposite rails
+         * (4085/84) while the FOC build — which skips them citing "pin conflict"
+         * — reads the same op-amps at ~2048. CMP3 (overcurrent) is untouched. */
     CMP1_Initialize();
     CMP2_Initialize();
 #endif
@@ -71,6 +78,7 @@ void InitializeCMPs(void)
 #endif
 }
 
+#if 0   /* CMP1/CMP2 disabled — see InitializeCMPs */
 /**
  * @brief Configure CMP1 for Phase A BEMF zero-crossing.
  * Input: CMP1B = RA4 (INSEL=1), DAC1 reference
@@ -130,6 +138,7 @@ static void CMP2_Initialize(void)
 
     DAC2SLPDAT = 0;
 }
+#endif  /* CMP1/CMP2 disabled */
 
 #if !FEATURE_HW_OVERCURRENT
 /**
@@ -212,11 +221,23 @@ void HAL_CMP3_EnableOvercurrent(void)
 
 /**
  * @brief Update CMP3/DAC3 threshold at runtime.
- * @param dacVal 12-bit DAC value (0-4095)
+ * @param dacVal 12-bit DAC value (0-4095), in the 2048-bias frame
  */
 void HAL_CMP3_SetThreshold(uint16_t dacVal)
 {
+#if FEATURE_OC_AUTOZERO
+    /* The DAC compares the RAW OA3OUT, whose true rest is ~78 counts — not
+     * the 2048 the threshold math assumes. Shift the 2048-frame threshold
+     * into the measured frame (no-op until the ARMED cal runs: bias=2048).
+     * Without this, CMP3 chopped/faulted ~22A above the configured mA. */
+    extern volatile uint16_t g_ocBiasAdc;
+    int32_t v = (int32_t)dacVal - (2048 - (int32_t)g_ocBiasAdc);
+    if (v < 1)    v = 1;
+    if (v > 4095) v = 4095;
+    DAC3DATbits.DACDAT = (uint16_t)v;
+#else
     DAC3DATbits.DACDAT = dacVal;
+#endif
 }
 #endif /* FEATURE_HW_OVERCURRENT */
 

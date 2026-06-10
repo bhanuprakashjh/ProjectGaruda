@@ -63,6 +63,9 @@ static const int16_t sineTable256[256] = {
  */
 void STARTUP_Init(volatile GARUDA_DATA_T *pData)
 {
+#if FEATURE_CL_DIFF_IDLE
+    g_pwmDiffLow = 0;   /* fresh start drives conventional waveforms */
+#endif
     pData->currentStep = 0;
     pData->alignCounter = ALIGN_TIME_COUNTS;
     pData->rampStepPeriod = RT_INITIAL_STEP_PERIOD;
@@ -92,6 +95,7 @@ void STARTUP_Init(volatile GARUDA_DATA_T *pData)
     pData->morph.entryTick = 0;
     pData->morph.lastZcTick = 0;
     pData->morph.morphZcCount = 0;
+    pData->morph.stableZcCount = 0;
     pData->morph.tickInStep = 0;
     pData->morph.stepPeriodSnap = 0;
     pData->morph.floatIsHiZ = false;
@@ -375,6 +379,7 @@ void STARTUP_MorphInit(volatile GARUDA_DATA_T *pData)
     pData->morph.entryTick = pData->systemTick;
     pData->morph.lastZcTick = 0;
     pData->morph.morphZcCount = 0;
+    pData->morph.stableZcCount = 0;
     pData->morph.tickInStep = 0;
     pData->morph.stepPeriodSnap = 0;
     pData->morph.floatIsHiZ = false;

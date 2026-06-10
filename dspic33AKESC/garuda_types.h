@@ -29,7 +29,9 @@ typedef enum
     ESC_CLOSED_LOOP,
     ESC_BRAKING,
     ESC_RECOVERY,       /* Desync coast-down before restart attempt */
-    ESC_FAULT
+    ESC_FAULT,
+    ESC_IF_RAMP         /* I-f current-controlled spin-up (FEATURE_IF_STARTUP).
+                         * Appended last so existing state values don't shift. */
 } ESC_STATE_T;
 
 /* Enum ordering guards — voltage fault check uses >= / <= on state enum */
@@ -224,6 +226,8 @@ typedef struct {
     uint32_t entryTick;        /* systemTick at morph entry (for timeout) */
     uint16_t lastZcTick;       /* adcIsrTick of last confirmed ZC in morph */
     uint16_t morphZcCount;     /* ZC count for IIR gating (need >=2 for interval) */
+    uint8_t  stableZcCount;    /* consecutive stable+non-harmonic Hi-Z ZC intervals
+                                * (strict morph→CL lock gate) */
     uint16_t tickInStep;       /* ADC ticks since last forced commutation */
     uint16_t stepPeriodSnap;   /* stepPeriod snapshot at commutation */
     bool     floatIsHiZ;       /* True when float phase override is Hi-Z */

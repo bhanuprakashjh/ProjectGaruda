@@ -204,6 +204,12 @@ void HAL_MC1PWMEnableOutputs(void)
  */
 void HAL_MC1PWMDisableOutputs(void)
 {
+#if FEATURE_CL_DIFF_IDLE
+    /* Any output kill exits differential-low CL mode, so the next drive
+     * (align/ramp/restart) gets conventional waveforms. */
+    extern volatile uint8_t g_pwmDiffLow;
+    g_pwmDiffLow = 0;
+#endif
     PWM_PDC3 = 0;
     PWM_PDC2 = 0;
     PWM_PDC1 = 0;

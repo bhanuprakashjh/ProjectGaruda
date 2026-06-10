@@ -529,9 +529,29 @@ bool BEMF_ZC_Poll(volatile GARUDA_DATA_T *pData, uint16_t now)
                     else
                     {
 #if ZC_ADAPTIVE_PERIOD
+#if FEATURE_CL_DIFF_IDLE
+                        {
+                            /* Diff idle: 4× heavier smoothing (gain 1/16). At
+                             * ~0.5V the synchronizing torque is soft and per-
+                             * crossing jitter large — chasing it at gain 1/4
+                             * makes rotor and commutation slosh (bench
+                             * 2026-06-10: eRPM hunting 3.3k..9.4k). Idle speed
+                             * changes slowly; track it slowly. */
+                            extern volatile uint8_t g_pwmDiffLow;
+                            if (g_pwmDiffLow)
+                                pData->timing.stepPeriod = (uint16_t)(
+                                    ((uint32_t)pData->timing.stepPeriod * 15u
+                                     + effectiveInterval) >> 4);
+                            else
+                                pData->timing.stepPeriod = (uint16_t)(
+                                    ((uint32_t)pData->timing.stepPeriod * 3
+                                     + effectiveInterval) >> 2);
+                        }
+#else
                         /* Phase 2B: IIR smoothing */
                         pData->timing.stepPeriod = (uint16_t)(
                             ((uint32_t)pData->timing.stepPeriod * 3 + effectiveInterval) >> 2);
+#endif
 #else
                         /* Phase 2A: direct assignment */
                         pData->timing.stepPeriod = effectiveInterval;

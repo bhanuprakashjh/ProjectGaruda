@@ -201,11 +201,23 @@ void MapGPIOHWFunction(void)
  */
 void HAL_OA12_Init(void)
 {
+    /* OMONEN=0 (2026-06-10): the datasheet REQUIRES at most ONE op-amp with
+     * the output-monitor enabled ("should be set high only for one instance
+     * at a time") — all three were set, a shared-internal-bus violation that
+     * matches the unstable/railed op-amp readings (OA1~4085, OA2~60, OA3
+     * wandering 70↔4090 between runs, even with the bridge OFF — bogus OC_SW
+     * trips at rest). Not needed anyway: all three outputs are bonded to
+     * physical pins and read as plain ANx inputs (AD1AN0/AD2AN1/AD1AN3);
+     * CMP3 reads the OA3OUT pin via CMP3A (INSEL=0). */
     AMP1CON1 = 0x0000;
     AMP1CON1bits.HPEN = 1;     /* High-power mode (high bandwidth) */
     AMP1CON1bits.UGE = 0;      /* External resistor gain (not unity) */
     AMP1CON1bits.DIFFCON = 0;  /* Both differential pairs active */
-    AMP1CON1bits.OMONEN = 1;   /* Internal ADC connection enabled */
+    AMP1CON1bits.OMONEN = 1;   /* RESTORED 2026-06-10: OMONEN=0 experiment made the
+                                * bus readout WORSE (wandering rails at rest) — this
+                                * board has run OMONEN=1 on all three for weeks. The
+                                * datasheet one-instance note does not match observed
+                                * behavior here; readout may route via the monitor. */
 
     AMP2CON1 = 0x0000;
     AMP2CON1bits.HPEN = 1;
@@ -230,7 +242,7 @@ void HAL_OA3_Init(void)
     AMP3CON1bits.HPEN = 1;       /* High-power mode (high bandwidth) */
     AMP3CON1bits.UGE = 0;        /* External resistor gain (not unity) */
     AMP3CON1bits.DIFFCON = 0;    /* Both differential pairs active */
-    AMP3CON1bits.OMONEN = 1;     /* Internal ADC connection enabled */
+    AMP3CON1bits.OMONEN = 1;     /* restored — see HAL_OA12_Init note */
     AMP3CON1bits.AMPEN = 1;      /* Enable op-amp — begins settling (~10us) */
 }
 #endif

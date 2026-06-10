@@ -27,7 +27,12 @@
  */
 void InitializeADCs(void)
 {
-#if FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3 || FEATURE_FOC_AN1078
+/* FEATURE_IF_STARTUP (M1 bring-up): configure the ADC EXACTLY like the FOC
+ * build — CH0s on the OA1/OA2 current op-amps, set BEFORE ADC ON (the runtime
+ * PINSEL repurpose at IF entry read OA2 as railed garbage; channel config with
+ * ADON=1 is unreliable per datasheet). The 6-step BEMF machinery runs inert
+ * against these channels during the I-f ramp; M2 will do the proper handoff. */
+#if FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3 || FEATURE_FOC_AN1078 || FEATURE_IF_STARTUP
     /* Ia on AD1CH0: OA1OUT = RA2 = AD1AN0, PINSEL=0 */
     AD1CH0CONbits.PINSEL = 0;
     AD1CH0CONbits.SAMC = 3;        /* Low Z from OA1 output */
@@ -74,7 +79,7 @@ void InitializeADCs(void)
     AD1CH2CONbits.TRG1SRC = 4;     /* PWM1 trigger (24kHz, midpoint sampling) */
 #endif
 
-#if FEATURE_ADC_CMP_ZC
+#if FEATURE_ADC_CMP_ZC && !FEATURE_IF_STARTUP
     /* High-speed BEMF channels configured BEFORE ADC ON.
      * Datasheet warns configuring channels when ADON=1 is unpredictable
      * for non-PWM trigger sources. TRG1SRC=14 (SCCP3 Trigger out).
@@ -115,7 +120,7 @@ void InitializeADCs(void)
     AD2CH1CMPHI = 0;
 #endif
 
-#if !FEATURE_FOC && !FEATURE_FOC_V2 && !FEATURE_FOC_V3 && !FEATURE_FOC_AN1078
+#if !FEATURE_FOC && !FEATURE_FOC_V2 && !FEATURE_FOC_V3 && !FEATURE_FOC_AN1078 && !FEATURE_IF_STARTUP
     /* 6-step Phase-current monitor channels — diagnostic peak tracking.
      *
      * AD1CH3 samples OA1OUT (phase A low-side shunt amp) at 1 MHz via
@@ -193,6 +198,11 @@ void InitializeADCs(void)
  */
 bool HAL_ADC_SelectBEMFChannel(uint8_t floatingPhase)
 {
+#if FEATURE_IF_STARTUP
+    /* M1 bring-up: AD2CH0 belongs to the OA2 current op-amp (PINSEL=1, set
+     * before ADC ON). Never let the BEMF mux steal it mid-run. */
+    return false;
+#endif
     switch (floatingPhase)
     {
         case FLOATING_PHASE_A:

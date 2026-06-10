@@ -294,6 +294,353 @@ static inline float v2_counts_to_amps(uint16_t raw, uint16_t offset)
 }
 #endif
 
+#if FEATURE_IF_STARTUP
+/* ── I-f current-controlled spin-up (Milestone 1) ────────────────────────────
+ * Reuses the standalone FOC primitives (Clarke/Park/SVPWM/PI) to drive a
+ * regulated current vector at a forced, ramping angle. Because SVPWM sets the
+ * differential phase voltage, the effective drive goes BELOW MIN_DUTY — so the
+ * motor spins up smoothly with Ibus bounded at ifCurrentCa (no 22A slam) and no
+ * deadtime floor. M1 = align → ramp to IF_HANDOFF and HOLD (no 6-step handoff). */
+#include "foc/foc_types.h"
+#include "foc/clarke.h"
+#include "foc/park.h"
+#include "foc/svpwm.h"
+#include "foc/pi_controller.h"
+
+static PI_t     s_if_pid_d, s_if_pid_q;
+static float    s_if_theta;        /* forced electrical angle (rad) */
+static float    s_if_omega;        /* forced electrical speed (elec rad/s) */
+static uint16_t s_if_alignCtr;     /* ticks holding angle before the speed ramp */
+static bool     s_if_atHandoff;    /* reached IF_HANDOFF (telemetry/M2 trigger) */
+static bool     s_if_bridgeUp;     /* false until overrides released (after latch) */
+/* MON current-offset calibration. The fixed IF_ADC_MIDPOINT (2048) is wrong on
+ * this board — the MON channels rest at ia~4085, ib~84 (ib is starved by the
+ * 1MHz HWZC channels unless they're disabled). Sample the TRUE rest over
+ * IF_CAL_TICKS at zero current and subtract that instead of 2048. */
+/* Phase-current offset calibration. With the CMP1/CMP2 root-cause fix
+ * (hal_comparator.c — their input muxes railed OA1/OA2 in the 6-step build),
+ * the op-amps should rest near 2048; the cal measures the TRUE rest anyway. */
+static float    s_if_ia_off, s_if_ib_off;
+static int32_t  s_if_ia_acc, s_if_ib_acc;
+static uint16_t s_if_calCtr;
+#define IF_CAL_TICKS  48u          /* ~2ms of zero-current rest sampling */
+
+/* Self-contained ADC conversions: the FEATURE_FOC counts_to_* helpers, the
+ * calibrated current offset, AND garuda_foc_params.h itself are all compiled
+ * out in the pure 6-step build, so define the scales here from the documented
+ * shunt/divider values (shunt 3mΩ × OA gain 24.95, Vref 3.3, FS 4095, Vbus
+ * divider 23.2). Fixed 2048 bias matches the 6-step convention; negation
+ * matches the FOC sign convention the reused gains were tuned with. */
+#define IF_ADC_MIDPOINT   2048.0f
+#define IF_CURRENT_SCALE  (3.3f / (4095.0f * 0.003f * 24.95f))   /* A per count */
+#define IF_VBUS_SCALE     (3.3f * 23.2f / 4095.0f)               /* V per count */
+/* Sign for the MON phase-current channels. The 6-step path reads them as
+ * (raw-2048) POSITIVE (no negation, unlike the FOC MAIN channels). Wrong sign
+ * = positive feedback = runaway → voltage clamp → full-scale current spike.
+ * Diagnostic proved the MON channels are INVERTING (like the FOC MAIN
+ * channels): +vd produced -idmeas. So negate (-1), same as the FOC path. */
+#define IF_CURRENT_SIGN   (-1.0f)
+static inline float if_raw_to_amps(uint16_t raw)
+{
+    return IF_CURRENT_SIGN * ((float)raw - IF_ADC_MIDPOINT) * IF_CURRENT_SCALE;
+}
+static inline float if_raw_to_vbus(uint16_t raw)
+{
+    return (float)raw * IF_VBUS_SCALE;
+}
+
+static void IF_StartupInit(void)
+{
+    float vbus = if_raw_to_vbus(garudaData.vbusRaw);
+    if (vbus < 1.0f) vbus = 1.0f;
+    /* Clamp Vd/Vq. Cap at 3V for the first real-current run: plenty to spin to
+     * ~11k (BEMF there is ~1.5V) yet bounds a worst-case wrong-sign current
+     * (the firmware OC/UV tiers backstop). Raise toward vbus*0.95*IF_INV_SQRT3
+     * once confirmed stable. */
+    float vclamp = vbus * 0.95f * IF_INV_SQRT3;
+    if (vclamp > 3.0f) vclamp = 3.0f;
+    float kp = (float)gspParams.focKpDqMilli * 0.001f;  /* tuned for this motor */
+    float ki = (float)gspParams.focKiDq;
+    pi_init(&s_if_pid_d, kp, ki, -vclamp, vclamp);
+    pi_init(&s_if_pid_q, kp, ki, -vclamp, vclamp);
+    s_if_theta     = 0.0f;
+    s_if_omega     = 0.0f;
+    s_if_alignCtr  = 0;
+    s_if_atHandoff = false;
+    s_if_bridgeUp  = false;
+    /* Offset cal: seed with the nominal midpoint; refined in the cal window. */
+    s_if_ia_off = IF_ADC_MIDPOINT; s_if_ib_off = IF_ADC_MIDPOINT;
+    s_if_ia_acc = 0; s_if_ib_acc = 0; s_if_calCtr = 0;
+    /* ADC channels are FOC-configured from BOOT (hal_adc.c, before ADC ON):
+     * AD1CH0=OA1(ia), AD2CH0=OA2(ib); no 1MHz HWZC / MON channels in this
+     * build. Nothing to reconfigure here — the earlier runtime PINSEL swap
+     * (with ADON=1) is exactly what read OA2 as railed garbage. */
+#if FEATURE_SINE_STARTUP
+    garudaData.sine.active = false;     /* I-f owns the modulator now (only exists with sine) */
+#endif
+    /* Clean bring-up, part 1 (in this T1-ISR call): force override-LOW — undoes
+     * STARTUP_Init/SineInit's drive AND keeps the low-sides on so the bootstrap
+     * caps stay charged — then load BALANCED 0V duties into the buffer. We do
+     * NOT release the overrides here: doing so before the balanced duty has
+     * LATCHED makes the bridge briefly drive a stale/unbalanced duty → the UV
+     * glitch. Part 2 (first IF_StartupTick) releases them once latched. */
+    HAL_MC1PWMDisableOutputs();
+    HAL_PWM_SetDutyFloat3Phase(0.5f, 0.5f, 0.5f);
+}
+
+static void IF_StartupTick(uint16_t raw_ia, uint16_t raw_ib)
+{
+    /* Clean bring-up, part 2: on the first tick the balanced duty loaded in
+     * IF_StartupInit has now latched (≥1 PWM boundary elapsed since that T1
+     * call), so release the overrides — the bridge goes override-low → balanced
+     * 0V with no stale-duty transient. Hold balanced (skip the loop) this one
+     * tick so the released bridge settles at 0V before current is commanded. */
+    if (!s_if_bridgeUp) {
+        HAL_PWM_ReleaseAllOverrides();
+        HAL_PWM_SetDutyFloat3Phase(0.5f, 0.5f, 0.5f);
+        s_if_bridgeUp = true;
+        return;
+    }
+
+    /* Offset-cal window: hold balanced 0V (zero current) and average the op-amp
+     * rest values, so id/iq are measured against the TRUE offset. spi_zcs
+     * latches the measured ib offset — THE diagnostic for the CMP1/CMP2 fix:
+     * ~2048 = op-amps un-railed and healthy; ~60/84 = still railed. */
+    if (s_if_calCtr < IF_CAL_TICKS) {
+        HAL_PWM_SetDutyFloat3Phase(0.5f, 0.5f, 0.5f);
+        s_if_ia_acc += raw_ia;
+        s_if_ib_acc += raw_ib;
+        if (++s_if_calCtr >= IF_CAL_TICKS) {
+            s_if_ia_off = (float)s_if_ia_acc / (float)IF_CAL_TICKS;
+            s_if_ib_off = (float)s_if_ib_acc / (float)IF_CAL_TICKS;
+            garudaData.speedPi.zcsSinceEnable = (uint16_t)s_if_ib_off;
+        }
+        return;
+    }
+
+    float ia   = IF_CURRENT_SIGN * ((float)raw_ia - s_if_ia_off) * IF_CURRENT_SCALE;
+    float ib   = IF_CURRENT_SIGN * ((float)raw_ib - s_if_ib_off) * IF_CURRENT_SCALE;
+    float vbus = if_raw_to_vbus(garudaData.vbusRaw);
+    if (vbus < 1.0f) vbus = 1.0f;
+
+    /* measure: 3-phase → αβ → dq at the forced angle */
+    AlphaBeta_t iab;  clarke_transform(ia, ib, &iab);
+    DQ_t idq;         park_transform(&iab, s_if_theta, &idq);
+
+    /* regulate the current vector onto the forced d-axis (rotating field).
+     * Soft-start: ramp the current reference up over the align window so the
+     * rotor pulls into the forced frame gently (no step / no spike). */
+    float frac = (s_if_alignCtr < IF_ALIGN_TICKS)
+               ? ((float)s_if_alignCtr / (float)IF_ALIGN_TICKS) : 1.0f;
+    float id_ref = (float)RT_IF_CURRENT_CA * 0.01f * frac;
+    DQ_t vdq;
+    vdq.d = pi_update(&s_if_pid_d, id_ref - idq.d, IF_DT_S);
+    vdq.q = pi_update(&s_if_pid_q, 0.0f   - idq.q, IF_DT_S);
+
+    /* dq → αβ → SVPWM duties (centered; effective V can be < MIN_DUTY) */
+    AlphaBeta_t vab;  inv_park_transform(&vdq, s_if_theta, &vab);
+    float da, db, dc;
+    svpwm_update(vab.alpha, vab.beta, vbus, &da, &db, &dc);
+    HAL_PWM_SetDutyFloat3Phase(da, db, dc);
+
+    /* DIAG: spi_target=id_ref(mA), spi_error=id_meas(mA), spi_integ=vd(V),
+     * spi_output=omega(rad/s), spi_zcs=ib offset. */
+    garudaData.speedPi.lastTarget  = (uint32_t)(id_ref  * 1000.0f);
+    garudaData.speedPi.lastError   = (int32_t) (idq.d   * 1000.0f);
+    garudaData.speedPi.integratorF = vdq.d;
+    garudaData.speedPi.outputDuty  = (uint32_t)(s_if_omega);
+
+    /* align first (hold angle so the rotor settles), then ramp speed */
+    if (s_if_alignCtr < IF_ALIGN_TICKS) {
+        s_if_alignCtr++;
+    } else if (s_if_omega < IF_HANDOFF_RAD_S) {
+        float omega_dot = IF_ERPM_TO_RAD_S(RT_IF_RAMP_ERPM_PER_S);
+        s_if_omega += omega_dot * IF_DT_S;
+        if (s_if_omega >= IF_HANDOFF_RAD_S) {
+            s_if_omega     = IF_HANDOFF_RAD_S;
+            s_if_atHandoff = true;       /* M1: hold here; M2 will hand to 6-step */
+        }
+    }
+    s_if_theta += s_if_omega * IF_DT_S;
+    if (s_if_theta >  3.14159265f) s_if_theta -= 6.28318531f;
+    if (s_if_theta < -3.14159265f) s_if_theta += 6.28318531f;
+}
+#endif /* FEATURE_IF_STARTUP */
+
+#if FEATURE_CL_DIFF_IDLE
+/* ── Coast-listen lock acquisition (2026-06-10) ──────────────────────────
+ * At diff-idle CL entry, instead of force-commutating at the morph period
+ * and detecting ZC through switching noise at ~0.5V drive (bench: noise-
+ * confirms, frozen period, hunting), CUT THE BRIDGE for up to ~2 electrical
+ * cycles and listen to phase B's clean BEMF — no PWM means no threshold
+ * model at all. The median of the crossing intervals is the true period
+ * (one B-crossing every half e-cycle = 3 sector periods); the last
+ * crossing's polarity gives the sector exactly (B floats rising in step 2,
+ * falling in step 5; ZC = sector center). Re-engage the differential drive
+ * SYNCED at the crossing instant. Same primitive AM32/BLHeli use to catch
+ * a spinning motor. Windage decel over the window is negligible (morph
+ * coast measurements). direction!=0 → blind fallback engage. */
+#define CL_COAST_MIN_CROSS      3     /* crossings needed (=> 2 valid intervals) */
+#define CL_COAST_MAX_IV         4     /* intervals stored for the median */
+#define CL_COAST_TIMEOUT_TICKS  4500  /* ~100ms @45kHz — then blind fallback engage */
+#define CL_COAST_SETTLE_TICKS   150   /* ~3.3ms: at bridge-cut the winding current
+                                       * FREEWHEELS through the body diodes, slamming
+                                       * the phase to the rails — ring-crossings.
+                                       * (Bench 2026-06-10: 12-tick settle let a
+                                       * synced-morph cut measure HALF the true
+                                       * interval → 2× engage → +22A OC.) */
+#define CL_COAST_IV_MIN         150   /* reject intervals implying > ~9k eRPM —
+                                       * impossible coming from the ~3k morph;
+                                       * those are ringing/noise, not BEMF */
+#define CL_COAST_HYST           8     /* ADC counts hysteresis about the mean */
+
+static struct {
+    uint8_t  active;
+    uint8_t  side;          /* 1=above mean, 0=below, 0xFF=not yet primed */
+    uint8_t  nCross;        /* crossings seen */
+    uint8_t  nIv;           /* intervals captured */
+    uint8_t  lastRising;    /* polarity of last crossing */
+    uint16_t tick;          /* ticks since coast start */
+    uint16_t lastCrossTick;
+    uint16_t mean;          /* running mean of phase-B = rest level estimate */
+    uint16_t iv[CL_COAST_MAX_IV];
+} s_clCoast;
+
+static void CL_CoastBegin(void)
+{
+    s_clCoast.active = 1;
+    s_clCoast.side = 0xFF;
+    s_clCoast.nCross = 0;
+    s_clCoast.nIv = 0;
+    s_clCoast.tick = 0;
+    s_clCoast.lastCrossTick = 0;
+    s_clCoast.mean = 0;
+    HAL_MC1PWMDisableOutputs();   /* true coast: all phases Hi-Z (clears diff flag) */
+}
+
+/* Re-engage drive in diff mode at `sector`, period `p`, next commutation in
+ * `dl` ticks, marked synced. Mirrors the morph→CL exit seeding. */
+static void CL_CoastEngage(uint8_t sector, uint16_t p, uint16_t dl, uint16_t now)
+{
+    g_pwmDiffLow = 1;
+    COMMUTATION_ApplyStep(&garudaData, sector);
+    /* Engage GENTLY at the idle floor: the rotor is already at speed and only
+     * needs holding volts. (Engaging at MIN_DUTY — which the deadtime comp
+     * turns into a ~16% active pulse — caused a −21A blip at engage.) */
+    garudaData.duty = CL_DIFF_IDLE_FLOOR;
+    HAL_PWM_SetDutyCycle(garudaData.duty);
+    BEMF_ZC_OnCommutation(&garudaData, now);
+
+    garudaData.timing.stepPeriod = p;
+    garudaData.timing.zcSynced = true;
+    garudaData.timing.goodZcCount = (uint16_t)RT_ZC_SYNC_THRESHOLD;
+    garudaData.timing.hasPrevZc = false;
+    garudaData.timing.stepsSinceLastZc = 0;
+    garudaData.timing.commDeadline = (uint16_t)(now + dl);
+    garudaData.timing.deadlineActive = true;
+#if FEATURE_BEMF_INTEGRATION || FEATURE_ADC_CMP_ZC
+    garudaData.timing.deadlineIsZc = true;
+#endif
+    s_clCoast.active = 0;
+}
+
+/* @return true while the coast owns the bridge (caller skips normal CL). */
+static bool CL_CoastListenTick(uint16_t vB, uint16_t now)
+{
+    if (!s_clCoast.active) return false;
+    s_clCoast.tick++;
+
+    /* Running mean of the clean BEMF = the rest level (signal average). */
+    if (s_clCoast.mean == 0)
+        s_clCoast.mean = vB;
+    else
+        s_clCoast.mean = (uint16_t)((int16_t)s_clCoast.mean
+                       + (((int16_t)vB - (int16_t)s_clCoast.mean) >> 4));
+
+    if (s_clCoast.tick >= CL_COAST_SETTLE_TICKS)
+    {
+        uint16_t hi = (uint16_t)(s_clCoast.mean + CL_COAST_HYST);
+        uint16_t lo = (s_clCoast.mean > CL_COAST_HYST)
+                    ? (uint16_t)(s_clCoast.mean - CL_COAST_HYST) : 0u;
+        uint8_t side = s_clCoast.side;
+        if (vB > hi)      side = 1;
+        else if (vB < lo) side = 0;
+
+        if (s_clCoast.side == 0xFF)
+        {
+            s_clCoast.side = side;            /* prime; no event */
+        }
+        else if (side != s_clCoast.side && side != 0xFF)
+        {
+            /* Crossing of the rest level (rising if now above). */
+            s_clCoast.side = side;
+            s_clCoast.lastRising = side;
+            if (s_clCoast.nCross > 0)
+            {
+                uint16_t ivNow =
+                    (uint16_t)(s_clCoast.tick - s_clCoast.lastCrossTick);
+                /* Plausibility: too-short intervals are diode-ring/noise,
+                 * not BEMF — discard (the timer still re-anchors below, so
+                 * a later clean crossing measures from the last event). */
+                if (ivNow >= CL_COAST_IV_MIN && s_clCoast.nIv < CL_COAST_MAX_IV)
+                    s_clCoast.iv[s_clCoast.nIv++] = ivNow;
+            }
+            s_clCoast.lastCrossTick = s_clCoast.tick;
+            s_clCoast.nCross++;
+
+            if (s_clCoast.nCross >= CL_COAST_MIN_CROSS && s_clCoast.nIv >= 2)
+            {
+                /* Median interval (2: average; 3+: middle of sorted copy). */
+                uint16_t m;
+                if (s_clCoast.nIv == 2)
+                    m = (uint16_t)((s_clCoast.iv[0] + s_clCoast.iv[1]) / 2u);
+                else
+                {
+                    uint16_t s[CL_COAST_MAX_IV];
+                    uint8_t i, j, n = s_clCoast.nIv;
+                    for (i = 0; i < n; i++) s[i] = s_clCoast.iv[i];
+                    for (i = 0; i < n; i++)
+                        for (j = (uint8_t)(i + 1u); j < n; j++)
+                            if (s[j] < s[i])
+                            { uint16_t t = s[i]; s[i] = s[j]; s[j] = t; }
+                    m = s[n / 2u];
+                }
+                /* B crosses every HALF e-cycle = 3 sector periods. */
+                uint16_t p = (uint16_t)(m / 3u);
+                if (p < MIN_CL_ADC_STEP_PERIOD) p = MIN_CL_ADC_STEP_PERIOD;
+                if (p > RT_INITIAL_ADC_STEP_PERIOD) p = RT_INITIAL_ADC_STEP_PERIOD;
+
+                /* Sector from polarity: B floats rising in step 2, falling in
+                 * step 5; the crossing IS the sector center, so the next
+                 * commutation is half a period out. Engaging at the crossing
+                 * instant keeps the angle error ≤ one tick. */
+                uint8_t k = s_clCoast.lastRising ? 2u : 5u;
+                CL_CoastEngage(k, p, (uint16_t)(p / 2u), now);
+                return true;
+            }
+        }
+    }
+
+    /* Timeout — couldn't hear enough crossings (too slow / too quiet):
+     * blind fallback = the pre-coast behavior (morph-seeded period). */
+    if (s_clCoast.tick >= CL_COAST_TIMEOUT_TICKS)
+        CL_CoastEngage(garudaData.currentStep,
+                       garudaData.timing.stepPeriod,
+                       (uint16_t)(garudaData.timing.stepPeriod / 2u), now);
+    return true;
+}
+#endif /* FEATURE_CL_DIFF_IDLE */
+
+#if FEATURE_OC_AUTOZERO
+/* OC auto-zero (2026-06-10): measured bus-ADC rest bias. 2048 = uncalibrated
+ * (legacy behavior). Measured during ARMED with the bridge off; re-measured on
+ * every disarm→arm. Shared with hal_comparator.c (CMP3 DAC shift). */
+volatile uint16_t g_ocBiasAdc = 2048;
+static uint16_t s_ocZeroRaw;       /* last UNCORRECTED bus sample (cal input) */
+static uint32_t s_ocZeroAcc;
+static uint16_t s_ocZeroCount;
+#endif
+
 /* Heartbeat LED counter */
 static uint16_t heartbeatCounter = 0;
 /* Sub-counter for 1ms system tick from 100us Timer1 */
@@ -613,8 +960,23 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
     {
         /* P0: Duty-proportional threshold — always used.
          * Exact division replaces >>18 shift (+1.7% bias fix). */
+#if FEATURE_CL_DIFF_IDLE
+        /* Differential-low CL: BOTH driven phases carry the MIN_DUTY base
+         * pulse (active = duty+MIN_DUTY, low = MIN_DUTY), so the float's
+         * ON-center level — what this duty-proportional model tracks — is
+         * raised by 2×MIN_DUTY. Bench 2026-06-10: at duty=2.2% the float swung
+         * 47..136 while a flat-floored threshold (35) sat BELOW the whole
+         * swing → zero ZC confirms → frozen pre-sync → OC. Midpoint model
+         * (duty+2×MIN_DUTY → thr≈84) centers the threshold in that swing. */
+        uint32_t thrDuty = garudaData.duty;
+        if (g_pwmDiffLow) thrDuty += 3u * MIN_DUTY;   /* active=duty+2·MIN(+DT comp),
+                                                       * low=MIN → midpoint duty/2+1.5·MIN */
+        uint16_t rawThresh = (uint16_t)(
+            ((uint32_t)garudaData.vbusRaw * thrDuty) / ZC_DUTY_DIVISOR);
+#else
         uint16_t rawThresh = (uint16_t)(
             ((uint32_t)garudaData.vbusRaw * garudaData.duty) / ZC_DUTY_DIVISOR);
+#endif
 
         if (garudaData.state == ESC_CLOSED_LOOP
 #if FEATURE_SINE_STARTUP
@@ -1013,7 +1375,8 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
     {
         static uint8_t vbusOvCount = 0, vbusUvCount = 0;
 
-        if (garudaData.state >= ESC_ALIGN && garudaData.state <= ESC_CLOSED_LOOP)
+        if ((garudaData.state >= ESC_ALIGN && garudaData.state <= ESC_CLOSED_LOOP)
+            || garudaData.state == ESC_IF_RAMP)   /* I-f spin-up: keep OV/UV active */
         {
             if (garudaData.vbusRaw > RT_VBUS_OVERVOLTAGE_ADC)
             {
@@ -1080,8 +1443,24 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
 
     /* Bus current sensing and overcurrent protection */
 #if FEATURE_HW_OVERCURRENT
+#if FEATURE_OC_AUTOZERO
+    /* Read AD1CH2DATA — clears data-ready (mandatory on dsPIC33AK) — then
+     * re-center into the 2048 frame that every threshold, the window tracker
+     * and the host decoder assume. The chain's TRUE rest is ~78 counts, so
+     * the correction is ≈ +1970 (no-op until the ARMED cal measures it).
+     * Saturates at 4095 ≈ +22A — beyond that is CMP3 hardware territory. */
+    {
+        uint16_t rawBus = ADCBUF_IBUS;
+        s_ocZeroRaw = rawBus;                       /* for the ARMED cal */
+        int32_t corr = (int32_t)rawBus + (2048 - (int32_t)g_ocBiasAdc);
+        if (corr < 0)    corr = 0;
+        if (corr > 4095) corr = 4095;
+        garudaData.ibusRaw = (uint16_t)corr;
+    }
+#else
     /* Read AD1CH2DATA — clears data-ready (mandatory on dsPIC33AK) */
     garudaData.ibusRaw = ADCBUF_IBUS;
+#endif
 
     /* Track peak for diagnostics */
     if (garudaData.ibusRaw > garudaData.ibusMax)
@@ -1116,11 +1495,27 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
     }
 #endif
 
-    /* Software hard fault — immediate shutdown (Mode 2 only) */
+    /* Software hard fault — immediate shutdown (Mode 2 only).
+     * DEBOUNCED 3 consecutive samples (2026-06-10): a single garbage bus-ADC
+     * sample (the readout spikes to the rail at random transition moments —
+     * bench: +22A reads with the bridge OFF) was latching phantom OC_SW and
+     * killing healthy runs. Real overcurrent is sustained for ≫3 ADC ticks
+     * (~67µs), and the truly fast events belong to the CMP3 HARDWARE
+     * comparator layer anyway — the software check is the slow backstop. */
 #if OC_PROTECT_MODE == 2
-    if (garudaData.ibusRaw > OC_FAULT_ADC_VAL
-        && garudaData.state >= ESC_ALIGN
-        && garudaData.state <= ESC_CLOSED_LOOP)
+    {
+        static uint8_t s_ocFaultDebounce = 0;
+        if (garudaData.ibusRaw > OC_FAULT_ADC_VAL)
+        {
+            if (s_ocFaultDebounce < 255u) s_ocFaultDebounce++;
+        }
+        else
+            s_ocFaultDebounce = 0;
+
+    if (s_ocFaultDebounce >= 3u
+        && ((garudaData.state >= ESC_ALIGN
+             && garudaData.state <= ESC_CLOSED_LOOP)
+            || garudaData.state == ESC_IF_RAMP))   /* protect I-f spin-up too */
     {
 #if FEATURE_ADC_CMP_ZC
         if (garudaData.hwzc.enabled)
@@ -1133,6 +1528,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
         garudaData.runCommandActive = false;
         LED2 = 0;
     }
+    }  /* debounce scope */
 #endif
 #endif /* FEATURE_HW_OVERCURRENT */
 
@@ -2025,7 +2421,23 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
     switch (garudaData.state)
     {
         case ESC_IDLE:
+#if FEATURE_OC_AUTOZERO
+            s_ocZeroAcc = 0;            /* re-calibrate on the next arm */
+            s_ocZeroCount = 0;
+#endif
+            break;
         case ESC_ARMED:
+#if FEATURE_OC_AUTOZERO
+            /* Bridge is off in ARMED → the bus ADC reads its true rest bias.
+             * Average OC_AUTOZERO_SAMPLES (~1.4ms) and latch; ALIGN starts
+             * 500ms later, so calibration always completes first. */
+            if (s_ocZeroCount < OC_AUTOZERO_SAMPLES)
+            {
+                s_ocZeroAcc += s_ocZeroRaw;
+                if (++s_ocZeroCount == OC_AUTOZERO_SAMPLES)
+                    g_ocBiasAdc = (uint16_t)(s_ocZeroAcc / OC_AUTOZERO_SAMPLES);
+            }
+#endif
             break;
 
 #if FEATURE_SINE_STARTUP
@@ -2039,6 +2451,19 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
             }
             break;
 
+#endif /* FEATURE_SINE_STARTUP — close so ESC_IF_RAMP is handled regardless of sine */
+
+#if FEATURE_IF_STARTUP
+        case ESC_IF_RAMP:
+            /* I-f current-controlled spin-up. IF_StartupInit pointed AD1CH0/
+             * AD2CH0 at the OA1/OA2 current op-amps, so phaseB_val/phaseAC_val
+             * hold ia/ib here. The CMP1/CMP2 removal (hal_comparator.c) un-rails
+             * the op-amps that defeated the earlier attempts. */
+            IF_StartupTick(phaseB_val, phaseAC_val);
+            break;
+#endif
+
+#if FEATURE_SINE_STARTUP   /* reopen: the MORPH cases below are sine-specific */
         case ESC_MORPH:
         {
             if (garudaData.morph.subPhase == MORPH_CONVERGE)
@@ -2321,6 +2746,37 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                         garudaData.timing.stepPeriod = (uint16_t)(
                             (int32_t)garudaData.timing.stepPeriod
                             + (delta >> 3));
+
+#if FEATURE_MORPH_LOCK_GATE
+                        /* Strict-lock tracking: count CONSECUTIVE Hi-Z ZC
+                         * intervals that are STABLE (within tol% of the smoothed
+                         * period) and NOT a half-period harmonic. CL must engage
+                         * on a trustworthy angle, else it drives the wrong sector
+                         * and regen-sloshes the rotor (the ~22A hand-off pulse).
+                         * Use the RAW interval (pre-clamp) so the [handoff,1.5×]
+                         * clamp above can't mask a harmonic. */
+                        {
+                            uint16_t rawIv = (uint16_t)(adcIsrTick
+                                - garudaData.morph.lastZcTick);
+                            uint16_t ref = garudaData.timing.stepPeriod;
+                            uint16_t diff = (rawIv > ref)
+                                ? (uint16_t)(rawIv - ref)
+                                : (uint16_t)(ref - rawIv);
+                            /* half-period harmonic: raw interval well below the
+                             * OL hand-off period (rotor can't be 2× the OL speed) */
+                            bool harmonic = (rawIv < (uint16_t)(mHandoff
+                                                                - (mHandoff >> 2)));
+                            bool stable = !harmonic
+                                && ((uint32_t)diff * 100u
+                                    <= (uint32_t)ref * RT_MORPH_LOCK_TOL_PCT);
+                            if (stable) {
+                                if (garudaData.morph.stableZcCount < 255u)
+                                    garudaData.morph.stableZcCount++;
+                            } else {
+                                garudaData.morph.stableZcCount = 0;
+                            }
+                        }
+#endif
                     }
                     garudaData.morph.lastZcTick = adcIsrTick;
                 }
@@ -2352,7 +2808,12 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                 if (garudaData.timing.goodZcCount >= MORPH_ZC_THRESHOLD
                     && garudaData.timing.risingZcWorks
                     && garudaData.timing.fallingZcWorks
-                    && newZcThisTick)
+                    && newZcThisTick
+#if FEATURE_MORPH_LOCK_GATE
+                    /* ...and a trustworthy, stable, non-harmonic period lock */
+                    && garudaData.morph.stableZcCount >= RT_MORPH_LOCK_ZC_COUNT
+#endif
+                    )
                 {
                     garudaData.timing.zcSynced = true;
 
@@ -2575,7 +3036,11 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                      * delivery speed (non-presync-ramp path). */
                     {
                         uint32_t curErpm = ERPM_FROM_ADC_STEP_NUM / initPeriod;
-                        if (curErpm >= RT_HWZC_CROSSOVER_ERPM)
+                        if (curErpm >= RT_HWZC_CROSSOVER_ERPM
+#if FEATURE_CL_DIFF_IDLE
+                            && !g_pwmDiffLow   /* HWZC invalid under diff drive */
+#endif
+                           )
                         {
                             HWZC_Enable(&garudaData);
                         }
@@ -2584,6 +3049,28 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
 #endif
                 }
             }
+
+#if FEATURE_CL_DIFF_IDLE
+            /* Diff-idle entry: coast-listen first (clean-BEMF lock), then the
+             * per-tick gate owns the bridge until engage. Entry-init above has
+             * already run; HWZC is forced off for the diff regime. */
+            if (prevAdcState != ESC_CLOSED_LOOP)
+            {
+                garudaData.hwzc.enablePending = false;
+                if (garudaData.hwzc.enabled)
+                    HWZC_Disable(&garudaData);
+                if (garudaData.direction == 0)
+                    CL_CoastBegin();
+                else
+                {
+                    /* CCW: sector math not implemented — blind diff engage */
+                    g_pwmDiffLow = 1;
+                    HAL_PWM_SetCommutationStep(garudaData.currentStep);
+                }
+            }
+            if (CL_CoastListenTick(phaseB_val, adcIsrTick))
+                break;   /* coasting: bridge off, skip normal CL this tick */
+#endif
 
 #if FEATURE_ADC_CMP_ZC
             /* HW->SW fallback re-seed (Rule 9) */
@@ -2757,7 +3244,20 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                  * dbgLatchDisable: after first HW ZC failure, permanently
                  * block re-enable so motor stays on SW ZC and diagnostics
                  * are preserved for debugger reading. */
-                if (!garudaData.hwzc.dbgLatchDisable)
+                if (!garudaData.hwzc.dbgLatchDisable
+#if FEATURE_CL_DIFF_IDLE
+                    /* Differential-low drive shifts the float's PWM-ON level up
+                     * by the MIN_DUTY base — HWZC's ON-window comparator model
+                     * (CMPLO from the conventional duty midpoint) is invalid
+                     * there: rising fires constantly, falling never → phantom
+                     * captures → lock collapse (bench 2026-06-10). Keep HWZC off
+                     * in diff mode; the SW valley detector (unaffected by diff —
+                     * both driven phases are grounded at the sampling point, and
+                     * morph-proven at these speeds) owns ZC until the swap to
+                     * conventional drive. */
+                    && !g_pwmDiffLow
+#endif
+                   )
                 {
                     uint32_t curErpm = ERPM_FROM_ADC_STEP_NUM /
                         garudaData.timing.stepPeriod;
@@ -2768,6 +3268,10 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                                            - HWZC_HYSTERESIS_ERPM))
                         garudaData.hwzc.enablePending = false;
                 }
+#if FEATURE_CL_DIFF_IDLE
+                else if (g_pwmDiffLow)
+                    garudaData.hwzc.enablePending = false;
+#endif
 #endif
 
                 /* Poll for ZC */
@@ -3091,11 +3595,21 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                         SPEED_PI_Enable(&garudaData);
                     mappedDuty = garudaData.speedPi.outputDuty;
 #else
+#if FEATURE_CL_DIFF_IDLE
+                    /* Differential-low idle: throttle maps from the (sub-
+                     * MIN_DUTY) diff floor — idle equilibrium ~3k, meeting the
+                     * morph hand-off speed instead of slamming up to ~10k. */
+                    mappedDuty = CL_DIFF_IDLE_FLOOR +
+                        ((uint32_t)garudaData.throttle * (cap - CL_DIFF_IDLE_FLOOR)) / 4096;
+#else
                     mappedDuty = RT_CL_IDLE_DUTY +
                         ((uint32_t)garudaData.throttle * (cap - RT_CL_IDLE_DUTY)) / 4096;
 #endif
+#endif
                 }
-#if FEATURE_CL_LOW_IDLE
+#if FEATURE_CL_DIFF_IDLE
+                if (mappedDuty < CL_DIFF_IDLE_FLOOR) mappedDuty = CL_DIFF_IDLE_FLOOR;
+#elif FEATURE_CL_LOW_IDLE
                 /* Lower CL idle floor (deadtime unchanged → no shoot-through risk;
                  * only shortens the H-pulse). Drops idle equilibrium + handoff gap. */
                 if (mappedDuty < CL_LOW_IDLE_FLOOR) mappedDuty = CL_LOW_IDLE_FLOOR;
@@ -3271,6 +3785,10 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                      * back up to MIN_DUTY every tick) */
                     if (mappedDuty < CL_LOW_IDLE_FLOOR)
                         mappedDuty = CL_LOW_IDLE_FLOOR;
+#elif FEATURE_CL_DIFF_IDLE
+                    /* differential-low idle: don't re-floor up to MIN_DUTY */
+                    if (mappedDuty < CL_DIFF_IDLE_FLOOR)
+                        mappedDuty = CL_DIFF_IDLE_FLOOR;
 #else
                     if (mappedDuty < MIN_DUTY)
                         mappedDuty = MIN_DUTY;
@@ -3281,7 +3799,10 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
 #if FEATURE_HW_OVERCURRENT
                 /* Software bus current soft limiter — proportional duty reduction.
                  * Ramps down duty smoothly BEFORE CMP3/CLPCI hardware trips. */
-                if (garudaData.ibusRaw > OC_SW_LIMIT_ADC)
+                if (garudaData.ibusRaw > OC_SW_LIMIT_ADC
+                    && mappedDuty > MIN_DUTY)   /* guard: below MIN_DUTY (diff idle)
+                                                 * the subtraction would underflow
+                                                 * unsigned and RAISE duty under OC */
                 {
                     uint16_t excess = garudaData.ibusRaw - OC_SW_LIMIT_ADC;
                     uint16_t range = RT_OC_CMP3_DAC_VAL - OC_SW_LIMIT_ADC;
@@ -3332,20 +3853,31 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                 {
                     static uint32_t ifDuty = 0;
                     static uint16_t ifCtr  = 0;
+                    static uint16_t ifPeak = 0;
                     static bool ifActive   = false;
                     if (prevAdcState != ESC_CLOSED_LOOP) {
                         ifActive = true;
                         ifDuty   = MIN_DUTY;
                         ifCtr    = 0;
+                        ifPeak   = 0;
                     }
                     if (ifActive) {
                         ifCtr++;
                         /* back off on current MAGNITUDE (both motoring + and regen -
                          * excursions); the bus current swings negative during the
-                         * unlocked hand-off, which a signed compare would miss. */
-                        int32_t iMag = (int32_t)garudaData.ibusRaw
-                                     - (int32_t)OC_BIAS_COUNTS;
-                        if (iMag < 0) iMag = -iMag;
+                         * unlocked hand-off, which a signed compare would miss.
+                         * ibusRaw is sampled at the PWM valley (~0 there), so the real
+                         * hand-off current registers only as a RECURRING spike that a
+                         * single per-tick read mostly misses — PEAK-HOLD it (decaying)
+                         * so the back-off actually sees the −22A and reacts. */
+                        int32_t iInst = (int32_t)garudaData.ibusRaw
+                                      - (int32_t)OC_BIAS_COUNTS;
+                        if (iInst < 0) iInst = -iInst;
+                        if ((uint16_t)iInst > ifPeak)
+                            ifPeak = (uint16_t)iInst;
+                        else
+                            ifPeak -= (ifPeak >> IF_BRIDGE_PEAK_DECAY_SHIFT);
+                        int32_t iMag = (int32_t)ifPeak;
                         if (iMag > IF_BRIDGE_LIMIT_DELTA) {
                             /* over the current cap — back off fast */
                             if (ifDuty > MIN_DUTY + IF_BRIDGE_DOWN_RATE)
@@ -3371,6 +3903,70 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                 }
 #endif
                 garudaData.duty = mappedDuty;
+
+#if FEATURE_CL_DIFF_IDLE
+                /* Drive-mode management. garudaData.duty is EFFECTIVE duty in
+                 * both modes (identical line-line volts for duty ≥ MIN_DUTY),
+                 * so the swaps are voltage-seamless; only the low phase's
+                 * waveform class changes. Hysteresis prevents IOCON churn. */
+                {
+                    /* (CL entry is handled by the coast-listen block at the
+                     * top of the case — it engages diff mode synced.) */
+                    if (g_pwmDiffLow
+                             && garudaData.duty >= MIN_DUTY
+                                + (MIN_DUTY / CL_DIFF_EXIT_HYST_DIV))
+                    {
+                        /* throttle demand exceeds the conventional floor —
+                         * swap to the proven override-LOW waveform (HWZC
+                         * re-enables via the normal crossover logic) */
+                        g_pwmDiffLow = 0;
+                        HAL_PWM_SetCommutationStep(garudaData.currentStep);
+                    }
+                    else if (!g_pwmDiffLow && garudaData.duty < MIN_DUTY)
+                    {
+                        /* demand back below the conventional floor — re-enter */
+                        g_pwmDiffLow = 1;
+                        HAL_PWM_SetCommutationStep(garudaData.currentStep);
+#if FEATURE_ADC_CMP_ZC
+                        garudaData.hwzc.enablePending = false;
+                        if (garudaData.hwzc.enabled)
+                        {
+                            /* hand ZC back to the SW valley detector, re-seeded
+                             * from HWZC's period (the proven fallback path) */
+                            HWZC_Disable(&garudaData);
+                            garudaData.hwzc.fallbackPending = true;
+                        }
+#endif
+                    }
+                }
+#endif
+
+#if FEATURE_HANDOFF_CHOP
+                /* Sub-MIN_DUTY current bound via the CMP3 HARDWARE chop, not duty.
+                 * Hold a LOW chop threshold for a window at CL entry so the
+                 * cycle-by-cycle CLPCI truncates each pulse at OC_CMP3_HANDOFF_MA
+                 * — bounding the phase current (and its −freewheel bus pulse)
+                 * regardless of duty/MIN_DUTY, with no regen oscillation. Other
+                 * state transitions also write the CMP3 DAC (zcSync etc.), so we
+                 * RE-ASSERT every tick to own the threshold for the whole window,
+                 * then restore the operational value once. Armed only at CL entry;
+                 * align/OL/morph keep STARTUP_DAC so their torque isn't chopped. */
+                {
+                    static uint16_t hcCtr = 0;
+                    static bool hcActive = false;
+                    if (prevAdcState != ESC_CLOSED_LOOP) {
+                        hcActive = true;
+                        hcCtr = 0;
+                    }
+                    if (hcActive) {
+                        HAL_CMP3_SetThreshold(OC_CMP3_HANDOFF_DAC);
+                        if (++hcCtr >= HANDOFF_CHOP_TICKS) {
+                            hcActive = false;
+                            HAL_CMP3_SetThreshold(RT_OC_CMP3_DAC_VAL);
+                        }
+                    }
+                }
+#endif
             }
             HAL_PWM_SetDutyCycle(garudaData.duty);
             break;
@@ -3471,7 +4067,17 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
                      * Init before state change: ADC ISR (prio 6) can
                      * preempt Timer1 (prio 5) between the two lines. */
                     STARTUP_Init(&garudaData);
+#if FEATURE_IF_STARTUP
+                    /* I-f self-aligns from the clean override-low bridge state.
+                     * STARTUP_Init's SineInit briefly wrote sine duties + released
+                     * overrides; IF_StartupInit (same tick) overwrites to balanced
+                     * 0V before any sine duty latches, so the sine HOLD never runs
+                     * and there's no sine→SVPWM handover. */
+                    IF_StartupInit();
+                    garudaData.state = ESC_IF_RAMP;
+#else
                     garudaData.state = ESC_ALIGN;
+#endif
                     LED2 = 1; /* Motor running indicator */
                 }
             }
@@ -3487,6 +4093,8 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
             /* FOC: alignment handled in ADC ISR. Timer1 is a no-op. */
             break;
 #elif FEATURE_SINE_STARTUP
+            /* I-f path bypasses ALIGN entirely (ARMED→IF_RAMP), so this only
+             * runs in the non-IF build. */
             if (STARTUP_SineAlign(&garudaData))
                 garudaData.state = ESC_OL_RAMP;
             break;
@@ -3496,6 +4104,12 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
                 garudaData.state = ESC_OL_RAMP;
                 garudaData.rampCounter = garudaData.rampStepPeriod;
             }
+            break;
+#endif
+
+#if FEATURE_IF_STARTUP
+        case ESC_IF_RAMP:
+            /* I-f spin-up is driven entirely in the ADC ISR; Timer1 is a no-op. */
             break;
 #endif
 

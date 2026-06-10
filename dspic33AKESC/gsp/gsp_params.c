@@ -46,7 +46,11 @@ static uint8_t activeProfile;
     .vbusOvAdc            = 3600, \
     .vbusUvAdc            = 500,  \
     .desyncCoastMs        = 200,  \
-    .desyncMaxRestarts    = 3
+    .desyncMaxRestarts    = 3,  \
+    .morphLockZcCount     = 4,  \
+    .morphLockTolPct      = 25,  \
+    .ifCurrentCa          = 600, \
+    .ifRampErpmPerS       = 12000
 
 static const GSP_PARAMS_T profileDefaults[6] = {
     [GSP_PROFILE_HURST] = {
@@ -454,6 +458,12 @@ static const PARAM_DESCRIPTOR_T paramDescriptors[] = {
     /* Recovery (group 6) */
     { PARAM_ID_DESYNC_COAST_MS,       PARAM_TYPE_U16, PARAM_GROUP_RECOVERY,    50,  1000, offsetof(GSP_PARAMS_T, desyncCoastMs),      2 },
     { PARAM_ID_DESYNC_MAX_RESTARTS,   PARAM_TYPE_U8,  PARAM_GROUP_RECOVERY,     0,    10, offsetof(GSP_PARAMS_T, desyncMaxRestarts),  1 },
+    /* Morph→CL lock gate (group 0 = startup) */
+    { PARAM_ID_MORPH_LOCK_ZC_COUNT,   PARAM_TYPE_U8,  PARAM_GROUP_STARTUP,      2,    20, offsetof(GSP_PARAMS_T, morphLockZcCount),   1 },
+    { PARAM_ID_MORPH_LOCK_TOL_PCT,    PARAM_TYPE_U8,  PARAM_GROUP_STARTUP,      5,    60, offsetof(GSP_PARAMS_T, morphLockTolPct),    1 },
+    /* I-f spin-up (group 0 = startup) */
+    { PARAM_ID_IF_CURRENT_CA,         PARAM_TYPE_U16, PARAM_GROUP_STARTUP,    100,  2000, offsetof(GSP_PARAMS_T, ifCurrentCa),        2 },
+    { PARAM_ID_IF_RAMP_ERPM_PER_S,    PARAM_TYPE_U16, PARAM_GROUP_STARTUP,   1000, 60000, offsetof(GSP_PARAMS_T, ifRampErpmPerS),     2 },
     /* Motor Hardware (group 7) */
     { PARAM_ID_MOTOR_POLE_PAIRS,      PARAM_TYPE_U8,  PARAM_GROUP_MOTOR_HW,    1,    20, offsetof(GSP_PARAMS_T, motorPolePairs),     1 },
     /* FOC Motor Model (group 8) */

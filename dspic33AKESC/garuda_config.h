@@ -46,6 +46,34 @@ extern "C" {
                                      * Must exceed the hand-off->idle spin-up time. */
 #define IF_BRIDGE_UP_PCT_PER_MS   2 /* Duty ramp-up rate while UNDER the current cap. */
 #define IF_BRIDGE_DOWN_PCT_PER_MS 8 /* Duty back-off rate when OVER the cap (faster). */
+#define IF_BRIDGE_PEAK_DECAY_SHIFT 6 /* Bridge current sense = PEAK-HOLD of |ibusRaw-bias|,
+                                     * not the instantaneous sample. ibusRaw is sampled at
+                                     * the PWM valley (~0 there), so the real hand-off
+                                     * current shows up only as a RECURRING spike (the −22A
+                                     * freewheel of the ~22A phase current) that a single
+                                     * per-tick read mostly misses. Peak-hold catches it;
+                                     * it decays by >>SHIFT/tick (6 ≈ 1.5%/tick, holds the
+                                     * peak ~2-3ms across the inter-commutation gap so the
+                                     * back-off doesn't chatter). Smaller = holds longer. */
+#define FEATURE_HANDOFF_CHOP     0  /* Sub-MIN_DUTY OL->CL current bound via the CMP3 HARDWARE
+                                     * cycle-by-cycle chop (CLPCI), not duty. The startup CMP3
+                                     * threshold is set HIGH (OC_CMP3_STARTUP_DAC ~22A) to not
+                                     * chop startup torque — which is exactly why the hand-off
+                                     * pulse reaches ~22A. This holds CMP3 at a LOW chop level
+                                     * (OC_CMP3_HANDOFF_MA) for a window at CL entry, so the
+                                     * hardware truncates each PWM pulse at that current —
+                                     * effective duty goes BELOW MIN_DUTY naturally (no deadtime
+                                     * issue) and the phase current (hence the −freewheel pulse)
+                                     * is bounded, WITHOUT the regen-oscillation the duty-clamp
+                                     * IF_BRIDGE caused. CMP3 is analog/continuous so it sees the
+                                     * true ON-time motoring peak the valley-sampled ADC misses.
+                                     * Armed only at CL entry (align/OL/morph keep STARTUP_DAC). */
+#define OC_CMP3_HANDOFF_MA   12000  /* Hand-off chop current cap (mA). Below STARTUP(~22A) and
+                                     * operational(~20A); above idle draw. Lower = gentler
+                                     * spin-up / smaller pulse; too low may not clear the gap. */
+#define HANDOFF_CHOP_MS       1000  /* Window after CL entry to hold the low chop (ms). Must
+                                     * exceed the hand-off->past-the-gap accel time. Idle draw
+                                     * is < cap so holding it there is inert. */
 #define FEATURE_THROTTLE_ZERO_AUTO_DISARM 0  /* When 1, motor disarms to IDLE state if
                                               * throttle stays below ARM_THROTTLE_ZERO_ADC
                                               * for 50ms. When 0, motor keeps running at
@@ -58,7 +86,10 @@ extern "C" {
 #define FEATURE_DYNAMIC_BLANKING 1  /* Phase C1: Speed+duty-aware blanking (extra blank at high duty/demag) */
 #define FEATURE_VBUS_SAG_LIMIT   1  /* Phase C2: Bus voltage sag power limiting (reduce duty on Vbus dip) */
 #define FEATURE_BEMF_INTEGRATION 1  /* Phase E: Shadow integration estimator (shadow-only, no control) */
-#define FEATURE_SINE_STARTUP     1  /* Re-enabled (2026-05-28) — try sine startup with
+#define FEATURE_SINE_STARTUP     1  /* RESTORED 2026-06-10: back to the proven sine startup (I-f parked).
+                                     * With 0, STARTUP_Init does NOT call SineInit → no bridge
+                                     * drive at ARMED→IF_RAMP → I-f owns a clean bring-up.
+                                     * Original: Re-enabled (2026-05-28) — try sine startup with
                                      * current HWZC architecture. Profile sets
                                      * HWZC_CROSSOVER_ERPM=1500 → HWZC arms during morph.
                                      * Code: motor/startup.c (SineInit/SineAlign/SineRamp,
@@ -68,6 +99,17 @@ extern "C" {
                                      * windowed Hi-Z ZC search) → CL (HWZC + sector PI). */
 #define FEATURE_ADC_CMP_ZC       1  /* Phase F: ADC comparator-based high-speed ZC — required for 6-step (2026-05-25). */
 #define FEATURE_HW_OVERCURRENT  1  /* Phase G: Hardware overcurrent protection via CMP3+OA3 */
+#define FEATURE_OC_AUTOZERO     1  /* 2026-06-10: the OC math assumes a 1.65V/2048-count bus-ADC
+                                    * bias, but the chain MEASURABLY rests at ~78 counts — so every
+                                    * OC trip (SW + CMP3 DAC) fired ~22A above the configured mA
+                                    * (full-code read + bench). Fix: measure the true rest during
+                                    * ARMED (bridge off), re-center ibusRaw into the 2048 frame
+                                    * (thresholds, window tracking AND host telemetry become true —
+                                    * the phantom −21A idle reading disappears), and shift the CMP3
+                                    * DAC threshold by the same delta inside HAL_CMP3_SetThreshold.
+                                    * Until the first arm completes calibration, bias stays 2048 =
+                                    * exactly the legacy behavior (graceful fallback). */
+#define OC_AUTOZERO_SAMPLES    64  /* ARMED rest samples (~1.4ms @45kHz) */
 
 /* FOC (Field-Oriented Control) — compile-time alternative to 6-step */
 #define FEATURE_FOC              0  /* Phase I: OLD FOC v1 (reference, deprecated) */
@@ -624,6 +666,35 @@ extern "C" {
 #define MORPH_TIMEOUT_MS       2000   /* Absolute morph timeout (ms). */
 #define MORPH_ZC_THRESHOLD        4   /* goodZcCount to exit morph → CL. Lowered from 6
                                        * for easier SW ZC lock during morph. */
+#define FEATURE_MORPH_LOCK_GATE   1   /* Stricter morph→CL handoff: in addition to the
+                                       * goodZcCount gate, require RT_MORPH_LOCK_ZC_COUNT
+                                       * consecutive Hi-Z ZC intervals that are STABLE
+                                       * (within RT_MORPH_LOCK_TOL_PCT of the smoothed
+                                       * period) and NOT a half-period harmonic, so CL
+                                       * engages on a trustworthy angle instead of a noisy
+                                       * /phantom lock (the wrong-angle regen at hand-off).
+                                       * The MORPH_HIZ_MAX_SECTORS partial-lock fallback
+                                       * still applies, so a hard-to-lock motor degrades to
+                                       * the old behaviour rather than failing to start. */
+#define MORPH_LOCK_ZC_COUNT       4   /* fallback (non-GSP) for RT_MORPH_LOCK_ZC_COUNT */
+#define MORPH_LOCK_TOL_PCT       25   /* fallback (non-GSP) for RT_MORPH_LOCK_TOL_PCT */
+#endif /* close FEATURE_SINE_STARTUP early — the I-f config below must be top-level
+        * (it was trapped in this block, so FEATURE_IF_STARTUP never compiled). */
+
+/* ── I-f current-controlled spin-up (hybrid: I-f start → 6-step run) ──────
+ * MILESTONE 1 (this build): replace the voltage-mode sine OL ramp with a
+ * CURRENT-controlled SVPWM spin-up so Ibus is bounded (no 22A slam) and the
+ * effective voltage can go BELOW MIN_DUTY (SVPWM differential), dissolving the
+ * OL→CL speed gap. No 6-step handoff yet — ALIGN → IF_RAMP holds at handoff
+ * speed so we can bench-verify the current cap. Current loop reuses the
+ * profile's tuned FOC gains (focKpDqMilli / focKiDq). Default OFF. */
+#define FEATURE_IF_STARTUP        0   /* PARKED 2026-06-10: op-amp current-sense wall (see memory). Code stays, compiled out. */
+#define IF_START_ERPM           800   /* (reserved) initial open-loop eRPM */
+#define IF_HANDOFF_ERPM       11000   /* speed I-f ramps to and holds (M1) — just above
+                                       * the ~10k MIN_DUTY 6-step idle so it's continuous */
+#define IF_ALIGN_MS             150   /* hold forced angle (rotor settles) before ramping */
+
+#if FEATURE_SINE_STARTUP   /* reopen: the Windowed Hi-Z config below is sine-specific */
 
 /* Windowed Hi-Z: progressive float-phase Hi-Z acquisition.
  * Each entry = Hi-Z window as % of step period for that sector.
@@ -913,6 +984,33 @@ extern "C" {
  * in the waveform, not just this clamp. Left OFF (=0): no benefit. */
 #define FEATURE_CL_LOW_IDLE             0   /* allow CL idle below MIN_DUTY (dead end, see above) */
 #define CL_LOW_IDLE_DT_PCT            150   /* idle floor as % of one deadtime (150=1.5xDT) */
+
+/* ── Differential-low CL idle (2026-06-10) ────────────────────────────────
+ * Fixes what CL_LOW_IDLE couldn't: the MIN_DUTY voltage floor is baked into
+ * the trap WAVEFORM (low phase = override-LOW → min line-line volts =
+ * MIN_DUTY×Vbus ≈ 1.3V → idle equilibrium ~10k → the 3k→10k hand-off slam).
+ * In CL below MIN_DUTY effective duty, drive the LOW phase COMPLEMENTARY at
+ * MIN_DUTY (a PDC write, overrides released) — the same differential drive
+ * MORPH_CONVERGE uses (bench: 0.78A coast). Line-line volts become
+ * (duty − base) — controllable from ~0V, so CL can idle at ~3-4k and MEET the
+ * sine/morph hand-off speed. garudaData.duty keeps meaning EFFECTIVE duty
+ * everywhere; at any duty ≥ MIN_DUTY both waveforms produce identical volts,
+ * so the swap to the proven conventional drive is seamless (hysteresis below).
+ * Prop-safe: continuous drive every cycle, full torque authority (this is
+ * NOT pulse skipping). Float phase / ZC handling unchanged; the duty-
+ * proportional zcThreshold is floored at its proven MIN_DUTY level. */
+#define FEATURE_CL_DIFF_IDLE            0   /* PARKED 2026-06-10 (bus-ADC analog instability blocks bench; see memory). */
+#define CL_DIFF_IDLE_PCT_X10           34   /* idle floor: EFFECTIVE duty, 0.1% units (34 = 3.4%
+                                             * ≈ 0.82V → idle ~8-9k on the 2810: the bench-measured
+                                             * smooth zone. BENCH 2026-06-10 ladder: 1.0% → ~2.5k,
+                                             * BEMF below threshold → desync. 2.2% → ~6.7k LOCKED but
+                                             * ROUGH (eRPM sd≈1400: BEMF slope too shallow → ZC
+                                             * jitter; user-confirmed — tiny pot lift = instantly
+                                             * smooth). 7-8% duty (16-18k): sd≈400-700 = smooth.
+                                             * Floor sits at the BEMF-quality limit, still below
+                                             * the ~10-11k MIN_DUTY wall. */
+#define CL_DIFF_EXIT_HYST_DIV           4   /* swap to conventional drive at duty ≥ MIN_DUTY +
+                                             * MIN_DUTY/DIV; re-enter diff below MIN_DUTY */
 
 /* Float-port of the sector PI (Phase 1 of pi_controller_research.md).
  * When 1, HWZC_OnPiPeriodExpired runs the same algorithm in float instead

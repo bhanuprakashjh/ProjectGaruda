@@ -611,10 +611,31 @@ static inline uint32_t pgIoconWord(uint8_t mode)
  *
  * @param step Commutation step index 0-5
  */
+#if FEATURE_CL_DIFF_IDLE
+/* Differential-low CL drive (see garuda_config.h). When set, the LOW phase of
+ * the current step runs complementary PWM at MIN_DUTY instead of override-LOW,
+ * so the line-line voltage is (duty − base) — controllable below the MIN_DUTY
+ * waveform floor. Cleared by HAL_MC1PWMDisableOutputs and STARTUP_Init. */
+volatile uint8_t g_pwmDiffLow = 0;
+static volatile uint8_t s_diffStep = 0;   /* current step for per-phase PDC writes */
+#endif
+
 void HAL_PWM_SetCommutationStep(uint8_t step)
 {
     const COMMUTATION_STEP_T *s = &commutationTable[step];
 
+#if FEATURE_CL_DIFF_IDLE
+    s_diffStep = step;
+    if (g_pwmDiffLow)
+    {
+        /* LOW phase → complementary PWM (its PDC carries the MIN_DUTY base,
+         * written by HAL_PWM_SetDutyCycle). Active/float roles unchanged. */
+        PG1IOCON = pgIoconWord((s->phaseA == PHASE_LOW) ? PHASE_PWM_ACTIVE : s->phaseA);
+        PG2IOCON = pgIoconWord((s->phaseB == PHASE_LOW) ? PHASE_PWM_ACTIVE : s->phaseB);
+        PG3IOCON = pgIoconWord((s->phaseC == PHASE_LOW) ? PHASE_PWM_ACTIVE : s->phaseC);
+        return;
+    }
+#endif
     PG1IOCON = pgIoconWord(s->phaseA);
     PG2IOCON = pgIoconWord(s->phaseB);
     PG3IOCON = pgIoconWord(s->phaseC);
@@ -629,6 +650,30 @@ void HAL_PWM_SetCommutationStep(uint8_t step)
  */
 void HAL_PWM_SetDutyCycle(uint32_t duty)
 {
+#if FEATURE_CL_DIFF_IDLE
+    if (g_pwmDiffLow)
+    {
+        /* duty = EFFECTIVE duty (may be < MIN_DUTY). Active phase carries
+         * MIN_DUTY + duty + deadtime compensation, low phase the MIN_DUTY base.
+         * DEADTIME COMPENSATION (bench 2026-06-10): the two driven phases carry
+         * OPPOSITE currents (active sources, low sinks — fixed in 6-step), so
+         * their deadtime voltage errors ADD against the differential instead of
+         * cancelling: ~2×(DT/T)×Vbus ≈ 0.65V eaten — measured as the rotor
+         * settling at ~700 eRPM (≈0.07V real) on a 0.53V command. Current
+         * directions are known by construction → deterministic comp: +2×DT
+         * (= MIN_DUTY) on the active phase restores effective ≈ duty. */
+        uint32_t active = duty + 2u * MIN_DUTY;
+        if (active > MAX_DUTY) active = MAX_DUTY;
+        const COMMUTATION_STEP_T *s = &commutationTable[s_diffStep];
+        uint32_t dA = (s->phaseA == PHASE_PWM_ACTIVE) ? active : MIN_DUTY;
+        uint32_t dB = (s->phaseB == PHASE_PWM_ACTIVE) ? active : MIN_DUTY;
+        uint32_t dC = (s->phaseC == PHASE_PWM_ACTIVE) ? active : MIN_DUTY;
+        PWM_PDC3 = dC;   /* slaves first, master (PG1) last — broadcast */
+        PWM_PDC2 = dB;
+        PWM_PDC1 = dA;
+        return;
+    }
+#endif
     if (duty < MIN_DUTY) duty = MIN_DUTY;
     if (duty > MAX_DUTY) duty = MAX_DUTY;
 
@@ -641,7 +686,7 @@ void HAL_PWM_SetDutyCycle(uint32_t duty)
     PWM_PDC1 = duty;
 }
 
-#if (FEATURE_SINE_STARTUP || FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3 || FEATURE_FOC_AN1078)
+#if (FEATURE_SINE_STARTUP || FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3 || FEATURE_FOC_AN1078 || FEATURE_IF_STARTUP)
 /**
  * @brief Set independent duty cycles on all three PWM generators.
  * Used by sine startup and FOC SVM to drive 3-phase waveforms.
@@ -704,7 +749,7 @@ void HAL_PWM_FloatPhaseToHiZ(uint8_t step)
 }
 #endif /* FEATURE_SINE_STARTUP || FEATURE_FOC || FEATURE_FOC_V2 */
 
-#if FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3 || FEATURE_FOC_AN1078
+#if FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3 || FEATURE_FOC_AN1078 || FEATURE_IF_STARTUP
 /**
  * @brief Set 3-phase PWM duty cycles from float [0.0, 1.0] values.
  * Converts normalised float duties to PWM register counts, clamps,
