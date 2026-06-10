@@ -623,41 +623,59 @@ static bool CL_CoastListenTick(uint16_t vB, uint16_t now)
                 /* Plausibility: too-short intervals are diode-ring/noise,
                  * not BEMF — discard (the timer still re-anchors below, so
                  * a later clean crossing measures from the last event). */
-                if (ivNow >= CL_COAST_IV_MIN && s_clCoast.nIv < CL_COAST_MAX_IV)
+                if (ivNow >= CL_COAST_IV_MIN)
+                {
+                    if (s_clCoast.nIv >= CL_COAST_MAX_IV)
+                    {
+                        /* Sliding window: early intervals can be mean-bias
+                         * artifacts — keep the most recent ones. */
+                        uint8_t i;
+                        for (i = 1; i < CL_COAST_MAX_IV; i++)
+                            s_clCoast.iv[i - 1u] = s_clCoast.iv[i];
+                        s_clCoast.nIv = CL_COAST_MAX_IV - 1u;
+                    }
                     s_clCoast.iv[s_clCoast.nIv++] = ivNow;
+                }
             }
             s_clCoast.lastCrossTick = s_clCoast.tick;
             s_clCoast.nCross++;
 
-            if (s_clCoast.nCross >= CL_COAST_MIN_CROSS && s_clCoast.nIv >= 2)
+            if (s_clCoast.nCross >= CL_COAST_MIN_CROSS && s_clCoast.nIv >= 3)
             {
-                /* Median interval (2: average; 3+: middle of sorted copy). */
-                uint16_t m;
-                if (s_clCoast.nIv == 2)
-                    m = (uint16_t)((s_clCoast.iv[0] + s_clCoast.iv[1]) / 2u);
-                else
+                /* CONSISTENCY GATE (2026-06-10): while the running mean is
+                 * still biased early in the coast, it crosses the BEMF
+                 * asymmetrically — ALTERNATING short/long intervals (bench:
+                 * the post-sine bridge-cut measured a deterministic 79-tick
+                 * period = "5696 eRPM" from a 3k rotor, impossible — all six
+                 * runs identical). True BEMF crossings of a converged mean
+                 * are uniform. Require the last 3 intervals to agree within
+                 * 25% before trusting them; inconsistent → keep listening
+                 * (the mean converges, later intervals become uniform);
+                 * never consistent → timeout fallback (pre-coast behavior). */
+                uint16_t a = s_clCoast.iv[s_clCoast.nIv - 3u];
+                uint16_t b = s_clCoast.iv[s_clCoast.nIv - 2u];
+                uint16_t c = s_clCoast.iv[s_clCoast.nIv - 1u];
+                uint16_t mn = a, mx = a;
+                if (b < mn) mn = b;
+                if (b > mx) mx = b;
+                if (c < mn) mn = c;
+                if (c > mx) mx = c;
+                if ((uint16_t)(mx - mn) <= (uint16_t)(mn >> 2))
                 {
-                    uint16_t s[CL_COAST_MAX_IV];
-                    uint8_t i, j, n = s_clCoast.nIv;
-                    for (i = 0; i < n; i++) s[i] = s_clCoast.iv[i];
-                    for (i = 0; i < n; i++)
-                        for (j = (uint8_t)(i + 1u); j < n; j++)
-                            if (s[j] < s[i])
-                            { uint16_t t = s[i]; s[i] = s[j]; s[j] = t; }
-                    m = s[n / 2u];
-                }
-                /* B crosses every HALF e-cycle = 3 sector periods. */
-                uint16_t p = (uint16_t)(m / 3u);
-                if (p < MIN_CL_ADC_STEP_PERIOD) p = MIN_CL_ADC_STEP_PERIOD;
-                if (p > RT_INITIAL_ADC_STEP_PERIOD) p = RT_INITIAL_ADC_STEP_PERIOD;
+                    uint16_t m = (uint16_t)(a + b + c - mn - mx); /* median */
+                    /* B crosses every HALF e-cycle = 3 sector periods. */
+                    uint16_t p = (uint16_t)(m / 3u);
+                    if (p < MIN_CL_ADC_STEP_PERIOD) p = MIN_CL_ADC_STEP_PERIOD;
+                    if (p > RT_INITIAL_ADC_STEP_PERIOD) p = RT_INITIAL_ADC_STEP_PERIOD;
 
-                /* Sector from polarity: B floats rising in step 2, falling in
-                 * step 5; the crossing IS the sector center, so the next
-                 * commutation is half a period out. Engaging at the crossing
-                 * instant keeps the angle error ≤ one tick. */
-                uint8_t k = s_clCoast.lastRising ? 2u : 5u;
-                CL_CoastEngage(k, p, (uint16_t)(p / 2u), now);
-                return true;
+                    /* Sector from polarity: B floats rising in step 2, falling
+                     * in step 5; the crossing IS the sector center, so the next
+                     * commutation is half a period out. Engaging at the
+                     * crossing instant keeps the angle error ≤ one tick. */
+                    uint8_t k = s_clCoast.lastRising ? 2u : 5u;
+                    CL_CoastEngage(k, p, (uint16_t)(p / 2u), now);
+                    return true;
+                }
             }
         }
     }
@@ -680,6 +698,8 @@ volatile uint16_t g_ocBiasAdc = 2048;
 static uint16_t s_ocZeroRaw;       /* last UNCORRECTED bus sample (cal input) */
 static uint32_t s_ocZeroAcc;
 static uint16_t s_ocZeroCount;
+static uint16_t s_ocZeroMin;       /* window spread — quiescence gate */
+static uint16_t s_ocZeroMax;
 #endif
 
 /* Heartbeat LED counter */
@@ -2471,12 +2491,34 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
 #if FEATURE_OC_AUTOZERO
             /* Bridge is off in ARMED → the bus ADC reads its true rest bias.
              * Average OC_AUTOZERO_SAMPLES (~1.4ms) and latch; ALIGN starts
-             * 500ms later, so calibration always completes first. */
+             * 500ms later, so calibration always completes first.
+             * QUIESCENCE GATE (2026-06-10): a quick re-arm with the rotor
+             * still spinning down puts regen ripple on the bus — bench showed
+             * whole runs with Ibus telemetry (and OC thresholds) offset ~7A
+             * from a bias latched mid-spin. Latch only if the sample window
+             * is tight; otherwise discard and retry — the rotor stops and a
+             * later window passes. The previous bias holds meanwhile. */
             if (s_ocZeroCount < OC_AUTOZERO_SAMPLES)
             {
-                s_ocZeroAcc += s_ocZeroRaw;
+                uint16_t v = s_ocZeroRaw;
+                if (s_ocZeroCount == 0)
+                {
+                    s_ocZeroAcc = 0;
+                    s_ocZeroMin = v;
+                    s_ocZeroMax = v;
+                }
+                if (v < s_ocZeroMin) s_ocZeroMin = v;
+                if (v > s_ocZeroMax) s_ocZeroMax = v;
+                s_ocZeroAcc += v;
                 if (++s_ocZeroCount == OC_AUTOZERO_SAMPLES)
-                    g_ocBiasAdc = (uint16_t)(s_ocZeroAcc / OC_AUTOZERO_SAMPLES);
+                {
+                    if ((uint16_t)(s_ocZeroMax - s_ocZeroMin)
+                            <= OC_AUTOZERO_MAX_SPREAD)
+                        g_ocBiasAdc =
+                            (uint16_t)(s_ocZeroAcc / OC_AUTOZERO_SAMPLES);
+                    else
+                        s_ocZeroCount = 0;   /* ripple — retry the window */
+                }
             }
 #endif
             break;
@@ -4214,6 +4256,21 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
                  * threshold (~15A) but below CMP3 startup. Without this,
                  * CMP3 never trips and the board PCI hard-faults. */
                 HAL_CMP3_SetThreshold(RT_OC_CMP3_DAC_VAL);
+#endif
+#if FEATURE_SKIP_MORPH && FEATURE_CL_COAST_VERIFY
+                if (garudaData.direction == 0)
+                {
+                    /* Skip the morph: the CL-entry coast-listen measures the
+                     * TRUE sector/period from clean coast BEMF — no trap
+                     * converge, no windowed-Hi-Z grind (deletes the morph
+                     * current kick). MorphInit above already did the critical
+                     * rampStepPeriod sync; the morph fields it set go unused.
+                     * Next ADC tick: normal CL entry init (prev==OL_RAMP →
+                     * BEMF_ZC_Init path), then CL_CoastBegin cuts the bridge. */
+                    garudaData.sine.active = false;
+                    garudaData.state = ESC_CLOSED_LOOP;
+                    break;
+                }
 #endif
                 garudaData.state = ESC_MORPH;
             }

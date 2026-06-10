@@ -110,7 +110,37 @@ extern "C" {
                                     * Until the first arm completes calibration, bias stays 2048 =
                                     * exactly the legacy behavior (graceful fallback). */
 #define OC_AUTOZERO_SAMPLES    64  /* ARMED rest samples (~1.4ms @45kHz) */
-#define FEATURE_CL_COAST_VERIFY 1  /* 2026-06-10 (step 1a of the baseline plan): at morph→CL
+#define OC_AUTOZERO_MAX_SPREAD 16  /* max (max−min) ADC counts in the cal
+                                    * window (~0.17A). A rotor still spinning
+                                    * down puts regen ripple on the bus that
+                                    * fails this → retry until quiescent. */
+#define FEATURE_SKIP_MORPH      0  /* PARKED 2026-06-10 (bench-proven 9/9 but engage is
+                                    * effectively blind at the 3k entry: the post-sine coast
+                                    * listen reads a uniform 2× crossing artifact — likely
+                                    * 3rd-harmonic/neutral wobble dominating the weak 3k
+                                    * fundamental — "5696 eRPM" every run; starts succeed via
+                                    * HWZC self-capture, not verified engage. User chose to
+                                    * return to the proven morph baseline. Revive for feel:
+                                    * single-jerk startup, one climb instead of kick+climb. */
+                                   /* ORIGINAL NOTE: skip ESC_MORPH entirely (CW only; needs
+                                    * FEATURE_CL_COAST_VERIFY). The morph's job — establish ZC
+                                    * lock before CL — is done better by the coast-listen
+                                    * measurement at CL entry. New flow: sine OL ramp to 3k →
+                                    * bridge cut → coast-listen → engage CL at the MEASURED
+                                    * sector/period → single climb to the MIN_DUTY equilibrium.
+                                    * Deletes startup jerk #1 (the trap-converge/sub-B kick:
+                                    * conventional MIN_DUTY engaging at 3k = ~13A + commutation
+                                    * peaks for ~100ms) — one climb instead of kick-pause-climb.
+                                    * STARTUP_MorphInit still runs for its rampStepPeriod sync
+                                    * (CL entry init + coast timeout fallback depend on it).
+                                    * Morph stays compiled as the CCW / flag-off fallback. */
+#define FEATURE_CL_COAST_VERIFY 0  /* OFF 2026-06-10 (user call: back to the a491c30 hot
+                                    * hand-off; the coast made startup feel 2-stage). The
+                                    * machinery is PROVEN (1a: 6/6 measured engages post-morph,
+                                    * commit d5d784b) and stays compiled-out for 1b fast
+                                    * re-sync / 1c windmill catch, where BEMF is strong and
+                                    * the listen is clean. */
+                                   /* ORIGINAL NOTE (step 1a of the baseline plan): at morph→CL
                                     * hand-off, coast the bridge 1-2 e-cycles and listen to
                                     * phase B's clean BEMF (no PWM = perfect signal), then enter
                                     * CL with the MEASURED sector + period instead of trusting
