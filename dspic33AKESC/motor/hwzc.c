@@ -87,6 +87,7 @@ void HWZC_Init(volatile GARUDA_DATA_T *pData)
     pData->hwzc.captureValid = false;
     pData->hwzc.pllStartActive = 0;
     pData->hwzc.pllStartGood = 0;
+    pData->hwzc.pllPrevCap = 0;
     pData->hwzc.stepPeriodForFilterComp = 0;
     pData->hwzc.dbgPiDelta = 0;
     pData->hwzc.dbgPiCaptureCount = 0;
@@ -682,34 +683,54 @@ static void HWZC_PllStartTick(volatile GARUDA_DATA_T *pData)
         if (eCmd >= PLL_START_CAPTURE_FLOOR_ERPM) {
             uint32_t cap = pData->hwzc.lastCaptureHR
                          - pData->hwzc.lastCommStamp;   /* modular */
-            /* plausible mid-sector crossing? (setpoint ~T/2 at adv 0) */
-            if (cap > (uint32_t)(T * 3u / 10u)
-                && cap < (uint32_t)(T * 3u / 4u)) {   /* tight mid-sector window */
-                if (++pData->hwzc.pllStartGood >= PLL_START_SYNC_CAPS) {
-                    /* HANDOVER: declared synced; leave captureValid set so
-                     * the normal PI consumes THIS capture next event. */
-                    pData->hwzc.pllStartActive = 0;
-                    pData->timing.zcSynced = true;
-                    pData->timing.goodZcCount = (uint16_t)RT_ZC_SYNC_THRESHOLD;
-                    goto pll_commutate;
+            /* CONSISTENCY gate (twin iteration #5). A locked rotor puts the
+             * ZC at the SAME sector fraction every sector; phantoms land
+             * randomly. The old absolute window (0.30T..0.75T) was fragile:
+             * load angle / timing advance / RC filter lag all shift the
+             * true crossing (twin saw a fully-locked rotor pinned at the
+             * blanking edge ~0.14T and never synced). Gate instead on
+             * sector-plausible (T/8..7T/8, outside blanking, inside sector)
+             * AND stable vs the previous capture (|Δ| < T/4 — wide enough
+             * for the rising/falling polarity lag split, narrow enough that
+             * a 6-streak of random phantoms is ~3% likely). */
+            uint32_t prevCap = pData->hwzc.pllPrevCap;
+            pData->hwzc.pllPrevCap = cap;
+            if (cap > (T >> 3) && cap < (T - (T >> 3))) {
+                uint32_t d = (cap > prevCap) ? cap - prevCap : prevCap - cap;
+                if (prevCap != 0u && d < (T >> 2)) {
+                    if (++pData->hwzc.pllStartGood >= PLL_START_SYNC_CAPS) {
+                        /* HANDOVER: declared synced; leave captureValid set
+                         * so the normal PI consumes THIS capture next event. */
+                        pData->hwzc.pllStartActive = 0;
+                        pData->timing.zcSynced = true;
+                        pData->timing.goodZcCount = (uint16_t)RT_ZC_SYNC_THRESHOLD;
+                        goto pll_commutate;
+                    }
+                } else {
+                    pData->hwzc.pllStartGood = 1;   /* plausible, streak restarts */
                 }
             } else {
                 pData->hwzc.pllStartGood = 0;
+                pData->hwzc.pllPrevCap = 0;
             }
         }
         pData->hwzc.captureValid = false;   /* consume in blind phase */
     } else if (eCmd >= PLL_START_CAPTURE_FLOOR_ERPM
                && pData->hwzc.pllStartGood > 0) {
         pData->hwzc.pllStartGood = 0;       /* silence resets the streak */
+        pData->hwzc.pllPrevCap = 0;
     }
 
     /* blind accel schedule toward the target */
     if (eCmd < PLL_START_TARGET_ERPM) {
+        /* Sector time in seconds = T / SCCP_CLOCK_HZ (HR tick = 10 ns).
+         * NOT /1e9 — that unit slip made the schedule accelerate exactly
+         * 10× slower than commanded (twin iteration #4 root cause). */
         uint32_t eNew = eCmd + (uint32_t)(((uint64_t)PLL_START_ACCEL_ERPM_PER_S
-                                           * T) / 1000000000ULL);
+                                           * T) / (uint64_t)SCCP_CLOCK_HZ);
         if (eNew <= eCmd) eNew = eCmd + 1u;
         if (eNew > PLL_START_TARGET_ERPM) eNew = PLL_START_TARGET_ERPM;
-        T = HWZC_TICKS_TO_ERPM(eNew);       /* symmetric: 1e9/e */
+        T = HWZC_ERPM_TO_TICKS(eNew);       /* symmetric: 1e9/e */
         pData->hwzc.timerPeriod = T;
         pData->hwzc.integrator  = (int32_t)T;
 #if FEATURE_HWZC_PI_FLOAT

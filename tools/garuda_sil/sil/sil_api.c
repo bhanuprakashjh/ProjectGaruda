@@ -156,12 +156,29 @@ int      sil_hwzc_phase(void)   { return (int)garudaData.hwzc.phase; }
 uint32_t sil_hwzc_period(void)  { return garudaData.hwzc.stepPeriodHR; }
 uint16_t sil_good_zc(void)      { return garudaData.hwzc.goodZcCount; }
 uint32_t sil_hwzc_total_zc(void){ return garudaData.hwzc.totalZcCount; }
+/* PLL-startup debug: where in the sector does the captured ZC land?
+ * Returns permille of timerPeriod; 9999 = stale (capture older than 4T). */
+uint32_t sil_hwzc_timer_period(void) { return garudaData.hwzc.timerPeriod; }
+uint32_t sil_hwzc_cap_frac_pm(void)
+{
+    uint32_t T = garudaData.hwzc.timerPeriod;
+    if (!T) return 0;
+    uint32_t cap = garudaData.hwzc.lastCaptureHR - garudaData.hwzc.lastCommStamp;
+    if (cap > 4u * T) return 9999;
+    return (uint32_t)(((uint64_t)cap * 1000u) / T);
+}
+int sil_pll_active(void) { return (int)garudaData.hwzc.pllStartActive; }
+int sil_pll_good(void)   { return (int)garudaData.hwzc.pllStartGood; }
 #else
 int      sil_hwzc_enabled(void) { return 0; }
 int      sil_hwzc_phase(void)   { return 0; }
 uint32_t sil_hwzc_period(void)  { return 0; }
 uint16_t sil_good_zc(void)      { return 0; }
 uint32_t sil_hwzc_total_zc(void){ return 0; }
+uint32_t sil_hwzc_timer_period(void) { return 0; }
+uint32_t sil_hwzc_cap_frac_pm(void)  { return 0; }
+int      sil_pll_active(void)   { return 0; }
+int      sil_pll_good(void)     { return 0; }
 #endif
 
 #if FEATURE_SINE_STARTUP

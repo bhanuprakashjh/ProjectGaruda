@@ -351,6 +351,7 @@ typedef struct {
      * then capture-weighted handover. Fields unconditional (2 bytes). */
     volatile uint8_t pllStartActive;
     volatile uint8_t pllStartGood;
+    volatile uint32_t pllPrevCap;     /* previous capture offset, consistency gate */
 #endif
 
 #if FEATURE_BEMF_INTEGRATION

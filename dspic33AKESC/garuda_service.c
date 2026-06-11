@@ -4257,6 +4257,7 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
                     (uint16_t)ERPM_TO_STEP_TICKS(PLL_START_ERPM0);
                 garudaData.hwzc.pllStartActive = 1;
                 garudaData.hwzc.pllStartGood = 0;
+                garudaData.hwzc.pllPrevCap = 0;
 #if FEATURE_HW_OVERCURRENT
                 HAL_CMP3_SetThreshold(RT_OC_CMP3_DAC_VAL);
 #endif
