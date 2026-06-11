@@ -55,6 +55,27 @@ USABLE DESIGN-STUDY ENVELOPE TODAY: 0–~15k eRPM — exactly the startup
 regime, which is where every open design question lives (PLL-from-align,
 hand-off studies, VEX-class profiles).
 
+## Experiment session #1 (2026-06-11 evening) — skip-morph & windmill
+Variant builds: build_variant.sh (temp flag edit + git restore; SIL_OUT names
+the .so). libgaruda_sil_skipmorph.so = FEATURE_SKIP_MORPH+CL_COAST_VERIFY.
+- Rest starts (12 rotor angles): both variants 12/12. skipmorph −140 ms
+  time-to-CL (1.95 vs 2.09 s), ipk 33.4 vs 35.1 A. Angle sweep is a null
+  experiment — ALIGN erases θ0 perfectly in this plant (no cogging/striction).
+- WINDMILL starts (0–15 k initial spin, coast-faithful plant): NEITHER
+  variant catches. Spin survives the ARM coast (15k→10.7k, TC 1.5 s ✓) and
+  then ALIGN BRAKES IT TO ZERO in <0.5 s (~44 A peaks, baseline). Both then
+  start from rest identically. ⇒ the 1c windmill-catch feature (pre-align
+  coast-listen → engage CL directly when spinning) is the missing piece;
+  the twin now quantifies the cost of not having it.
+- Drag model v2 discovered a twin ANGLE BIAS: with light drag, equilibrium
+  runs ~50% high ⇒ effective commutation ~25° early (BEMF factor ~0.66) in
+  the twin's sense-chain synthesis (bench equilibrium implies aligned
+  commutation). P2 investigation item — was masked by heavy drag in v1.
+- Plant drag configs: v1 (defaults) equilibrium-faithful, coast wrong
+  (TC 0.17 s); v2 (j=5e-6, b=3.3e-6, v_drop=0.0822+0.0053·Vbus)
+  coast-faithful (TC 1.5 s) + ladder-exact analytically, but exposes the
+  angle bias. Unify after the angle bias is fixed.
+
 ## Next (roadmap P2/P3)
 1. Replay-and-score: feed a recorded session's throttle/Vbus through the twin,
    score state durations, CL-entry seed, idle eRPM, event stats.

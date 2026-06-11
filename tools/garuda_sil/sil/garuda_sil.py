@@ -149,7 +149,7 @@ class Plant2810:
     """
 
     def __init__(self, vbus=24.0, kv=1350.0, pp=7, r_ll=0.05,
-                 j=2.0e-5, b_visc=1.1573e-4, tau_c=0.0, v_drop=0.0847,
+                 j=2.0e-5, b_visc=1.1573e-4, tau_c=0.0, v_drop_a=0.0847, v_drop_c=0.0,
                  rc_fc=5500.0, phase_fix_deg=0.0, theta0_deg=200.0):
         self.vbus = vbus
         self.pp = pp
@@ -160,7 +160,13 @@ class Plant2810:
         self.j = j
         self.b_visc = b_visc
         self.tau_c = tau_c
-        self.v_drop = v_drop
+        # drive volt-loss = a + c*Vbus: 'a' = diode/deadtime floor, the
+        # c*Vbus term = switching/deadtime loss scaling with the bus.
+        # (a,c) fit EXACTLY to the 2026-06-11 bench equilibrium ladder
+        # (24.3->10.4k, 14.2->5.75k, 13.1->5.3k) with b_visc small enough
+        # for a realistic seconds-scale coast-down (J/b ~ 1.5 s).
+        self.v_drop_a = v_drop_a
+        self.v_drop_c = v_drop_c
         self.rc_tau = 1.0 / (2.0 * math.pi * rc_fc)
         self.phase_fix = phase_fix_deg
         # state
@@ -207,10 +213,11 @@ class Plant2810:
             a, c = driven
             drive = (v[a] - v[c]) - (e[a] - e[c])
             # series conduction drop (FET/diode) — bench-fit 0.078 V
-            if drive > self.v_drop:
-                drive -= self.v_drop
-            elif drive < -self.v_drop:
-                drive += self.v_drop
+            vdrop = self.v_drop_a + self.v_drop_c * self.vbus
+            if drive > vdrop:
+                drive -= vdrop
+            elif drive < -vdrop:
+                drive += vdrop
             else:
                 drive = 0.0
             cur = drive / self.r_ll

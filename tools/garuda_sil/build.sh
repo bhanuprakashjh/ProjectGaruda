@@ -9,7 +9,7 @@ set -euo pipefail
 
 HERE="$(cd "$(dirname "$0")" && pwd)"
 FW="$(cd "$HERE/../../dspic33AKESC" && pwd)"
-OUT="$HERE/libgaruda_sil.so"
+OUT="${SIL_OUT:-$HERE/libgaruda_sil.so}"
 
 CFLAGS=(
     -std=gnu11 -m64 -fPIC -shared -g -O1
