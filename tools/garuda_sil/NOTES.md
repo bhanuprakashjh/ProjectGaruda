@@ -39,6 +39,22 @@
   electrical + trapezoid BEMF + RC-filtered terminal synthesis per zcsim.py
   conventions (PWM-ON Vn+1.5e, OFF freewheel diode-clamped, ~52 counts/V).
 
+## Replay-and-score (sil/replay.py) — first results, golden session
+gui_auto_20260611_090540 (truth-entry startup + 232k sweep, 31 s) replayed
+at ~1.5x real time. MEASURED FIDELITY ENVELOPE:
+- state edges ALIGN/OL_RAMP/MORPH/CL: within ±40 ms of bench over 31 s ✓
+- idle equilibria: ±1.5% (see ladder) ✓
+- CL-entry eRPM: twin +71% (4820 vs 2810) — plant accelerates too easily
+  through OL/morph (J underfit at 2e-5; torque model has no L, no load
+  angle softness). Coast-down fit will pin J.
+- high-speed: twin desyncs ~61k eRPM (bench 234k) then OC — the M1
+  quasi-static plant + linear b_visc (fit at ~10k) does not extrapolate;
+  sense-chain synthesis fidelity at sub-30 µs sectors untested (n_sub=4
+  → 5.5 µs comparator granularity). P2 work, expected.
+USABLE DESIGN-STUDY ENVELOPE TODAY: 0–~15k eRPM — exactly the startup
+regime, which is where every open design question lives (PLL-from-align,
+hand-off studies, VEX-class profiles).
+
 ## Next (roadmap P2/P3)
 1. Replay-and-score: feed a recorded session's throttle/Vbus through the twin,
    score state durations, CL-entry seed, idle eRPM, event stats.
