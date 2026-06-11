@@ -612,9 +612,10 @@ void GSP_RecomputeDerived(void)
         d->minStepPeriod = 1;
     }
 
-    /* Convert to ADC ISR ticks: Timer1_ticks * 12 / 5 */
+    /* Convert to ADC ISR ticks: ratio = PWMFREQUENCY_HZ/10000 (4.5 at 45 kHz).
+     * FIXED 2026-06-11: was *12/5, the stale 24 kHz factor. */
 #if FEATURE_BEMF_CLOSED_LOOP
-    d->minAdcStepPeriod = (uint16_t)(((uint32_t)d->minStepPeriod * 12) / 5);
+    d->minAdcStepPeriod = (uint16_t)(((uint32_t)d->minStepPeriod * PWMFREQUENCY_HZ) / 10000UL);
     if (d->minAdcStepPeriod < 1) d->minAdcStepPeriod = 1;
 #else
     d->minAdcStepPeriod = 1;
@@ -639,7 +640,7 @@ void GSP_RecomputeDerived(void)
 
     /* Initial ADC step period */
 #if FEATURE_BEMF_CLOSED_LOOP
-    d->initialAdcStepPeriod = (uint16_t)(((uint32_t)d->initialStepPeriod * 12) / 5);
+    d->initialAdcStepPeriod = (uint16_t)(((uint32_t)d->initialStepPeriod * PWMFREQUENCY_HZ) / 10000UL);
     if (d->initialAdcStepPeriod < 1) d->initialAdcStepPeriod = 1;
 #else
     d->initialAdcStepPeriod = 1;
@@ -650,7 +651,7 @@ void GSP_RecomputeDerived(void)
     if (p->maxClosedLoopErpm > 0) {
         uint32_t maxClStepT1 = 100000UL / p->maxClosedLoopErpm;
         if (maxClStepT1 < 1) maxClStepT1 = 1;
-        d->minClAdcStepPeriod = (uint16_t)(((uint32_t)maxClStepT1 * 12) / 5);
+        d->minClAdcStepPeriod = (uint16_t)(((uint32_t)maxClStepT1 * PWMFREQUENCY_HZ) / 10000UL);
         if (d->minClAdcStepPeriod < 1) d->minClAdcStepPeriod = 1;
     } else {
         d->minClAdcStepPeriod = 1;

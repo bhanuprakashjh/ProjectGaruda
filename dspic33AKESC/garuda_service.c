@@ -2938,9 +2938,12 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                          * Sync rampStepPeriod from IIR-adapted stepPeriod
                          * so CL entry re-init doesn't discard morph's
                          * speed tracking and jump back to ramp-end rate.
-                         * Inverse of TIMER1_TO_ADC_TICKS: t1 = adc * 5/12 */
+                         * Inverse of TIMER1_TO_ADC_TICKS (rounded):
+                         * t1 = adc * 10000 / PWMFREQUENCY_HZ.
+                         * FIXED 2026-06-11: was *5/12 (stale 24 kHz factor). */
                         garudaData.rampStepPeriod = (uint16_t)(
-                            ((uint32_t)garudaData.timing.stepPeriod * 5 + 6) / 12);
+                            ((uint32_t)garudaData.timing.stepPeriod * 10000UL
+                             + PWMFREQUENCY_HZ / 2) / PWMFREQUENCY_HZ);
                         garudaData.state = ESC_CLOSED_LOOP;
                     }
                     else

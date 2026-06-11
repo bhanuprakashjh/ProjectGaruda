@@ -111,10 +111,17 @@ _Static_assert(CL_DIFF_IDLE_PCT_X10 >= 1, "diff idle floor must be > 0 (0V idle 
 #define ADC_SAMPLING_POINT              0
 
 /* Phase 2: Timer1-tick to ADC ISR tick conversion.
- * Timer1 tick = 100us. ADC ISR tick = 1/24000 s = 41.67us.
- * Ratio: 100/41.67 = 2.4. adcIsrTicks = Timer1_ticks * 12/5 */
+ * Timer1 tick = 100 us. The ADC ISR is PG1TRIGA-triggered once per PWM
+ * period, so its tick = 1/PWMFREQUENCY_HZ (22.22 us at 45 kHz) and the
+ * ratio = 100 us * PWMFREQUENCY_HZ / 1e6 = 4.5 -- derived from the PWM
+ * frequency so it can never rot again.
+ * BUG FIXED 2026-06-11: this was hardcoded *12/5 (the 24 kHz factor) ever
+ * since the 24->45 kHz migration -- every Timer1-seeded period (morph
+ * handoff, CL entry seed, HWZC enable seed) was 1.875x too fast: the
+ * "5696 eRPM" hand-off from a 3,000 eRPM rotor, and the morph IIR clamp
+ * [seed, 1.5*seed] = [79,118] that FORBADE the true 150-tick period. */
 #if FEATURE_BEMF_CLOSED_LOOP
-#define TIMER1_TO_ADC_TICKS(t1)     (uint16_t)(((uint32_t)(t1) * 12) / 5)
+#define TIMER1_TO_ADC_TICKS(t1)     (uint16_t)(((uint32_t)(t1) * PWMFREQUENCY_HZ) / 10000UL)
 
 /* Step periods in adcIsrTick units */
 #define INITIAL_ADC_STEP_PERIOD     TIMER1_TO_ADC_TICKS(INITIAL_STEP_PERIOD)   /* ~800 ticks at 300 eRPM */
