@@ -16,9 +16,6 @@
 extern "C" {
 #endif
 
-/* SCCP peripheral bus clock (FCY = 100 MHz) — shared by all SCCP timers */
-#define SCCP_CLOCK_HZ  100000000UL
-
 /* PWM clock is 400 MHz (from clock.c CLK5 config) */
 #define PWM_CLOCK_MHZ               400
 
@@ -37,33 +34,7 @@ extern "C" {
 
 /* Duty cycle limits */
 #define MIN_DUTY                    (uint32_t)(DEADTIME_COUNTS + DEADTIME_COUNTS)
-#if FEATURE_CL_LOW_IDLE
-/* Lower CL-idle-only floor (< MIN_DUTY). Deadtime unchanged; H-pulse shorter. */
-#define CL_LOW_IDLE_FLOOR           (uint32_t)((DEADTIME_COUNTS * CL_LOW_IDLE_DT_PCT) / 100)
-_Static_assert(CL_LOW_IDLE_DT_PCT >= 100, "CL idle floor must exceed 1x deadtime (else no H-pulse)");
-#endif
-#if FEATURE_CL_DIFF_IDLE
-/* Differential-low CL idle floor — EFFECTIVE duty (line-line volts fraction).
- * Applied as active = MIN_DUTY + duty, low = MIN_DUTY (complementary), so the
- * physical H-pulses always exceed the deadtime swallow. */
-#if FEATURE_CL_ENTRY_GLIDE
-/* Glide mode: steady-state diff idle NEUTRALIZED — floor pinned to MIN_DUTY
- * makes the CL idle mapping numerically identical to the baseline (pot-0
- * target = MIN_DUTY → 10.4k equilibrium, never re-enters diff at idle). The
- * diff waveform only runs during the post-coast entry glide. */
-#define CL_DIFF_IDLE_FLOOR          ((uint32_t)MIN_DUTY)
-#else
-#define CL_DIFF_IDLE_FLOOR          (uint32_t)(((uint32_t)LOOPTIME_TCY * CL_DIFF_IDLE_PCT_X10) / 1000UL)
-_Static_assert(CL_DIFF_IDLE_PCT_X10 >= 1, "diff idle floor must be > 0 (0V idle would stall)");
-#endif
-#endif
-/* Raised to 99% (2026-05-26): old formula reserved 2×deadtime of L-side on-time
- * (max 94.6% at 45kHz × 300ns DT). Past ~94% the L-FET is going to be suppressed
- * anyway (PWM peripheral handles deadtime internally — when requested H-pulse
- * leaves no room for L+2×DT, L just doesn't fire). So allow up to 99% and let
- * the module take over at the top. Effectively this gives BC-like behavior
- * above ~94% without an explicit BC mode. */
-#define MAX_DUTY                    ((uint32_t)((LOOPTIME_TCY * 99UL) / 100UL))
+#define MAX_DUTY                    (LOOPTIME_TCY - (uint32_t)(DEADTIME_COUNTS + DEADTIME_COUNTS))
 
 /* Alignment duty cycle in PWM counts */
 #define ALIGN_DUTY                  (uint32_t)((ALIGN_DUTY_PERCENT / 100.0f) * LOOPTIME_TCY)
@@ -111,17 +82,10 @@ _Static_assert(CL_DIFF_IDLE_PCT_X10 >= 1, "diff idle floor must be > 0 (0V idle 
 #define ADC_SAMPLING_POINT              0
 
 /* Phase 2: Timer1-tick to ADC ISR tick conversion.
- * Timer1 tick = 100 us. The ADC ISR is PG1TRIGA-triggered once per PWM
- * period, so its tick = 1/PWMFREQUENCY_HZ (22.22 us at 45 kHz) and the
- * ratio = 100 us * PWMFREQUENCY_HZ / 1e6 = 4.5 -- derived from the PWM
- * frequency so it can never rot again.
- * BUG FIXED 2026-06-11: this was hardcoded *12/5 (the 24 kHz factor) ever
- * since the 24->45 kHz migration -- every Timer1-seeded period (morph
- * handoff, CL entry seed, HWZC enable seed) was 1.875x too fast: the
- * "5696 eRPM" hand-off from a 3,000 eRPM rotor, and the morph IIR clamp
- * [seed, 1.5*seed] = [79,118] that FORBADE the true 150-tick period. */
+ * Timer1 tick = 100us. ADC ISR tick = 1/24000 s = 41.67us.
+ * Ratio: 100/41.67 = 2.4. adcIsrTicks = Timer1_ticks * 12/5 */
 #if FEATURE_BEMF_CLOSED_LOOP
-#define TIMER1_TO_ADC_TICKS(t1)     (uint16_t)(((uint32_t)(t1) * PWMFREQUENCY_HZ) / 10000UL)
+#define TIMER1_TO_ADC_TICKS(t1)     (uint16_t)(((uint32_t)(t1) * 12) / 5)
 
 /* Step periods in adcIsrTick units */
 #define INITIAL_ADC_STEP_PERIOD     TIMER1_TO_ADC_TICKS(INITIAL_STEP_PERIOD)   /* ~800 ticks at 300 eRPM */
@@ -146,13 +110,11 @@ _Static_assert(ZC_BLANKING_PERCENT < 100,      "ZC_BLANKING_PERCENT must be < 10
 _Static_assert(ZC_ADC_DEADBAND < 512,          "ZC_ADC_DEADBAND must be < 512");
 _Static_assert(ZC_STALENESS_LIMIT >= 6,        "ZC_STALENESS_LIMIT must be >= 6 (one e-cycle)");
 _Static_assert(ZC_STEP_MISS_LIMIT >= 1,        "ZC_STEP_MISS_LIMIT must be >= 1");
-/* P0: Exact divisor for duty-proportional threshold. Replaces >>18 shift
- * which had +1.7% bias (2^18=262144 vs 2*LOOPTIME_TCY=266636).
- * neutral = Vbus * duty / (2 * LOOPTIME_TCY).
- * Compile-time constant — compiler strength-reduces to reciprocal multiply. */
-#define ZC_DUTY_DIVISOR  (2UL * LOOPTIME_TCY)
-_Static_assert(ZC_DUTY_DIVISOR > 0 && ZC_DUTY_DIVISOR < 0x100000UL,
-               "ZC_DUTY_DIVISOR out of expected range");
+/* Duty-proportional threshold: (vbusRaw * duty) >> SHIFT approximates
+ * Vbus * D / 2.  Verify 2*LOOPTIME_TCY is in the right power-of-2 range. */
+_Static_assert(2UL * LOOPTIME_TCY >= (1UL << ZC_DUTY_THRESHOLD_SHIFT)
+            && 2UL * LOOPTIME_TCY <  (1UL << (ZC_DUTY_THRESHOLD_SHIFT + 1)),
+               "ZC_DUTY_THRESHOLD_SHIFT doesn't match 2*LOOPTIME_TCY range");
 _Static_assert(ZC_AD2_SETTLE_SAMPLES >= 1 && ZC_AD2_SETTLE_SAMPLES <= 4,
                "ZC_AD2_SETTLE_SAMPLES must be 1-4");
 _Static_assert(ZC_PHASE_GAIN_A > 0 && ZC_PHASE_GAIN_A < 65536, "Gain A out of Q15 range");
@@ -184,15 +146,6 @@ _Static_assert(ZC_FILTER_MAX >= ZC_FILTER_MIN, "ZC_FILTER_MAX must be >= ZC_FILT
     / (PWMFREQUENCY_HZ / 1000))
 /* Post-sync duty settle period in ADC ISR ticks */
 #define POST_SYNC_SETTLE_TICKS ((uint16_t)(POST_SYNC_SETTLE_MS * PWMFREQUENCY_HZ / 1000))
-#if FEATURE_CL_SOFT_ENTRY
-/* Soft CL-entry window in ADC ISR ticks */
-#define CL_SOFT_ENTRY_TICKS ((uint16_t)(CL_SOFT_ENTRY_MS * PWMFREQUENCY_HZ / 1000))
-_Static_assert(CL_SOFT_ENTRY_DIVISOR >= 1, "CL_SOFT_ENTRY_DIVISOR must be >= 1");
-#endif
-#else /* !FEATURE_DUTY_SLEW */
-#if FEATURE_CL_SOFT_ENTRY
-#error "FEATURE_CL_SOFT_ENTRY requires FEATURE_DUTY_SLEW=1"
-#endif
 #endif
 
 /* Phase B2: Desync recovery coast-down counts (Timer1 = 100us ticks) */
@@ -214,53 +167,7 @@ _Static_assert(MIN_ADC_STEP_PERIOD > MIN_CL_ADC_STEP_PERIOD,
 #error "FEATURE_X2CSCOPE and FEATURE_GSP are mutually exclusive (both use UART1)"
 #endif
 
-/* FOC mutual exclusion guards */
-#if FEATURE_FOC && FEATURE_FOC_V2
-#error "FEATURE_FOC (v1) and FEATURE_FOC_V2 are mutually exclusive"
-#endif
-#if FEATURE_FOC && FEATURE_BEMF_CLOSED_LOOP
-#error "FEATURE_FOC and FEATURE_BEMF_CLOSED_LOOP are mutually exclusive"
-#endif
-#if FEATURE_FOC_V2 && FEATURE_BEMF_CLOSED_LOOP
-#error "FEATURE_FOC_V2 and FEATURE_BEMF_CLOSED_LOOP are mutually exclusive"
-#endif
-#if FEATURE_FOC && FEATURE_SINE_STARTUP
-#error "FEATURE_FOC and FEATURE_SINE_STARTUP are mutually exclusive"
-#endif
-#if FEATURE_FOC_V2 && FEATURE_SINE_STARTUP
-#error "FEATURE_FOC_V2 and FEATURE_SINE_STARTUP are mutually exclusive"
-#endif
-#if FEATURE_FOC && FEATURE_ADC_CMP_ZC
-#error "FEATURE_FOC and FEATURE_ADC_CMP_ZC are mutually exclusive"
-#endif
-#if FEATURE_FOC_V2 && FEATURE_ADC_CMP_ZC
-#error "FEATURE_FOC_V2 and FEATURE_ADC_CMP_ZC are mutually exclusive"
-#endif
-#if FEATURE_PLL_STARTUP && (!FEATURE_ADC_CMP_ZC || !FEATURE_HWZC_SECTOR_PI || !FEATURE_SINE_STARTUP)
-#error "FEATURE_PLL_STARTUP requires ADC_CMP_ZC + HWZC_SECTOR_PI (the PI/SCCP1 machinery) and SINE_STARTUP (the align)"
-#endif
-#if FEATURE_FOC && DIAGNOSTIC_MANUAL_STEP
-#error "FEATURE_FOC and DIAGNOSTIC_MANUAL_STEP are mutually exclusive"
-#endif
-#if FEATURE_FOC_V2 && DIAGNOSTIC_MANUAL_STEP
-#error "FEATURE_FOC_V2 and DIAGNOSTIC_MANUAL_STEP are mutually exclusive"
-#endif
-
-/* MXLEMMING requires FOC v1 */
-#if FEATURE_MXLEMMING && !FEATURE_FOC
-#error "FEATURE_MXLEMMING requires FEATURE_FOC"
-#endif
-
-/* FOC SVM switches all 3 phases at different instants — LEB only covers one
- * edge, so CMP3 false-trips on switching ringing. Force CLPCI off; software
- * overcurrent (OC_PROTECT_MODE 1 or 2 software path) still protects. */
-#if (FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3 || FEATURE_FOC_AN1078) && OC_CLPCI_ENABLE
-#undef OC_CLPCI_ENABLE
-#define OC_CLPCI_ENABLE 0
-#endif
-
-/* 6-step feature dependency guards (N/A when FOC active) */
-#if !FEATURE_FOC && !FEATURE_FOC_V2 && !FEATURE_FOC_V3 && !FEATURE_FOC_AN1078
+/* Feature dependency guards */
 #if FEATURE_TIMING_ADVANCE && !FEATURE_BEMF_CLOSED_LOOP
 #error "Timing advance requires FEATURE_BEMF_CLOSED_LOOP"
 #endif
@@ -363,11 +270,10 @@ _Static_assert(MORPH_WINDOW_MIN_TICKS >= 5,
 #if FEATURE_ADC_CMP_ZC && !FEATURE_BEMF_CLOSED_LOOP
 #error "ADC comparator ZC requires FEATURE_BEMF_CLOSED_LOOP"
 #endif
-#endif /* !FEATURE_FOC && !FEATURE_FOC_V2 — end of 6-step dependency guards */
 
 #if FEATURE_ADC_CMP_ZC
-/* SCCP2 clock = SCCP peripheral bus = 100 MHz */
-#define HWZC_TIMER_HZ           SCCP_CLOCK_HZ
+/* SCCP2 clock: FCY = 100 MHz -> 10ns per tick -> 1e8 ticks/sec */
+#define HWZC_TIMER_HZ           100000000UL
 
 /* eRPM <-> SCCP2 step period conversion.
  * Step freq = eRPM / 10 Hz -> step period = 10 / eRPM seconds.
@@ -386,11 +292,6 @@ _Static_assert(MORPH_WINDOW_MIN_TICKS >= 5,
 
 /* Minimum step period in SCCP2 ticks at MAX_CLOSED_LOOP_ERPM */
 #define HWZC_MIN_STEP_TICKS     HWZC_ERPM_TO_TICKS(MAX_CLOSED_LOOP_ERPM)
-
-/* Step period threshold for skipping verify reads (high-RPM latency optimization).
- * Below this many ticks, motor is spinning fast enough that the ~3µs verify
- * overhead matters more than the noise immunity. */
-#define HWZC_VERIFY_SKIP_TICKS  HWZC_ERPM_TO_TICKS(HWZC_VERIFY_SKIP_ERPM)
 
 /* Noise rejection stall limit: if noiseRejectCount reaches this value since
  * HWZC_Enable, the ZC events are dominated by PWM switching noise (stalled
@@ -417,7 +318,6 @@ _Static_assert(MORPH_WINDOW_MIN_TICKS >= 5,
 /* Stall plausibility: duty limit and debounce in ADC ISR ticks */
 #define HWZC_STALL_DUTY_LIMIT   (uint32_t)((uint64_t)MAX_DUTY * HWZC_STALL_DUTY_PCT / 100)
 #define HWZC_STALL_DEBOUNCE_TICKS (uint16_t)(HWZC_STALL_DEBOUNCE_MS * PWMFREQUENCY_HZ / 1000)
-#define HWZC_NO_CAPTURE_TICKS     (uint16_t)(HWZC_NO_CAPTURE_MS    * PWMFREQUENCY_HZ / 1000)
 
 _Static_assert(HWZC_MIN_INTERVAL_PCT >= 1 && HWZC_MIN_INTERVAL_PCT <= 99,
                "HWZC_MIN_INTERVAL_PCT must be 1..99");
@@ -463,46 +363,6 @@ _Static_assert(HWZC_BLANKING_PERCENT >= 1 && HWZC_BLANKING_PERCENT <= 20,
 #define OC_SW_LIMIT_ADC     OC_MV_TO_COUNTS(OC_TRIP_MV(OC_SW_LIMIT_MA))
 #define OC_FAULT_ADC_VAL    OC_MV_TO_COUNTS(OC_TRIP_MV(OC_FAULT_MA))
 
-/* Option D: I-f current-limited hand-off bridge thresholds (frequency-independent).
- * IF_BRIDGE_LIMIT_ADC uses the same bias+scale as OC_SW_LIMIT_ADC, so it's
- * directly comparable to garudaData.ibusRaw. */
-#if FEATURE_IF_BRIDGE
-#define IF_BRIDGE_LIMIT_ADC  OC_MV_TO_COUNTS(OC_TRIP_MV(IF_BRIDGE_LIMIT_MA))
-#define IF_BRIDGE_TICKS      ((uint16_t)((uint32_t)IF_BRIDGE_MS * PWMFREQUENCY_HZ / 1000))
-#define IF_BRIDGE_UP_RATE    (uint32_t)((uint64_t)MAX_DUTY * IF_BRIDGE_UP_PCT_PER_MS \
-                                        / 100 / (PWMFREQUENCY_HZ / 1000))
-#define IF_BRIDGE_DOWN_RATE  (uint32_t)((uint64_t)MAX_DUTY * IF_BRIDGE_DOWN_PCT_PER_MS \
-                                        / 100 / (PWMFREQUENCY_HZ / 1000))
-/* Cap expressed as a MAGNITUDE delta from the zero-current bias, so the limiter
- * backs off on BOTH motoring (+) and regen (-) excursions. During the unlocked
- * hand-off the bus current swings strongly negative (phase-mismatch slosh) — a
- * SIGNED compare is fooled into "current is low" and ramps duty up. */
-#define IF_BRIDGE_LIMIT_DELTA ((int32_t)IF_BRIDGE_LIMIT_ADC - (int32_t)OC_BIAS_COUNTS)
-_Static_assert(IF_BRIDGE_LIMIT_ADC < OC_FAULT_ADC_VAL,
-               "IF_BRIDGE_LIMIT must be below the OC fault threshold");
-_Static_assert(IF_BRIDGE_LIMIT_DELTA > 0, "IF_BRIDGE_LIMIT must exceed the zero bias");
-#endif
-
-/* Hand-off CMP3 chop: a LOW cycle-by-cycle current threshold held for a window
- * at CL entry. Same DAC scale as OC_CMP3_DAC_VAL / OC_CMP3_STARTUP_DAC. */
-#if FEATURE_HANDOFF_CHOP
-#define OC_CMP3_HANDOFF_DAC  OC_MV_TO_COUNTS(OC_TRIP_MV(OC_CMP3_HANDOFF_MA))
-#define HANDOFF_CHOP_TICKS   ((uint16_t)((uint32_t)HANDOFF_CHOP_MS * PWMFREQUENCY_HZ / 1000))
-_Static_assert(OC_CMP3_HANDOFF_DAC < OC_CMP3_STARTUP_DAC,
-               "hand-off chop must be below the startup chop threshold");
-_Static_assert(OC_CMP3_HANDOFF_DAC > OC_BIAS_COUNTS,
-               "hand-off chop must be above the zero-current bias");
-#endif
-
-/* I-f spin-up derived constants (the control loop runs in the 24kHz ADC ISR). */
-#if FEATURE_IF_STARTUP
-#define IF_ERPM_TO_RAD_S(e)  ((float)(e) * 0.104719755f)   /* eRPM → elec rad/s */
-#define IF_HANDOFF_RAD_S     IF_ERPM_TO_RAD_S(IF_HANDOFF_ERPM)
-#define IF_ALIGN_TICKS       ((uint16_t)((uint32_t)IF_ALIGN_MS * 24u))  /* 24kHz */
-#define IF_DT_S              (1.0f / 24000.0f)
-#define IF_INV_SQRT3         0.57735027f
-#endif
-
 /* Static asserts — all integer constant expressions */
 _Static_assert(OC_CMP3_DAC_VAL < 4096, "CMP3 operational threshold exceeds 12-bit DAC range");
 _Static_assert(OC_CMP3_STARTUP_DAC < 4096, "CMP3 startup threshold exceeds 12-bit DAC range");
@@ -532,17 +392,6 @@ _Static_assert(RAMP_CURRENT_GATE_ADC < OC_CMP3_DAC_VAL,
 
 #endif /* FEATURE_HW_OVERCURRENT */
 
-/* ── FOC compile-time constants ─────────────────────────────────────── */
-#if FEATURE_FOC || FEATURE_FOC_V2
-/* FOC current/voltage scaling now in garuda_foc_params.h:
- * CURRENT_SCALE_A_PER_COUNT, VBUS_SCALE_V_PER_COUNT, ADC_MIDPOINT.
- * These are derived from the board shunt (3 mohm) and DIM diff-amp gain (24.95x).
- * OA3 (bus current for FEATURE_HW_OVERCURRENT) uses the same shunt/gain path.
- *
- * Legacy AN1292 defines (VBUS_ADC_TO_VOLTS, ADC_CURRENT_SCALE) removed;
- * garuda_foc_params.h provides the canonical values. */
-#endif /* FEATURE_FOC || FEATURE_FOC_V2 */
-
 /* ── Runtime parameter macros ────────────────────────────────────────── *
  * When FEATURE_GSP=1, these read from the GSP runtime param system
  * (gspParams for raw values, gspDerived for precomputed ISR values).
@@ -566,10 +415,6 @@ _Static_assert(RAMP_CURRENT_GATE_ADC < OC_CMP3_DAC_VAL,
   #define RT_ZC_DEMAG_BLANK_EXTRA_PERCENT gspParams.zcDemagBlankExtraPct
   #define RT_POST_SYNC_SLEW_DIVISOR       gspParams.postSyncSlewDivisor
   #define RT_DESYNC_MAX_RESTARTS          gspParams.desyncMaxRestarts
-  #define RT_MORPH_LOCK_ZC_COUNT          gspParams.morphLockZcCount
-  #define RT_MORPH_LOCK_TOL_PCT           gspParams.morphLockTolPct
-  #define RT_IF_CURRENT_CA                gspParams.ifCurrentCa
-  #define RT_IF_RAMP_ERPM_PER_S           gspParams.ifRampErpmPerS
   #define RT_VBUS_OVERVOLTAGE_ADC         gspParams.vbusOvAdc
   #define RT_VBUS_UNDERVOLTAGE_ADC        gspParams.vbusUvAdc
   /* Precomputed derived (set from main context only) */
@@ -612,10 +457,6 @@ _Static_assert(RAMP_CURRENT_GATE_ADC < OC_CMP3_DAC_VAL,
   #define RT_ZC_DEMAG_BLANK_EXTRA_PERCENT ZC_DEMAG_BLANK_EXTRA_PERCENT
   #define RT_POST_SYNC_SLEW_DIVISOR       POST_SYNC_SLEW_DIVISOR
   #define RT_DESYNC_MAX_RESTARTS          DESYNC_MAX_RESTARTS
-  #define RT_MORPH_LOCK_ZC_COUNT          MORPH_LOCK_ZC_COUNT
-  #define RT_MORPH_LOCK_TOL_PCT           MORPH_LOCK_TOL_PCT
-  #define RT_IF_CURRENT_CA                600
-  #define RT_IF_RAMP_ERPM_PER_S           12000
   #define RT_VBUS_OVERVOLTAGE_ADC         VBUS_OVERVOLTAGE_ADC
   #define RT_VBUS_UNDERVOLTAGE_ADC        VBUS_UNDERVOLTAGE_ADC
   #define RT_RAMP_DUTY_CAP                RAMP_DUTY_CAP

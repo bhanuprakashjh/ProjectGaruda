@@ -76,6 +76,27 @@ the .so). libgaruda_sil_skipmorph.so = FEATURE_SKIP_MORPH+CL_COAST_VERIFY.
   coast-faithful (TC 1.5 s) + ladder-exact analytically, but exposes the
   angle bias. Unify after the angle bias is fixed.
 
+## PLL-from-align prototype (task #10) — 3 twin iterations, IN PROGRESS
+FEATURE_PLL_STARTUP=0 (twin-only WIP). State trace achieved:
+IDLE→ARMED→ALIGN→CLOSED_LOOP — no OL ramp, no morph. The twin caught
+three real design bugs in three ~60s iterations (would have been three
+bench days):
+1. PHANTOM SYNC LEAK: garuda_service.c:~3552 promotes zcSynced from raw
+   hwzc.goodZcCount — low-speed phantom captures synced it at t=1.151s
+   every time, bypassing the PllStartTick gates. FIXED (gated on
+   !pllStartActive).
+2. ZERO-TORQUE ENGAGE: first commutation at the align sector = field ON
+   the rotor → no pull. FIXED (engage at s0+1, 60° lead) — rotor now
+   tracks the blind schedule within ~20%.
+3. OPEN: blind schedule advances ~10× slower than commanded (673 vs 4300
+   eRPM at t=2s with ACCEL=4000) — suspect capture-preempted COMM_PENDING
+   scheduling shares timing ownership with OnPiPeriodExpired during the
+   blind phase (low-speed comparator chatter → captures re-arm SCCP1 at
+   capture-relative delays). Next iteration: trace hwzc.phase transitions
+   per event in the twin; likely fix = in pllStartActive, ignore captures
+   at the OnZcDetected level (timestamp only, never COMM_PENDING).
+Gates as of now: floor 2500, caps 6, window 0.30T–0.75T, accel 4000.
+
 ## Next (roadmap P2/P3)
 1. Replay-and-score: feed a recorded session's throttle/Vbus through the twin,
    score state durations, CL-entry seed, idle eRPM, event stats.

@@ -85,6 +85,8 @@ void HWZC_Init(volatile GARUDA_DATA_T *pData)
     pData->hwzc.lastCaptureHR = 0;
     pData->hwzc.prevCommHR = 0;
     pData->hwzc.captureValid = false;
+    pData->hwzc.pllStartActive = 0;
+    pData->hwzc.pllStartGood = 0;
     pData->hwzc.stepPeriodForFilterComp = 0;
     pData->hwzc.dbgPiDelta = 0;
     pData->hwzc.dbgPiCaptureCount = 0;
@@ -665,8 +667,73 @@ void HWZC_OnCommDeadline(volatile GARUDA_DATA_T *pData)
  * On capture-miss: skip PI update (timerPeriod unchanged), still commutate.
  * The motor is more robust to a missed sample than to a wrong correction.
  */
+#if FEATURE_PLL_STARTUP
+/* PLL-from-align blind startup tick (task #10, twin-prototyped).
+ * Runs INSTEAD of the PI while pllStartActive: commutates on an
+ * accelerating commanded schedule, consumes captures (discarding them
+ * below the BEMF floor — phantom-proof), and hands over to the normal
+ * PI after PLL_START_SYNC_CAPS consecutive plausible captures. */
+static void HWZC_PllStartTick(volatile GARUDA_DATA_T *pData)
+{
+    uint32_t T = pData->hwzc.timerPeriod;
+    uint32_t eCmd = (T > 0) ? HWZC_TICKS_TO_ERPM(T) : PLL_START_ERPM0;
+
+    if (pData->hwzc.captureValid) {
+        if (eCmd >= PLL_START_CAPTURE_FLOOR_ERPM) {
+            uint32_t cap = pData->hwzc.lastCaptureHR
+                         - pData->hwzc.lastCommStamp;   /* modular */
+            /* plausible mid-sector crossing? (setpoint ~T/2 at adv 0) */
+            if (cap > (uint32_t)(T * 3u / 10u)
+                && cap < (uint32_t)(T * 3u / 4u)) {   /* tight mid-sector window */
+                if (++pData->hwzc.pllStartGood >= PLL_START_SYNC_CAPS) {
+                    /* HANDOVER: declared synced; leave captureValid set so
+                     * the normal PI consumes THIS capture next event. */
+                    pData->hwzc.pllStartActive = 0;
+                    pData->timing.zcSynced = true;
+                    pData->timing.goodZcCount = (uint16_t)RT_ZC_SYNC_THRESHOLD;
+                    goto pll_commutate;
+                }
+            } else {
+                pData->hwzc.pllStartGood = 0;
+            }
+        }
+        pData->hwzc.captureValid = false;   /* consume in blind phase */
+    } else if (eCmd >= PLL_START_CAPTURE_FLOOR_ERPM
+               && pData->hwzc.pllStartGood > 0) {
+        pData->hwzc.pllStartGood = 0;       /* silence resets the streak */
+    }
+
+    /* blind accel schedule toward the target */
+    if (eCmd < PLL_START_TARGET_ERPM) {
+        uint32_t eNew = eCmd + (uint32_t)(((uint64_t)PLL_START_ACCEL_ERPM_PER_S
+                                           * T) / 1000000000ULL);
+        if (eNew <= eCmd) eNew = eCmd + 1u;
+        if (eNew > PLL_START_TARGET_ERPM) eNew = PLL_START_TARGET_ERPM;
+        T = HWZC_TICKS_TO_ERPM(eNew);       /* symmetric: 1e9/e */
+        pData->hwzc.timerPeriod = T;
+        pData->hwzc.integrator  = (int32_t)T;
+#if FEATURE_HWZC_PI_FLOAT
+        pData->hwzc.integratorF = (float)T;
+#endif
+        pData->hwzc.writeSeq++;             /* Rule 13 seqlock */
+        pData->hwzc.stepPeriodHR = T;
+        pData->hwzc.writeSeq++;
+    }
+
+pll_commutate:
+    COMMUTATION_AdvanceStep(pData);
+    pData->hwzc.totalCommCount++;
+    pData->hwzc.commSeq++;
+    pData->hwzc.stepsSinceLastHwZc = 0;
+    HWZC_OnCommutation(pData);
+}
+#endif /* FEATURE_PLL_STARTUP */
+
 void HWZC_OnPiPeriodExpired(volatile GARUDA_DATA_T *pData)
 {
+#if FEATURE_PLL_STARTUP
+    if (pData->hwzc.pllStartActive) { HWZC_PllStartTick(pData); return; }
+#endif
     /* Compute current torque-advance (interpolated from RT_TIMING_ADV_MAX_DEG)
      * — same schedule the reactive path uses, just consumed differently. */
     uint16_t advDeg;

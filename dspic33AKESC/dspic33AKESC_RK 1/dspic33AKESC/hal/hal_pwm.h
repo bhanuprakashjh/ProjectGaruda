@@ -1,0 +1,85 @@
+/**
+ * @file hal_pwm.h
+ *
+ * @brief PWM module definitions and interface for FOC 3-phase SVPWM.
+ * Adapted from 6-step version — override control retained but 6-step
+ * commutation functions removed. Float duty wrapper added for FOC.
+ *
+ * Definitions in this file are for dsPIC33AK128MC106
+ *
+ * Component: PWM
+ */
+
+#ifndef _HAL_PWM_H
+#define _HAL_PWM_H
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+#include <xc.h>
+#include <stdint.h>
+
+#include "clock.h"
+#include "../garuda_calc_params.h"
+
+/* Duty cycle register macros */
+#define PWM_PDC1                    PG1DCbits.DC
+#define PWM_PDC2                    PG2DCbits.DC
+#define PWM_PDC3                    PG3DCbits.DC
+
+#define PWM_PHASE1                  PG1PHASEbits.PHASE
+#define PWM_PHASE2                  PG2PHASEbits.PHASE
+#define PWM_PHASE3                  PG3PHASEbits.PHASE
+
+#define PWM_TRIGA                   PG1TRIGAbits.TRIGA
+
+/* PWM Fault PCI — board-level OC+OV fault via DIM040/RP28/RB11.
+ * MCLV-48V-300W has external comparators (U25A OV, U25B OC) combined
+ * through AND gate U27 into M1_FAULT_OC_OV → DIM:040 → RP28.
+ * PCI8R=28 mapped in port_config.c. PSS=0b01000 (RPn). PPS=1 (active-low). */
+#define ENABLE_PWM_FAULT_PCI
+#define PCI_FAULT_ACTIVE_STATUS     PG1STATbits.FLTACT
+#define _PWMInterrupt               _PWM1Interrupt
+#define ClearPWMIF()                _PWM1IF = 0
+#define EnablePWMIF()               _PWM1IE = 1
+#define DisablePWMIF()              _PWM1IE = 0
+
+#if FEATURE_HW_OVERCURRENT
+/* CLEVT = Current Limit Event flag (W1C latch, bit 13 = 0x2000).
+ * Set by hardware when CLPCI transitions to active. Independent of CLIEN.
+ * Read via bitfield (safe for reads). Clear via direct register write
+ * PGnSTAT = PCI_CLIMIT_EVT_MASK to avoid RMW on other W1C bits. */
+#define PCI_CLIMIT_EVT_PG1    PG1STATbits.CLEVT
+#define PCI_CLIMIT_EVT_PG2    PG2STATbits.CLEVT
+#define PCI_CLIMIT_EVT_PG3    PG3STATbits.CLEVT
+#define PCI_CLIMIT_EVT_MASK   0x2000u
+#endif
+
+/* FLTEVT = Fault PCI Event flag (W1C latch, bit 14 = 0x4000).
+ * Set by hardware when FPCI transitions to active (even transiently).
+ * With TERM=1 (auto-terminate), FLTACT clears before ISR runs —
+ * but FLTEVT latches the event. Poll in ADC ISR to detect transient
+ * board-level FPCI trips that auto-release within one PWM cycle. */
+#define PCI_FAULT_EVT_PG1     PG1STATbits.FLTEVT
+#define PCI_FAULT_EVT_PG2     PG2STATbits.FLTEVT
+#define PCI_FAULT_EVT_PG3     PG3STATbits.FLTEVT
+#define PCI_FAULT_EVT_MASK    0x4000u
+
+void InitPWMGenerators(void);
+void InitPWMGenerator1(void);
+void InitPWMGenerator2(void);
+void InitPWMGenerator3(void);
+void InitDutyPWM123Generators(void);
+void ChargeBootstrapCapacitors(void);
+
+/* FOC interface */
+void HAL_PWM_SetDutyCycle3Phase(uint32_t dutyA, uint32_t dutyB, uint32_t dutyC);
+void HAL_PWM_SetDutyFloat3Phase(float da, float db, float dc);
+void HAL_PWM_ReleaseAllOverrides(void);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* _HAL_PWM_H */

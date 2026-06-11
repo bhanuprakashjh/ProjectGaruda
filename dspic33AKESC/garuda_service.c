@@ -3132,6 +3132,25 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                         }
                     }
 #endif
+
+#if FEATURE_PLL_STARTUP
+                    if (garudaData.hwzc.pllStartActive)
+                    {
+                        /* Engage 6-step from the align angle and start the
+                         * blind PLL schedule: comparator armed from the
+                         * first commutation, captures gated in hwzc.c. */
+                        garudaData.sine.active = false;
+                        /* rotor is parked AT the align vector = step s0's
+                         * center → applying s0 gives ~zero torque. Lead by
+                         * one step (60°) so the schedule pulls forward. */
+                        uint8_t s0 = STARTUP_SineGetTransitionStep(&garudaData);
+                        COMMUTATION_ApplyStep(&garudaData, (uint8_t)((s0 + 1u) % 6u));
+                        garudaData.duty = MIN_DUTY;
+                        HAL_PWM_SetDutyCycle(garudaData.duty);
+                        if (!garudaData.hwzc.enabled)
+                            HWZC_Enable(&garudaData);
+                    }
+#endif
 #endif
                 }
             }
@@ -3533,6 +3552,12 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                  * This unlocks pot-mapped duty (CL_IDLE_DUTY floor)
                  * and MAX_DUTY cap instead of RAMP_DUTY_CAP. */
                 if (!garudaData.timing.zcSynced
+#if FEATURE_PLL_STARTUP
+                    /* during the PLL blind ramp, sync is declared ONLY by
+                     * HWZC_PllStartTick's gated-capture handover — raw
+                     * goodZcCount here counts low-speed phantoms */
+                    && !garudaData.hwzc.pllStartActive
+#endif
                     && garudaData.hwzc.goodZcCount >= RT_ZC_SYNC_THRESHOLD)
                 {
                     garudaData.timing.zcSynced = true;
@@ -4223,7 +4248,23 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
             /* I-f path bypasses ALIGN entirely (ARMED→IF_RAMP), so this only
              * runs in the non-IF build. */
             if (STARTUP_SineAlign(&garudaData))
+            {
+#if FEATURE_PLL_STARTUP
+                /* PLL-from-align: no OL ramp, no morph. Seed the slow
+                 * initial period, flag the blind schedule, and enter CL —
+                 * the ADC-ISR entry block engages 6-step + HWZC there. */
+                garudaData.rampStepPeriod =
+                    (uint16_t)ERPM_TO_STEP_TICKS(PLL_START_ERPM0);
+                garudaData.hwzc.pllStartActive = 1;
+                garudaData.hwzc.pllStartGood = 0;
+#if FEATURE_HW_OVERCURRENT
+                HAL_CMP3_SetThreshold(RT_OC_CMP3_DAC_VAL);
+#endif
+                garudaData.state = ESC_CLOSED_LOOP;
+#else
                 garudaData.state = ESC_OL_RAMP;
+#endif
+            }
             break;
 #else
             if (STARTUP_Align(&garudaData))

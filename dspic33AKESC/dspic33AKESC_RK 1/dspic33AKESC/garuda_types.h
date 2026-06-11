@@ -17,29 +17,21 @@
 extern "C" {
 #endif
 
-/* ESC state machine states */
+/* ESC state machine states — FOC version */
 typedef enum
 {
-    ESC_IDLE = 0,
-    ESC_ARMED,
-    ESC_DETECT,         /* Auto-commissioning (FOC V2 only) */
-    ESC_ALIGN,
-    ESC_OL_RAMP,
-    ESC_MORPH,          /* Sine-to-trap waveform morph */
-    ESC_CLOSED_LOOP,
-    ESC_BRAKING,
-    ESC_RECOVERY,       /* Desync coast-down before restart attempt */
-    ESC_FAULT,
-    ESC_IF_RAMP         /* I-f current-controlled spin-up (FEATURE_IF_STARTUP).
-                         * Appended last so existing state values don't shift. */
+    ESC_IDLE    = 0,
+    ESC_ARMED   = 1,   /* Throttle-zero arming check */
+    ESC_STARTUP = 2,   /* Open-loop I/F frequency ramp */
+    ESC_RUNNING = 3,   /* FOC closed-loop (PLL tracking) */
+    ESC_FAULT   = 4
 } ESC_STATE_T;
 
-/* Enum ordering guards — voltage fault check uses >= / <= on state enum */
-_Static_assert(ESC_IDLE < ESC_ARMED, "State enum ordering violated");
-_Static_assert(ESC_ARMED < ESC_ALIGN, "State enum ordering violated");
-_Static_assert(ESC_ALIGN < ESC_CLOSED_LOOP, "State enum ordering violated");
-_Static_assert(ESC_CLOSED_LOOP < ESC_RECOVERY, "State enum ordering violated");
-_Static_assert(ESC_RECOVERY < ESC_FAULT, "State enum ordering violated");
+/* Enum ordering guards */
+_Static_assert(ESC_IDLE    < ESC_ARMED,   "State enum ordering violated");
+_Static_assert(ESC_ARMED   < ESC_STARTUP, "State enum ordering violated");
+_Static_assert(ESC_STARTUP < ESC_RUNNING, "State enum ordering violated");
+_Static_assert(ESC_RUNNING < ESC_FAULT,   "State enum ordering violated");
 
 /* Phase output states for 6-step commutation */
 typedef enum
@@ -64,41 +56,12 @@ typedef struct
 {
     uint16_t bemfRaw;           /* Floating phase ADC reading (0-4095) */
     uint16_t zcThreshold;       /* ZC comparison threshold (scaled from Vbus) */
-    uint16_t zcAmpForFilterComp; /* Slow-IIR amplitude estimate for filter
-                                  * compensation offset magnitude. Tracks the
-                                  * BEMF amplitude's actual mechanical response
-                                  * (~100 ms) rather than the instantaneous DC
-                                  * level (zcThreshold) which steps with duty.
-                                  * Decoupling these prevents the slow-drift PI
-                                  * runaway observed at 75%+ duty: when duty
-                                  * bumps, zcThreshold tracks fast but real
-                                  * BEMF lags by rotor inertia (~50-100ms), so
-                                  * if offset used zcThreshold directly the PI
-                                  * accumulates a systematic phase-error bias
-                                  * over thousands of sectors. */
     bool     zeroCrossDetected; /* ZC event detected this step */
     uint8_t  cmpPrev;           /* Previous computed state (0 or 1, 0xFF=unknown) */
     uint8_t  cmpExpected;       /* Expected post-ZC state (0 or 1) */
     uint8_t  filterCount;       /* Consecutive reads matching cmpExpected */
     uint8_t  ad2SettleCount;    /* Samples to discard after AD2 PINSEL change (0=settled) */
     bool     bemfSampleValid;   /* false when bemfRaw is stale after mux switch */
-    /* Diagnostic 2026-06-07: OFF-center BEMF envelope captured ONLY during
-     * falling-ZC sectors' WATCHING window. The HW comparator (ON-time) goes
-     * silent on falling sectors at speed; this proves whether the floating BEMF
-     * actually sweeps through neutral (zcThreshold) at the OFF-center sample
-     * (bemfRaw) — i.e. whether a per-polarity OFF-window detector is viable.
-     * Windowed: reset to {0xFFFF,0} on each snapshot read. */
-    uint16_t fallOffBemfMin;
-    uint16_t fallOffBemfMax;
-    /* P1: Measured neutral from active-rail tracking + ZC events */
-    uint16_t phaseBHigh;         /* Phase B ADC reading when B=PWM (high rail) */
-    uint16_t phaseBLow;          /* Phase B ADC reading when B=LOW (low rail) */
-    bool     phaseBHighValid;    /* Explicit validity — phaseBLow=0 is legitimate */
-    bool     phaseBLowValid;     /* Explicit validity — can't use >0 sentinel */
-    uint16_t measuredNeutral;    /* (phaseBHigh + phaseBLow) / 2 — real-time neutral */
-    bool     neutralValid;       /* true after first valid high+low pair captured */
-    uint16_t zcNeutral[3];       /* Per-phase neutral from ZC events [A,B,C] */
-    uint8_t  zcNeutralCount[3];  /* ZC measurement count per phase (saturates 255) */
 } BEMF_STATE_T;
 
 /* ZC timeout result enum */
@@ -152,9 +115,6 @@ typedef struct
     /* Blanking-aware transition tracking */
     uint16_t blankTransitionTotal;  /* Correct-polarity edges detected during blanking */
     uint16_t wrongEdgeTotal;        /* Transitions opposite to expected polarity */
-    /* Plausibility-gate rejects: zcInterval too short relative to stepPeriod
-     * (phantom ZC before motor could physically reach next sector). */
-    uint16_t intervalRejectTotal;
     /* Last-sample snapshot */
     uint16_t lastFloatAdc;
     uint16_t lastZcThreshold;
@@ -226,8 +186,6 @@ typedef struct {
     uint32_t entryTick;        /* systemTick at morph entry (for timeout) */
     uint16_t lastZcTick;       /* adcIsrTick of last confirmed ZC in morph */
     uint16_t morphZcCount;     /* ZC count for IIR gating (need >=2 for interval) */
-    uint8_t  stableZcCount;    /* consecutive stable+non-harmonic Hi-Z ZC intervals
-                                * (strict morph→CL lock gate) */
     uint16_t tickInStep;       /* ADC ticks since last forced commutation */
     uint16_t stepPeriodSnap;   /* stepPeriod snapshot at commutation */
     bool     floatIsHiZ;       /* True when float phase override is Hi-Z */
@@ -261,15 +219,6 @@ typedef struct {
                                      * interval spans 2× timeout periods, not
                                      * real motor periods). */
     bool         fallbackPending; /* Set by HWZC_Disable, cleared by ADC ISR re-seed */
-    bool         firstZcAfterEnable; /* True on first ZC after HWZC_Enable — bypass
-                                      * plausibility gate + skip IIR update. The gate is
-                                      * bypassed because the seeded lastZcStamp is a
-                                      * guess (morph rotor position is unpredictable),
-                                      * so the first interval measured is effectively
-                                      * random and would false-reject the first real ZC.
-                                      * Using the first ZC only to re-anchor lastZcStamp
-                                      * guarantees the SECOND ZC gives a clean full-step
-                                      * interval that can feed the IIR safely. */
     bool         dbgLatchDisable;  /* Debug: after first HW ZC failure, block re-enable permanently */
     uint32_t     noiseRejectCount; /* ZC events rejected by interval filter (diagnostic) */
     uint8_t      rejectsThisStep; /* Noise rejects since last commutation (diagnostic) */
@@ -289,69 +238,6 @@ typedef struct {
     uint16_t     dbgTimeoutBemfThresh; /* bemf.zcThreshold at timeout */
     uint16_t     dbgEnableStepPeriod;  /* timing.stepPeriod when HWZC_Enable was called */
     uint16_t     dbgAdvanceDeg;        /* Current timing advance in HW ZC path (degrees) */
-    uint32_t     cachedCommDelay;      /* Pre-computed commDelay for next ZC (set in
-                                        * OnBlankingExpired). Avoids ~1.5µs of div/mult
-                                        * inside the latency-critical OnZcDetected ISR. */
-    uint16_t     dbgFilterOffset;      /* Last filter-comp CMPLO shift (ADC counts).
-                                        * 0 when FEATURE_HWZC_FILTER_COMP=0. Used to
-                                        * bench-validate the pre-distortion magnitude. */
-
-#if FEATURE_HWZC_SECTOR_PI
-    /* Sector PI synchronizer (Phase A — 2026-05-26).
-     * In PI mode, timerPeriod is the autonomous commutation period driven
-     * by phase-error feedback. stepPeriodHR (above) stays in use as the
-     * measurement-side period (no IIR write in PI mode). */
-    uint32_t     timerPeriod;          /* PI-controlled commutation period (HR ticks) */
-    uint32_t     integrator;           /* PI integrator state (HR ticks).
-                                        * In integer mode: tracks timerPeriod 1:1.
-                                        * In FEATURE_HWZC_PI_FLOAT mode without FF:
-                                        * same semantics, stored as int snapshot of
-                                        * the float integratorF.
-                                        * In FEATURE_HWZC_PI_FLOAT mode WITH FF:
-                                        * holds the RESIDUAL (signed-by-cast) — small
-                                        * value centered around 0; full period =
-                                        * P_ff + integrator + Kp×delta. */
-    float        integratorF;          /* Float integrator state for FEATURE_HWZC_PI_FLOAT.
-                                        * Unused / zero when feature off. Lives here so
-                                        * the FPU never has to reload from the int field. */
-    uint16_t     piDefMissStreak;      /* Consecutive sectors of TRUE silence (no capture).
-                                        * Drives FEATURE_HWZC_PI_DEFENSIVE entry. */
-    uint16_t     piDefGoodStreak;      /* Consecutive good captures. Drives exit. */
-    uint8_t      piDefActive;          /* 1 when defensive mode currently engaged. */
-    uint8_t      piDefPad0;            /* alignment */
-    uint32_t     piDefEntryCount;      /* Telemetry: total entries into defensive mode */
-    uint32_t     lastCaptureHR;        /* Most recent ZC timestamp (SCCP2 HR domain) */
-    uint32_t     prevCommHR;           /* Previous commutation timestamp — base for capValue */
-    uint16_t     handoffDamp;          /* >0 for the first N commutations after CL entry;
-                                        * tightly clamps the per-event period DECREASE so a
-                                        * too-early first capture can't collapse the period
-                                        * to the half-period phantom (OL->CL smooth, 2026-06-07). */
-    bool         captureValid;         /* True after a ZC is timestamped this sector;
-                                        * cleared at commutation when PI consumes it. */
-    uint32_t     stepPeriodForFilterComp; /* Slow-IIR period for filter-comp ω·τ
-                                        * calculation. ~10 ms time constant at high
-                                        * RPM (vs ~1 sector for timerPeriod). Breaks
-                                        * the positive feedback where PI shrinking
-                                        * timerPeriod → ω·τ grows → offset grows →
-                                        * CMPLO shifts → comparator fires earlier →
-                                        * PI shrinks more (loop gain ~1 per sector).
-                                        * Decoupling ω·τ from PI changes prevents
-                                        * the 75-79% duty runaway. */
-    /* Telemetry / diagnostics */
-    int16_t      dbgPiDelta;           /* Last clamped phase error (HR ticks, signed) */
-    uint32_t     dbgPiCaptureCount;    /* PI captures consumed (lifetime) */
-    uint32_t     dbgPiMissCount;       /* Commutations without capture (lifetime) */
-    uint32_t     dbgPiMissBySector[6]; /* Per-sector miss tally. If 50% miss rate at high
-                                        * RPM is the AD2-PINSEL settle hypothesis, then 3
-                                        * of these (the AD2 sectors) will dominate the
-                                        * count. If misses are uniform across all 6,
-                                        * it's something else. */
-    uint32_t     dbgPiCapBySector[6];  /* Per-sector accept tally for reference */
-    /* PLL-from-align startup (FEATURE_PLL_STARTUP): blind accel schedule
-     * then capture-weighted handover. Fields unconditional (2 bytes). */
-    volatile uint8_t pllStartActive;
-    volatile uint8_t pllStartGood;
-#endif
 
 #if FEATURE_BEMF_INTEGRATION
     uint32_t     shadowHwzcSkipCount; /* Scoring opportunities skipped in HW ZC mode */
@@ -496,10 +382,10 @@ typedef struct __attribute__((packed))
     uint16_t initialErpm;
     uint16_t rampTargetErpm;
     uint16_t rampAccelErpmPerS;
-    uint8_t reserved[112];      /* pad to 128 bytes (16 used + 112 reserved) */
+    uint8_t reserved[48];       /* pad to 64 bytes (16 used + 48 reserved) */
 } GARUDA_CONFIG_T;
 
-_Static_assert(sizeof(GARUDA_CONFIG_T) == 128, "GARUDA_CONFIG_T must be 128 bytes");
+_Static_assert(sizeof(GARUDA_CONFIG_T) == 64, "GARUDA_CONFIG_T must be 64 bytes");
 
 /* Learned motor parameters (persisted to EEPROM) */
 typedef struct __attribute__((packed))
@@ -559,42 +445,18 @@ _Static_assert(sizeof(EEPROM_LEARNED_T) == 64, "EEPROM_LEARNED_T must be 64 byte
 /* Full EEPROM image (128 bytes) */
 typedef struct __attribute__((packed))
 {
-    GARUDA_CONFIG_T   config;           /* bytes 0-127 */
-    EEPROM_LEARNED_T  learned;          /* bytes 128-191 */
+    GARUDA_CONFIG_T   config;           /* bytes 0-63 */
+    EEPROM_LEARNED_T  learned;          /* bytes 64-127 */
 } EEPROM_IMAGE_T;
 
-_Static_assert(sizeof(EEPROM_IMAGE_T) == 192, "EEPROM_IMAGE_T must be 192 bytes");
+_Static_assert(sizeof(EEPROM_IMAGE_T) == 128, "EEPROM_IMAGE_T must be 128 bytes");
 
-/* Throttle source selection */
+/* Throttle source (ADC pot vs GSP remote) */
 typedef enum
 {
     THROTTLE_SRC_ADC = 0,   /* Hardware pot (default) */
-    THROTTLE_SRC_GSP = 1,   /* Remote GSP command */
-    THROTTLE_SRC_PWM = 2,   /* RC PWM capture */
-    THROTTLE_SRC_DSHOT = 3, /* DShot digital protocol */
-    THROTTLE_SRC_AUTO = 4   /* Auto-detect DShot/PWM */
+    THROTTLE_SRC_GSP = 1    /* Remote GSP command */
 } THROTTLE_SOURCE_T;
-
-/* RX link state machine (Phase H) */
-typedef enum
-{
-    RX_LINK_UNLOCKED = 0,
-    RX_LINK_DETECTING,
-    RX_LINK_LOCKING,
-    RX_LINK_LOCKED,
-    RX_LINK_LOST
-} RX_LINK_STATE_T;
-
-/* Detected RX protocol */
-typedef enum
-{
-    RX_PROTO_NONE = 0,
-    RX_PROTO_PWM,
-    RX_PROTO_DSHOT150,
-    RX_PROTO_DSHOT300,
-    RX_PROTO_DSHOT600,
-    RX_PROTO_DSHOT1200
-} RX_PROTOCOL_T;
 
 /* Fault codes */
 typedef enum
@@ -607,31 +469,34 @@ typedef enum
     FAULT_STALL,
     FAULT_DESYNC,
     FAULT_STARTUP_TIMEOUT,  /* Pre-sync timeout: ZC never achieved within PRESYNC_TIMEOUT_MS */
-    FAULT_MORPH_TIMEOUT,    /* Morph did not achieve ZC lock */
-    FAULT_RX_LOSS,          /* RX signal lost (PWM/DShot/AUTO) — requires CLEAR_FAULT */
-    FAULT_FOC_INTERNAL,     /* FOC internal fault (estimator divergence, overcurrent) */
-    FAULT_OBSERVER,         /* Observer lost tracking (sustained reverse speed in CL) */
-    FAULT_FOC_BUSLOSS,      /* HW OC tripped: voltage applied but no current flows */
-    FAULT_TRAP_BUS,         /* CPU bus error trap */
-    FAULT_TRAP_ILLEGAL,     /* Illegal instruction trap */
-    FAULT_TRAP_ADDRESS,     /* CPU address error trap */
-    FAULT_TRAP_STACK,       /* CPU stack error trap */
-    FAULT_TRAP_MATH,        /* CPU math error trap (integer div by zero) */
-    FAULT_TRAP_GENERAL,     /* General error trap */
-    FAULT_TRAP_DEFAULT      /* Unhandled interrupt (default handler) */
+    FAULT_MORPH_TIMEOUT     /* Morph did not achieve ZC lock */
 } FAULT_CODE_T;
 
 /* Main ESC runtime data */
 typedef struct
 {
     ESC_STATE_T state;
-    uint16_t throttle;          /* 0-2000 (DShot range), or ADC pot value */
-    uint8_t currentStep;        /* 0-5 commutation step index */
-    uint8_t direction;          /* 0=CW, 1=CCW */
-    uint32_t duty;              /* PWM duty cycle count */
+    uint16_t throttle;          /* ADC pot value (legacy field — GSP uses) */
+    uint8_t currentStep;        /* legacy field — kept for GSP snapshot */
+    uint8_t direction;          /* 0=CW, 1=CCW (kept for GSP) */
+    uint32_t duty;              /* legacy field — kept for GSP snapshot */
     uint16_t vbusRaw;           /* raw ADC reading of DC bus voltage */
     uint16_t potRaw;            /* raw ADC reading of potentiometer */
     FAULT_CODE_T faultCode;
+
+    /* FOC telemetry (updated by ADC ISR, read by main/GSP) */
+    float id_a;          /* d-axis current (A) — flux */
+    float iq_a;          /* q-axis current (A) — torque */
+    float theta_rad;     /* electrical angle estimate (rad) */
+    float omega_rad_s;   /* electrical speed estimate (rad/s) */
+    float vbus_v;        /* DC bus voltage (V) */
+    float idc_est;       /* estimated DC bus current (A) */
+    float theta2_rad;    /* flux estimator angle (rad) — parallel estimator */
+#if FEATURE_SMO
+    float smo_theta_rad; /* SMO estimated angle (rad) — parallel estimator */
+    float smo_omega_rad_s; /* SMO estimated speed (rad/s elec.) */
+#endif
+    uint16_t pot_raw;    /* throttle ADC count (duplicate of potRaw for FOC) */
 
     /* Timing counters */
     uint32_t alignCounter;      /* counts down during alignment phase */
@@ -639,10 +504,6 @@ typedef struct
     uint32_t rampCounter;       /* counts down within current step */
     uint32_t systemTick;        /* 1ms tick counter */
     uint16_t armCounter;        /* counts up during arming phase */
-    uint16_t cpuLoadPermille;   /* main-loop CPU load 0..1000 (‰), relative to
-                                 * the motor-off idle baseline. Computed in
-                                 * main()'s while(1) from a spin counter — see
-                                 * main.c. Diagnostic only; 0 when uncalibrated. */
 
     /* Run command and recovery */
     bool     runCommandActive;       /* SW1-driven latch: true = user wants motor running */
@@ -670,45 +531,6 @@ typedef struct
     HWZC_STATE_T hwzc;
 #endif
 
-#if !FEATURE_FOC && !FEATURE_FOC_V2 && !FEATURE_FOC_V3 && !FEATURE_FOC_AN1078
-    /* 6-step diagnostic phase-current monitor (AD1CH3=Ia, AD2CH2=Ib via
-     * PG1TRIGA @ 24 kHz). Scale ~93 counts/A, bias ~2048 (0 A).
-     *
-     * iaMax/iaMin/ibMax/ibMin are RESET each telemetry snapshot by
-     * gsp_snapshot.c — so each row reflects the 20 ms window peaks,
-     * not a lifetime latched value. This lets us observe the current
-     * envelope evolve vs time.
-     *
-     * iaAtFault/ibAtFault/iaMaxAtFault/iaMinAtFault/ibMaxAtFault/
-     * ibMinAtFault are FROZEN when BOARD_PCI latches — they survive
-     * fault-clear so we can see what the last 20 ms window looked like
-     * at the moment of trip. */
-    struct {
-        uint16_t iaRaw;         /* Latest Ia sample */
-        uint16_t ibRaw;         /* Latest Ib sample */
-        uint16_t iaMax;         /* Max Ia since last snapshot read */
-        uint16_t iaMin;         /* Min Ia since last snapshot read (0xFFFF = no samples) */
-        uint16_t ibMax;
-        uint16_t ibMin;
-        /* Bus current windowed peak tracking (mirrors phase, separate from
-         * the lifetime ibusMax in the HW_OVERCURRENT block). */
-        uint16_t ibusWinMax;
-        uint16_t ibusWinMin;
-        /* Frozen-at-fault snapshot — captured once when fault transitions
-         * non-BOARD_PCI → BOARD_PCI, kept until next CL entry. */
-        uint16_t iaAtFault;
-        uint16_t ibAtFault;
-        uint16_t iaMaxAtFault;
-        uint16_t iaMinAtFault;
-        uint16_t ibMaxAtFault;
-        uint16_t ibMinAtFault;
-        uint16_t ibusAtFault;
-        uint16_t ibusMaxAtFault;
-        uint16_t ibusMinAtFault;
-        uint8_t  faultCaptured; /* 1 once we've latched an at-fault snapshot; 0 = no fault yet */
-    } phaseCurrent;
-#endif
-
 #if FEATURE_HW_OVERCURRENT
     uint16_t ibusRaw;             /* Bus current ADC (biased ~2048, ~93 counts/A) */
     uint16_t ibusMax;             /* Peak bus current since last clear */
@@ -729,10 +551,9 @@ typedef struct
     COMMISSION_DATA_T commission;
 #endif
 
-    /* Throttle source mux — unconditional (used by all source types) */
-    THROTTLE_SOURCE_T throttleSource;  /* default THROTTLE_SRC_ADC */
-
 #if FEATURE_GSP
+    /* Throttle source mux */
+    THROTTLE_SOURCE_T throttleSource;  /* default THROTTLE_SRC_ADC */
     uint16_t gspThrottle;              /* GSP-provided throttle [0-2000] */
     uint32_t lastGspPacketTick;        /* systemTick of last GSP RX — heartbeat */
 
@@ -740,112 +561,7 @@ typedef struct
     bool gspStartIntent;
     bool gspStopIntent;
     bool gspFaultClearIntent;
-    bool gspDetectIntent;       /* Auto-commissioning trigger */
 #endif
-
-#if FEATURE_FOC
-    /* FOC v1 telemetry (updated by ADC ISR, read by main/GSP) */
-    float       focIa;          /* Phase A current (A) */
-    float       focIb;          /* Phase B current (A) */
-    float       focTheta;       /* PLL electrical angle (rad) */
-    float       focOmega;       /* PLL electrical speed (rad/s) */
-    float       focVbus;        /* Bus voltage (V) */
-    float       focIdcEst;      /* Estimated DC bus current (A) */
-    float       focTheta2;      /* Flux estimator angle (parallel, rad) */
-    uint8_t     focSubState;    /* Internal FOC sub-state (0=align,1=OL,2=running) */
-    uint16_t    focOffsetIa;    /* Calibrated ADC offset Ia */
-    uint16_t    focOffsetIb;    /* Calibrated ADC offset Ib */
-#if FEATURE_SMO
-    float       focSmoTheta;    /* SMO angle (rad) */
-    float       focSmoOmega;    /* SMO speed (rad/s) */
-#endif
-#endif
-
-#if FEATURE_FOC_V2
-    /* FOC v2 telemetry — proper Id/Iq (not raw phase currents) */
-    float       focIdMeas;      /* D-axis current (A) — should be ~0 */
-    float       focIqMeas;      /* Q-axis current (A) — torque */
-    float       focTheta;       /* Commutation angle (rad) */
-    float       focOmega;       /* PLL speed (rad/s) */
-    float       focVbus;        /* Bus voltage (V) */
-    float       focIa;          /* Phase A current (A, for debug) */
-    float       focIb;          /* Phase B current (A, for debug) */
-    float       focThetaObs;    /* Observer angle (rad) */
-    float       focVd;          /* D-axis voltage command (V) */
-    float       focVq;          /* Q-axis voltage command (V) */
-    /* Observer internals */
-    float       focFluxAlpha;   /* Observer flux alpha (V·s) */
-    float       focFluxBeta;    /* Observer flux beta (V·s) */
-    float       focLambdaEst;   /* Adaptive flux linkage estimate (V·s/rad) */
-    float       focObsGain;     /* Observer scheduled gain */
-    /* PI controller internals */
-    float       focPidDInteg;   /* D-axis PI integrator state */
-    float       focPidQInteg;   /* Q-axis PI integrator state */
-    float       focPidSpdInteg; /* Speed PI integrator state */
-    /* Derived diagnostics */
-    float       focModIndex;    /* Modulation index 0-1 (voltage utilization) */
-    float       focObsConfidence; /* Observer confidence 0-1 */
-    uint8_t     focSubState;    /* 0=idle,1=armed,2=align,3=if,4=cl */
-    uint16_t    focOffsetIa;    /* Calibrated ADC offset Ia */
-    uint16_t    focOffsetIb;    /* Calibrated ADC offset Ib */
-#endif
-
-#if FEATURE_FOC_V3 || FEATURE_FOC_AN1078
-    /* FOC v3 / AN1078 telemetry — SMO observer */
-    float       focIdMeas;      /* D-axis current (A) */
-    float       focIqMeas;      /* Q-axis current (A) — torque */
-    float       focTheta;       /* Commutation angle (rad) */
-    float       focOmega;       /* PLL speed (rad/s) */
-    float       focVbus;        /* Bus voltage (V) */
-    float       focIa;          /* Phase A current (A) */
-    float       focIb;          /* Phase B current (A) */
-    float       focThetaObs;    /* SMO angle (rad) */
-    float       focVd;          /* D-axis voltage command (V) */
-    float       focVq;          /* Q-axis voltage command (V) */
-    /* SMO internals (mapped to flux telemetry for GUI reuse) */
-    float       focFluxAlpha;   /* SMO back-EMF alpha (V) */
-    float       focFluxBeta;    /* SMO back-EMF beta (V) */
-    float       focLambdaEst;   /* Not used in v3 (0) */
-    float       focObsGain;     /* SMO gain K */
-    /* PI controller internals */
-    float       focPidDInteg;   /* D-axis PI integrator state */
-    float       focPidQInteg;   /* Q-axis PI integrator state */
-    float       focPidSpdInteg; /* Speed PI integrator state */
-    /* Derived diagnostics */
-    float       focModIndex;    /* Modulation index 0-1 */
-    float       focObsConfidence; /* Observer confidence 0-1 */
-    uint8_t     focSubState;    /* 0=idle,1=armed,2=align,3=ol,4=cl */
-    uint16_t    focOffsetIa;    /* Calibrated ADC offset Ia */
-    uint16_t    focOffsetIb;    /* Calibrated ADC offset Ib */
-    /* V4 observer diagnostics */
-    float       smoResidual;    /* LP-filtered current estimation error (A) */
-    float       pllInnovation;  /* LP-filtered PLL phase error (rad) */
-    float       pllOmega;       /* Raw PLL speed (rad/s) */
-    float       omegaOl;        /* OL forced speed / CL filtered speed (rad/s) */
-    uint16_t    handoffCtr;     /* Handoff dwell counter */
-    uint8_t     smoObservable;  /* Observer health flag */
-#endif
-
-    /* RX input state (Phase H) — unconditional for status reporting */
-    RX_LINK_STATE_T rxLinkState;
-    RX_PROTOCOL_T   rxProtocol;
-    uint16_t rxCrcErrors;
-    uint16_t rxPulseUs;
-    uint8_t  rxDshotRate;       /* 0=none, 150/300/600 */
-    uint16_t rxDroppedFrames;
-
-    /* Speed PI state (2026-05-29) — per-ZC interval-based speed PID.
-     * Runs in HWZC ISR per sector event. Throttle → target_period,
-     * error = measured_period − target_period, output → mappedDuty.
-     * Gated by FEATURE_SPEED_PI (compile-time) and per-bench testing. */
-    struct {
-        bool     enabled;            /* True while CL state is active */
-        uint16_t zcsSinceEnable;     /* ZC count since CL entry (gate for integral) */
-        float    integratorF;        /* I-term accumulator (PWM tick units) */
-        uint32_t outputDuty;         /* Latest PI output, used by CL state */
-        int32_t  lastError;          /* Telemetry: last error (period HR ticks) */
-        uint32_t lastTarget;         /* Telemetry: last target period HR */
-    } speedPi;
 } GARUDA_DATA_T;
 
 #ifdef __cplusplus
