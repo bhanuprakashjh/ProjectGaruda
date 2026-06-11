@@ -465,6 +465,37 @@
 #define OBS_LPF_ALPHA           0.35f
 #define SMO_LPF_ALPHA           0.15f
 
+#elif MOTOR_PROFILE == 6
+/* ----------------------------------------------------------------
+ * VEX 14mm micro 4000 KV — 10 V. 6PP. Rs(pp)=0.44Ω → L-N 0.22Ω.
+ * Ld/Lq ≈ 18.4µH(pp) → L-N 9.2µH (datasheet). FOC UNUSED in the
+ * 6-step build; values here so the build closes. */
+#define MOTOR_RS_OHM            0.22f
+#define MOTOR_LS_H              9.2e-6f
+#define MOTOR_KE_VPEAK          0.000230f      /* 60/(√3×2π×4000×6) */
+#define MOTOR_POLE_PAIRS_FOC    6
+#define MOTOR_VBUS_NOM_V        10.0f
+#define MOTOR_MAX_CURRENT_A     7.2f           /* max torque current */
+#define MOTOR_MAX_ELEC_RAD_S    25000.0f       /* 4000×10×6 ≈ 240k eRPM */
+#define MOTOR_FLUX_LINKAGE      0.000230f
+#define KP_DQ                   0.058f         /* 2π×1000×9.2µH */
+#define KI_DQ                   1382.0f        /* 2π×1000×0.22Ω */
+#define KP_SPD                  0.00010f
+#define KI_SPD                  0.004f
+#define STARTUP_ALIGN_IQ_A      2.0f
+#define STARTUP_RAMP_IQ_A       3.0f
+#define STARTUP_IQ_RAMP_TICKS   4800U
+#define STARTUP_ALIGN_TICKS     4800U
+#define STARTUP_RAMP_RATE_RPS2  800.0f
+#define STARTUP_HANDOFF_RAD_S   1000.0f
+#define STARTUP_MIN_OL_RAD_S    1500.0f
+#define STARTUP_MAX_OL_RAD_S    MOTOR_MAX_ELEC_RAD_S
+#define STARTUP_USE_VF          0
+#define FAULT_OC_A              9.0f
+#define FAULT_STALL_RAD_S       50.0f
+#define OBS_LPF_ALPHA           0.35f
+#define SMO_LPF_ALPHA           0.15f
+
 #else
 #error "Unknown MOTOR_PROFILE for FOC params -- see garuda_config.h"
 #endif

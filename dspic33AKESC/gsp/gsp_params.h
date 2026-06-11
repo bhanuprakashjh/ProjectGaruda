@@ -240,8 +240,9 @@ typedef enum {
 #define GSP_PROFILE_5055    3
 #define GSP_PROFILE_COBRA   4  /* Cobra CM-2814/36 470KV (12N14P, 7PP, heavy, high-R) */
 #define GSP_PROFILE_XROTOR  5  /* Hobbywing XRotor 3110 1150KV (12N14P, 7PP, ~2810 regime) */
-#define GSP_PROFILE_CUSTOM  6
-#define GSP_PROFILE_COUNT   6  /* built-in profiles (excl. Custom) */
+#define GSP_PROFILE_VEX     6  /* VEX 14mm 4000KV (12N?, 6PP, 7.4V rated / 10V max, micro) */
+#define GSP_PROFILE_CUSTOM  7
+#define GSP_PROFILE_COUNT   7  /* built-in profiles (excl. Custom) */
 
 /* Global instances (defined in gsp_params.c) */
 extern GSP_PARAMS_T  gspParams;

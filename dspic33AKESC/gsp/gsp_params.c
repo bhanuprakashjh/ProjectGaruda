@@ -52,7 +52,7 @@ static uint8_t activeProfile;
     .ifCurrentCa          = 600, \
     .ifRampErpmPerS       = 12000
 
-static const GSP_PARAMS_T profileDefaults[6] = {
+static const GSP_PARAMS_T profileDefaults[7] = {
     [GSP_PROFILE_HURST] = {
         .rampTargetErpm     = 2000,
         .rampAccelErpmPerS  = 1000,
@@ -413,6 +413,68 @@ static const GSP_PARAMS_T profileDefaults[6] = {
         .an1078KslideMv        = 2500,
         .an1078IdFwMaxDecia    = 120,
     },
+    [GSP_PROFILE_VEX] = {
+        /* === VEX 14mm micro (12N/6PP, 4000KV, 7.4V rated / 10V max) ===
+         * Rs(pp)=0.44Ω, Ld/Lq≈18.4µH(pp), no-load 0.65A, max-torque 7.25A,
+         * stall 14A. Wizard-generated 2026-06-11, then BENCH-DERIVED overrides:
+         * the 2810 hand-off-starvation experiment (rampTargetErpm=1200 →
+         * 2/3 starts fiction-locked then OC'd, 1/3 ground through) proved a
+         * 4000KV motor at the stock 3k hand-off has ~6 ADC counts of BEMF —
+         * below the detection floor. 12k eRPM hand-off (only ~2k mech RPM)
+         * restores the proven 2810-equivalent signal (~17+ counts); crossover
+         * scaled to match. OC chain scaled to the motor (stall is only 14A —
+         * the 24V-class 18/21A chain could never protect it). vbusUvAdc
+         * lowered for the 10V supply (spec min 5V; UV ≈6.0V, derived startup
+         * UV ≈4.8V). NOTE: phase dividers are 48V-scaled — BEMF lives in the
+         * bottom ~435mV of the ADC at 10V; a divider rescale is the real
+         * long-term fix (4.8x signal). */
+        .rampTargetErpm     = 12000,   /* EXPERIMENT-DERIVED — do not lower */
+        .rampAccelErpmPerS  = 8000,    /* 1.5s ramp; 20g rotor takes it */
+        .rampDutyPct        = 25,
+        .clIdleDutyPct      = 14,      /* idle ~1.4V → ~34k eRPM (5.6k mech) */
+        .timingAdvMaxDeg    = 25,
+        .hwzcCrossoverErpm  = 6000,    /* scaled with the hand-off */
+        .ocSwLimitMa        = 7250,    /* = max torque current */
+        .ocFaultMa          = 9500,
+        .motorPolePairs     = 6,
+        .alignDutyPct       = 25,
+        .initialErpm        = 300,
+        .maxClosedLoopErpm  = 252000,  /* 4000KV x 10V x 6pp ~ 240k +5% */
+        .sineAlignModPct    = 50,      /* ~6A align against 0.44Ω at 10V */
+        .sineRampModPct     = 50,      /* ~5.7A ramp current */
+        .zcDemagDutyThresh  = 45,
+        .zcDemagBlankExtraPct = 18,
+        .ocLimitMa          = 9000,    /* CMP3 chop */
+        .ocStartupMa        = 10000,
+        .rampCurrentGateMa  = 7000,
+        TUNING_DEFAULTS,
+        /* 10V-supply override (TUNING default 500 ≈ 9.3V leaves 0.7V margin
+         * at a 10V bus — any sag faults). 320 ≈ 6.0V; startup UV derives to
+         * ~4.8V which matches the 5V spec minimum. */
+        .vbusUvAdc          = 320,
+        /* FOC motor model (unused at runtime in the 6-step build) */
+        .focRsMilliOhm       = 220,
+        .focLsMicroH         = 9,
+        .focKeUvSRad         = 230,
+        .focVbusNomCentiV    = 1000,
+        .focMaxCurrentCentiA = 725,
+        .focMaxElecRadS      = 25000,
+        .focKpDqMilli        = 58,
+        .focKiDq             = 1382,
+        .focObsLpfAlphaMilli = 200,
+        .focAlignIqCentiA    = 200,
+        .focRampIqCentiA     = 300,
+        .focAlignTimeMs      = 800,
+        .focIqRampTimeMs     = 300,
+        .focRampRateRps2     = 400,
+        .focHandoffRadS      = 1000,
+        .focFaultOcCentiA    = 900,
+        .focFaultStallDeciRadS = 50,
+        .an1078ThetaBaseDegX10 = 200,
+        .an1078ThetaKE7        = 800,
+        .an1078KslideMv        = 2500,
+        .an1078IdFwMaxDecia    = 120,
+    },
 };
 
 /* Max safe mA for OC params: DAC ceiling 4095 counts = 3299 mV */
@@ -422,8 +484,8 @@ static const GSP_PARAMS_T profileDefaults[6] = {
 
 static const PARAM_DESCRIPTOR_T paramDescriptors[] = {
     /* Stage 1: Startup & Ramp (group 0) */
-    { PARAM_ID_RAMP_TARGET_ERPM,      PARAM_TYPE_U16, PARAM_GROUP_STARTUP,    500,    10000, offsetof(GSP_PARAMS_T, rampTargetErpm),     2 },
-    { PARAM_ID_RAMP_ACCEL_ERPM_PER_S, PARAM_TYPE_U16, PARAM_GROUP_STARTUP,     50,     5000, offsetof(GSP_PARAMS_T, rampAccelErpmPerS),  2 },
+    { PARAM_ID_RAMP_TARGET_ERPM,      PARAM_TYPE_U16, PARAM_GROUP_STARTUP,    500,    20000, offsetof(GSP_PARAMS_T, rampTargetErpm),     2 },   /* max 10k->20k 2026-06-11: high-KV motors (VEX 4000KV) need a 12k+ hand-off for detectable BEMF */
+    { PARAM_ID_RAMP_ACCEL_ERPM_PER_S, PARAM_TYPE_U16, PARAM_GROUP_STARTUP,     50,    20000, offsetof(GSP_PARAMS_T, rampAccelErpmPerS),  2 },   /* max 5k->20k 2026-06-11: 12k+ hand-offs need matching accel */
     { PARAM_ID_RAMP_DUTY_PCT,         PARAM_TYPE_U8,  PARAM_GROUP_STARTUP,      5,       80, offsetof(GSP_PARAMS_T, rampDutyPct),        1 },
     { PARAM_ID_ALIGN_DUTY_PCT,        PARAM_TYPE_U8,  PARAM_GROUP_STARTUP,      2,       50, offsetof(GSP_PARAMS_T, alignDutyPct),       1 },
     { PARAM_ID_INITIAL_ERPM,          PARAM_TYPE_U16, PARAM_GROUP_STARTUP,     50,     1000, offsetof(GSP_PARAMS_T, initialErpm),        2 },

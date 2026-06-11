@@ -254,7 +254,7 @@ extern "C" {
  * All motor-dependent parameters are grouped here for easy swapping.
  * Board-specific and feature-tuning parameters are below.
  *──────────────────────────────────────────────────────────────────────────*/
-#define MOTOR_PROFILE  2   /* 2 = 2810 (bench baseline). Set 5 = XRotor or 4 = Cobra to test those. */
+#define MOTOR_PROFILE  2   /* 2 = 2810 (bench baseline). 4 = Cobra, 5 = XRotor, 6 = VEX 4000KV micro. */
 
 #if MOTOR_PROFILE == 0
 /* === Hurst DMB2424B10002 (long Hurst, MCLV-48V-300W bench motor) ===
@@ -515,6 +515,42 @@ extern "C" {
 #define OC_FAULT_MA              21000
 #define OC_SW_LIMIT_MA           18000
 #define RAMP_CURRENT_GATE_MA     10000
+#define FEATURE_PRESYNC_RAMP       0
+#define OC_CLPCI_ENABLE            0
+
+#elif MOTOR_PROFILE == 6
+/* === VEX 14mm micro 4000KV (6PP, 7.4V rated / 10V max, ~20g) ===
+ * Rs(pp)=0.44Ω, Ld/Lq≈18.4µH(pp), no-load 0.65A, max torque 7.25A, stall 14A.
+ * Run at 10V on the MCLV-48V-300W. TWO things make this motor different:
+ * (1) 4000KV through 48V-scaled dividers → BEMF at the stock 3k hand-off is
+ *     ~6 ADC counts = below the detection floor. Bench-proven 2026-06-11 by
+ *     starving the 2810 to the same counts (hand-off 1200): 2/3 starts
+ *     fiction-locked then OC'd — the exact reported VEX failure. Hence
+ *     RAMP_TARGET 12k / CROSSOVER 6k (only ~2k mech RPM for this KV).
+ * (2) stall current is 14A — the 24V-class OC chain (18/20/21A) sits ABOVE
+ *     stall and protects nothing; chain scaled to 7.25/9/9.5/10A.
+ * NOTE: with FEATURE_GSP=1 these are overridden by
+ * profileDefaults[GSP_PROFILE_VEX] in gsp_params.c — keep the two in sync. */
+#define MOTOR_POLE_PAIRS             6
+#define DEADTIME_NS                300
+#define ALIGN_DUTY_PERCENT          25
+#define RAMP_DUTY_PERCENT           25
+#define INITIAL_ERPM               300
+#define RAMP_TARGET_ERPM         12000
+#define MAX_CLOSED_LOOP_ERPM    252000     /* 4000 * 10V * 6pp ≈ 240k */
+#define RAMP_ACCEL_ERPM_PER_S     8000
+#define SINE_ALIGN_MODULATION_PCT   50     /* ~6A against 0.44Ω at 10V */
+#define SINE_RAMP_MODULATION_PCT    50
+#define ZC_DEMAG_DUTY_THRESH        45
+#define ZC_DEMAG_BLANK_EXTRA_PERCENT 18
+#define HWZC_CROSSOVER_ERPM       6000
+#define CL_IDLE_DUTY_PERCENT        14
+#define SINE_PHASE_OFFSET_DEG       60
+#define OC_LIMIT_MA               9000
+#define OC_STARTUP_MA            10000
+#define OC_FAULT_MA               9500
+#define OC_SW_LIMIT_MA            7250
+#define RAMP_CURRENT_GATE_MA      7000
 #define FEATURE_PRESYNC_RAMP       0
 #define OC_CLPCI_ENABLE            0
 
