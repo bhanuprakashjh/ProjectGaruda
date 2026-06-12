@@ -809,6 +809,8 @@ void HWZC_OnPiPeriodExpired(volatile GARUDA_DATA_T *pData)
      * A rejected capture (cap > T) is NOT silence — only "captureValid==
      * false at entry" counts toward the defensive trigger. */
     bool hadCaptureThisEvent = pData->hwzc.captureValid;
+    if (!hadCaptureThisEvent)
+        pData->hwzc.dbgPiNoCap++;        /* bring-up diag: silent PI event */
 #endif
 
     /* Run PI if we have a fresh capture from this sector */
@@ -825,9 +827,14 @@ void HWZC_OnPiPeriodExpired(volatile GARUDA_DATA_T *pData)
         uint32_t capValue = pData->hwzc.lastCaptureHR - pData->hwzc.lastCommStamp;
         uint32_t setValue = ((uint32_t)advFp8 * T) >> 8;
 
+        /* bring-up diag: capture position in sector, even if rejected */
+        if (T > 0)
+            pData->hwzc.dbgLastCapPm = (uint16_t)(((uint64_t)capValue * 1000u) / T);
+
         /* Cross-sector reject (same gate in both float and int paths). */
         if (capValue > T) {
             pData->hwzc.dbgPiMissCount++;
+            pData->hwzc.dbgPiCrossSector++;
             pData->hwzc.captureValid = false;
             goto pi_commutate;
         }

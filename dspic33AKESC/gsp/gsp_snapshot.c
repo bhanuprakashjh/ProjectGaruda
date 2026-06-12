@@ -251,9 +251,9 @@ void GSP_CaptureSnapshot(GSP_SNAPSHOT_T *dst)
      *   spiInteg   = AD3CH2DATA  (VBUS raw)
      * Remove before merge. */
     dst->speedPiEnabled        = 0xDDu;   /* marker: diagnostics active */
-    dst->speedPiZcsSinceEnable = (uint16_t)AD1CH1DATA;        /* VA hi-speed raw */
-    dst->speedPiTarget         = (int32_t)(uint32_t)AD1CH3DATA;
-    dst->speedPiLastError      = (int32_t)(uint32_t)AD2CH1DATA;
+    dst->speedPiZcsSinceEnable = src->hwzc.dbgPiNoCap;        /* silent PI events */
+    dst->speedPiTarget         = (int32_t)src->hwzc.dbgLastCapPm; /* cap pos ‰ of T */
+    dst->speedPiLastError      = (int32_t)src->hwzc.dbgPiCrossSector;
     dst->speedPiOutputDuty     = (uint16_t)(((uint16_t)AD1CH3CON1bits.TRG1SRC << 8)
                                | ((uint16_t)PG1CONbits.ON << 5)
                                | ((uint16_t)AD3CONbits.ADRDY << 4)

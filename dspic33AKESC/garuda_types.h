@@ -352,6 +352,9 @@ typedef struct {
     volatile uint8_t pllStartActive;
     volatile uint8_t pllStartGood;
     volatile uint32_t pllPrevCap;     /* previous capture offset, consistency gate */
+    volatile uint16_t dbgLastCapPm;   /* bring-up diag: last capValue/T permille */
+    volatile uint16_t dbgPiCrossSector; /* bring-up diag: capValue>T rejects */
+    volatile uint16_t dbgPiNoCap;     /* bring-up diag: PI events w/o capture */
 #endif
 
 #if FEATURE_BEMF_INTEGRATION
