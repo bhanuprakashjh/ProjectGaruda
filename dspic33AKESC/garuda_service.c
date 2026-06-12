@@ -4594,7 +4594,11 @@ void __attribute__((__interrupt__, no_auto_psv)) _PWMInterrupt(void)
 void __attribute__((__interrupt__, no_auto_psv)) _AD1CMP5Interrupt(void)
 {
     _AD1CMP5IE = 0;              /* Disable immediately to prevent re-trigger */
+#if GARUDA_TARGET_AK512
+    AD1CMPSTATbits.CH5FLG = 0;  /* Clear comparator status */
+#else
     AD1CMPSTATbits.CH5CMP = 0;  /* Clear comparator status */
+#endif
     if (garudaData.hwzc.enabled)
         HWZC_OnZcDetected(&garudaData);
     _AD1CMP5IF = 0;
@@ -4606,7 +4610,11 @@ void __attribute__((__interrupt__, no_auto_psv)) _AD1CMP5Interrupt(void)
 void __attribute__((__interrupt__, no_auto_psv)) _AD2CMP1Interrupt(void)
 {
     _AD2CMP1IE = 0;
+#if GARUDA_TARGET_AK512
+    AD2CMPSTATbits.CH1FLG = 0;
+#else
     AD2CMPSTATbits.CH1CMP = 0;
+#endif
     if (garudaData.hwzc.enabled)
         HWZC_OnZcDetected(&garudaData);
     _AD2CMP1IF = 0;

@@ -47,7 +47,11 @@ extern "C" {
 #if !FEATURE_FOC && !FEATURE_FOC_V2
 #define ENABLE_PWM_FAULT_PCI
 #endif
+#if GARUDA_TARGET_AK512
+#define PCI_FAULT_ACTIVE_STATUS     PG1STATbits.FLT1ACT
+#else
 #define PCI_FAULT_ACTIVE_STATUS     PG1STATbits.FLTACT
+#endif
 #define _PWMInterrupt               _PWM1Interrupt
 #define ClearPWMIF()                _PWM1IF = 0
 #define EnablePWMIF()               _PWM1IE = 1
@@ -69,9 +73,15 @@ extern "C" {
  * With TERM=1 (auto-terminate), FLTACT clears before ISR runs —
  * but FLTEVT latches the event. Poll in ADC ISR to detect transient
  * board-level FPCI trips that auto-release within one PWM cycle. */
+#if GARUDA_TARGET_AK512
+#define PCI_FAULT_EVT_PG1     PG1STATbits.FLT1EVT
+#define PCI_FAULT_EVT_PG2     PG2STATbits.FLT1EVT
+#define PCI_FAULT_EVT_PG3     PG3STATbits.FLT1EVT
+#else
 #define PCI_FAULT_EVT_PG1     PG1STATbits.FLTEVT
 #define PCI_FAULT_EVT_PG2     PG2STATbits.FLTEVT
 #define PCI_FAULT_EVT_PG3     PG3STATbits.FLTEVT
+#endif
 #define PCI_FAULT_EVT_MASK    0x4000u
 
 void InitPWMGenerators(void);

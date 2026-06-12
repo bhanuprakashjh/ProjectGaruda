@@ -33,6 +33,19 @@ void InitializeADCs(void)
  * ADON=1 is unreliable per datasheet). The 6-step BEMF machinery runs inert
  * against these channels during the I-f ramp; M2 will do the proper handoff. */
 #if FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3 || FEATURE_FOC_AN1078 || FEATURE_IF_STARTUP
+#if GARUDA_TARGET_AK512
+    /* Ia on AD1CH0: OA1OUT = RA2 = AD1AN0, PINSEL=0 */
+    AD1CH0CON1bits.PINSEL = 0;
+    AD1CH0CON1bits.SAMC = 3;       /* Low Z from OA1 output */
+    AD1CH0CON1bits.FRAC = 0;       /* right-aligned (LEFT equivalent) */
+    AD1CH0CON1bits.DIFF = 0;
+
+    /* Ib on AD2CH0: OA2OUT = RB0 = AD2AN1, PINSEL=1 */
+    AD2CH0CON1bits.PINSEL = 1;
+    AD2CH0CON1bits.SAMC = 3;       /* Low Z from OA2 output */
+    AD2CH0CON1bits.FRAC = 0;       /* right-aligned (LEFT equivalent) */
+    AD2CH0CON1bits.DIFF = 0;
+#else
     /* Ia on AD1CH0: OA1OUT = RA2 = AD1AN0, PINSEL=0 */
     AD1CH0CONbits.PINSEL = 0;
     AD1CH0CONbits.SAMC = 3;        /* Low Z from OA1 output */
@@ -44,6 +57,20 @@ void InitializeADCs(void)
     AD2CH0CONbits.SAMC = 3;        /* Low Z from OA2 output */
     AD2CH0CONbits.LEFT = 0;
     AD2CH0CONbits.DIFF = 0;
+#endif /* GARUDA_TARGET_AK512 */
+#else
+#if GARUDA_TARGET_AK512
+    /* Phase B on AD1CH0: RB8 = AD1AN11, PINSEL=11 — interrupt source, always sampled */
+    AD1CH0CON1bits.PINSEL = 11;
+    AD1CH0CON1bits.SAMC = 5;       /* Increased for divider impedance */
+    AD1CH0CON1bits.FRAC = 0;       /* right-aligned (LEFT equivalent) */
+    AD1CH0CON1bits.DIFF = 0;
+
+    /* Phase A (default) on AD2CH0: RB9 = AD2AN10, PINSEL=10 (muxed with Phase C) */
+    AD2CH0CON1bits.PINSEL = 10;
+    AD2CH0CON1bits.SAMC = 5;       /* Increased for divider impedance */
+    AD2CH0CON1bits.FRAC = 0;       /* right-aligned (LEFT equivalent) */
+    AD2CH0CON1bits.DIFF = 0;
 #else
     /* Phase B on AD1CH0: RB8 = AD1AN11, PINSEL=11 — interrupt source, always sampled */
     AD1CH0CONbits.PINSEL = 11;
@@ -56,8 +83,22 @@ void InitializeADCs(void)
     AD2CH0CONbits.SAMC = 5;        /* Increased for divider impedance */
     AD2CH0CONbits.LEFT = 0;
     AD2CH0CONbits.DIFF = 0;
+#endif /* GARUDA_TARGET_AK512 */
 #endif
 
+#if GARUDA_TARGET_AK512
+    /* POT on AD1CH1: RA11 = AD1AN10, PINSEL=10 */
+    AD1CH1CON1bits.PINSEL = 10;
+    AD1CH1CON1bits.SAMC = 5;
+    AD1CH1CON1bits.FRAC = 0;       /* right-aligned (LEFT equivalent) */
+    AD1CH1CON1bits.DIFF = 0;
+
+    /* VBUS on AD1CH4: RA7 = AD1AN6, PINSEL=6 */
+    AD1CH4CON1bits.PINSEL = 6;
+    AD1CH4CON1bits.SAMC = 5;
+    AD1CH4CON1bits.FRAC = 0;       /* right-aligned (LEFT equivalent) */
+    AD1CH4CON1bits.DIFF = 0;
+#else
     /* POT on AD1CH1: RA11 = AD1AN10, PINSEL=10 */
     AD1CH1CONbits.PINSEL = 10;
     AD1CH1CONbits.SAMC = 5;
@@ -69,14 +110,24 @@ void InitializeADCs(void)
     AD1CH4CONbits.SAMC = 5;
     AD1CH4CONbits.LEFT = 0;
     AD1CH4CONbits.DIFF = 0;
+#endif /* GARUDA_TARGET_AK512 */
 
 #if FEATURE_HW_OVERCURRENT
+#if GARUDA_TARGET_AK512
+    /* Bus current on AD1CH2: RA5 = OA3OUT = AD1AN3, PINSEL=3 */
+    AD1CH2CON1bits.PINSEL = 3;
+    AD1CH2CON1bits.SAMC = 3;       /* Fast sample (low Z from OA3 output) */
+    AD1CH2CON1bits.FRAC = 0;       /* right-aligned (LEFT equivalent) */
+    AD1CH2CON1bits.DIFF = 0;
+    AD1CH2CON1bits.TRG1SRC = 4;    /* PWM1 trigger (24kHz, midpoint sampling) */
+#else
     /* Bus current on AD1CH2: RA5 = OA3OUT = AD1AN3, PINSEL=3 */
     AD1CH2CONbits.PINSEL = 3;
     AD1CH2CONbits.SAMC = 3;        /* Fast sample (low Z from OA3 output) */
     AD1CH2CONbits.LEFT = 0;
     AD1CH2CONbits.DIFF = 0;
     AD1CH2CONbits.TRG1SRC = 4;     /* PWM1 trigger (24kHz, midpoint sampling) */
+#endif /* GARUDA_TARGET_AK512 */
 #endif
 
 #if FEATURE_ADC_CMP_ZC && !FEATURE_IF_STARTUP
@@ -93,6 +144,33 @@ void InitializeADCs(void)
      * out the 76 %-of-cycle OFF-time samples at high duty / 24 V where
      * the floating-phase voltage is dominated by freewheel-diode
      * conduction and switching ringing, not clean BEMF. */
+#if GARUDA_TARGET_AK512
+    AD1CH5CON1bits.PINSEL = 11;
+    AD1CH5CON1bits.SAMC = HWZC_SAMC;
+    AD1CH5CON1bits.FRAC = 0;     /* right-aligned (LEFT equivalent) */
+    AD1CH5CON1bits.DIFF = 0;
+    AD1CH5CON1bits.TRG1SRC = 14; /* SCCP3 Trigger out (1 MHz free-running) */
+    AD1CH5CON1bits.TRG2SRC = 2;  /* Immediate re-trigger for oversampling repeats */
+    AD1CH5CON1bits.MODE = 0b11;  /* Oversampling mode */
+    AD1CH5CON1bits.ACCNUM = 0b00; /* 4 samples, result right-shifted by 2 bits */
+    AD1CH5CON2bits.ACCBRST = 1;  /* Non-interruptible burst (prevent 24kHz split) */
+    AD1CH5CON2bits.CMPMOD = 0;   /* Comparator disabled initially */
+    AD1CH5CMPLO = 0;
+    AD1CH5CMPHI = 0;
+
+    AD2CH1CON1bits.PINSEL = 10;
+    AD2CH1CON1bits.SAMC = HWZC_SAMC;
+    AD2CH1CON1bits.FRAC = 0;     /* right-aligned (LEFT equivalent) */
+    AD2CH1CON1bits.DIFF = 0;
+    AD2CH1CON1bits.TRG1SRC = 14; /* SCCP3 Trigger out (1 MHz free-running) */
+    AD2CH1CON1bits.TRG2SRC = 2;
+    AD2CH1CON1bits.MODE = 0b11;
+    AD2CH1CON1bits.ACCNUM = 0b00;
+    AD2CH1CON2bits.ACCBRST = 1;
+    AD2CH1CON2bits.CMPMOD = 0;
+    AD2CH1CMPLO = 0;
+    AD2CH1CMPHI = 0;
+#else
     AD1CH5CONbits.PINSEL = 11;
     AD1CH5CONbits.SAMC = HWZC_SAMC;
     AD1CH5CONbits.LEFT = 0;
@@ -118,6 +196,7 @@ void InitializeADCs(void)
     AD2CH1CONbits.CMPMOD = 0;
     AD2CH1CMPLO = 0;
     AD2CH1CMPHI = 0;
+#endif /* GARUDA_TARGET_AK512 */
 #endif
 
 #if !FEATURE_FOC && !FEATURE_FOC_V2 && !FEATURE_FOC_V3 && !FEATURE_FOC_AN1078 && !FEATURE_IF_STARTUP
@@ -149,6 +228,23 @@ void InitializeADCs(void)
      * dead-time — but that's sufficient to validate the sustained-ON
      * operating current (the "real" ~20 A we've inferred from 50 Hz
      * telemetry). */
+#if GARUDA_TARGET_AK512
+    AD1CH3CON1bits.PINSEL = 0;      /* OA1OUT = RA2 = AD1AN0 (Ia) */
+    AD1CH3CON1bits.SAMC = 3;
+    AD1CH3CON1bits.FRAC = 0;        /* right-aligned (LEFT equivalent) */
+    AD1CH3CON1bits.DIFF = 0;
+    AD1CH3CON1bits.TRG1SRC = 4;     /* PG1TRIGA (24 kHz mid-ON valley) */
+    AD1CH3CON1bits.MODE = 0;        /* Single sample, one per trigger */
+    AD1CH3CON2bits.CMPMOD = 0;
+
+    AD2CH2CON1bits.PINSEL = 1;      /* OA2OUT = RB0 = AD2AN1 (Ib) */
+    AD2CH2CON1bits.SAMC = 3;
+    AD2CH2CON1bits.FRAC = 0;        /* right-aligned (LEFT equivalent) */
+    AD2CH2CON1bits.DIFF = 0;
+    AD2CH2CON1bits.TRG1SRC = 4;     /* PG1TRIGA (24 kHz mid-ON valley) */
+    AD2CH2CON1bits.MODE = 0;
+    AD2CH2CON2bits.CMPMOD = 0;
+#else
     AD1CH3CONbits.PINSEL = 0;       /* OA1OUT = RA2 = AD1AN0 (Ia) */
     AD1CH3CONbits.SAMC = 3;
     AD1CH3CONbits.LEFT = 0;
@@ -164,6 +260,7 @@ void InitializeADCs(void)
     AD2CH2CONbits.TRG1SRC = 4;      /* PG1TRIGA (24 kHz mid-ON valley) */
     AD2CH2CONbits.MODE = 0;
     AD2CH2CONbits.CMPMOD = 0;
+#endif /* GARUDA_TARGET_AK512 */
 #endif
 
     /* Turn on ADC Core 1 */
@@ -180,10 +277,17 @@ void InitializeADCs(void)
     _AD1CH0IE = 0;         /* Disabled until service init */
 
     /* Trigger sources: PWM1 ADC Trigger 1 (TRG1SRC=4) */
+#if GARUDA_TARGET_AK512
+    AD1CH0CON1bits.TRG1SRC = 4;    /* Phase B from PWM1 trigger */
+    AD2CH0CON1bits.TRG1SRC = 4;    /* Phase A/C from PWM1 trigger */
+    AD1CH1CON1bits.TRG1SRC = 4;    /* POT from PWM1 trigger */
+    AD1CH4CON1bits.TRG1SRC = 4;    /* VBUS from PWM1 trigger */
+#else
     AD1CH0CONbits.TRG1SRC = 4;     /* Phase B from PWM1 trigger */
     AD2CH0CONbits.TRG1SRC = 4;     /* Phase A/C from PWM1 trigger */
     AD1CH1CONbits.TRG1SRC = 4;     /* POT from PWM1 trigger */
     AD1CH4CONbits.TRG1SRC = 4;     /* VBUS from PWM1 trigger */
+#endif
 }
 
 #if !FEATURE_FOC && !FEATURE_FOC_V2 && !FEATURE_FOC_V3 && !FEATURE_FOC_AN1078
@@ -205,6 +309,22 @@ bool HAL_ADC_SelectBEMFChannel(uint8_t floatingPhase)
 #endif
     switch (floatingPhase)
     {
+#if GARUDA_TARGET_AK512
+        case FLOATING_PHASE_A:
+            if (AD2CH0CON1bits.PINSEL != 10) {
+                AD2CH0CON1bits.PINSEL = 10; /* M1_VA: RB9 = AD2AN10 */
+                return true;
+            }
+            return false;
+        case FLOATING_PHASE_B:
+            return false;  /* VB on AD1CH0 — no mux change */
+        case FLOATING_PHASE_C:
+            if (AD2CH0CON1bits.PINSEL != 7) {
+                AD2CH0CON1bits.PINSEL = 7;  /* M1_VC: RA10 = AD2AN7 */
+                return true;
+            }
+            return false;
+#else
         case FLOATING_PHASE_A:
             if (AD2CH0CONbits.PINSEL != 10) {
                 AD2CH0CONbits.PINSEL = 10;  /* M1_VA: RB9 = AD2AN10 */
@@ -219,6 +339,7 @@ bool HAL_ADC_SelectBEMFChannel(uint8_t floatingPhase)
                 return true;
             }
             return false;
+#endif
         default:
             return false;
     }
@@ -258,12 +379,20 @@ void HAL_ADC_ConfigComparator(uint8_t adcCore, uint16_t threshold, bool risingZc
 {
     if (adcCore == 1)
     {
+#if GARUDA_TARGET_AK512
+        AD1CH5CON2bits.CMPMOD = risingZc ? 0b011 : 0b100;
+#else
         AD1CH5CONbits.CMPMOD = risingZc ? 0b011 : 0b100;
+#endif
         AD1CH5CMPLO = threshold;
     }
     else
     {
+#if GARUDA_TARGET_AK512
+        AD2CH1CON2bits.CMPMOD = risingZc ? 0b011 : 0b100;
+#else
         AD2CH1CONbits.CMPMOD = risingZc ? 0b011 : 0b100;
+#endif
         AD2CH1CMPLO = threshold;
     }
 }
@@ -327,12 +456,20 @@ void HAL_ADC_ClearComparatorFlag(uint8_t adcCore)
 {
     if (adcCore == 1)
     {
+#if GARUDA_TARGET_AK512
+        AD1CMPSTATbits.CH5FLG = 0;
+#else
         AD1CMPSTATbits.CH5CMP = 0;
+#endif
         _AD1CMP5IF = 0;
     }
     else
     {
+#if GARUDA_TARGET_AK512
+        AD2CMPSTATbits.CH1FLG = 0;
+#else
         AD2CMPSTATbits.CH1CMP = 0;
+#endif
         _AD2CMP1IF = 0;
     }
 }
@@ -343,7 +480,11 @@ void HAL_ADC_ClearComparatorFlag(uint8_t adcCore)
  */
 void HAL_ADC_SetHighSpeedPinsel(uint8_t pinsel)
 {
+#if GARUDA_TARGET_AK512
+    AD2CH1CON1bits.PINSEL = pinsel;
+#else
     AD2CH1CONbits.PINSEL = pinsel;
+#endif
 }
 
 #endif /* FEATURE_ADC_CMP_ZC */

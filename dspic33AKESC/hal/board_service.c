@@ -191,12 +191,21 @@ void HAL_MC1PWMEnableOutputs(void)
     PWM_PDC2 = 0;
     PWM_PDC1 = 0;
 
+#if GARUDA_TARGET_AK512
+    PG3IOCON2bits.OVRENH = 0;
+    PG3IOCON2bits.OVRENL = 0;
+    PG2IOCON2bits.OVRENH = 0;
+    PG2IOCON2bits.OVRENL = 0;
+    PG1IOCON2bits.OVRENH = 0;
+    PG1IOCON2bits.OVRENL = 0;
+#else
     PG3IOCONbits.OVRENH = 0;
     PG3IOCONbits.OVRENL = 0;
     PG2IOCONbits.OVRENH = 0;
     PG2IOCONbits.OVRENL = 0;
     PG1IOCONbits.OVRENH = 0;
     PG1IOCONbits.OVRENL = 0;
+#endif
 }
 
 /**
@@ -214,6 +223,18 @@ void HAL_MC1PWMDisableOutputs(void)
     PWM_PDC2 = 0;
     PWM_PDC1 = 0;
 
+#if GARUDA_TARGET_AK512
+    PG3IOCON2bits.OVRDAT = 0;
+    PG2IOCON2bits.OVRDAT = 0;
+    PG1IOCON2bits.OVRDAT = 0;
+
+    PG3IOCON2bits.OVRENH = 1;
+    PG3IOCON2bits.OVRENL = 1;
+    PG2IOCON2bits.OVRENH = 1;
+    PG2IOCON2bits.OVRENL = 1;
+    PG1IOCON2bits.OVRENH = 1;
+    PG1IOCON2bits.OVRENL = 1;
+#else
     PG3IOCONbits.OVRDAT = 0;
     PG2IOCONbits.OVRDAT = 0;
     PG1IOCONbits.OVRDAT = 0;
@@ -224,6 +245,7 @@ void HAL_MC1PWMDisableOutputs(void)
     PG2IOCONbits.OVRENL = 1;
     PG1IOCONbits.OVRENH = 1;
     PG1IOCONbits.OVRENL = 1;
+#endif
 }
 
 /**
@@ -231,9 +253,15 @@ void HAL_MC1PWMDisableOutputs(void)
  */
 void HAL_MC1ClearPWMPCIFault(void)
 {
+#if GARUDA_TARGET_AK512
+    PG1F1PCI1bits.SWTERM = 1;
+    PG2F1PCI1bits.SWTERM = 1;
+    PG3F1PCI1bits.SWTERM = 1;
+#else
     PG1FPCIbits.SWTERM = 1;
     PG2FPCIbits.SWTERM = 1;
     PG3FPCIbits.SWTERM = 1;
+#endif
 }
 
 /**

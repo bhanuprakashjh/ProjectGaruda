@@ -94,6 +94,20 @@ void InitPWMGenerators(void)
  */
 void InitDutyPWM123Generators(void)
 {
+#if GARUDA_TARGET_AK512
+    /* Set Override Data to 0 (LOW) on all outputs */
+    PG3IOCON2bits.OVRDAT = 0;
+    PG2IOCON2bits.OVRDAT = 0;
+    PG1IOCON2bits.OVRDAT = 0;
+
+    /* Enable override on all H and L outputs */
+    PG3IOCON2bits.OVRENH = 1;
+    PG3IOCON2bits.OVRENL = 1;
+    PG2IOCON2bits.OVRENH = 1;
+    PG2IOCON2bits.OVRENL = 1;
+    PG1IOCON2bits.OVRENH = 1;
+    PG1IOCON2bits.OVRENL = 1;
+#else
     /* Set Override Data to 0 (LOW) on all outputs */
     PG3IOCONbits.OVRDAT = 0;
     PG2IOCONbits.OVRDAT = 0;
@@ -106,6 +120,7 @@ void InitDutyPWM123Generators(void)
     PG2IOCONbits.OVRENL = 1;
     PG1IOCONbits.OVRENH = 1;
     PG1IOCONbits.OVRENL = 1;
+#endif
 
     /* Set all duty cycles to zero */
     PG3DC = 0;
@@ -121,6 +136,20 @@ void ChargeBootstrapCapacitors(void)
     uint32_t i = BOOTSTRAP_CHARGING_COUNTS;
     uint8_t prevStatusCAHALF = 0, currStatusCAHALF = 0;
 
+#if GARUDA_TARGET_AK512
+    /* Override H-side LOW, let L-side run from PWM generator */
+    PG3IOCON2bits.OVRDAT = 0;
+    PG2IOCON2bits.OVRDAT = 0;
+    PG1IOCON2bits.OVRDAT = 0;
+
+    PG3IOCON2bits.OVRENH = 1;
+    PG2IOCON2bits.OVRENH = 1;
+    PG1IOCON2bits.OVRENH = 1;
+
+    PG3IOCON2bits.OVRENL = 1;
+    PG2IOCON2bits.OVRENL = 1;
+    PG1IOCON2bits.OVRENL = 1;
+#else
     /* Override H-side LOW, let L-side run from PWM generator */
     PG3IOCONbits.OVRDAT = 0;
     PG2IOCONbits.OVRDAT = 0;
@@ -133,6 +162,7 @@ void ChargeBootstrapCapacitors(void)
     PG3IOCONbits.OVRENL = 1;
     PG2IOCONbits.OVRENL = 1;
     PG1IOCONbits.OVRENL = 1;
+#endif
 
     /* Set tickle charge duty */
     PWM_PHASE3 = TICKLE_CHARGE_DUTY;
@@ -143,9 +173,15 @@ void ChargeBootstrapCapacitors(void)
     PWM_PDC1 = TICKLE_CHARGE_DUTY;
 
     /* Release L-side override to allow charging */
+#if GARUDA_TARGET_AK512
+    PG1IOCON2bits.OVRENL = 0;
+    PG2IOCON2bits.OVRENL = 0;
+    PG3IOCON2bits.OVRENL = 0;
+#else
     PG1IOCONbits.OVRENL = 0;
     PG2IOCONbits.OVRENL = 0;
     PG3IOCONbits.OVRENL = 0;
+#endif
 
     /* Wait for bootstrap charging time */
     while (i)
@@ -170,9 +206,15 @@ void ChargeBootstrapCapacitors(void)
     PWM_PDC1 = 0;
 
     /* Release H-side override */
+#if GARUDA_TARGET_AK512
+    PG3IOCON2bits.OVRENH = 0;
+    PG2IOCON2bits.OVRENH = 0;
+    PG1IOCON2bits.OVRENH = 0;
+#else
     PG3IOCONbits.OVRENH = 0;
     PG2IOCONbits.OVRENH = 0;
     PG1IOCONbits.OVRENH = 0;
+#endif
 }
 
 /**
@@ -194,6 +236,50 @@ void InitPWMGenerator1(void)
     PG1CONbits.SOCS = 0;           /* Local EOC */
 
     PG1STAT     = 0x0000;
+#if GARUDA_TARGET_AK512
+    PG1IOCON1   = 0x0000;
+    PG1IOCON2   = 0x0000;
+
+    PG1IOCON2bits.CLMOD = 0;
+    PG1IOCON1bits.SWAP = 0;
+    PG1IOCON2bits.OVRENH = 1;      /* Start with override enabled */
+    PG1IOCON2bits.OVRENL = 1;
+    PG1IOCON2bits.OVRDAT = 0;      /* Override data = LOW */
+    PG1IOCON2bits.OSYNC = 0;
+    PG1IOCON2bits.FLT1DAT = 0;
+    PG1IOCON2bits.CLDAT = 0;
+    PG1IOCON2bits.FFDAT = 0;
+    PG1IOCON2bits.DBDAT = 0;
+
+    PG1IOCON1bits.CAPSRC = 0;
+    PG1IOCON1bits.DTCMPSEL = 0;
+    PG1IOCON1bits.PMOD = 0;        /* Complementary mode */
+    PG1IOCON1bits.PENH = 1;
+    PG1IOCON1bits.PENL = 1;
+    PG1IOCON1bits.POLH = 0;
+    PG1IOCON1bits.POLL = 0;
+
+    /* Event registers */
+    PG1EVT1     = 0x0000;
+    PG1EVT2     = 0x0000;
+    PG1EVT1bits.ADTR1PS = 0;
+    PG1EVT1bits.ADTR1EN3 = 0;
+    PG1EVT1bits.ADTR1EN2 = 0;
+    PG1EVT1bits.ADTR1EN1 = 1;      /* PG1TRIGA triggers ADC */
+    PG1EVT1bits.UPDTRG = 1;        /* DC write triggers UPDATE */
+    PG1EVT1bits.PGTRGSEL = 0;
+#ifdef ENABLE_PWM_FAULT_PCI
+    PG1EVT1bits.FLT1IEN = 1;       /* Fault interrupt enabled (6-step ISR) */
+#endif
+    PG1EVT1bits.CLIEN = 0;
+    PG1EVT1bits.FFIEN = 0;
+    PG1EVT1bits.SIEN = 0;
+    PG1EVT1bits.IEVTSEL = 3;       /* Time base interrupts disabled */
+    PG1EVT2bits.ADTR2EN3 = 0;
+    PG1EVT2bits.ADTR2EN2 = 0;
+    PG1EVT2bits.ADTR2EN1 = 0;
+    PG1EVT1bits.ADTR1OFS = 0;
+#else
     PG1IOCON    = 0x0000;
 
     PG1IOCONbits.CLMOD = 0;
@@ -234,6 +320,7 @@ void InitPWMGenerator1(void)
     PG1EVTbits.ADTR2EN2 = 0;
     PG1EVTbits.ADTR2EN1 = 0;
     PG1EVTbits.ADTR1OFS = 0;
+#endif
 
     /* Fault PCI — external overcurrent via PCI8 pin (RB11/RP28).
      *
@@ -245,6 +332,28 @@ void InitPWMGenerator1(void)
      * the BOARD_PCI trips we see on 2810 @ 24V where commutation transients
      * peak above U25B's fixed HW threshold for ~1µs after each edge. */
 #ifdef ENABLE_PWM_FAULT_PCI
+#if GARUDA_TARGET_AK512
+    PG1F1PCI1   = 0x0000;
+    PG1F1PCI2   = 0x0000;
+    PG1F1PCI1bits.TSYNCDIS = 0;
+    PG1F1PCI1bits.TERM = 1;         /* Auto-terminate when qualifier goes false */
+    PG1F1PCI1bits.AQPS = 1;         /* Inverted: accept when LEB LOW (post-blanking) */
+    PG1F1PCI1bits.AQSS = 0b010;     /* LEB active as acceptance qualifier */
+    PG1F1PCI1bits.PSYNC = 0;
+    PG1F1PCI1bits.PPS = 1;          /* Inverted polarity */
+    PG1F1PCI2 = 0; /* PCI source: TODO P1b - map AK128 PSS 0b01000 to MC510 one-hot source */
+    PG1F1PCI1bits.BPEN = 0;
+    PG1F1PCI1bits.BPSEL = 0;
+    PG1F1PCI1bits.TERMPS = 0;
+    PG1F1PCI1bits.ACP = 3;          /* Latched */
+    PG1F1PCI1bits.LATMOD = 0;
+    PG1F1PCI1bits.TQPS = 0;
+    PG1F1PCI1bits.TQSS = 0;
+#if FEATURE_HW_OVERCURRENT && OC_PROTECT_MODE == 1
+    PG1F1PCI2 = 0; /* PCI source: TODO P1b - map AK128 PSS 0b11101 to MC510 one-hot source */
+    PG1F1PCI1bits.PPS = 0;          /* Non-inverted */
+#endif
+#else
     PG1FPCI     = 0x0000;
     PG1FPCIbits.TSYNCDIS = 0;
     PG1FPCIbits.TERM = 1;           /* Auto-terminate when qualifier goes false */
@@ -264,6 +373,7 @@ void InitPWMGenerator1(void)
     PG1FPCIbits.PSS = 0b11101;      /* CMP3 (replaces RPn/PCI8R) */
     PG1FPCIbits.PPS = 0;            /* Non-inverted */
 #endif
+#endif /* GARUDA_TARGET_AK512 */
 #else
     /* FOC mode: FPCI truly disabled via acceptance qualifier gating.
      * Board U25B shunt comparator has no LEB — SVM switching transients
@@ -272,14 +382,33 @@ void InitPWMGenerator1(void)
      * qualifier), AQPS=0. Since PGxLEB=0 in FOC, LEB never asserts →
      * qualifier never met → fault NEVER accepted. Software OC via ADC
      * ibusRaw is the primary protection in FOC mode. */
+#if GARUDA_TARGET_AK512
+    PG1F1PCI1   = 0x0000;
+    PG1F1PCI2   = 0x0000;
+    PG1F1PCI1bits.ACP  = 1;     /* Edge-sensitive (requires qualifier) */
+    PG1F1PCI1bits.AQSS = 0b010; /* LEB active as acceptance qualifier */
+    PG1F1PCI1bits.AQPS = 0;     /* Non-inverted: need LEB HIGH to accept */
+    PG1F1PCI1bits.TERM = 1;     /* Safety: auto-terminate if somehow accepted */
+#else
     PG1FPCI     = 0x0000;
     PG1FPCIbits.ACP  = 1;       /* Edge-sensitive (requires qualifier) */
     PG1FPCIbits.AQSS = 0b010;   /* LEB active as acceptance qualifier */
     PG1FPCIbits.AQPS = 0;       /* Non-inverted: need LEB HIGH to accept */
     PG1FPCIbits.TERM = 1;       /* Safety: auto-terminate if somehow accepted */
+#endif /* GARUDA_TARGET_AK512 */
 #endif
 
 #if FEATURE_HW_OVERCURRENT && (OC_PROTECT_MODE == 0 || OC_PROTECT_MODE == 2) && OC_CLPCI_ENABLE
+#if GARUDA_TARGET_AK512
+    PG1CLPCI1   = 0x0000;
+    PG1CLPCI2 = 0; /* PCI source: TODO P1b - map AK128 PSS 0b11101 to MC510 one-hot source */
+    PG1CLPCI1bits.PPS = 0;         /* Non-inverted (CMP3 high = overcurrent) */
+    PG1CLPCI1bits.TERM = 1;        /* Auto-terminate when PCI source goes inactive */
+    PG1CLPCI1bits.ACP = 0b011;    /* Latched acceptance (recommended with LEB) */
+    PG1CLPCI1bits.PSYNC = 0;
+    PG1CLPCI1bits.AQSS = 0b010;   /* LEB active as acceptance qualifier */
+    PG1CLPCI1bits.AQPS = 1;       /* Inverted: accept only when LEB inactive */
+#else
     PG1CLPCI    = 0x0000;
     PG1CLPCIbits.PSS = 0b11101;    /* Comparator 3 output */
     PG1CLPCIbits.PPS = 0;          /* Non-inverted (CMP3 high = overcurrent) */
@@ -288,13 +417,26 @@ void InitPWMGenerator1(void)
     PG1CLPCIbits.PSYNC = 0;
     PG1CLPCIbits.AQSS = 0b010;    /* LEB active as acceptance qualifier */
     PG1CLPCIbits.AQPS = 1;        /* Inverted: accept only when LEB inactive */
+#endif /* GARUDA_TARGET_AK512 */
     /* CLIEN stays 0 — no ISR. CLPCI protection is pure hardware.
      * Trip counting uses CLEVT polling in ADC ISR. */
 #else
+#if GARUDA_TARGET_AK512
+    PG1CLPCI1   = 0x0000;
+    PG1CLPCI2   = 0x0000;
+#else
     PG1CLPCI    = 0x0000;
+#endif /* GARUDA_TARGET_AK512 */
 #endif
+#if GARUDA_TARGET_AK512
+    PG1FFPCI1   = 0x0000;
+    PG1FFPCI2   = 0x0000;
+    PG1SPCI1    = 0x0000;
+    PG1SPCI2    = 0x0000;
+#else
     PG1FFPCI    = 0x0000;
     PG1SPCI     = 0x0000;
+#endif
     /* LEB counter — drives the FPCI qualifier above (and CLPCI if enabled).
      * Runs on every H/L edge, so any CMP3 / board-U25B transient in the
      * first OC_LEB_COUNTS PWM clocks after a switch edge is ignored. */
@@ -341,6 +483,47 @@ void InitPWMGenerator2(void)
     PG2CONbits.SOCS = 1;           /* Triggered by PG1 */
 
     PG2STAT     = 0x0000;
+#if GARUDA_TARGET_AK512
+    PG2IOCON1   = 0x0000;
+    PG2IOCON2   = 0x0000;
+
+    PG2IOCON2bits.CLMOD = 0;
+    PG2IOCON1bits.SWAP = 0;
+    PG2IOCON2bits.OVRENH = 1;
+    PG2IOCON2bits.OVRENL = 1;
+    PG2IOCON2bits.OVRDAT = 0;
+    PG2IOCON2bits.OSYNC = 0;
+    PG2IOCON2bits.FLT1DAT = 0;
+    PG2IOCON2bits.CLDAT = 0;
+    PG2IOCON2bits.FFDAT = 0;
+    PG2IOCON2bits.DBDAT = 0;
+
+    PG2IOCON1bits.CAPSRC = 0;
+    PG2IOCON1bits.DTCMPSEL = 0;
+    PG2IOCON1bits.PMOD = 0;
+    PG2IOCON1bits.PENH = 1;
+    PG2IOCON1bits.PENL = 1;
+    PG2IOCON1bits.POLH = 0;
+    PG2IOCON1bits.POLL = 0;
+
+    PG2EVT1     = 0x0000;
+    PG2EVT2     = 0x0000;
+    PG2EVT1bits.ADTR1PS = 0;
+    PG2EVT1bits.ADTR1EN3 = 0;
+    PG2EVT1bits.ADTR1EN2 = 0;
+    PG2EVT1bits.ADTR1EN1 = 0;
+    PG2EVT1bits.UPDTRG = 1;        /* DC write triggers UPDATE (fix: slave wasn't loading duty) */
+    PG2EVT1bits.PGTRGSEL = 0;
+    PG2EVT1bits.FLT1IEN = 0;
+    PG2EVT1bits.CLIEN = 0;
+    PG2EVT1bits.FFIEN = 0;
+    PG2EVT1bits.SIEN = 0;
+    PG2EVT1bits.IEVTSEL = 3;
+    PG2EVT2bits.ADTR2EN3 = 0;
+    PG2EVT2bits.ADTR2EN2 = 0;
+    PG2EVT2bits.ADTR2EN1 = 0;
+    PG2EVT1bits.ADTR1OFS = 0;
+#else
     PG2IOCON    = 0x0000;
 
     PG2IOCONbits.CLMOD = 0;
@@ -378,9 +561,32 @@ void InitPWMGenerator2(void)
     PG2EVTbits.ADTR2EN2 = 0;
     PG2EVTbits.ADTR2EN1 = 0;
     PG2EVTbits.ADTR1OFS = 0;
+#endif
 
 #ifdef ENABLE_PWM_FAULT_PCI
     /* LEB-gated FPCI acceptance — see PG1 comment */
+#if GARUDA_TARGET_AK512
+    PG2F1PCI1   = 0x0000;
+    PG2F1PCI2   = 0x0000;
+    PG2F1PCI1bits.TSYNCDIS = 0;
+    PG2F1PCI1bits.TERM = 1;
+    PG2F1PCI1bits.AQPS = 1;         /* Inverted: accept when LEB LOW */
+    PG2F1PCI1bits.AQSS = 0b010;     /* LEB as acceptance qualifier */
+    PG2F1PCI1bits.PSYNC = 0;
+    PG2F1PCI1bits.PPS = 1;
+    PG2F1PCI2 = 0; /* PCI source: TODO P1b - map AK128 PSS 0b01000 to MC510 one-hot source */
+    PG2F1PCI1bits.BPEN = 0;
+    PG2F1PCI1bits.BPSEL = 0;
+    PG2F1PCI1bits.TERMPS = 0;
+    PG2F1PCI1bits.ACP = 3;
+    PG2F1PCI1bits.LATMOD = 0;
+    PG2F1PCI1bits.TQPS = 0;
+    PG2F1PCI1bits.TQSS = 0;
+#if FEATURE_HW_OVERCURRENT && OC_PROTECT_MODE == 1
+    PG2F1PCI2 = 0; /* PCI source: TODO P1b - map AK128 PSS 0b11101 to MC510 one-hot source */
+    PG2F1PCI1bits.PPS = 0;          /* Non-inverted */
+#endif
+#else
     PG2FPCI     = 0x0000;
     PG2FPCIbits.TSYNCDIS = 0;
     PG2FPCIbits.TERM = 1;
@@ -400,16 +606,36 @@ void InitPWMGenerator2(void)
     PG2FPCIbits.PSS = 0b11101;      /* CMP3 (replaces RPn/PCI8R) */
     PG2FPCIbits.PPS = 0;            /* Non-inverted */
 #endif
+#endif /* GARUDA_TARGET_AK512 */
 #else
     /* FOC: FPCI disabled via LEB qualifier gating (see PG1 comment) */
+#if GARUDA_TARGET_AK512
+    PG2F1PCI1   = 0x0000;
+    PG2F1PCI2   = 0x0000;
+    PG2F1PCI1bits.ACP  = 1;
+    PG2F1PCI1bits.AQSS = 0b010;
+    PG2F1PCI1bits.AQPS = 0;
+    PG2F1PCI1bits.TERM = 1;
+#else
     PG2FPCI     = 0x0000;
     PG2FPCIbits.ACP  = 1;
     PG2FPCIbits.AQSS = 0b010;
     PG2FPCIbits.AQPS = 0;
     PG2FPCIbits.TERM = 1;
+#endif /* GARUDA_TARGET_AK512 */
 #endif
 
 #if FEATURE_HW_OVERCURRENT && (OC_PROTECT_MODE == 0 || OC_PROTECT_MODE == 2) && OC_CLPCI_ENABLE
+#if GARUDA_TARGET_AK512
+    PG2CLPCI1   = 0x0000;
+    PG2CLPCI2 = 0; /* PCI source: TODO P1b - map AK128 PSS 0b11101 to MC510 one-hot source */
+    PG2CLPCI1bits.PPS = 0;
+    PG2CLPCI1bits.TERM = 1;
+    PG2CLPCI1bits.ACP = 0b011;    /* Latched acceptance (recommended with LEB) */
+    PG2CLPCI1bits.PSYNC = 0;
+    PG2CLPCI1bits.AQSS = 0b010;   /* LEB active as acceptance qualifier */
+    PG2CLPCI1bits.AQPS = 1;       /* Inverted: accept only when LEB inactive */
+#else
     PG2CLPCI    = 0x0000;
     PG2CLPCIbits.PSS = 0b11101;    /* Comparator 3 output */
     PG2CLPCIbits.PPS = 0;
@@ -418,11 +644,24 @@ void InitPWMGenerator2(void)
     PG2CLPCIbits.PSYNC = 0;
     PG2CLPCIbits.AQSS = 0b010;    /* LEB active as acceptance qualifier */
     PG2CLPCIbits.AQPS = 1;        /* Inverted: accept only when LEB inactive */
+#endif /* GARUDA_TARGET_AK512 */
+#else
+#if GARUDA_TARGET_AK512
+    PG2CLPCI1   = 0x0000;
+    PG2CLPCI2   = 0x0000;
 #else
     PG2CLPCI    = 0x0000;
+#endif /* GARUDA_TARGET_AK512 */
 #endif
+#if GARUDA_TARGET_AK512
+    PG2FFPCI1   = 0x0000;
+    PG2FFPCI2   = 0x0000;
+    PG2SPCI1    = 0x0000;
+    PG2SPCI2    = 0x0000;
+#else
     PG2FFPCI    = 0x0000;
     PG2SPCI     = 0x0000;
+#endif
     /* LEB counter — see PG1 comment. Required for FPCI qualifier. */
 #if FEATURE_HW_OVERCURRENT
     PG2LEB      = 0x0000;
@@ -466,6 +705,47 @@ void InitPWMGenerator3(void)
     PG3CONbits.SOCS = 1;
 
     PG3STAT     = 0x0000;
+#if GARUDA_TARGET_AK512
+    PG3IOCON1   = 0x0000;
+    PG3IOCON2   = 0x0000;
+
+    PG3IOCON2bits.CLMOD = 0;
+    PG3IOCON1bits.SWAP = 0;
+    PG3IOCON2bits.OVRENH = 1;
+    PG3IOCON2bits.OVRENL = 1;
+    PG3IOCON2bits.OVRDAT = 0;
+    PG3IOCON2bits.OSYNC = 0;
+    PG3IOCON2bits.FLT1DAT = 0;
+    PG3IOCON2bits.CLDAT = 0;
+    PG3IOCON2bits.FFDAT = 0;
+    PG3IOCON2bits.DBDAT = 0;
+
+    PG3IOCON1bits.CAPSRC = 0;
+    PG3IOCON1bits.DTCMPSEL = 0;
+    PG3IOCON1bits.PMOD = 0;
+    PG3IOCON1bits.PENH = 1;
+    PG3IOCON1bits.PENL = 1;
+    PG3IOCON1bits.POLH = 0;
+    PG3IOCON1bits.POLL = 0;
+
+    PG3EVT1     = 0x0000;
+    PG3EVT2     = 0x0000;
+    PG3EVT1bits.ADTR1PS = 0;
+    PG3EVT1bits.ADTR1EN3 = 0;
+    PG3EVT1bits.ADTR1EN2 = 0;
+    PG3EVT1bits.ADTR1EN1 = 0;
+    PG3EVT1bits.UPDTRG = 1;        /* DC write triggers UPDATE (fix: slave wasn't loading duty) */
+    PG3EVT1bits.PGTRGSEL = 0;
+    PG3EVT1bits.FLT1IEN = 0;
+    PG3EVT1bits.CLIEN = 0;
+    PG3EVT1bits.FFIEN = 0;
+    PG3EVT1bits.SIEN = 0;
+    PG3EVT1bits.IEVTSEL = 3;
+    PG3EVT2bits.ADTR2EN3 = 0;
+    PG3EVT2bits.ADTR2EN2 = 0;
+    PG3EVT2bits.ADTR2EN1 = 0;
+    PG3EVT1bits.ADTR1OFS = 0;
+#else
     PG3IOCON    = 0x0000;
 
     PG3IOCONbits.CLMOD = 0;
@@ -503,9 +783,32 @@ void InitPWMGenerator3(void)
     PG3EVTbits.ADTR2EN2 = 0;
     PG3EVTbits.ADTR2EN1 = 0;
     PG3EVTbits.ADTR1OFS = 0;
+#endif
 
 #ifdef ENABLE_PWM_FAULT_PCI
     /* LEB-gated FPCI acceptance — see PG1 comment */
+#if GARUDA_TARGET_AK512
+    PG3F1PCI1   = 0x0000;
+    PG3F1PCI2   = 0x0000;
+    PG3F1PCI1bits.TSYNCDIS = 0;
+    PG3F1PCI1bits.TERM = 1;
+    PG3F1PCI1bits.AQPS = 1;         /* Inverted: accept when LEB LOW */
+    PG3F1PCI1bits.AQSS = 0b010;     /* LEB as acceptance qualifier */
+    PG3F1PCI1bits.PSYNC = 0;
+    PG3F1PCI1bits.PPS = 1;
+    PG3F1PCI2 = 0; /* PCI source: TODO P1b - map AK128 PSS 0b01000 to MC510 one-hot source */
+    PG3F1PCI1bits.BPEN = 0;
+    PG3F1PCI1bits.BPSEL = 0;
+    PG3F1PCI1bits.TERMPS = 0;
+    PG3F1PCI1bits.ACP = 3;
+    PG3F1PCI1bits.LATMOD = 0;
+    PG3F1PCI1bits.TQPS = 0;
+    PG3F1PCI1bits.TQSS = 0;
+#if FEATURE_HW_OVERCURRENT && OC_PROTECT_MODE == 1
+    PG3F1PCI2 = 0; /* PCI source: TODO P1b - map AK128 PSS 0b11101 to MC510 one-hot source */
+    PG3F1PCI1bits.PPS = 0;          /* Non-inverted */
+#endif
+#else
     PG3FPCI     = 0x0000;
     PG3FPCIbits.TSYNCDIS = 0;
     PG3FPCIbits.TERM = 1;
@@ -525,16 +828,36 @@ void InitPWMGenerator3(void)
     PG3FPCIbits.PSS = 0b11101;      /* CMP3 (replaces RPn/PCI8R) */
     PG3FPCIbits.PPS = 0;            /* Non-inverted */
 #endif
+#endif /* GARUDA_TARGET_AK512 */
 #else
     /* FOC: FPCI disabled via LEB qualifier gating (see PG1 comment) */
+#if GARUDA_TARGET_AK512
+    PG3F1PCI1   = 0x0000;
+    PG3F1PCI2   = 0x0000;
+    PG3F1PCI1bits.ACP  = 1;
+    PG3F1PCI1bits.AQSS = 0b010;
+    PG3F1PCI1bits.AQPS = 0;
+    PG3F1PCI1bits.TERM = 1;
+#else
     PG3FPCI     = 0x0000;
     PG3FPCIbits.ACP  = 1;
     PG3FPCIbits.AQSS = 0b010;
     PG3FPCIbits.AQPS = 0;
     PG3FPCIbits.TERM = 1;
+#endif /* GARUDA_TARGET_AK512 */
 #endif
 
 #if FEATURE_HW_OVERCURRENT && (OC_PROTECT_MODE == 0 || OC_PROTECT_MODE == 2) && OC_CLPCI_ENABLE
+#if GARUDA_TARGET_AK512
+    PG3CLPCI1   = 0x0000;
+    PG3CLPCI2 = 0; /* PCI source: TODO P1b - map AK128 PSS 0b11101 to MC510 one-hot source */
+    PG3CLPCI1bits.PPS = 0;
+    PG3CLPCI1bits.TERM = 1;
+    PG3CLPCI1bits.ACP = 0b011;    /* Latched acceptance (recommended with LEB) */
+    PG3CLPCI1bits.PSYNC = 0;
+    PG3CLPCI1bits.AQSS = 0b010;   /* LEB active as acceptance qualifier */
+    PG3CLPCI1bits.AQPS = 1;       /* Inverted: accept only when LEB inactive */
+#else
     PG3CLPCI    = 0x0000;
     PG3CLPCIbits.PSS = 0b11101;    /* Comparator 3 output */
     PG3CLPCIbits.PPS = 0;
@@ -543,11 +866,24 @@ void InitPWMGenerator3(void)
     PG3CLPCIbits.PSYNC = 0;
     PG3CLPCIbits.AQSS = 0b010;    /* LEB active as acceptance qualifier */
     PG3CLPCIbits.AQPS = 1;        /* Inverted: accept only when LEB inactive */
+#endif /* GARUDA_TARGET_AK512 */
+#else
+#if GARUDA_TARGET_AK512
+    PG3CLPCI1   = 0x0000;
+    PG3CLPCI2   = 0x0000;
 #else
     PG3CLPCI    = 0x0000;
+#endif /* GARUDA_TARGET_AK512 */
 #endif
+#if GARUDA_TARGET_AK512
+    PG3FFPCI1   = 0x0000;
+    PG3FFPCI2   = 0x0000;
+    PG3SPCI1    = 0x0000;
+    PG3SPCI2    = 0x0000;
+#else
     PG3FFPCI    = 0x0000;
     PG3SPCI     = 0x0000;
+#endif
     /* LEB counter — see PG1 comment. Required for FPCI qualifier. */
 #if FEATURE_HW_OVERCURRENT
     PG3LEB      = 0x0000;
@@ -586,10 +922,20 @@ void InitPWMGenerator3(void)
  * The reduced skew is what prevents 24 V · (di/dt) transient spikes from
  * crossing the 22 A board fault threshold during a sector transition.
  */
+#if GARUDA_TARGET_AK512
+/* MC510: PGxIOCON is split — PENH/PENL live in PGxIOCON1 (written once at
+ * init, never touched during commutation), while all override fields live in
+ * PGxIOCON2: OVRENH=bit21, OVRENL=bit20, OVRDAT=bits[13:12] (bit13=H, bit12=L).
+ * A single atomic 32-bit write to PGxIOCON2 preserves the low-skew property. */
+#define PG_IOCON_PWM_ACTIVE  0x00000000U                            /* ENH=0 ENL=0 */
+#define PG_IOCON_LOW         0x00301000U                            /* ENH=1 ENL=1 OVRDAT=01 (H=LOW, L=HIGH sink) */
+#define PG_IOCON_FLOAT       0x00300000U                            /* ENH=1 ENL=1 OVRDAT=00 (both LOW, high-Z) */
+#else
 #define PG_IOCON_KEEP        0x000C0000U  /* PENH=1, PENL=1 */
 #define PG_IOCON_PWM_ACTIVE  (PG_IOCON_KEEP | 0x00000000U)          /* ENH=0 ENL=0 */
 #define PG_IOCON_LOW         (PG_IOCON_KEEP | 0x00003400U)          /* ENH=1 ENL=1 OVRDAT=01 (H=LOW, L=HIGH sink) */
 #define PG_IOCON_FLOAT       (PG_IOCON_KEEP | 0x00003000U)          /* ENH=1 ENL=1 OVRDAT=00 (both LOW, high-Z) */
+#endif
 
 static inline uint32_t pgIoconWord(uint8_t mode)
 {
@@ -630,15 +976,27 @@ void HAL_PWM_SetCommutationStep(uint8_t step)
     {
         /* LOW phase → complementary PWM (its PDC carries the MIN_DUTY base,
          * written by HAL_PWM_SetDutyCycle). Active/float roles unchanged. */
+#if GARUDA_TARGET_AK512
+        PG1IOCON2 = pgIoconWord((s->phaseA == PHASE_LOW) ? PHASE_PWM_ACTIVE : s->phaseA);
+        PG2IOCON2 = pgIoconWord((s->phaseB == PHASE_LOW) ? PHASE_PWM_ACTIVE : s->phaseB);
+        PG3IOCON2 = pgIoconWord((s->phaseC == PHASE_LOW) ? PHASE_PWM_ACTIVE : s->phaseC);
+#else
         PG1IOCON = pgIoconWord((s->phaseA == PHASE_LOW) ? PHASE_PWM_ACTIVE : s->phaseA);
         PG2IOCON = pgIoconWord((s->phaseB == PHASE_LOW) ? PHASE_PWM_ACTIVE : s->phaseB);
         PG3IOCON = pgIoconWord((s->phaseC == PHASE_LOW) ? PHASE_PWM_ACTIVE : s->phaseC);
+#endif
         return;
     }
 #endif
+#if GARUDA_TARGET_AK512
+    PG1IOCON2 = pgIoconWord(s->phaseA);
+    PG2IOCON2 = pgIoconWord(s->phaseB);
+    PG3IOCON2 = pgIoconWord(s->phaseC);
+#else
     PG1IOCON = pgIoconWord(s->phaseA);
     PG2IOCON = pgIoconWord(s->phaseB);
     PG3IOCON = pgIoconWord(s->phaseC);
+#endif
 }
 
 /**
@@ -714,21 +1072,36 @@ void HAL_PWM_SetDutyCycle3Phase(uint32_t dutyA, uint32_t dutyB, uint32_t dutyC)
  */
 void HAL_PWM_ReleaseAllOverrides(void)
 {
+#if GARUDA_TARGET_AK512
+    PG3IOCON2bits.OVRENH = 0;
+    PG3IOCON2bits.OVRENL = 0;
+    PG2IOCON2bits.OVRENH = 0;
+    PG2IOCON2bits.OVRENL = 0;
+    PG1IOCON2bits.OVRENH = 0;
+    PG1IOCON2bits.OVRENL = 0;
+#else
     PG3IOCONbits.OVRENH = 0;
     PG3IOCONbits.OVRENL = 0;
     PG2IOCONbits.OVRENH = 0;
     PG2IOCONbits.OVRENL = 0;
     PG1IOCONbits.OVRENH = 0;
     PG1IOCONbits.OVRENL = 0;
+#endif
 }
 
 void HAL_PWM_ReleaseFloatPhase(uint8_t step)
 {
     switch (commutationTable[step].floatingPhase)
     {
+#if GARUDA_TARGET_AK512
+        case 0: PG1IOCON2bits.OVRENH = 0; PG1IOCON2bits.OVRENL = 0; break;
+        case 1: PG2IOCON2bits.OVRENH = 0; PG2IOCON2bits.OVRENL = 0; break;
+        case 2: PG3IOCON2bits.OVRENH = 0; PG3IOCON2bits.OVRENL = 0; break;
+#else
         case 0: PG1IOCONbits.OVRENH = 0; PG1IOCONbits.OVRENL = 0; break;
         case 1: PG2IOCONbits.OVRENH = 0; PG2IOCONbits.OVRENL = 0; break;
         case 2: PG3IOCONbits.OVRENH = 0; PG3IOCONbits.OVRENL = 0; break;
+#endif
     }
 }
 
@@ -736,6 +1109,17 @@ void HAL_PWM_FloatPhaseToHiZ(uint8_t step)
 {
     switch (commutationTable[step].floatingPhase)
     {
+#if GARUDA_TARGET_AK512
+        case 0:
+            PG1IOCON2bits.OVRDAT = 0b00;
+            PG1IOCON2bits.OVRENH = 1; PG1IOCON2bits.OVRENL = 1; break;
+        case 1:
+            PG2IOCON2bits.OVRDAT = 0b00;
+            PG2IOCON2bits.OVRENH = 1; PG2IOCON2bits.OVRENL = 1; break;
+        case 2:
+            PG3IOCON2bits.OVRDAT = 0b00;
+            PG3IOCON2bits.OVRENH = 1; PG3IOCON2bits.OVRENL = 1; break;
+#else
         case 0:
             PG1IOCONbits.OVRDAT = 0b00;
             PG1IOCONbits.OVRENH = 1; PG1IOCONbits.OVRENL = 1; break;
@@ -745,6 +1129,7 @@ void HAL_PWM_FloatPhaseToHiZ(uint8_t step)
         case 2:
             PG3IOCONbits.OVRDAT = 0b00;
             PG3IOCONbits.OVRENH = 1; PG3IOCONbits.OVRENL = 1; break;
+#endif
     }
 }
 #endif /* FEATURE_SINE_STARTUP || FEATURE_FOC || FEATURE_FOC_V2 */

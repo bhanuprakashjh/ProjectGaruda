@@ -213,6 +213,16 @@ void HAL_OA12_Init(void)
     AMP1CON1bits.HPEN = 1;     /* High-power mode (high bandwidth) */
     AMP1CON1bits.UGE = 0;      /* External resistor gain (not unity) */
     AMP1CON1bits.DIFFCON = 0;  /* Both differential pairs active */
+#if GARUDA_TARGET_AK512
+    /* MC510: AMPxCON1 has NO OMONEN field (no output-monitor enable in the
+     * p33AK512MC510.h header — fields are REFEN/DIFFCON/UGE/HPEN/AMPEN).
+     * TODO P1b: verify MC510 op-amp output readback path without OMONEN. */
+
+    AMP2CON1 = 0x0000;
+    AMP2CON1bits.HPEN = 1;
+    AMP2CON1bits.UGE = 0;
+    AMP2CON1bits.DIFFCON = 0;
+#else
     AMP1CON1bits.OMONEN = 1;   /* RESTORED 2026-06-10: OMONEN=0 experiment made the
                                 * bus readout WORSE (wandering rails at rest) — this
                                 * board has run OMONEN=1 on all three for weeks. The
@@ -224,6 +234,7 @@ void HAL_OA12_Init(void)
     AMP2CON1bits.UGE = 0;
     AMP2CON1bits.DIFFCON = 0;
     AMP2CON1bits.OMONEN = 1;
+#endif
 
     AMP1CON1bits.AMPEN = 1;    /* Enable OA1 — begins settling (~10us) */
     AMP2CON1bits.AMPEN = 1;    /* Enable OA2 */
@@ -242,7 +253,12 @@ void HAL_OA3_Init(void)
     AMP3CON1bits.HPEN = 1;       /* High-power mode (high bandwidth) */
     AMP3CON1bits.UGE = 0;        /* External resistor gain (not unity) */
     AMP3CON1bits.DIFFCON = 0;    /* Both differential pairs active */
+#if GARUDA_TARGET_AK512
+    /* MC510: no OMONEN field on AMP3CON1 — see HAL_OA12_Init note.
+     * TODO P1b: verify MC510 op-amp output readback path without OMONEN. */
+#else
     AMP3CON1bits.OMONEN = 1;     /* restored — see HAL_OA12_Init note */
+#endif
     AMP3CON1bits.AMPEN = 1;      /* Enable op-amp — begins settling (~10us) */
 }
 #endif

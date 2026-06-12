@@ -1047,15 +1047,25 @@ void HWZC_OnTimeout(volatile GARUDA_DATA_T *pData)
     {
         pData->hwzc.dbgTimeoutAdcVal = AD1CH5DATA;
         pData->hwzc.dbgTimeoutThresh = AD1CH5CMPLO;
+#if GARUDA_TARGET_AK512
+        pData->hwzc.dbgTimeoutCmpmod = AD1CH5CON2bits.CMPMOD;
+        pData->hwzc.dbgTimeoutCmpstat = AD1CMPSTATbits.CH5FLG;
+#else
         pData->hwzc.dbgTimeoutCmpmod = AD1CH5CONbits.CMPMOD;
         pData->hwzc.dbgTimeoutCmpstat = AD1CMPSTATbits.CH5CMP;
+#endif
     }
     else
     {
         pData->hwzc.dbgTimeoutAdcVal = AD2CH1DATA;
         pData->hwzc.dbgTimeoutThresh = AD2CH1CMPLO;
+#if GARUDA_TARGET_AK512
+        pData->hwzc.dbgTimeoutCmpmod = AD2CH1CON2bits.CMPMOD;
+        pData->hwzc.dbgTimeoutCmpstat = AD2CMPSTATbits.CH1FLG;
+#else
         pData->hwzc.dbgTimeoutCmpmod = AD2CH1CONbits.CMPMOD;
         pData->hwzc.dbgTimeoutCmpstat = AD2CMPSTATbits.CH1CMP;
+#endif
     }
     pData->hwzc.dbgTimeoutCore = core;
     pData->hwzc.dbgTimeoutStep = pData->currentStep;

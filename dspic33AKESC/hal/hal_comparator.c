@@ -192,12 +192,25 @@ static void CMP3_Initialize(void)
  */
 static void CMP3_InitOvercurrent(void)
 {
+#if GARUDA_TARGET_AK512
+    /* MC510: comparator-config fields moved from DACxCON to DACxCMP
+     * (INSEL renamed INPSEL). Zero DAC3CMP to mirror the DAC3CON=0 reset
+     * of these fields on AK128. */
+    DAC3CON = 0;
+    DAC3CMP = 0;
+    DAC3CMPbits.FLTREN = OC_CMP_FILTER_EN;
+    DAC3CMPbits.CMPPOL = 0;         /* Non-inverted: HIGH when OA3OUT > DAC */
+    DAC3CMPbits.INPSEL = 0;         /* CMP3A = RA5 = OA3OUT */
+    DAC3CMPbits.HYSPOL = 0;         /* Hysteresis on rising edge */
+    DAC3CMPbits.HYSSEL = OC_CMP_HYSTERESIS;
+#else
     DAC3CON = 0;
     DAC3CONbits.FLTREN = OC_CMP_FILTER_EN;
     DAC3CONbits.CMPPOL = 0;         /* Non-inverted: HIGH when OA3OUT > DAC */
     DAC3CONbits.INSEL = 0;          /* CMP3A = RA5 = OA3OUT */
     DAC3CONbits.HYSPOL = 0;         /* Hysteresis on rising edge */
     DAC3CONbits.HYSSEL = OC_CMP_HYSTERESIS;
+#endif
 
     /* All modes start with elevated startup threshold. On low-R motors
      * (A2212: 0.065 ohm), stall current during align/ramp easily exceeds
@@ -293,9 +306,15 @@ uint8_t HAL_CMP_ReadStatus(uint8_t phase)
 {
     switch (phase)
     {
+#if GARUDA_TARGET_AK512
+        case 0: return DAC1CMPbits.CMPSTAT;
+        case 1: return DAC2CMPbits.CMPSTAT;
+        case 2: return DAC3CMPbits.CMPSTAT;
+#else
         case 0: return DAC1CONbits.CMPSTAT;
         case 1: return DAC2CONbits.CMPSTAT;
         case 2: return DAC3CONbits.CMPSTAT;
+#endif
         default: return 0;
     }
 }
