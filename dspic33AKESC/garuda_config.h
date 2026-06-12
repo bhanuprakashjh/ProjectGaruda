@@ -163,7 +163,8 @@ extern "C" {
 #define ARM_BEEP_FREQ1_HZ     800  /* note 1 (first ~ARM_BEEP_MS/3) */
 #define ARM_BEEP_FREQ2_HZ    1200  /* note 2 */
 #define ARM_BEEP_FREQ3_HZ    1600  /* note 3 — rising chirp */
-#define ARM_BEEP_DUTY_PCT       2  /* drive strength — align-class current, safe parked */
+#define ARM_BEEP_DUTY_PCT       3  /* drive strength — louder; = profile align duty class. 4+ NOT
+                                    * recommended at 24V: burst peaks approach the 18A SW OC. */
 #define PLL_START_TARGET_ERPM      10000   /* blind schedule ceiling (hold if unsynced) */
 #define FEATURE_SKIP_MORPH      0  /* PARKED 2026-06-10 (bench-proven 9/9 but engage is
                                     * effectively blind at the 3k entry: the post-sine coast
