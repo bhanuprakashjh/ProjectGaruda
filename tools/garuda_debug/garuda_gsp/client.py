@@ -76,6 +76,9 @@ def find_port(preferred: str = None) -> str:
     return cands[0][0] if cands else _default_port()
 
 
+last_reasons = {}
+
+
 def probe_ports(preferred: str = None, baud: int = 115200,
                 timeout: float = 0.5, on_try=None) -> str:
     """Open each candidate port and send GET_INFO; return the device that
@@ -93,8 +96,9 @@ def probe_ports(preferred: str = None, baud: int = 115200,
                  for p in sorted(usb, key=_score)]
         if not cands:                       # nothing USB — fall back to all
             cands = candidate_ports()
+    last_reasons.clear()
     for dev, desc in cands:
-        ok = False
+        ok, reason = False, "no answer"
         try:
             # exclusive=True so a port already held by another app errors out
             # immediately instead of blocking the probe.
@@ -108,13 +112,26 @@ def probe_ports(preferred: str = None, baud: int = 115200,
                         ok = True
                         break
                     ser.reset_input_buffer()
-        except Exception:
+        except Exception as e:
             ok = False
+            reason = ("BUSY — held by another app (close MPLAB/Data "
+                      "Visualizer/terminal, or a stale broker)"
+                      if _is_busy_error(e) else f"open failed: {e}")
+        last_reasons[dev] = "answered" if ok else reason
         if on_try:
             on_try(dev, desc, ok)
         if ok:
             return dev
     return None
+
+
+def _is_busy_error(e) -> bool:
+    """True if the open failed because another process holds the port
+    (Windows 'Access is denied' / errno 13/16, Linux exclusive-lock)."""
+    txt = str(e).lower()
+    return ("denied" in txt or "busy" in txt or "errno 13" in txt
+            or "errno 16" in txt or "exclusively lock" in txt
+            or "in use" in txt)
 
 
 def list_ports_human():

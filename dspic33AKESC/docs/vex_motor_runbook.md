@@ -96,6 +96,29 @@ chain modeled as the MCLV board). Treat the table as a failure-mode map,
 not a guarantee. Your first sessions are the calibration data — the GUI
 auto-records; send the `sessions/` folder back with notes.
 
+## Windows serial-port troubleshooting (GUI can't find/open the board)
+
+Windows COM ports are **exclusive** — only one program can hold one. The GUI's
+connect error lists every port it saw; a port tagged `[BUSY]` is held by
+another program. In order of likelihood:
+
+1. **MPLAB X / Data Visualizer is still attached** to the PKoB COM after
+   flashing. Close the Data Visualizer tab (or MPLAB entirely), click Rescan.
+2. **A terminal app** (PuTTY/TeraTerm/Arduino monitor) is connected. Close it.
+3. **A stale broker** from a previous GUI session that was killed via Task
+   Manager. Check Task Manager for a leftover `python` running
+   `garuda_gsp.broker` and end it (or just reboot).
+4. **No ports listed at all**:
+   - using the PKoB USB? Win10+ has the CDC driver inbox — try another cable
+     (charge-only cables are real) and another USB port.
+   - using an external CH340/CP210x UART dongle? Install its driver.
+   - running our tools under **WSL**? WSL2 cannot see COM ports — run the GUI
+     with native Windows Python, or attach the device with `usbipd-win`.
+5. **Two COM ports, picks the wrong one**: normal — the PKoB debug COM and the
+   data UART look identical. 'Auto-detect' probes each with GET_INFO and picks
+   whichever answers; if you select manually, the board is the one that
+   connects.
+
 ## If it still won't start
 
 Capture one failing run in the GUI and report: the session folder, which

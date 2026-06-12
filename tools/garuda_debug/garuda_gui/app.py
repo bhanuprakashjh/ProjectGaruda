@@ -72,13 +72,20 @@ def _port_hint() -> str:
     """Human hint listing the serial ports we can see — shown on connect failure
     so a Windows user knows which COM to pick (and to avoid the debug COM)."""
     try:
-        from garuda_gsp.client import candidate_ports
+        from garuda_gsp.client import candidate_ports, last_reasons
         cs = candidate_ports()
         if not cs:
-            return "No serial ports found — check the USB cable and the UART driver."
-        return ("Ports seen: " + ", ".join(d for d, _ in cs) +
+            return ("No serial ports found — check the USB cable and the UART "
+                    "driver (CH340/CP210x need a driver on Windows; WSL sees "
+                    "no COM ports without usbipd).")
+        parts = []
+        for d, _ in cs:
+            r = last_reasons.get(d)
+            parts.append(f"{d} [{r}]" if r and r != "answered" else d)
+        return ("Ports seen: " + ", ".join(parts) +
                 ".  Try 'Auto-detect', or pick each port until one connects "
-                "(the board is whichever answers GET_INFO).")
+                "(the board is whichever answers GET_INFO). A [BUSY] port is "
+                "held by another program — close it and Rescan.")
     except Exception:
         return ""
 
