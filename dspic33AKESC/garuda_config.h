@@ -16,6 +16,7 @@
  * only HAL pin/channel tables may branch on this. */
 #if defined(__dsPIC33AK512MC510__)
   #define GARUDA_TARGET_AK512   1
+  #define AK512_BRINGUP_DIAG        /* TEMP: spi_* telemetry carries raw ADC diagnostics */
 #else
   #define GARUDA_TARGET_AK512   0   /* dsPIC33AK128MC106 (original target) */
 #endif

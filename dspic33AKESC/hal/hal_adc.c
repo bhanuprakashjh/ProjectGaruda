@@ -165,7 +165,11 @@ void InitializeADCs(void)
     AD1CH1CON1bits.SAMC = HWZC_SAMC;
     AD1CH1CON1bits.FRAC = 0;     /* right-aligned (LEFT equivalent) */
     AD1CH1CON1bits.DIFF = 0;
-    AD1CH1CON1bits.TRG1SRC = 34; /* SCCP3 Trigger out (1 MHz free-running) */
+    AD1CH1CON1bits.TRG1SRC = 0;  /* gated OFF at init — SelectBemfPhase
+                                  * triggers ONLY the active phase (two
+                                  * simultaneous 1MHz bursts on one core
+                                  * starve the PWM-triggered channels —
+                                  * bench-proven on bring-up day 1) */ /* SCCP3 Trigger out (1 MHz free-running) */
     AD1CH1CON1bits.TRG2SRC = 2;  /* Immediate re-trigger for oversampling repeats */
     AD1CH1CON1bits.MODE = 0b11;  /* Oversampling mode */
     AD1CH1CON1bits.ACCNUM = 0b00; /* 4 samples, result right-shifted by 2 bits */
@@ -178,7 +182,11 @@ void InitializeADCs(void)
     AD1CH2CON1bits.SAMC = HWZC_SAMC;
     AD1CH2CON1bits.FRAC = 0;
     AD1CH2CON1bits.DIFF = 0;
-    AD1CH2CON1bits.TRG1SRC = 34;
+    AD1CH2CON1bits.TRG1SRC = 0;  /* gated OFF at init — SelectBemfPhase
+                                  * triggers ONLY the active phase (two
+                                  * simultaneous 1MHz bursts on one core
+                                  * starve the PWM-triggered channels —
+                                  * bench-proven on bring-up day 1) */
     AD1CH2CON1bits.TRG2SRC = 2;
     AD1CH2CON1bits.MODE = 0b11;
     AD1CH2CON1bits.ACCNUM = 0b00;
@@ -191,7 +199,11 @@ void InitializeADCs(void)
     AD2CH2CON1bits.SAMC = HWZC_SAMC;
     AD2CH2CON1bits.FRAC = 0;
     AD2CH2CON1bits.DIFF = 0;
-    AD2CH2CON1bits.TRG1SRC = 34;
+    AD2CH2CON1bits.TRG1SRC = 0;  /* gated OFF at init — SelectBemfPhase
+                                  * triggers ONLY the active phase (two
+                                  * simultaneous 1MHz bursts on one core
+                                  * starve the PWM-triggered channels —
+                                  * bench-proven on bring-up day 1) */
     AD2CH2CON1bits.TRG2SRC = 2;
     AD2CH2CON1bits.MODE = 0b11;
     AD2CH2CON1bits.ACCNUM = 0b00;
@@ -467,7 +479,15 @@ void HAL_ADC_InitHighSpeedBEMF(void)
 uint8_t HAL_ADC_SelectBemfPhase(uint8_t floatPhase)
 {
 #if GARUDA_TARGET_AK512
-    return (floatPhase <= FLOATING_PHASE_C) ? floatPhase : FLOATING_PHASE_B;
+    uint8_t ph = (floatPhase <= FLOATING_PHASE_C) ? floatPhase : FLOATING_PHASE_B;
+    /* Trigger ONLY the active phase's high-speed channel (SCCP3 = 34);
+     * silence the other two. Keeps each AD core at <=1 burst channel —
+     * same effective load as the 106 — so the PWM-triggered channels
+     * (AD1CH3/CH4, AD2CH3) never starve. */
+    AD1CH1CON1bits.TRG1SRC = (ph == FLOATING_PHASE_A) ? 34 : 0;
+    AD1CH2CON1bits.TRG1SRC = (ph == FLOATING_PHASE_B) ? 34 : 0;
+    AD2CH2CON1bits.TRG1SRC = (ph == FLOATING_PHASE_C) ? 34 : 0;
+    return ph;
 #else
     uint8_t core;
     if (floatPhase == FLOATING_PHASE_B)

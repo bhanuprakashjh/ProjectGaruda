@@ -242,12 +242,34 @@ void GSP_CaptureSnapshot(GSP_SNAPSHOT_T *dst)
 
     /* Speed PI telemetry (zero unless FEATURE_SPEED_PI=1; the struct
      * fields exist either way, sourced from GARUDA_DATA_T.speedPi). */
+#if GARUDA_TARGET_AK512 && defined(AK512_BRINGUP_DIAG)
+    /* TEMPORARY bring-up diagnostics riding the idle speed-PI telemetry:
+     *   spiTarget  = AD1CH3DATA  (VB pwm-synced raw — the 45kHz ISR channel)
+     *   spiError   = AD2CH1DATA  (POT raw)
+     *   spiOutput  = flag word: [13:8]=AD1CH3 TRG1SRC, bit5=PG1 ON,
+     *                bit4..2=AD3/AD2/AD1 ADRDY, bit1=_AD1CH3IE, bit0=_AD1CH3IF
+     *   spiInteg   = AD3CH2DATA  (VBUS raw)
+     * Remove before merge. */
+    dst->speedPiEnabled        = 0xDDu;   /* marker: diagnostics active */
+    dst->speedPiZcsSinceEnable = (uint16_t)AD1CH1DATA;        /* VA hi-speed raw */
+    dst->speedPiTarget         = (int32_t)(uint32_t)AD1CH3DATA;
+    dst->speedPiLastError      = (int32_t)(uint32_t)AD2CH1DATA;
+    dst->speedPiOutputDuty     = (uint16_t)(((uint16_t)AD1CH3CON1bits.TRG1SRC << 8)
+                               | ((uint16_t)PG1CONbits.ON << 5)
+                               | ((uint16_t)AD3CONbits.ADRDY << 4)
+                               | ((uint16_t)AD2CONbits.ADRDY << 3)
+                               | ((uint16_t)AD1CONbits.ADRDY << 2)
+                               | ((uint16_t)_AD1CH3IE << 1)
+                               | (uint16_t)_AD1CH3IF);
+    dst->speedPiIntegratorF    = (float)(uint32_t)AD3CH2DATA;
+#else
     dst->speedPiEnabled        = src->speedPi.enabled ? 1u : 0u;
     dst->speedPiZcsSinceEnable = src->speedPi.zcsSinceEnable;
     dst->speedPiTarget         = src->speedPi.lastTarget;
     dst->speedPiLastError      = src->speedPi.lastError;
     dst->speedPiOutputDuty     = src->speedPi.outputDuty;
     dst->speedPiIntegratorF    = src->speedPi.integratorF;
+#endif
 }
 
 #endif /* FEATURE_GSP */
