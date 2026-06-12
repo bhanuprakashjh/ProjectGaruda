@@ -10,6 +10,16 @@
 #ifndef GARUDA_CONFIG_H
 #define GARUDA_CONFIG_H
 
+/* ── Build target (auto-detected from the compiler's device macro) ──────
+ * GARUDA_TARGET_AK512: dsPIC33AK512MC510 MC DIM (EV67N21A) port — see
+ * docs/migration_dsPIC33AK512MC510.md. Everything above hal/ is shared;
+ * only HAL pin/channel tables may branch on this. */
+#if defined(__dsPIC33AK512MC510__)
+  #define GARUDA_TARGET_AK512   1
+#else
+  #define GARUDA_TARGET_AK512   0   /* dsPIC33AK128MC106 (original target) */
+#endif
+
 #ifdef __cplusplus
 extern "C" {
 #endif
