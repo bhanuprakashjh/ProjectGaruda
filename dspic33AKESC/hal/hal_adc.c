@@ -170,10 +170,10 @@ void InitializeADCs(void)
                                   * simultaneous 1MHz bursts on one core
                                   * starve the PWM-triggered channels —
                                   * bench-proven on bring-up day 1) */ /* SCCP3 Trigger out (1 MHz free-running) */
-    AD1CH1CON1bits.TRG2SRC = 2;  /* Immediate re-trigger for oversampling repeats */
-    AD1CH1CON1bits.MODE = 0b11;  /* Oversampling mode */
+    AD1CH1CON1bits.TRG2SRC = 0;  /* AK512 capture-rate exp: no retrigger */  /* Immediate re-trigger for oversampling repeats */
+    AD1CH1CON1bits.MODE = 0;     /* AK512 capture-rate exp: single sample (was 4x oversample burst) */  /* Oversampling mode */
     AD1CH1CON1bits.ACCNUM = 0b00; /* 4 samples, result right-shifted by 2 bits */
-    AD1CH1CON2bits.ACCBRST = 1;  /* Non-interruptible burst (prevent 24kHz split) */
+    AD1CH1CON2bits.ACCBRST = 0;  /* Non-interruptible burst (prevent 24kHz split) */
     AD1CH1CON2bits.CMPMOD = 0;   /* Comparator disabled initially */
     AD1CH1CMPLO = 0;
     AD1CH1CMPHI = 0;
@@ -187,10 +187,10 @@ void InitializeADCs(void)
                                   * simultaneous 1MHz bursts on one core
                                   * starve the PWM-triggered channels —
                                   * bench-proven on bring-up day 1) */
-    AD1CH2CON1bits.TRG2SRC = 2;
-    AD1CH2CON1bits.MODE = 0b11;
+    AD1CH2CON1bits.TRG2SRC = 0;  /* AK512 capture-rate exp: no retrigger */
+    AD1CH2CON1bits.MODE = 0;     /* AK512 capture-rate exp: single sample (was 4x oversample burst) */
     AD1CH2CON1bits.ACCNUM = 0b00;
-    AD1CH2CON2bits.ACCBRST = 1;
+    AD1CH2CON2bits.ACCBRST = 0;
     AD1CH2CON2bits.CMPMOD = 0;
     AD1CH2CMPLO = 0;
     AD1CH2CMPHI = 0;
@@ -204,10 +204,10 @@ void InitializeADCs(void)
                                   * simultaneous 1MHz bursts on one core
                                   * starve the PWM-triggered channels —
                                   * bench-proven on bring-up day 1) */
-    AD2CH2CON1bits.TRG2SRC = 2;
-    AD2CH2CON1bits.MODE = 0b11;
+    AD2CH2CON1bits.TRG2SRC = 0;  /* AK512 capture-rate exp: no retrigger */
+    AD2CH2CON1bits.MODE = 0;     /* AK512 capture-rate exp: single sample (was 4x oversample burst) */
     AD2CH2CON1bits.ACCNUM = 0b00;
-    AD2CH2CON2bits.ACCBRST = 1;
+    AD2CH2CON2bits.ACCBRST = 0;
     AD2CH2CON2bits.CMPMOD = 0;
     AD2CH2CMPLO = 0;
     AD2CH2CMPHI = 0;
