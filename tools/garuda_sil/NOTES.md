@@ -88,14 +88,22 @@ bench days):
 2. ZERO-TORQUE ENGAGE: first commutation at the align sector = field ON
    the rotor → no pull. FIXED (engage at s0+1, 60° lead) — rotor now
    tracks the blind schedule within ~20%.
-3. OPEN: blind schedule advances ~10× slower than commanded (673 vs 4300
-   eRPM at t=2s with ACCEL=4000) — suspect capture-preempted COMM_PENDING
-   scheduling shares timing ownership with OnPiPeriodExpired during the
-   blind phase (low-speed comparator chatter → captures re-arm SCCP1 at
-   capture-relative delays). Next iteration: trace hwzc.phase transitions
-   per event in the twin; likely fix = in pllStartActive, ignore captures
-   at the OnZcDetected level (timestamp only, never COMM_PENDING).
-Gates as of now: floor 2500, caps 6, window 0.30T–0.75T, accel 4000.
+3. RESOLVED (iteration #4): blind schedule 10× slow was a UNIT BUG, not
+   timing ownership — accel term divided sector time by 1e9 but HR ticks
+   are 10 ns (SCCP_CLOCK_HZ=1e8). Twin 673 eRPM at t=2s; formula gives 672.
+4. RESOLVED (iteration #5): rotor then tracked within 1% but never synced —
+   the absolute window (0.30T..0.75T) is wrong-headed: the locked rotor's
+   ZC sat pinned at 0.14T (twin ~25° angle bias + blanking clip; on real HW
+   load angle/advance/RC lag shift it too). Replaced with a CONSISTENCY
+   gate: plausible (T/8..7T/8) AND |cap−prevCap| < T/4 for 6 consecutive
+   sectors. Lock is consistent, phantoms are random.
+RESULT (commit 6e46121): 12/12 rotor angles. Sync t=1.59s (~2.8k eRPM,
+just above the 2.5k floor), PI pulls cap 0.25T→0.49T post-handover, idle
+10456 at fw/rotor=1.00. experiment_pll.py is the study harness; sil_api
+gained cap-position/pll debug getters.
+Gates: floor 2500, caps 6, consistency T/4, accel 4000, target 10000.
+BENCH HEX BUILT 2026-06-11 23:41 (FEATURE_PLL_STARTUP=1, flag restored to
+0 in repo): /tmp/garuda_pll_startup_234209.hex — awaiting hardware trial.
 
 ## Next (roadmap P2/P3)
 1. Replay-and-score: feed a recorded session's throttle/Vbus through the twin,
