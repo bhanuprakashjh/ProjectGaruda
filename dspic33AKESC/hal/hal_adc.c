@@ -34,14 +34,15 @@ void InitializeADCs(void)
  * against these channels during the I-f ramp; M2 will do the proper handoff. */
 #if FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3 || FEATURE_FOC_AN1078 || FEATURE_IF_STARTUP
 #if GARUDA_TARGET_AK512
-    /* Ia on AD1CH0: OA1OUT = RA2 = AD1AN0, PINSEL=0 */
+    /* Ia on AD1CH0: OA1OUT = RA2 = AD1AN0, PINSEL=0 (AN957) */
     AD1CH0CON1bits.PINSEL = 0;
     AD1CH0CON1bits.SAMC = 3;       /* Low Z from OA1 output */
     AD1CH0CON1bits.FRAC = 0;       /* right-aligned (LEFT equivalent) */
     AD1CH0CON1bits.DIFF = 0;
 
-    /* Ib on AD2CH0: OA2OUT = RB0 = AD2AN1, PINSEL=1 */
-    AD2CH0CON1bits.PINSEL = 1;
+    /* Ib on AD2CH0: OA2OUT = RB0 = AD2AN0, PINSEL=0 (AN957; the 106 had
+     * OA2OUT on AD2AN1 — MC510 bonds it to AD2AN0) */
+    AD2CH0CON1bits.PINSEL = 0;
     AD2CH0CON1bits.SAMC = 3;       /* Low Z from OA2 output */
     AD2CH0CON1bits.FRAC = 0;       /* right-aligned (LEFT equivalent) */
     AD2CH0CON1bits.DIFF = 0;
@@ -60,17 +61,25 @@ void InitializeADCs(void)
 #endif /* GARUDA_TARGET_AK512 */
 #else
 #if GARUDA_TARGET_AK512
-    /* Phase B on AD1CH0: RB8 = AD1AN11, PINSEL=11 — interrupt source, always sampled */
-    AD1CH0CON1bits.PINSEL = 11;
-    AD1CH0CON1bits.SAMC = 5;       /* Increased for divider impedance */
-    AD1CH0CON1bits.FRAC = 0;       /* right-aligned (LEFT equivalent) */
-    AD1CH0CON1bits.DIFF = 0;
+    /* MC510 6-step: every BEMF phase owns a dedicated PWM-synced channel
+     * (PG1TRIGA sampling instant — same trigger event as the 106's CH0s).
+     * Phase B on AD1CH3: RA10 = AD1AN4 — interrupt source, always sampled */
+    AD1CH3CON1bits.PINSEL = 4;
+    AD1CH3CON1bits.SAMC = 5;       /* Increased for divider impedance */
+    AD1CH3CON1bits.FRAC = 0;       /* right-aligned (LEFT equivalent) */
+    AD1CH3CON1bits.DIFF = 0;
 
-    /* Phase A (default) on AD2CH0: RB9 = AD2AN10, PINSEL=10 (muxed with Phase C) */
-    AD2CH0CON1bits.PINSEL = 10;
-    AD2CH0CON1bits.SAMC = 5;       /* Increased for divider impedance */
-    AD2CH0CON1bits.FRAC = 0;       /* right-aligned (LEFT equivalent) */
-    AD2CH0CON1bits.DIFF = 0;
+    /* Phase A on AD1CH4: RA9 = AD1AN3 (dedicated — no A/C mux on MC510) */
+    AD1CH4CON1bits.PINSEL = 3;
+    AD1CH4CON1bits.SAMC = 5;       /* Increased for divider impedance */
+    AD1CH4CON1bits.FRAC = 0;       /* right-aligned (LEFT equivalent) */
+    AD1CH4CON1bits.DIFF = 0;
+
+    /* Phase C on AD2CH3: RB8 = AD2AN4 (dedicated) */
+    AD2CH3CON1bits.PINSEL = 4;
+    AD2CH3CON1bits.SAMC = 5;       /* Increased for divider impedance */
+    AD2CH3CON1bits.FRAC = 0;       /* right-aligned (LEFT equivalent) */
+    AD2CH3CON1bits.DIFF = 0;
 #else
     /* Phase B on AD1CH0: RB8 = AD1AN11, PINSEL=11 — interrupt source, always sampled */
     AD1CH0CONbits.PINSEL = 11;
@@ -87,17 +96,17 @@ void InitializeADCs(void)
 #endif
 
 #if GARUDA_TARGET_AK512
-    /* POT on AD1CH1: RA11 = AD1AN10, PINSEL=10 */
-    AD1CH1CON1bits.PINSEL = 10;
-    AD1CH1CON1bits.SAMC = 5;
-    AD1CH1CON1bits.FRAC = 0;       /* right-aligned (LEFT equivalent) */
-    AD1CH1CON1bits.DIFF = 0;
+    /* POT on AD2CH1: RB15 = AD2AN5, PINSEL=5 (AN957) */
+    AD2CH1CON1bits.PINSEL = 5;
+    AD2CH1CON1bits.SAMC = 5;
+    AD2CH1CON1bits.FRAC = 0;       /* right-aligned (LEFT equivalent) */
+    AD2CH1CON1bits.DIFF = 0;
 
-    /* VBUS on AD1CH4: RA7 = AD1AN6, PINSEL=6 */
-    AD1CH4CON1bits.PINSEL = 6;
-    AD1CH4CON1bits.SAMC = 5;
-    AD1CH4CON1bits.FRAC = 0;       /* right-aligned (LEFT equivalent) */
-    AD1CH4CON1bits.DIFF = 0;
+    /* VBUS on AD3CH2: RF0 = AD3AN4, PINSEL=4 (AN957) */
+    AD3CH2CON1bits.PINSEL = 4;
+    AD3CH2CON1bits.SAMC = 5;
+    AD3CH2CON1bits.FRAC = 0;       /* right-aligned (LEFT equivalent) */
+    AD3CH2CON1bits.DIFF = 0;
 #else
     /* POT on AD1CH1: RA11 = AD1AN10, PINSEL=10 */
     AD1CH1CONbits.PINSEL = 10;
@@ -114,12 +123,12 @@ void InitializeADCs(void)
 
 #if FEATURE_HW_OVERCURRENT
 #if GARUDA_TARGET_AK512
-    /* Bus current on AD1CH2: RA5 = OA3OUT = AD1AN3, PINSEL=3 */
-    AD1CH2CON1bits.PINSEL = 3;
-    AD1CH2CON1bits.SAMC = 3;       /* Fast sample (low Z from OA3 output) */
-    AD1CH2CON1bits.FRAC = 0;       /* right-aligned (LEFT equivalent) */
-    AD1CH2CON1bits.DIFF = 0;
-    AD1CH2CON1bits.TRG1SRC = 4;    /* PWM1 trigger (24kHz, midpoint sampling) */
+    /* Bus current on AD3CH1: RA5 = OA3OUT = AD3AN0, PINSEL=0 (AN957) */
+    AD3CH1CON1bits.PINSEL = 0;
+    AD3CH1CON1bits.SAMC = 3;       /* Fast sample (low Z from OA3 output) */
+    AD3CH1CON1bits.FRAC = 0;       /* right-aligned (LEFT equivalent) */
+    AD3CH1CON1bits.DIFF = 0;
+    AD3CH1CON1bits.TRG1SRC = 4;    /* PWM1 trigger (24kHz, midpoint sampling) */
 #else
     /* Bus current on AD1CH2: RA5 = OA3OUT = AD1AN3, PINSEL=3 */
     AD1CH2CONbits.PINSEL = 3;
@@ -145,31 +154,51 @@ void InitializeADCs(void)
      * the floating-phase voltage is dominated by freewheel-diode
      * conduction and switching ringing, not clean BEMF. */
 #if GARUDA_TARGET_AK512
-    AD1CH5CON1bits.PINSEL = 11;
-    AD1CH5CON1bits.SAMC = HWZC_SAMC;
-    AD1CH5CON1bits.FRAC = 0;     /* right-aligned (LEFT equivalent) */
-    AD1CH5CON1bits.DIFF = 0;
-    AD1CH5CON1bits.TRG1SRC = 14; /* SCCP3 Trigger out (1 MHz free-running) */
-    AD1CH5CON1bits.TRG2SRC = 2;  /* Immediate re-trigger for oversampling repeats */
-    AD1CH5CON1bits.MODE = 0b11;  /* Oversampling mode */
-    AD1CH5CON1bits.ACCNUM = 0b00; /* 4 samples, result right-shifted by 2 bits */
-    AD1CH5CON2bits.ACCBRST = 1;  /* Non-interruptible burst (prevent 24kHz split) */
-    AD1CH5CON2bits.CMPMOD = 0;   /* Comparator disabled initially */
-    AD1CH5CMPLO = 0;
-    AD1CH5CMPHI = 0;
+    /* MC510: one dedicated high-speed channel PER PHASE (no A/C PINSEL mux).
+     * VA = AD1CH1, VB = AD1CH2, VC = AD2CH2 (AN957 channel map). Same
+     * trigger event source as the 106's AD1CH5/AD2CH1: SCCP3 Trigger out —
+     * MC510 TRG1SRC encoding is 34 (0b100010, DS70005591 Table 17-4; the
+     * 106 used 14). All three convert continuously; the 40 MSPS MC510 core
+     * schedules two 1 MHz 4×-burst channels on AD1 with ample headroom
+     * (the 106's "second 1 MHz channel starves" limit does not apply). */
+    AD1CH1CON1bits.PINSEL = 3;   /* VA: RA9 = AD1AN3 */
+    AD1CH1CON1bits.SAMC = HWZC_SAMC;
+    AD1CH1CON1bits.FRAC = 0;     /* right-aligned (LEFT equivalent) */
+    AD1CH1CON1bits.DIFF = 0;
+    AD1CH1CON1bits.TRG1SRC = 34; /* SCCP3 Trigger out (1 MHz free-running) */
+    AD1CH1CON1bits.TRG2SRC = 2;  /* Immediate re-trigger for oversampling repeats */
+    AD1CH1CON1bits.MODE = 0b11;  /* Oversampling mode */
+    AD1CH1CON1bits.ACCNUM = 0b00; /* 4 samples, result right-shifted by 2 bits */
+    AD1CH1CON2bits.ACCBRST = 1;  /* Non-interruptible burst (prevent 24kHz split) */
+    AD1CH1CON2bits.CMPMOD = 0;   /* Comparator disabled initially */
+    AD1CH1CMPLO = 0;
+    AD1CH1CMPHI = 0;
 
-    AD2CH1CON1bits.PINSEL = 10;
-    AD2CH1CON1bits.SAMC = HWZC_SAMC;
-    AD2CH1CON1bits.FRAC = 0;     /* right-aligned (LEFT equivalent) */
-    AD2CH1CON1bits.DIFF = 0;
-    AD2CH1CON1bits.TRG1SRC = 14; /* SCCP3 Trigger out (1 MHz free-running) */
-    AD2CH1CON1bits.TRG2SRC = 2;
-    AD2CH1CON1bits.MODE = 0b11;
-    AD2CH1CON1bits.ACCNUM = 0b00;
-    AD2CH1CON2bits.ACCBRST = 1;
-    AD2CH1CON2bits.CMPMOD = 0;
-    AD2CH1CMPLO = 0;
-    AD2CH1CMPHI = 0;
+    AD1CH2CON1bits.PINSEL = 4;   /* VB: RA10 = AD1AN4 */
+    AD1CH2CON1bits.SAMC = HWZC_SAMC;
+    AD1CH2CON1bits.FRAC = 0;
+    AD1CH2CON1bits.DIFF = 0;
+    AD1CH2CON1bits.TRG1SRC = 34;
+    AD1CH2CON1bits.TRG2SRC = 2;
+    AD1CH2CON1bits.MODE = 0b11;
+    AD1CH2CON1bits.ACCNUM = 0b00;
+    AD1CH2CON2bits.ACCBRST = 1;
+    AD1CH2CON2bits.CMPMOD = 0;
+    AD1CH2CMPLO = 0;
+    AD1CH2CMPHI = 0;
+
+    AD2CH2CON1bits.PINSEL = 4;   /* VC: RB8 = AD2AN4 */
+    AD2CH2CON1bits.SAMC = HWZC_SAMC;
+    AD2CH2CON1bits.FRAC = 0;
+    AD2CH2CON1bits.DIFF = 0;
+    AD2CH2CON1bits.TRG1SRC = 34;
+    AD2CH2CON1bits.TRG2SRC = 2;
+    AD2CH2CON1bits.MODE = 0b11;
+    AD2CH2CON1bits.ACCNUM = 0b00;
+    AD2CH2CON2bits.ACCBRST = 1;
+    AD2CH2CON2bits.CMPMOD = 0;
+    AD2CH2CMPLO = 0;
+    AD2CH2CMPHI = 0;
 #else
     AD1CH5CONbits.PINSEL = 11;
     AD1CH5CONbits.SAMC = HWZC_SAMC;
@@ -229,21 +258,24 @@ void InitializeADCs(void)
      * operating current (the "real" ~20 A we've inferred from 50 Hz
      * telemetry). */
 #if GARUDA_TARGET_AK512
-    AD1CH3CON1bits.PINSEL = 0;      /* OA1OUT = RA2 = AD1AN0 (Ia) */
-    AD1CH3CON1bits.SAMC = 3;
-    AD1CH3CON1bits.FRAC = 0;        /* right-aligned (LEFT equivalent) */
-    AD1CH3CON1bits.DIFF = 0;
-    AD1CH3CON1bits.TRG1SRC = 4;     /* PG1TRIGA (24 kHz mid-ON valley) */
-    AD1CH3CON1bits.MODE = 0;        /* Single sample, one per trigger */
-    AD1CH3CON2bits.CMPMOD = 0;
+    /* MC510: the monitor channels are the AN957 IA/IB channels themselves
+     * (AD1CH0/AD2CH0, PG1TRIGA-triggered) — same sampling instant as the
+     * 106's AD1CH3/AD2CH2 monitors. AD2CH2 is VC high-speed here. */
+    AD1CH0CON1bits.PINSEL = 0;      /* OA1OUT = RA2 = AD1AN0 (Ia) */
+    AD1CH0CON1bits.SAMC = 3;
+    AD1CH0CON1bits.FRAC = 0;        /* right-aligned (LEFT equivalent) */
+    AD1CH0CON1bits.DIFF = 0;
+    AD1CH0CON1bits.TRG1SRC = 4;     /* PG1TRIGA (24 kHz mid-ON valley) */
+    AD1CH0CON1bits.MODE = 0;        /* Single sample, one per trigger */
+    AD1CH0CON2bits.CMPMOD = 0;
 
-    AD2CH2CON1bits.PINSEL = 1;      /* OA2OUT = RB0 = AD2AN1 (Ib) */
-    AD2CH2CON1bits.SAMC = 3;
-    AD2CH2CON1bits.FRAC = 0;        /* right-aligned (LEFT equivalent) */
-    AD2CH2CON1bits.DIFF = 0;
-    AD2CH2CON1bits.TRG1SRC = 4;     /* PG1TRIGA (24 kHz mid-ON valley) */
-    AD2CH2CON1bits.MODE = 0;
-    AD2CH2CON2bits.CMPMOD = 0;
+    AD2CH0CON1bits.PINSEL = 0;      /* OA2OUT = RB0 = AD2AN0 (Ib) */
+    AD2CH0CON1bits.SAMC = 3;
+    AD2CH0CON1bits.FRAC = 0;        /* right-aligned (LEFT equivalent) */
+    AD2CH0CON1bits.DIFF = 0;
+    AD2CH0CON1bits.TRG1SRC = 4;     /* PG1TRIGA (24 kHz mid-ON valley) */
+    AD2CH0CON1bits.MODE = 0;
+    AD2CH0CON2bits.CMPMOD = 0;
 #else
     AD1CH3CONbits.PINSEL = 0;       /* OA1OUT = RA2 = AD1AN0 (Ia) */
     AD1CH3CONbits.SAMC = 3;
@@ -263,6 +295,40 @@ void InitializeADCs(void)
 #endif /* GARUDA_TARGET_AK512 */
 #endif
 
+#if GARUDA_TARGET_AK512
+    /* Turn on ADC Core 1 */
+    AD1CONbits.ON = 1;
+    while (AD1CONbits.ADRDY == 0);
+
+    /* Turn on ADC Core 2 */
+    AD2CONbits.ON = 1;
+    while (AD2CONbits.ADRDY == 0);
+
+    /* Turn on ADC Core 3 (IBUS + VBUS live on AD3 on the MC510) */
+    AD3CONbits.ON = 1;
+    while (AD3CONbits.ADRDY == 0);
+
+    /* Control-loop interrupt source: VB PWM-synced channel (AD1CH3) in the
+     * 6-step build; IA (AD1CH0) in FOC/I-f builds — same signal as the
+     * 106's AD1CH0 in each mode. GARUDA_ADC_IP from hal_adc.h. */
+    GARUDA_ADC_IP = 7;     /* Highest priority */
+    GARUDA_ClearADCIF();
+    GARUDA_DisableADCInterrupt();  /* Disabled until service init */
+
+    /* Trigger sources: PWM1 ADC Trigger 1 (TRG1SRC=4 — same encoding as
+     * the 106, confirmed by AN957 adc.c). IA/IB (CH0s) and IBUS already
+     * have TRG1SRC=4 from their config blocks above. */
+    AD2CH1CON1bits.TRG1SRC = 4;    /* POT from PWM1 trigger */
+    AD3CH2CON1bits.TRG1SRC = 4;    /* VBUS from PWM1 trigger */
+#if !FEATURE_FOC && !FEATURE_FOC_V2 && !FEATURE_FOC_V3 && !FEATURE_FOC_AN1078 && !FEATURE_IF_STARTUP
+    AD1CH3CON1bits.TRG1SRC = 4;    /* Phase B (VB) from PWM1 trigger */
+    AD1CH4CON1bits.TRG1SRC = 4;    /* Phase A (VA) from PWM1 trigger */
+    AD2CH3CON1bits.TRG1SRC = 4;    /* Phase C (VC) from PWM1 trigger */
+#else
+    AD1CH0CON1bits.TRG1SRC = 4;    /* IA from PWM1 trigger */
+    AD2CH0CON1bits.TRG1SRC = 4;    /* IB from PWM1 trigger */
+#endif
+#else
     /* Turn on ADC Core 1 */
     AD1CONbits.ON = 1;
     while (AD1CONbits.ADRDY == 0);
@@ -277,24 +343,41 @@ void InitializeADCs(void)
     _AD1CH0IE = 0;         /* Disabled until service init */
 
     /* Trigger sources: PWM1 ADC Trigger 1 (TRG1SRC=4) */
-#if GARUDA_TARGET_AK512
-    AD1CH0CON1bits.TRG1SRC = 4;    /* Phase B from PWM1 trigger */
-    AD2CH0CON1bits.TRG1SRC = 4;    /* Phase A/C from PWM1 trigger */
-    AD1CH1CON1bits.TRG1SRC = 4;    /* POT from PWM1 trigger */
-    AD1CH4CON1bits.TRG1SRC = 4;    /* VBUS from PWM1 trigger */
-#else
     AD1CH0CONbits.TRG1SRC = 4;     /* Phase B from PWM1 trigger */
     AD2CH0CONbits.TRG1SRC = 4;     /* Phase A/C from PWM1 trigger */
     AD1CH1CONbits.TRG1SRC = 4;     /* POT from PWM1 trigger */
     AD1CH4CONbits.TRG1SRC = 4;     /* VBUS from PWM1 trigger */
-#endif
+#endif /* GARUDA_TARGET_AK512 */
 }
 
 #if !FEATURE_FOC && !FEATURE_FOC_V2 && !FEATURE_FOC_V3 && !FEATURE_FOC_AN1078
+
+#if GARUDA_TARGET_AK512 && !FEATURE_IF_STARTUP
+/* Active floating phase for the PWM-synced A/C read (set per commutation by
+ * HAL_ADC_SelectBEMFChannel, consumed by HAL_ADC_ReadPhaseAC in the ISR). */
+static volatile uint8_t halBemfAcPhase = FLOATING_PHASE_A;
+
+/**
+ * @brief Return the PWM-synced sample of the active A-or-C floating phase.
+ * Reads BOTH dedicated channels (clears data-ready on both — required on
+ * dsPIC33AK), returns the one selected at the last commutation.
+ */
+uint16_t HAL_ADC_ReadPhaseAC(void)
+{
+    uint16_t va = (uint16_t)AD1CH4DATA;
+    uint16_t vc = (uint16_t)AD2CH3DATA;
+    return (halBemfAcPhase == FLOATING_PHASE_C) ? vc : va;
+}
+#endif
+
 /**
  * @brief Select which phase voltage to sample on AD2CH0 for the current
  * floating phase. Phase A and C share AD2, so we mux PINSEL.
  * Phase B is on AD1CH0 (always sampled).
+ *
+ * AK512: every phase has a dedicated PWM-synced channel — PINSEL is never
+ * touched; this just latches which channel HAL_ADC_ReadPhaseAC returns.
+ * Always returns false (no mux settling, no sample discard needed).
  *
  * @param floatingPhase 0=A (AD2CH0 PINSEL=10), 1=B (AD1CH0, no mux change),
  *                      2=C (AD2CH0 PINSEL=7)
@@ -306,25 +389,13 @@ bool HAL_ADC_SelectBEMFChannel(uint8_t floatingPhase)
     /* M1 bring-up: AD2CH0 belongs to the OA2 current op-amp (PINSEL=1, set
      * before ADC ON). Never let the BEMF mux steal it mid-run. */
     return false;
-#endif
+#elif GARUDA_TARGET_AK512
+    if (floatingPhase == FLOATING_PHASE_A || floatingPhase == FLOATING_PHASE_C)
+        halBemfAcPhase = floatingPhase;
+    return false;   /* dedicated channels — nothing to settle */
+#else
     switch (floatingPhase)
     {
-#if GARUDA_TARGET_AK512
-        case FLOATING_PHASE_A:
-            if (AD2CH0CON1bits.PINSEL != 10) {
-                AD2CH0CON1bits.PINSEL = 10; /* M1_VA: RB9 = AD2AN10 */
-                return true;
-            }
-            return false;
-        case FLOATING_PHASE_B:
-            return false;  /* VB on AD1CH0 — no mux change */
-        case FLOATING_PHASE_C:
-            if (AD2CH0CON1bits.PINSEL != 7) {
-                AD2CH0CON1bits.PINSEL = 7;  /* M1_VC: RA10 = AD2AN7 */
-                return true;
-            }
-            return false;
-#else
         case FLOATING_PHASE_A:
             if (AD2CH0CONbits.PINSEL != 10) {
                 AD2CH0CONbits.PINSEL = 10;  /* M1_VA: RB9 = AD2AN10 */
@@ -339,10 +410,10 @@ bool HAL_ADC_SelectBEMFChannel(uint8_t floatingPhase)
                 return true;
             }
             return false;
-#endif
         default:
             return false;
     }
+#endif /* GARUDA_TARGET_AK512 */
 }
 #endif /* !FEATURE_FOC && !FEATURE_FOC_V2 */
 
@@ -362,11 +433,55 @@ bool HAL_ADC_SelectBEMFChannel(uint8_t floatingPhase)
  */
 void HAL_ADC_InitHighSpeedBEMF(void)
 {
+#if GARUDA_TARGET_AK512
+    /* Comparator interrupts (one per dedicated BEMF channel):
+     * VA = AD1CH1 → AD1CMP1, VB = AD1CH2 → AD1CMP2, VC = AD2CH2 → AD2CMP2.
+     * Clear and leave disabled. */
+    _AD1CMP1IF = 0;
+    _AD1CMP1IE = 0;
+    _AD1CMP2IF = 0;
+    _AD1CMP2IE = 0;
+    _AD2CMP2IF = 0;
+    _AD2CMP2IE = 0;
+#else
     /* Comparator interrupts: clear and leave disabled */
     _AD1CMP5IF = 0;
     _AD1CMP5IE = 0;
     _AD2CMP1IF = 0;
     _AD2CMP1IE = 0;
+#endif
+}
+
+/**
+ * @brief Select the high-speed BEMF channel/comparator for the floating
+ * phase. Returns the comparator handle hwzc stores in hwzc.activeCore.
+ *
+ * AK128: VERBATIM move of the selection block from HWZC_OnCommutation —
+ * core 1 = AD1CH5 (Phase B, PINSEL fixed at 11), core 2 = AD2CH1 with the
+ * Phase A/C PINSEL mux (10 = RB9/VA, 7 = RA10/VC). Identical semantics:
+ * caller has already disabled both comparator IEs (Rule 2).
+ *
+ * AK512: dedicated channel per phase — handle IS the floating phase
+ * (0 = VA/AD1CH1, 1 = VB/AD1CH2, 2 = VC/AD2CH2); no PINSEL writes ever.
+ */
+uint8_t HAL_ADC_SelectBemfPhase(uint8_t floatPhase)
+{
+#if GARUDA_TARGET_AK512
+    return (floatPhase <= FLOATING_PHASE_C) ? floatPhase : FLOATING_PHASE_B;
+#else
+    uint8_t core;
+    if (floatPhase == FLOATING_PHASE_B)
+    {
+        core = 1;  /* AD1CH5, PINSEL fixed at 11 */
+    }
+    else
+    {
+        core = 2;  /* AD2CH1 */
+        uint8_t pinsel = (floatPhase == FLOATING_PHASE_A) ? 10 : 7;
+        HAL_ADC_SetHighSpeedPinsel(pinsel);
+    }
+    return core;
+#endif
 }
 
 /**
@@ -377,24 +492,37 @@ void HAL_ADC_InitHighSpeedBEMF(void)
  */
 void HAL_ADC_ConfigComparator(uint8_t adcCore, uint16_t threshold, bool risingZc)
 {
+#if GARUDA_TARGET_AK512
+    /* Per-phase channels; same CMPMOD encodings as the 106 (DS70005591
+     * Table: 0b011 = greater-than CMPLO → rising ZC, 0b100 = less-or-equal
+     * CMPLO → falling ZC; only CMPLO is used). */
+    switch (adcCore)
+    {
+        case FLOATING_PHASE_A:
+            AD1CH1CON2bits.CMPMOD = risingZc ? 0b011 : 0b100;
+            AD1CH1CMPLO = threshold;
+            break;
+        case FLOATING_PHASE_B:
+            AD1CH2CON2bits.CMPMOD = risingZc ? 0b011 : 0b100;
+            AD1CH2CMPLO = threshold;
+            break;
+        default: /* FLOATING_PHASE_C */
+            AD2CH2CON2bits.CMPMOD = risingZc ? 0b011 : 0b100;
+            AD2CH2CMPLO = threshold;
+            break;
+    }
+#else
     if (adcCore == 1)
     {
-#if GARUDA_TARGET_AK512
-        AD1CH5CON2bits.CMPMOD = risingZc ? 0b011 : 0b100;
-#else
         AD1CH5CONbits.CMPMOD = risingZc ? 0b011 : 0b100;
-#endif
         AD1CH5CMPLO = threshold;
     }
     else
     {
-#if GARUDA_TARGET_AK512
-        AD2CH1CON2bits.CMPMOD = risingZc ? 0b011 : 0b100;
-#else
         AD2CH1CONbits.CMPMOD = risingZc ? 0b011 : 0b100;
-#endif
         AD2CH1CMPLO = threshold;
     }
+#endif /* GARUDA_TARGET_AK512 */
 }
 
 /**
@@ -411,10 +539,19 @@ void HAL_ADC_ConfigComparator(uint8_t adcCore, uint16_t threshold, bool risingZc
  */
 void HAL_ADC_UpdateComparatorThreshold(uint8_t adcCore, uint16_t threshold)
 {
+#if GARUDA_TARGET_AK512
+    switch (adcCore)
+    {
+        case FLOATING_PHASE_A: AD1CH1CMPLO = threshold; break;
+        case FLOATING_PHASE_B: AD1CH2CMPLO = threshold; break;
+        default:               AD2CH2CMPLO = threshold; break;
+    }
+#else
     if (adcCore == 1)
         AD1CH5CMPLO = threshold;
     else
         AD2CH1CMPLO = threshold;
+#endif /* GARUDA_TARGET_AK512 */
 }
 
 /**
@@ -424,6 +561,14 @@ void HAL_ADC_UpdateComparatorThreshold(uint8_t adcCore, uint16_t threshold)
  */
 void HAL_ADC_EnableComparatorIE(uint8_t adcCore)
 {
+#if GARUDA_TARGET_AK512
+    switch (adcCore)
+    {
+        case FLOATING_PHASE_A: _AD1CMP1IF = 0; _AD1CMP1IE = 1; break;
+        case FLOATING_PHASE_B: _AD1CMP2IF = 0; _AD1CMP2IE = 1; break;
+        default:               _AD2CMP2IF = 0; _AD2CMP2IE = 1; break;
+    }
+#else
     if (adcCore == 1)
     {
         _AD1CMP5IF = 0;
@@ -434,6 +579,7 @@ void HAL_ADC_EnableComparatorIE(uint8_t adcCore)
         _AD2CMP1IF = 0;
         _AD2CMP1IE = 1;
     }
+#endif /* GARUDA_TARGET_AK512 */
 }
 
 /**
@@ -442,10 +588,19 @@ void HAL_ADC_EnableComparatorIE(uint8_t adcCore)
  */
 void HAL_ADC_DisableComparatorIE(uint8_t adcCore)
 {
+#if GARUDA_TARGET_AK512
+    switch (adcCore)
+    {
+        case FLOATING_PHASE_A: _AD1CMP1IE = 0; break;
+        case FLOATING_PHASE_B: _AD1CMP2IE = 0; break;
+        default:               _AD2CMP2IE = 0; break;
+    }
+#else
     if (adcCore == 1)
         _AD1CMP5IE = 0;
     else
         _AD2CMP1IE = 0;
+#endif /* GARUDA_TARGET_AK512 */
 }
 
 /**
@@ -454,24 +609,36 @@ void HAL_ADC_DisableComparatorIE(uint8_t adcCore)
  */
 void HAL_ADC_ClearComparatorFlag(uint8_t adcCore)
 {
+#if GARUDA_TARGET_AK512
+    /* Same clear semantics as the 106: drop the per-channel CMPSTAT flag
+     * first, then the interrupt flag. */
+    switch (adcCore)
+    {
+        case FLOATING_PHASE_A:
+            AD1CMPSTATbits.CH1FLG = 0;
+            _AD1CMP1IF = 0;
+            break;
+        case FLOATING_PHASE_B:
+            AD1CMPSTATbits.CH2FLG = 0;
+            _AD1CMP2IF = 0;
+            break;
+        default: /* FLOATING_PHASE_C */
+            AD2CMPSTATbits.CH2FLG = 0;
+            _AD2CMP2IF = 0;
+            break;
+    }
+#else
     if (adcCore == 1)
     {
-#if GARUDA_TARGET_AK512
-        AD1CMPSTATbits.CH5FLG = 0;
-#else
         AD1CMPSTATbits.CH5CMP = 0;
-#endif
         _AD1CMP5IF = 0;
     }
     else
     {
-#if GARUDA_TARGET_AK512
-        AD2CMPSTATbits.CH1FLG = 0;
-#else
         AD2CMPSTATbits.CH1CMP = 0;
-#endif
         _AD2CMP1IF = 0;
     }
+#endif /* GARUDA_TARGET_AK512 */
 }
 
 /**
@@ -481,7 +648,9 @@ void HAL_ADC_ClearComparatorFlag(uint8_t adcCore)
 void HAL_ADC_SetHighSpeedPinsel(uint8_t pinsel)
 {
 #if GARUDA_TARGET_AK512
-    AD2CH1CON1bits.PINSEL = pinsel;
+    /* No-op on the MC510: every BEMF phase owns a dedicated channel and
+     * AD2CH1 carries the POT. Never rewrite PINSEL at runtime here. */
+    (void)pinsel;
 #else
     AD2CH1CONbits.PINSEL = pinsel;
 #endif

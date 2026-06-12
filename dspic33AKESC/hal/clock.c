@@ -16,7 +16,7 @@
 /*******************************************************************************
 * SOFTWARE LICENSE AGREEMENT
 * 
-* � [2024] Microchip Technology Inc. and its subsidiaries
+* � [2024] Microchip Technology Inc. and its subsidiaries
 * 
 * Subject to your compliance with these terms, you may use this Microchip 
 * software and any derivatives exclusively with Microchip products. 
@@ -52,8 +52,36 @@
 #include <stdint.h>
 
 #include "clock.h"
+#include "../garuda_config.h"   /* GARUDA_TARGET_AK512 */
 
 // </editor-fold>
+
+/* ============================================================================
+ * CLOCK TREE SUMMARY (both targets — values MUST be identical so that every
+ * constant in garuda_calc_params.h stays valid unchanged):
+ *
+ *   Source: 8 MHz (FRC; the DIM's 8 MHz MEMS oscillator is the same value,
+ *           POSC currently disabled — POSCEN=0 on both targets).
+ *   PLL1:   FVCO = 8 MHz × M / N1     = 8 × 100 / 1      = 800 MHz
+ *           FPLL = FVCO / (N2 × N3)   = 800 / (4 × 1)    = 200 MHz
+ *   CLK1 (System):  200 MHz  → FCY (peripheral/instruction clock) = 100 MHz
+ *                              → SCCP_CLOCK_HZ = 100 MHz (CCPxCON1.CLKSEL=0)
+ *   CLK5 (PWM):     VCO 800 MHz / (1×2) = 400 MHz  → PWM_CLOCK_MHZ = 400
+ *                              (PCLKCON.MCLKSEL=1 selects this master clock;
+ *                               LOOPTIME_TCY = LOOPTIME_us × 8 × 400 − 16)
+ *   CLK6 (ADC):     200 / (1×2) = 100 MHz
+ *   CLK7 (DAC/CMP): 800 / (1×2) = 400 MHz
+ *   CLK8 (UART):    200 / (1×2) = 100 MHz → GSP baud divider 54 (115.7 kbps)
+ *   REFO1:          200 / (4000×2) = 25 kHz (diagnostic; not routed to a pin)
+ *
+ * AK512 (dsPIC33AK512MC510) note: the PLL/CLK1..CLK8 register map and the
+ * generator-to-peripheral assignments (5=PWM, 6=ADC, 7=DAC, 8=UART) are
+ * IDENTICAL to the 106 — verified against AN957's clock.c for this DIM and
+ * DS70005591 Table "Clock Generator Assignments". The ONLY difference is the
+ * REFO1 generator index: CLK12 on the 106, CLK13 on the MC510 (where gen 13
+ * also feeds the CCP clock *option*; harmless — all SCCPs use CLKSEL=0 =
+ * peripheral clock, never the gen-13 input, same as the 106 with CLK12).
+ * ==========================================================================*/
 
 // <editor-fold defaultstate="expanded" desc="INTERFACE FUNCTIONS ">
 /**
@@ -215,19 +243,35 @@ void InitOscillator (void)
     CLK8CONbits.DIVSWEN =1;
     while (CLK8CONbits.DIVSWEN);
     
+#if GARUDA_TARGET_AK512
+    /** Reference Clock Generator — MC510: REFO1 lives on clock generator 13
+    * (gen 12 feeds BiSS on this device). Matches AN957 clock.c exactly.
+    * Input Clock Selection (NOSC) = 5 :PLL1 FOUT output = 200 MHz
+    * Clock Division (INTDIV) = (4000*2)
+    * Final Clock for REFO = 200 MHz / 8000 = 25 kHz */
+    CLK13DIVbits.INTDIV = 4000;
+    CLK13CONbits.OE = 1;
+    CLK13CONbits.ON = 1;
+    CLK13CONbits.NOSC = 5;
+    CLK13CONbits.OSWEN = 1;
+    while (CLK13CONbits.OSWEN);
+    CLK13CONbits.DIVSWEN =1;
+    while (CLK13CONbits.DIVSWEN);
+#else
     /** Reference Clock Generator REFO1 output through PPS (PPS to be 22)
-    * Input Clock Selection (NOSC) = 5 :PLL1 FOUT output = 200 MHz 
+    * Input Clock Selection (NOSC) = 5 :PLL1 FOUT output = 200 MHz
     * Clock Division (INTDIV) = (4000*2)
     * Final Clock for REFO = 25 kHz*/
     CLK12DIVbits.INTDIV = 4000;
     CLK12CONbits.OE = 1;
     CLK12CONbits.ON = 1;
-    CLK12CONbits.NOSC = 5; 
-    CLK12CONbits.OSWEN = 1; 
+    CLK12CONbits.NOSC = 5;
+    CLK12CONbits.OSWEN = 1;
     while (CLK12CONbits.OSWEN);
     CLK12CONbits.DIVSWEN =1;
     while (CLK12CONbits.DIVSWEN);
-    
+#endif /* GARUDA_TARGET_AK512 */
+
 }
 
 // </editor-fold>

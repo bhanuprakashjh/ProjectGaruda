@@ -103,8 +103,15 @@ void HWZC_Init(volatile GARUDA_DATA_T *pData)
     pData->hwzc.obsLastCommTick = 0;
 #endif
 
+#if GARUDA_TARGET_AK512
+    /* Per-phase comparator handles: disable all three BEMF channels */
+    HAL_ADC_DisableComparatorIE(FLOATING_PHASE_A);
+    HAL_ADC_DisableComparatorIE(FLOATING_PHASE_B);
+    HAL_ADC_DisableComparatorIE(FLOATING_PHASE_C);
+#else
     HAL_ADC_DisableComparatorIE(1);
     HAL_ADC_DisableComparatorIE(2);
+#endif
 }
 
 /**
@@ -198,8 +205,14 @@ void HWZC_Disable(volatile GARUDA_DATA_T *pData)
     HAL_SCCP1_Stop();
     _CCT1IE = 0;
     _CCT1IF = 0;
+#if GARUDA_TARGET_AK512
+    HAL_ADC_DisableComparatorIE(FLOATING_PHASE_A);
+    HAL_ADC_DisableComparatorIE(FLOATING_PHASE_B);
+    HAL_ADC_DisableComparatorIE(FLOATING_PHASE_C);
+#else
     HAL_ADC_DisableComparatorIE(1);
     HAL_ADC_DisableComparatorIE(2);
+#endif
 
     pData->hwzc.phase = HWZC_IDLE;
     pData->hwzc.fallbackPending = true;
@@ -228,21 +241,20 @@ void HWZC_OnCommutation(volatile GARUDA_DATA_T *pData)
     bool risingZc = (pol > 0);
 
     /* Disable both comparator IEs before any mux change (Rule 2) */
+#if GARUDA_TARGET_AK512
+    HAL_ADC_DisableComparatorIE(FLOATING_PHASE_A);
+    HAL_ADC_DisableComparatorIE(FLOATING_PHASE_B);
+    HAL_ADC_DisableComparatorIE(FLOATING_PHASE_C);
+#else
     HAL_ADC_DisableComparatorIE(1);
     HAL_ADC_DisableComparatorIE(2);
+#endif
 
-    /* Select active ADC core and PINSEL */
-    uint8_t core;
-    if (floatPhase == FLOATING_PHASE_B)
-    {
-        core = 1;  /* AD1CH5, PINSEL fixed at 11 */
-    }
-    else
-    {
-        core = 2;  /* AD2CH1 */
-        uint8_t pinsel = (floatPhase == FLOATING_PHASE_A) ? 10 : 7;
-        HAL_ADC_SetHighSpeedPinsel(pinsel);
-    }
+    /* Select active detection channel/comparator for the floating phase.
+     * AK128: HAL reproduces the old in-place block verbatim (core 1 =
+     * AD1CH5 Phase B; core 2 = AD2CH1 + A/C PINSEL mux). AK512: handle =
+     * floating phase, dedicated channel, no runtime PINSEL. */
+    uint8_t core = HAL_ADC_SelectBemfPhase(floatPhase);
     pData->hwzc.activeCore = core;
 
     /* Compute threshold with deadband (Rule 4).
@@ -536,7 +548,11 @@ void HWZC_OnZcDetected(volatile GARUDA_DATA_T *pData)
              * + read/branch ≈ 1 µs total at SCCP3 = 1 MHz. */
             for (uint8_t j = 0; j < 80; j++) __asm__ volatile("nop");
 
+#if GARUDA_TARGET_AK512
+            uint16_t adc_now = HAL_ADC_BemfChannelData(v_core);
+#else
             uint16_t adc_now = (v_core == 1) ? AD1CH5DATA : AD2CH1DATA;
+#endif
             bool crossed = v_rising ? (adc_now > v_thresh) : (adc_now < v_thresh);
             if (!crossed) {
                 /* Phantom — BEMF returned to original side within one sample
@@ -1043,30 +1059,45 @@ void HWZC_OnTimeout(volatile GARUDA_DATA_T *pData)
 {
     /* Capture diagnostics: what did the ADC channel actually see? */
     uint8_t core = pData->hwzc.activeCore;
+#if GARUDA_TARGET_AK512
+    /* Per-phase channels: VA = AD1CH1, VB = AD1CH2, VC = AD2CH2 */
+    if (core == FLOATING_PHASE_A)
+    {
+        pData->hwzc.dbgTimeoutAdcVal = AD1CH1DATA;
+        pData->hwzc.dbgTimeoutThresh = AD1CH1CMPLO;
+        pData->hwzc.dbgTimeoutCmpmod = AD1CH1CON2bits.CMPMOD;
+        pData->hwzc.dbgTimeoutCmpstat = AD1CMPSTATbits.CH1FLG;
+    }
+    else if (core == FLOATING_PHASE_B)
+    {
+        pData->hwzc.dbgTimeoutAdcVal = AD1CH2DATA;
+        pData->hwzc.dbgTimeoutThresh = AD1CH2CMPLO;
+        pData->hwzc.dbgTimeoutCmpmod = AD1CH2CON2bits.CMPMOD;
+        pData->hwzc.dbgTimeoutCmpstat = AD1CMPSTATbits.CH2FLG;
+    }
+    else
+    {
+        pData->hwzc.dbgTimeoutAdcVal = AD2CH2DATA;
+        pData->hwzc.dbgTimeoutThresh = AD2CH2CMPLO;
+        pData->hwzc.dbgTimeoutCmpmod = AD2CH2CON2bits.CMPMOD;
+        pData->hwzc.dbgTimeoutCmpstat = AD2CMPSTATbits.CH2FLG;
+    }
+#else
     if (core == 1)
     {
         pData->hwzc.dbgTimeoutAdcVal = AD1CH5DATA;
         pData->hwzc.dbgTimeoutThresh = AD1CH5CMPLO;
-#if GARUDA_TARGET_AK512
-        pData->hwzc.dbgTimeoutCmpmod = AD1CH5CON2bits.CMPMOD;
-        pData->hwzc.dbgTimeoutCmpstat = AD1CMPSTATbits.CH5FLG;
-#else
         pData->hwzc.dbgTimeoutCmpmod = AD1CH5CONbits.CMPMOD;
         pData->hwzc.dbgTimeoutCmpstat = AD1CMPSTATbits.CH5CMP;
-#endif
     }
     else
     {
         pData->hwzc.dbgTimeoutAdcVal = AD2CH1DATA;
         pData->hwzc.dbgTimeoutThresh = AD2CH1CMPLO;
-#if GARUDA_TARGET_AK512
-        pData->hwzc.dbgTimeoutCmpmod = AD2CH1CON2bits.CMPMOD;
-        pData->hwzc.dbgTimeoutCmpstat = AD2CMPSTATbits.CH1FLG;
-#else
         pData->hwzc.dbgTimeoutCmpmod = AD2CH1CONbits.CMPMOD;
         pData->hwzc.dbgTimeoutCmpstat = AD2CMPSTATbits.CH1CMP;
-#endif
     }
+#endif /* GARUDA_TARGET_AK512 */
     pData->hwzc.dbgTimeoutCore = core;
     pData->hwzc.dbgTimeoutStep = pData->currentStep;
     pData->hwzc.dbgTimeoutBemfThresh = pData->bemf.zcThreshold;

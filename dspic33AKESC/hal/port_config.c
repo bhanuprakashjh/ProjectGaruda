@@ -57,6 +57,32 @@ void SetupGPIOPorts(void)
         ANSELD = 0x0000;
     #endif
 
+    /* MC510 (AK512 target) adds ports E/F/G — guarded so the AK128 build
+     * (no TRISE/F/G) is byte-identical. Mirrors AN957 port_config.c. */
+    #ifdef TRISE
+        TRISE = 0xFFFF;
+        LATE  = 0x0000;
+    #endif
+    #ifdef ANSELE
+        ANSELE = 0x0000;
+    #endif
+
+    #ifdef TRISF
+        TRISF = 0xFFFF;
+        LATF  = 0x0000;
+    #endif
+    #ifdef ANSELF
+        ANSELF = 0x0000;
+    #endif
+
+    #ifdef TRISG
+        TRISG = 0xFFFF;
+        LATG  = 0x0000;
+    #endif
+    #ifdef ANSELG
+        ANSELG = 0x0000;
+    #endif
+
     MapGPIOHWFunction();
 }
 
@@ -74,12 +100,49 @@ void MapGPIOHWFunction(void)
      * OA2OUT : RB0  (DIM:025) → AD2AN1 (Ib)
      * From reference: port_config.c:126-145
      * ================================================================ */
+#if GARUDA_TARGET_AK512
+    /* MC510: identical OA1/OA2 pins (OA1IN+ RA4, OA1IN- RA3, OA1OUT RA2,
+     * OA2IN+ RB2, OA2IN- RB1, OA2OUT RB0). AN957 internal-op-amp mode
+     * drives the OUT pins with TRIS=0 — mirror that convention here. */
+    ANSELAbits.ANSELA4 = 1; TRISAbits.TRISA4 = 1;   /* OA1IN+ */
+    ANSELAbits.ANSELA3 = 1; TRISAbits.TRISA3 = 1;   /* OA1IN- */
+    ANSELAbits.ANSELA2 = 1; TRISAbits.TRISA2 = 0;   /* OA1OUT (AN957: TRIS=0, op-amp drives pin) */
+    ANSELBbits.ANSELB2 = 1; TRISBbits.TRISB2 = 1;   /* OA2IN+ */
+    ANSELBbits.ANSELB1 = 1; TRISBbits.TRISB1 = 1;   /* OA2IN- */
+    ANSELBbits.ANSELB0 = 1; TRISBbits.TRISB0 = 0;   /* OA2OUT (AN957: TRIS=0, op-amp drives pin) */
+#else
     ANSELAbits.ANSELA4 = 1; TRISAbits.TRISA4 = 1;   /* OA1IN+ */
     ANSELAbits.ANSELA3 = 1; TRISAbits.TRISA3 = 1;   /* OA1IN- */
     ANSELAbits.ANSELA2 = 1; TRISAbits.TRISA2 = 1;   /* OA1OUT (TRIS=1: disable digital output, let OA drive) */
     ANSELBbits.ANSELB2 = 1; TRISBbits.TRISB2 = 1;   /* OA2IN+ */
     ANSELBbits.ANSELB1 = 1; TRISBbits.TRISB1 = 1;   /* OA2IN- */
     ANSELBbits.ANSELB0 = 1; TRISBbits.TRISB0 = 1;   /* OA2OUT (TRIS=1: disable digital output, let OA drive) */
+#endif /* GARUDA_TARGET_AK512 */
+#else
+#if GARUDA_TARGET_AK512
+    /* 6-step diagnostic phase-current monitor: same OA1/OA2 pins on MC510.
+     * AN957 convention: op-amp OUT pins TRIS=0 (internal op-amp mode). */
+    ANSELAbits.ANSELA4 = 1; TRISAbits.TRISA4 = 1;   /* OA1IN+ */
+    ANSELAbits.ANSELA3 = 1; TRISAbits.TRISA3 = 1;   /* OA1IN- */
+    ANSELAbits.ANSELA2 = 1; TRISAbits.TRISA2 = 0;   /* OA1OUT */
+    ANSELBbits.ANSELB2 = 1; TRISBbits.TRISB2 = 1;   /* OA2IN+ */
+    ANSELBbits.ANSELB1 = 1; TRISBbits.TRISB1 = 1;   /* OA2IN- */
+    ANSELBbits.ANSELB0 = 1; TRISBbits.TRISB0 = 0;   /* OA2OUT */
+
+    /* ================================================================
+     * Phase Voltage Feedback (MCLV-48V-300W via MC510 DIM, per AN957)
+     * M1_VA : DIM:009 - RA9  (AD1AN3)
+     * M1_VB : DIM:011 - RA10 (AD1AN4)
+     * M1_VC : DIM:022 - RB8  (AD2AN4)
+     * ================================================================ */
+    ANSELAbits.ANSELA9 = 1;
+    TRISAbits.TRISA9 = 1;
+
+    ANSELAbits.ANSELA10 = 1;
+    TRISAbits.TRISA10 = 1;
+
+    ANSELBbits.ANSELB8 = 1;
+    TRISBbits.TRISB8 = 1;
 #else
     /* 6-step diagnostic phase-current monitor: reuse same OA1/OA2 pins.
      * CMP1/CMP2 share RA4/RB2 but are init'd with DACEN=0 (disabled), so
@@ -106,8 +169,24 @@ void MapGPIOHWFunction(void)
 
     ANSELAbits.ANSELA10 = 1;
     TRISAbits.TRISA10 = 1;
+#endif /* GARUDA_TARGET_AK512 */
 #endif
 
+#if GARUDA_TARGET_AK512
+    /* ================================================================
+     * Potentiometer input (POT1) - used as Speed Reference
+     * DIM:028 - PIN #36: AD2AN5/CVDAN31/CVDTX15/RP32/RB15 (AN957)
+     * ================================================================ */
+    ANSELBbits.ANSELB15 = 1;
+    TRISBbits.TRISB15 = 1;
+
+    /* ================================================================
+     * DC Bus Voltage (VBUS)
+     * DIM:039 - PIN #37: AD3AN4/CVDTX29/RP81/RF0 (AN957)
+     * ================================================================ */
+    ANSELFbits.ANSELF0 = 1;
+    TRISFbits.TRISF0 = 1;
+#else
     /* ================================================================
      * Potentiometer input (POT1) - used as Speed Reference
      * DIM:028 - PIN #06: AD1AN10/RP12/RA11
@@ -121,6 +200,7 @@ void MapGPIOHWFunction(void)
      * ================================================================ */
     ANSELAbits.ANSELA7 = 1;
     TRISAbits.TRISA7 = 1;
+#endif /* GARUDA_TARGET_AK512 */
 
     /* ================================================================
      * Inverter Control - PWM Outputs
@@ -138,6 +218,23 @@ void MapGPIOHWFunction(void)
     TRISCbits.TRISC4 = 0;
     TRISCbits.TRISC3 = 0;
 
+#if GARUDA_TARGET_AK512
+    /* ================================================================
+     * Debug LEDs (AN957 map for the MC510 DIM)
+     * LED1 : DIM:030 - PIN #10 : CVDTX21/RP67/RE2
+     * LED2 : DIM:032 - PIN #06 : CVDTX22/RP68/RE3
+     * ================================================================ */
+    TRISEbits.TRISE2 = 0;
+    TRISEbits.TRISE3 = 0;
+
+    /* ================================================================
+     * Push button Switches (AN957 map for the MC510 DIM)
+     * SW1 : DIM:034 - PIN #03 : CVDAN12/RP13/RA12
+     * SW2 : DIM:036 - PIN #02 : CVDTX20/RP66/RE1
+     * ================================================================ */
+    TRISAbits.TRISA12 = 1;
+    TRISEbits.TRISE1 = 1;
+#else
     /* ================================================================
      * Debug LEDs
      * LED1 : DIM:030 - PIN #55 : RP54/ASCL1/RD5
@@ -153,6 +250,7 @@ void MapGPIOHWFunction(void)
      * ================================================================ */
     TRISDbits.TRISD9 = 1;
     TRISDbits.TRISD10 = 1;
+#endif /* GARUDA_TARGET_AK512 */
 
     /* ================================================================
      * PWM Fault PCI8 input — board OC+OV fault (M1_FAULT_OC_OV)
@@ -168,6 +266,23 @@ void MapGPIOHWFunction(void)
     _PCI8R = 28;
 #endif
 
+#if GARUDA_TARGET_AK512
+    /* ================================================================
+     * UART PPS mapping (AN957: _U1RXR = 47, _RP48R = 19)
+     * UART_RX : DIM:054 - PIN #74 : RP47/APWM3H/IOMBD9/RC14 (Input)
+     * UART_TX : DIM:052 - PIN #75 : RP48/APWM3L/IOMBD8/RC15 (Output)
+     * U1TX output-function code on MC510 is 19 (vs 9 on the 106).
+     * ================================================================ */
+    _U1RXR = 47;
+    _RP48R = 19;
+
+    /* ================================================================
+     * RX Input Pin — same DIM position as the 106 build (DIM:108).
+     * MC510 DIM:108 = device PIN #17 : CVDAN15/RP16/RA15.
+     * PPS mapping (_ICM4R) lives in hal_input_capture.c:HAL_IC4_Init().
+     * ================================================================ */
+    TRISAbits.TRISA15 = 1;     /* Input */
+#else
     /* ================================================================
      * UART PPS mapping
      * UART_RX : DIM:054 - PIN #46 : RP44/IOMD8/IOMF8/RC11 (Input)
@@ -182,6 +297,7 @@ void MapGPIOHWFunction(void)
      * TRIS input config stays here (GPIO direction is port_config's job).
      * ================================================================ */
     TRISDbits.TRISD8 = 1;      /* Input */
+#endif /* GARUDA_TARGET_AK512 */
 
 #if FEATURE_HW_OVERCURRENT
     /* ================================================================

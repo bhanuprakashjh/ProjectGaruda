@@ -191,6 +191,25 @@ void HAL_ADC_SetHighSpeedPinsel(uint8_t pinsel)
 {
     g_silHw.hs_pinsel = pinsel;
 }
+
+/* Mirrors hal/hal_adc.c HAL_ADC_SelectBemfPhase (AK128 semantics): the
+ * selection block moved out of HWZC_OnCommutation — core 1 = AD1CH5
+ * (Phase B), core 2 = AD2CH1 with the A/C PINSEL mux. */
+uint8_t HAL_ADC_SelectBemfPhase(uint8_t floatPhase)
+{
+    uint8_t core;
+    if (floatPhase == FLOATING_PHASE_B)
+    {
+        core = 1;  /* AD1CH5, PINSEL fixed at 11 */
+    }
+    else
+    {
+        core = 2;  /* AD2CH1 */
+        uint8_t pinsel = (floatPhase == FLOATING_PHASE_A) ? 10 : 7;
+        HAL_ADC_SetHighSpeedPinsel(pinsel);
+    }
+    return core;
+}
 #endif /* FEATURE_ADC_CMP_ZC */
 
 /* ── comparator 3 (bus OC DAC) ───────────────────────────────────────── */

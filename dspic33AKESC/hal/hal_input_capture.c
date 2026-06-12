@@ -197,8 +197,14 @@ static void MailboxWrite(uint16_t value, uint8_t valid)
 
 void HAL_IC4_Init(void)
 {
+#if GARUDA_TARGET_AK512
+    /* PPS: RX stays at the same DIM position (DIM:108); on the MC510 DIM
+     * that is device pin 17 = CVDAN15/RP16/RA15. Map RP16 to IC4 input. */
+    _ICM4R = 16;
+#else
     /* PPS: map RP57 (RD8) to IC4 input */
     _ICM4R = 57;
+#endif
 
     /* Configure SCCP4 for Input Capture:
      * CCSEL=1: IC mode
@@ -344,7 +350,11 @@ void __attribute__((__interrupt__, no_auto_psv)) _CCP4Interrupt(void)
             /* Rise/fall edge pairing for PWM decode.
              * We use the pin state to determine polarity.
              * RD8 high = rising edge just happened. */
+#if GARUDA_TARGET_AK512
+            bool pinHigh = PORTAbits.RA15;   /* RX pin on MC510 (DIM:108) */
+#else
             bool pinHigh = PORTDbits.RD8;
+#endif
 
             if (pinHigh)
             {

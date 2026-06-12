@@ -897,10 +897,18 @@ void GARUDA_ServiceInit(void)
 
     /* ISR priority setup */
 #if FEATURE_ADC_CMP_ZC
+#if GARUDA_TARGET_AK512
+    GARUDA_ADC_IP = 6;  /* ADC ISR (VB conv = AD1CH3) lowered from 7 to 6 when HW ZC available */
+    _AD1CMP1IP = 7;     /* AD1 comparator CH1 (VA): highest priority */
+    _AD1CMP2IP = 7;     /* AD1 comparator CH2 (VB): highest priority */
+    _AD2CMP2IP = 7;     /* AD2 comparator CH2 (VC): highest priority */
+    _CCT1IP = 7;        /* SCCP1 timer: highest priority */
+#else
     _AD1CH0IP = 6;      /* ADC ISR lowered from 7 to 6 when HW ZC available */
     _AD1CMP5IP = 7;     /* AD1 comparator CH5: highest priority */
     _AD2CMP1IP = 7;     /* AD2 comparator CH1: highest priority */
     _CCT1IP = 7;        /* SCCP1 timer: highest priority */
+#endif /* GARUDA_TARGET_AK512 */
 #endif
 
     /* Clear any latched PCI fault from previous run (U25B is latching).
@@ -4587,6 +4595,40 @@ void __attribute__((__interrupt__, no_auto_psv)) _PWMInterrupt(void)
 #endif /* ENABLE_PWM_FAULT_PCI */
 
 #if FEATURE_ADC_CMP_ZC
+#if GARUDA_TARGET_AK512
+/**
+ * @brief MC510: one comparator ISR per dedicated BEMF channel.
+ * VA = AD1CH1 → AD1CMP1, VB = AD1CH2 → AD1CMP2, VC = AD2CH2 → AD2CMP2.
+ * Same stub semantics as the 106 pair: disable own IE, clear own CMPSTAT
+ * flag, dispatch HWZC_OnZcDetected (Rule 10: no data re-read here).
+ */
+void __attribute__((__interrupt__, no_auto_psv)) _AD1CMP1Interrupt(void)
+{
+    _AD1CMP1IE = 0;              /* Disable immediately to prevent re-trigger */
+    AD1CMPSTATbits.CH1FLG = 0;   /* Clear comparator status */
+    if (garudaData.hwzc.enabled)
+        HWZC_OnZcDetected(&garudaData);
+    _AD1CMP1IF = 0;
+}
+
+void __attribute__((__interrupt__, no_auto_psv)) _AD1CMP2Interrupt(void)
+{
+    _AD1CMP2IE = 0;
+    AD1CMPSTATbits.CH2FLG = 0;
+    if (garudaData.hwzc.enabled)
+        HWZC_OnZcDetected(&garudaData);
+    _AD1CMP2IF = 0;
+}
+
+void __attribute__((__interrupt__, no_auto_psv)) _AD2CMP2Interrupt(void)
+{
+    _AD2CMP2IE = 0;
+    AD2CMPSTATbits.CH2FLG = 0;
+    if (garudaData.hwzc.enabled)
+        HWZC_OnZcDetected(&garudaData);
+    _AD2CMP2IF = 0;
+}
+#else
 /**
  * @brief ADC1 Comparator CH5 ISR — ZC detected on Phase B.
  * Do NOT re-read AD1CH5DATA for validation (Rule 10).
@@ -4594,11 +4636,7 @@ void __attribute__((__interrupt__, no_auto_psv)) _PWMInterrupt(void)
 void __attribute__((__interrupt__, no_auto_psv)) _AD1CMP5Interrupt(void)
 {
     _AD1CMP5IE = 0;              /* Disable immediately to prevent re-trigger */
-#if GARUDA_TARGET_AK512
-    AD1CMPSTATbits.CH5FLG = 0;  /* Clear comparator status */
-#else
     AD1CMPSTATbits.CH5CMP = 0;  /* Clear comparator status */
-#endif
     if (garudaData.hwzc.enabled)
         HWZC_OnZcDetected(&garudaData);
     _AD1CMP5IF = 0;
@@ -4610,15 +4648,12 @@ void __attribute__((__interrupt__, no_auto_psv)) _AD1CMP5Interrupt(void)
 void __attribute__((__interrupt__, no_auto_psv)) _AD2CMP1Interrupt(void)
 {
     _AD2CMP1IE = 0;
-#if GARUDA_TARGET_AK512
-    AD2CMPSTATbits.CH1FLG = 0;
-#else
     AD2CMPSTATbits.CH1CMP = 0;
-#endif
     if (garudaData.hwzc.enabled)
         HWZC_OnZcDetected(&garudaData);
     _AD2CMP1IF = 0;
 }
+#endif /* GARUDA_TARGET_AK512 */
 
 /**
  * @brief SCCP1 Timer ISR — blanking expired, commutation deadline, or timeout.
