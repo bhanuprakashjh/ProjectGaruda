@@ -80,3 +80,6 @@ package-lock.json
 *.log
 *.log.inx
 
+# large vendor datasheets (kept local; URLs in docs/migration_dsPIC33AK512MC510.md)
+docs/datasheets/dsPIC33AK512MPS512-Family-DataSheet-DS70005591.pdf
+reference-an957-ak512mc510/
