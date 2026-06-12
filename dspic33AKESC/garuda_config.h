@@ -126,7 +126,7 @@ extern "C" {
                                     * "closed loop with training wheels". Prototype in
                                     * garuda_sil before any bench flash. */
 #define PLL_START_ERPM0              300   /* first commanded speed after align */
-#define PLL_START_ACCEL_ERPM_PER_S 16000   /* blind schedule acceleration */
+#define PLL_START_ACCEL_ERPM_PER_S 32000   /* blind schedule acceleration */
 #define PLL_START_CAPTURE_FLOOR_ERPM 2500  /* ignore captures below (BEMF noise floor) */
 #define PLL_START_SYNC_CAPS            6   /* consecutive plausible captures = synced */
 #define PLL_START_TARGET_ERPM      10000   /* blind schedule ceiling (hold if unsynced) */
