@@ -150,6 +150,17 @@ extern "C" {
 #if FEATURE_AM32_STARTUP && FEATURE_PLL_STARTUP
 #error "FEATURE_AM32_STARTUP and FEATURE_PLL_STARTUP both own CL entry - pick one"
 #endif
+
+#define FEATURE_ARM_BEEP        1  /* 2026-06-12: audible arm confirmation (AM32-style).
+                                    * During the first ARM_BEEP_MS of ARMED, gate 45kHz PWM
+                                    * bursts on/off at ARM_BEEP_FREQ_HZ on the align sector at
+                                    * ARM_BEEP_DUTY_PCT — the stator windings act as the
+                                    * speaker; rotor stays parked. The OC auto-zero's
+                                    * quiescence gate rejects bias samples during the beep and
+                                    * latches in the quiet remainder of the 500ms arm window. */
+#define ARM_BEEP_MS           120  /* beep length (must stay < arm window 500ms) */
+#define ARM_BEEP_FREQ_HZ     1000  /* tone (burst-gating rate); 10000/(2*N ticks) */
+#define ARM_BEEP_DUTY_PCT       2  /* drive strength — align-class current, safe parked */
 #define PLL_START_TARGET_ERPM      10000   /* blind schedule ceiling (hold if unsynced) */
 #define FEATURE_SKIP_MORPH      0  /* PARKED 2026-06-10 (bench-proven 9/9 but engage is
                                     * effectively blind at the 3k entry: the post-sine coast

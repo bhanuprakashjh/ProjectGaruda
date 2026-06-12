@@ -4244,6 +4244,34 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
              * cross-ISR races. Timer1 is a no-op for ESC_ARMED with FOC. */
             break;
 #else
+#if FEATURE_ARM_BEEP
+            /* Audible arm confirmation (AM32-style): burst-gate the 45kHz
+             * PWM at the tone rate on the align sector for the first
+             * ARM_BEEP_MS of the arm countdown. Keyed to armCounter, so a
+             * fresh ARMED entry (or a restart of the countdown after a
+             * throttle blip) beeps again. Bridge force-silenced at beep
+             * end; the OC auto-zero's quiescence gate skips the noisy
+             * window and latches in the quiet remainder of the 500ms arm. */
+            if (garudaData.throttle < ARM_THROTTLE_ZERO_ADC
+                && garudaData.armCounter < (uint16_t)(ARM_BEEP_MS * 10u))
+            {
+                const uint16_t halfT = (uint16_t)(10000u / (2u * ARM_BEEP_FREQ_HZ));
+                if (((garudaData.armCounter / halfT) & 1u) == 0u)
+                {
+                    HAL_PWM_SetCommutationStep(0);
+                    HAL_PWM_SetDutyCycle((uint16_t)(((uint32_t)LOOPTIME_TCY
+                                          * ARM_BEEP_DUTY_PCT) / 100u));
+                }
+                else
+                {
+                    HAL_MC1PWMDisableOutputs();
+                }
+            }
+            else if (garudaData.armCounter == (uint16_t)(ARM_BEEP_MS * 10u))
+            {
+                HAL_MC1PWMDisableOutputs();    /* beep end: silence + Hi-Z */
+            }
+#endif
             /* Verify throttle stays at zero for ARM_TIME */
             if (garudaData.throttle < ARM_THROTTLE_ZERO_ADC)
             {
