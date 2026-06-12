@@ -679,8 +679,13 @@ static void HWZC_PllStartTick(volatile GARUDA_DATA_T *pData)
     uint32_t T = pData->hwzc.timerPeriod;
     uint32_t eCmd = (T > 0) ? HWZC_TICKS_TO_ERPM(T) : PLL_START_ERPM0;
 
+    /* Capture floor: never trust captures below the active profile's HWZC
+     * crossover (per-motor BEMF detectability), whichever is higher. */
+    uint32_t pllFloorErpm = PLL_START_CAPTURE_FLOOR_ERPM;
+    if (RT_HWZC_CROSSOVER_ERPM > pllFloorErpm)
+        pllFloorErpm = RT_HWZC_CROSSOVER_ERPM;
     if (pData->hwzc.captureValid) {
-        if (eCmd >= PLL_START_CAPTURE_FLOOR_ERPM) {
+        if (eCmd >= pllFloorErpm) {
             uint32_t cap = pData->hwzc.lastCaptureHR
                          - pData->hwzc.lastCommStamp;   /* modular */
             /* CONSISTENCY gate (twin iteration #5). A locked rotor puts the
@@ -715,7 +720,7 @@ static void HWZC_PllStartTick(volatile GARUDA_DATA_T *pData)
             }
         }
         pData->hwzc.captureValid = false;   /* consume in blind phase */
-    } else if (eCmd >= PLL_START_CAPTURE_FLOOR_ERPM
+    } else if (eCmd >= pllFloorErpm
                && pData->hwzc.pllStartGood > 0) {
         pData->hwzc.pllStartGood = 0;       /* silence resets the streak */
         pData->hwzc.pllPrevCap = 0;

@@ -141,7 +141,11 @@ extern "C" {
                                     * Known risk: phantom captures below the BEMF floor can
                                     * fiction-lock (the VEX failure mode) -- that is what the
                                     * experiment measures. Mutually exclusive w/ PLL_STARTUP. */
-#define AM32_START_SEED_ERPM    2000   /* initial period guess (AM32 seeds ~2k equiv) */
+#define AM32_START_SEED_ERPM       0   /* initial period guess. 0 = derive from the
+                                            * active profile: (2/3)*rampTargetErpm —
+                                            * gives the bench-proven 2000 on profile 2
+                                            * (rampTarget 3000) and scales for high-BEMF-
+                                            * floor motors (VEX: 8000). Nonzero = use as-is. */
 
 #if FEATURE_AM32_STARTUP && FEATURE_PLL_STARTUP
 #error "FEATURE_AM32_STARTUP and FEATURE_PLL_STARTUP both own CL entry - pick one"

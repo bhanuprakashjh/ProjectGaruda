@@ -3145,7 +3145,9 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                     if (g_am32EntryPending)
                     {
                         g_am32EntryPending = 0;
+#if FEATURE_SINE_STARTUP
                         garudaData.sine.active = false;
+#endif
                         /* One blind commutation from the UNKNOWN rotor angle
                          * (AM32 does exactly this — worst case zero torque on
                          * the first step; the listener sorts it out). */
@@ -3168,11 +3170,15 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                         /* Engage 6-step from the align angle and start the
                          * blind PLL schedule: comparator armed from the
                          * first commutation, captures gated in hwzc.c. */
-                        garudaData.sine.active = false;
                         /* rotor is parked AT the align vector = step s0's
                          * center → applying s0 gives ~zero torque. Lead by
                          * one step (60°) so the schedule pulls forward. */
+#if FEATURE_SINE_STARTUP
+                        garudaData.sine.active = false;
                         uint8_t s0 = STARTUP_SineGetTransitionStep(&garudaData);
+#else
+                        uint8_t s0 = 0;   /* classic STARTUP_Align parks at step 0 */
+#endif
                         COMMUTATION_ApplyStep(&garudaData, (uint8_t)((s0 + 1u) % 6u));
                         garudaData.duty = MIN_DUTY;
                         HAL_PWM_SetDutyCycle(garudaData.duty);
@@ -4253,8 +4259,14 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
                      * period guess and enter CL; the ADC-ISR entry block
                      * does the one blind kick + HWZC arm (startMotor()
                      * semantics, AM32 main.c:977). */
-                    garudaData.rampStepPeriod =
-                        (uint16_t)ERPM_TO_STEP_TICKS(AM32_START_SEED_ERPM);
+                    {
+                        uint32_t seedErpm = AM32_START_SEED_ERPM;
+                        if (seedErpm == 0u)   /* derive from active profile */
+                            seedErpm = (2u * RT_RAMP_TARGET_ERPM) / 3u;
+                        if (seedErpm < 300u) seedErpm = 300u;
+                        garudaData.rampStepPeriod =
+                            (uint16_t)ERPM_TO_STEP_TICKS(seedErpm);
+                    }
                     g_am32EntryPending = 1;
 #if FEATURE_HW_OVERCURRENT
                     HAL_CMP3_SetThreshold(RT_OC_CMP3_DAC_VAL);
@@ -4311,8 +4323,23 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
 #else
             if (STARTUP_Align(&garudaData))
             {
+#if FEATURE_PLL_STARTUP
+                /* PLL-from-align over the CLASSIC align: same exit as the
+                 * sine-align path — seed slow period, flag the blind
+                 * schedule, enter CL (ADC-ISR entry block engages). */
+                garudaData.rampStepPeriod =
+                    (uint16_t)ERPM_TO_STEP_TICKS(PLL_START_ERPM0);
+                garudaData.hwzc.pllStartActive = 1;
+                garudaData.hwzc.pllStartGood = 0;
+                garudaData.hwzc.pllPrevCap = 0;
+#if FEATURE_HW_OVERCURRENT
+                HAL_CMP3_SetThreshold(RT_OC_CMP3_DAC_VAL);
+#endif
+                garudaData.state = ESC_CLOSED_LOOP;
+#else
                 garudaData.state = ESC_OL_RAMP;
                 garudaData.rampCounter = garudaData.rampStepPeriod;
+#endif
             }
             break;
 #endif
