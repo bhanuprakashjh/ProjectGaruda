@@ -141,7 +141,7 @@ max(2500, crossover).
 | 3 | 5055 | 2000 | 1500 | 1333 | 2500 | ✓ (heavy rotor: if no catch, raise seed) | ✓ (accel 32000 may be high for the inertia — try 8000) |
 | 4 | COBRA 470KV | 3000 | 1500 | 2000 | 2500 | ✓ expected OK (high-R limits slip current naturally) | ✓ |
 | 5 | XROTOR 1150KV | 3000 | 1500 | 2000 | 2500 | ✓ ~2810 regime | ✓ |
-| 6 | VEX 4000KV | 12000 | 6000 | 8000 | 6000 | ⚠ untested: seed 8000 is detectable territory but the **catch from rest at an 8k field is unproven** — micro rotor may catch (light), may not. Test with PLL first. | ✓ floor auto-raises to 6000; set `PLL_START_TARGET_ERPM ≥ 15000` for this motor |
+| 6 | VEX 4000KV | 12000 | 6000 | 8000 | 6000 | ⚠ twin (uncalibrated VEX plant, 2026-06-12): bare-rotor J → 4/4 OK (idle ~29k); with ≥2.5× load inertia → OC fault during pull-in. | ✓ twin: 4/4 at bare AND 2.5× load inertia (where AM32 faults) — **use PLL on this motor**; heavily geared loads (≥5× bare J) fiction-hold at the blind target → needs an engage-duty boost (future knob). See `tools/garuda_sil/sil/experiment_vex.py`. |
 
 Notes:
 - The deeper portability issue for VEX-class is not the startup method but
