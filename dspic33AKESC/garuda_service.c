@@ -4245,18 +4245,24 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
             break;
 #else
 #if FEATURE_ARM_BEEP
-            /* Audible arm confirmation (AM32-style): burst-gate the 45kHz
-             * PWM at the tone rate on the align sector for the first
-             * ARM_BEEP_MS of the arm countdown. Keyed to armCounter, so a
-             * fresh ARMED entry (or a restart of the countdown after a
-             * throttle blip) beeps again. Bridge force-silenced at beep
-             * end; the OC auto-zero's quiescence gate skips the noisy
-             * window and latches in the quiet remainder of the 500ms arm. */
+            /* Arm melody: plays AFTER the quiet arm window (OC auto-zero has
+             * already latched its bias) and BEFORE startup. Three sequential
+             * pitches over ARM_BEEP_TICKS; the arm-complete transition below
+             * is pushed out by the same amount. Throttle-up during the
+             * melody resets the countdown (same rule as arming itself). */
             if (garudaData.throttle < ARM_THROTTLE_ZERO_ADC
-                && garudaData.armCounter < (uint16_t)(ARM_BEEP_MS * 10u))
+                && garudaData.armCounter >= ARM_TIME_COUNTS)
             {
-                const uint16_t halfT = (uint16_t)(10000u / (2u * ARM_BEEP_FREQ_HZ));
-                if (((garudaData.armCounter / halfT) & 1u) == 0u)
+                static const uint16_t halfTbl[3] = {
+                    (uint16_t)(10000u / (2u * ARM_BEEP_FREQ1_HZ)),
+                    (uint16_t)(10000u / (2u * ARM_BEEP_FREQ2_HZ)),
+                    (uint16_t)(10000u / (2u * ARM_BEEP_FREQ3_HZ)),
+                };
+                uint32_t t = garudaData.armCounter - ARM_TIME_COUNTS;
+                uint32_t noteLen = ARM_BEEP_TICKS / 3u;
+                uint8_t note = (uint8_t)(t / noteLen);
+                if (note > 2u) note = 2u;
+                if (((t / halfTbl[note]) & 1u) == 0u)
                 {
                     HAL_PWM_SetCommutationStep(0);
                     HAL_PWM_SetDutyCycle((uint16_t)(((uint32_t)LOOPTIME_TCY
@@ -4267,16 +4273,16 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
                     HAL_MC1PWMDisableOutputs();
                 }
             }
-            else if (garudaData.armCounter == (uint16_t)(ARM_BEEP_MS * 10u))
-            {
-                HAL_MC1PWMDisableOutputs();    /* beep end: silence + Hi-Z */
-            }
 #endif
             /* Verify throttle stays at zero for ARM_TIME */
             if (garudaData.throttle < ARM_THROTTLE_ZERO_ADC)
             {
                 garudaData.armCounter++;
+#if FEATURE_ARM_BEEP
+                if (garudaData.armCounter >= ARM_TIME_COUNTS + ARM_BEEP_TICKS)
+#else
                 if (garudaData.armCounter >= ARM_TIME_COUNTS)
+#endif
                 {
                     /* Armed successfully — transition to ALIGN.
                      * Init before state change: ADC ISR (prio 6) can

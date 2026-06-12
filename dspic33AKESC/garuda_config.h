@@ -151,15 +151,18 @@ extern "C" {
 #error "FEATURE_AM32_STARTUP and FEATURE_PLL_STARTUP both own CL entry - pick one"
 #endif
 
-#define FEATURE_ARM_BEEP        1  /* 2026-06-12: audible arm confirmation (AM32-style).
-                                    * During the first ARM_BEEP_MS of ARMED, gate 45kHz PWM
-                                    * bursts on/off at ARM_BEEP_FREQ_HZ on the align sector at
-                                    * ARM_BEEP_DUTY_PCT — the stator windings act as the
-                                    * speaker; rotor stays parked. The OC auto-zero's
-                                    * quiescence gate rejects bias samples during the beep and
-                                    * latches in the quiet remainder of the 500ms arm window. */
-#define ARM_BEEP_MS           120  /* beep length (must stay < arm window 500ms) */
-#define ARM_BEEP_FREQ_HZ     1000  /* tone (burst-gating rate); 10000/(2*N ticks) */
+#define FEATURE_ARM_BEEP        1  /* 2026-06-12: arm melody through the motor windings.
+                                    * Sequence: button -> quiet 500ms arm (OC auto-zero
+                                    * calibrates undisturbed) -> ARM_BEEP_MS of music (three
+                                    * sequential pitches, 45kHz PWM burst-gated at each note's
+                                    * rate, align sector, ARM_BEEP_DUTY_PCT drive; rotor stays
+                                    * parked) -> startup. Startup is therefore delayed by
+                                    * ARM_BEEP_MS after the normal arm window. */
+#define ARM_BEEP_MS          2000  /* melody length (delays startup by this much) */
+#define ARM_BEEP_TICKS       (uint32_t)(ARM_BEEP_MS * 10u)
+#define ARM_BEEP_FREQ1_HZ     800  /* note 1 (first ~ARM_BEEP_MS/3) */
+#define ARM_BEEP_FREQ2_HZ    1200  /* note 2 */
+#define ARM_BEEP_FREQ3_HZ    1600  /* note 3 — rising chirp */
 #define ARM_BEEP_DUTY_PCT       2  /* drive strength — align-class current, safe parked */
 #define PLL_START_TARGET_ERPM      10000   /* blind schedule ceiling (hold if unsynced) */
 #define FEATURE_SKIP_MORPH      0  /* PARKED 2026-06-10 (bench-proven 9/9 but engage is
