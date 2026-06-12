@@ -109,6 +109,10 @@ BENCH HEX BUILT 2026-06-11 23:41 (FEATURE_PLL_STARTUP=1, flag restored to
 1. Replay-and-score: feed a recorded session's throttle/Vbus through the twin,
    score state durations, CL-entry seed, idle eRPM, event stats.
 2. Coast-down J/b fit from session CSVs.
-3. GSP snapshot bytes out + broker attach (GUI shows the twin like a board).
+3. DONE 2026-06-12: sil/sim_broker.py serves the twin over the broker's
+   TCP protocol (port 47800) — garuda-gui/MCP connect UNCHANGED and see
+   the simulator as a board (live plots, sessions, start/stop, throttle
+   via set_throttle RPC; sim-only truth channels plant_erpm/theta in
+   every snapshot). --motor vex|2810, --so <variant>, --vbus, --speed.
 4. First design study: PLL-from-align startup (no-morph, capture-weighted
    transition) — prototype in twin before any bench time.

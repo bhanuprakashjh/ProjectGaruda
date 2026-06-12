@@ -35,6 +35,23 @@ garuda-gui          # auto-starts the broker, auto-detects the board port
 
 Every run is auto-recorded to `sessions/` as a shareable bundle.
 
+### No board? Run the GUI against the simulator
+
+The SIL digital twin (`tools/garuda_sil`) can serve the broker protocol, so
+the GUI connects to the SIMULATED motor exactly as if it were hardware
+(plots, state trace, sessions — and extra truth channels like `plant_erpm`):
+
+```bash
+# terminal 1 — the twin as a board (build it once: bash tools/garuda_sil/build.sh)
+python tools/garuda_sil/sil/sim_broker.py                    # 2810 @ 24.3 V
+python tools/garuda_sil/sil/sim_broker.py --motor vex --vbus 10
+# terminal 2
+garuda-gui
+```
+
+Don't run the real broker at the same time (same TCP port). Throttle is the
+simulated pot: `set_throttle(<0..4095>)` over MCP or any BrokerClient.
+
 ## Use
 
 ```bash
