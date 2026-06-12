@@ -150,13 +150,14 @@ Notes:
 - All verdicts above except profile 2 are **twin/derivation, not bench** —
   treat ⚠ rows as "needs a bench session with that motor".
 
-## Verified flag combinations (x86 twin builds + functional, 2026-06-12)
+## Verified flag combinations (2026-06-12)
 
-| Combo | Compiles | Twin functional |
-|---|---|---|
-| AM32=1, SINE=1 (default) | ✓ | 12/12 angles |
-| AM32=1, SINE=0 | ✓ | 4/4 angles |
-| PLL=1, SINE=1 | ✓ | 12/12 angles |
-| PLL=1, SINE=0 (classic align) | ✓ | 4/4 angles |
-| all 0 (classic trapezoid) | ✓ | (baseline path) |
-| AM32=1 && PLL=1 | `#error` (by design) | — |
+| Combo | Compiles | Twin functional | BENCH (2810 @24V) |
+|---|---|---|---|
+| AM32=1, SINE=1 (default) | ✓ | 12/12 angles | ✓ 3/3 (derived seed reads 2010) |
+| AM32=1, SINE=0 | ✓ | 4/4 angles | — |
+| PLL=1, SINE=1 | ✓ | 12/12 angles | ✓ 5/5 + a32000 2/2 (06-11/12) |
+| PLL=1, SINE=0 (classic align) | ✓ | 4/4 angles | ✓ 3/3 + floor auto-raise verified live (`set_param hwzcCrossoverErpm 4000` → sync plateau 3.2k→4.4k) |
+| SINE=1 only (sine+morph baseline) | ✓ | (long-proven) | ✓ 2/2 regression — full 5-state trace, true ~3k CL entries, unchanged |
+| all 0 (classic trapezoid) | ✓ | (baseline path) | — (least-used; untested post-decoupling) |
+| AM32=1 && PLL=1 | `#error` (by design) | — | — |
