@@ -127,6 +127,14 @@ class SerialWorker(QtCore.QThread):
                                              "name": kw.get("name", ""), "value": rb})
                 elif action == "refresh_params":
                     self.params_ready.emit(c.dump_params())
+                elif action == "motor_cmd":
+                    cmd = kw["cmd"]
+                    if cmd == "start":
+                        c.start_motor()
+                    elif cmd == "stop":
+                        c.stop_motor()
+                    elif cmd == "throttle":
+                        c.set_throttle(int(kw["value"]))
                 elif action == "scope_capture":
                     c.scope_arm(trig_mode=kw.get("mode", 0), pre_pct=kw.get("pre", 25))
                     st, ready = {"state": 0}, False
@@ -546,6 +554,40 @@ class MainWindow(QtWidgets.QMainWindow):
         top.addStretch(1)
         top.addWidget(self.lbl_id, 3)
         root.addLayout(top)
+
+        # ── sim control bar (visible only when connected to the SIL twin —
+        # a real bench run is started with the physical button + pot) ──
+        simbar = QtWidgets.QHBoxLayout()
+        self.sim_panel = QtWidgets.QWidget()
+        self.sim_panel.setStyleSheet(
+            "background:#1d2b1d;border:1px solid #2e7d32;border-radius:4px;")
+        sp = QtWidgets.QHBoxLayout(self.sim_panel)
+        sp.setContentsMargins(8, 3, 8, 3)
+        lab = QtWidgets.QLabel("🧪 SIMULATOR")
+        lab.setStyleSheet("color:#81c784;font-weight:bold;border:none;")
+        sp.addWidget(lab)
+        self.sim_start = QtWidgets.QPushButton("▶ Start motor")
+        self.sim_start.clicked.connect(
+            lambda: self.worker and self.worker.submit("motor_cmd", cmd="start"))
+        sp.addWidget(self.sim_start)
+        self.sim_stop = QtWidgets.QPushButton("⏹ Stop")
+        self.sim_stop.clicked.connect(
+            lambda: self.worker and self.worker.submit("motor_cmd", cmd="stop"))
+        sp.addWidget(self.sim_stop)
+        sp.addSpacing(12)
+        sp.addWidget(QtWidgets.QLabel("Throttle"))
+        self.sim_pot = QtWidgets.QSlider(QtCore.Qt.Horizontal)
+        self.sim_pot.setRange(0, 4095)
+        self.sim_pot.setValue(40)
+        self.sim_pot.valueChanged.connect(self._sim_pot_changed)
+        sp.addWidget(self.sim_pot, 1)
+        self.sim_pot_lbl = QtWidgets.QLabel("40")
+        self.sim_pot_lbl.setMinimumWidth(48)
+        self.sim_pot_lbl.setStyleSheet("font-family:monospace;border:none;")
+        sp.addWidget(self.sim_pot_lbl)
+        self.sim_panel.setVisible(False)
+        simbar.addWidget(self.sim_panel)
+        root.addLayout(simbar)
 
         # tabbed pillars
         self.tabs = QtWidgets.QTabWidget()
@@ -1378,9 +1420,15 @@ class MainWindow(QtWidgets.QMainWindow):
             f"PWM={info['pwmFrequency']:,}Hz  cap={info['maxErpm']:,}")
         self.btn_record.setEnabled(True)
         self.btn_diag.setEnabled(True)
+        self.sim_panel.setVisible(bool(info.get("sim")))
         self._log(f"connected: fw v{info['fwVersion']} build={bh} "
                   f"profile={info['motorProfile']} {'FOC' if info.get('isFoc') else '6-step'}")
         self.status.showMessage(f"Connected ({self.port}).")
+
+    def _sim_pot_changed(self, v):
+        self.sim_pot_lbl.setText(str(v))
+        if self.worker:
+            self.worker.submit("motor_cmd", cmd="throttle", value=v)
 
     def on_failed(self, msg):
         self.status.showMessage(f"Error: {msg}")
