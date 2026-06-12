@@ -114,7 +114,7 @@ extern "C" {
                                     * window (~0.17A). A rotor still spinning
                                     * down puts regen ripple on the bus that
                                     * fails this → retry until quiescent. */
-#define FEATURE_PLL_STARTUP     0  /* 2026-06-11 twin design study (task #10): after ALIGN,
+#define FEATURE_PLL_STARTUP     1  /* 2026-06-11 twin design study (task #10): after ALIGN,
                                     * enter CL directly — the sector-PI/SCCP1 machinery runs a
                                     * BLIND accelerating commutation schedule from
                                     * PLL_START_ERPM0, comparator armed the whole way; captures
@@ -126,7 +126,7 @@ extern "C" {
                                     * "closed loop with training wheels". Prototype in
                                     * garuda_sil before any bench flash. */
 #define PLL_START_ERPM0              300   /* first commanded speed after align */
-#define PLL_START_ACCEL_ERPM_PER_S  4000   /* blind schedule acceleration */
+#define PLL_START_ACCEL_ERPM_PER_S 16000   /* blind schedule acceleration */
 #define PLL_START_CAPTURE_FLOOR_ERPM 2500  /* ignore captures below (BEMF noise floor) */
 #define PLL_START_SYNC_CAPS            6   /* consecutive plausible captures = synced */
 #define PLL_START_TARGET_ERPM      10000   /* blind schedule ceiling (hold if unsynced) */
