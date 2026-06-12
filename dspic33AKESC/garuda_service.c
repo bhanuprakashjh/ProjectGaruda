@@ -1054,6 +1054,23 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
         uint16_t rawThresh = (uint16_t)(
             ((uint32_t)garudaData.vbusRaw * garudaData.duty) / ZC_DUTY_DIVISOR);
 #endif
+#if FEATURE_VIRTUAL_NEUTRAL
+        /* Measured virtual neutral overrides the duty-model threshold while
+         * the bridge is driving (CL/OL/morph). All three channels sampled at
+         * the same PG1TRIGA instant this very tick. Downstream consumers
+         * (smoothing IIR, live CMPLO refresh, falling-SW, filter comp)
+         * inherit it unchanged. Bridge-off states keep the duty model: with
+         * no drive the three dividers just read rest level (~equal), which
+         * would park the threshold at the rest bias instead of near 0. */
+        if (garudaData.state == ESC_CLOSED_LOOP
+            || garudaData.state == ESC_OL_RAMP
+            || garudaData.state == ESC_MORPH)
+        {
+            rawThresh = (uint16_t)(((uint32_t)ADCBUF_BEMF_VA
+                                  + (uint32_t)ADCBUF_BEMF_VB
+                                  + (uint32_t)ADCBUF_BEMF_VC) / 3u);
+        }
+#endif
 
         if (garudaData.state == ESC_CLOSED_LOOP
 #if FEATURE_SINE_STARTUP

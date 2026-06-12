@@ -1075,6 +1075,24 @@ extern "C" {
 #else
 #define HWZC_FALLING_SW_MAX_ERPM       0   /* 0 = falling-SW at all speeds; else cap */
 #endif
+
+/* ── Virtual neutral (AK512 only) ──────────────────────────────────────────
+ * The MC510 port samples ALL THREE phase voltages every PWM cycle from the
+ * same PG1TRIGA instant (VA=AD1CH4, VB=AD1CH3, VC=AD2CH3). zcThreshold then
+ * becomes the MEASURED neutral (VA+VB+VC)/3 instead of the duty*Vbus/2 model.
+ * Math: at the sample instant driven phases read ~Vbus and ~0, so measured
+ * neutral = Vbus/2 + e_float/3 — the float BEMF leak scales the detection
+ * signal by 2/3 but the crossing fires EXACTLY at e_float = 0. Every model
+ * error (deadtime, Vbus ripple, divider tolerance, duty model) is measured
+ * in, not estimated. Bench motivation 2026-06-12: scope showed the model
+ * threshold puts rising crossings at 78% of sector vs falling 67% (ideal
+ * ~65% incl. RC lag) -> asymmetric over-advance -> 22 A at speed. Triplen
+ * (3x f) neutral ripple is expected and smoothed by the zcThreshold IIR. */
+#if GARUDA_TARGET_AK512
+#define FEATURE_VIRTUAL_NEUTRAL        1
+#else
+#define FEATURE_VIRTUAL_NEUTRAL        0   /* 106: VA/VC share one muxed channel */
+#endif
 /* Falling-polarity ZC fix (2026-06-07, investigation closed). Root cause
  * (measured): the ON-time HW comparator detects RISING perfectly but is silent
  * on FALLING above ~20k — during PWM-ON the driven phase couples into the

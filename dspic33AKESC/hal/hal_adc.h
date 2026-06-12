@@ -66,6 +66,11 @@ extern "C" {
 #define ADCBUF_PHASE_B      (uint16_t)AD1CH3DATA
 #define ADCBUF_PHASE_AC     HAL_ADC_ReadPhaseAC()
 uint16_t HAL_ADC_ReadPhaseAC(void);
+/* All three PWM-synced phase voltages, same PG1TRIGA instant — the raw
+ * ingredients of the measured virtual neutral (VA+VB+VC)/3. */
+#define ADCBUF_BEMF_VA      (uint16_t)AD1CH4DATA
+#define ADCBUF_BEMF_VB      (uint16_t)AD1CH3DATA
+#define ADCBUF_BEMF_VC      (uint16_t)AD2CH3DATA
 #endif
 #define ADCBUF_POT          (uint16_t)AD2CH1DATA
 #define ADCBUF_VBUS         (uint16_t)AD3CH2DATA
