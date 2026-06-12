@@ -114,7 +114,7 @@ extern "C" {
                                     * window (~0.17A). A rotor still spinning
                                     * down puts regen ripple on the bus that
                                     * fails this → retry until quiescent. */
-#define FEATURE_PLL_STARTUP     1  /* 2026-06-11 twin design study (task #10): after ALIGN,
+#define FEATURE_PLL_STARTUP     0  /* 2026-06-11 twin design study (task #10): after ALIGN,
                                     * enter CL directly — the sector-PI/SCCP1 machinery runs a
                                     * BLIND accelerating commutation schedule from
                                     * PLL_START_ERPM0, comparator armed the whole way; captures
@@ -129,6 +129,23 @@ extern "C" {
 #define PLL_START_ACCEL_ERPM_PER_S 32000   /* blind schedule acceleration */
 #define PLL_START_CAPTURE_FLOOR_ERPM 2500  /* ignore captures below (BEMF noise floor) */
 #define PLL_START_SYNC_CAPS            6   /* consecutive plausible captures = synced */
+
+#define FEATURE_AM32_STARTUP    1  /* 2026-06-12 bench experiment: AM32-style "kick + listen".
+                                    * NO align, NO ramp, NO blind schedule: on arm-complete,
+                                    * one blind commutation at MIN_DUTY from the unknown rotor
+                                    * angle, HWZC armed immediately with the period seeded at
+                                    * AM32_START_SEED_ERPM, zcSynced trusted from event 1 --
+                                    * the normal sector PI + defensive machinery do EVERYTHING
+                                    * (AM32 main.c:977 startMotor() semantics; their polling/
+                                    * voting low-speed mode maps onto our defensive PI).
+                                    * Known risk: phantom captures below the BEMF floor can
+                                    * fiction-lock (the VEX failure mode) -- that is what the
+                                    * experiment measures. Mutually exclusive w/ PLL_STARTUP. */
+#define AM32_START_SEED_ERPM    2000   /* initial period guess (AM32 seeds ~2k equiv) */
+
+#if FEATURE_AM32_STARTUP && FEATURE_PLL_STARTUP
+#error "FEATURE_AM32_STARTUP and FEATURE_PLL_STARTUP both own CL entry - pick one"
+#endif
 #define PLL_START_TARGET_ERPM      10000   /* blind schedule ceiling (hold if unsynced) */
 #define FEATURE_SKIP_MORPH      0  /* PARKED 2026-06-10 (bench-proven 9/9 but engage is
                                     * effectively blind at the 3k entry: the post-sine coast

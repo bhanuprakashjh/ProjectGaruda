@@ -105,6 +105,12 @@
 /* Global ESC runtime data — volatile: shared between ISRs and main loop */
 volatile GARUDA_DATA_T garudaData;
 
+#if FEATURE_AM32_STARTUP
+/* Set by Timer1 ARMED exit, consumed by the ADC-ISR CL entry-init: do the
+ * one blind kick + immediate HWZC arm (AM32 startMotor() semantics). */
+static volatile uint8_t g_am32EntryPending;
+#endif
+
 #if FEATURE_FOC_V2
 /* FOC v2 state — accessed only from ADC ISR (not volatile) */
 static FOC_State_t s_foc_v2;
@@ -199,6 +205,7 @@ static uint16_t     s_slow_ctr;     /* Slow loop counter (0 -> FOC_SLOW_DIV) */
 static float        s_theta_ol;     /* Open-loop angle (rad) */
 static float        s_omega_ol;     /* Open-loop speed (rad/s elec.) */
 static bool         s_ovr_released; /* True after overrides released this run */
+
 static uint32_t     s_iq_ramp_ctr;  /* Ticks elapsed since entry (Iq ramp) */
 static uint32_t     s_align_ctr;    /* Ticks elapsed during alignment dwell */
 
@@ -514,6 +521,7 @@ static struct {
  * force-swaps to the conventional waveform (baseline from there on). */
 static uint8_t  s_glideActive;
 static uint8_t  s_glideDivCtr;
+
 static uint16_t s_glideDuty;
 #endif
 
@@ -3133,6 +3141,27 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                     }
 #endif
 
+#if FEATURE_AM32_STARTUP
+                    if (g_am32EntryPending)
+                    {
+                        g_am32EntryPending = 0;
+                        garudaData.sine.active = false;
+                        /* One blind commutation from the UNKNOWN rotor angle
+                         * (AM32 does exactly this — worst case zero torque on
+                         * the first step; the listener sorts it out). */
+                        COMMUTATION_ApplyStep(&garudaData,
+                            (uint8_t)((garudaData.currentStep + 1u) % 6u));
+                        garudaData.duty = MIN_DUTY;
+                        HAL_PWM_SetDutyCycle(garudaData.duty);
+                        if (!garudaData.hwzc.enabled)
+                            HWZC_Enable(&garudaData);
+                        /* Trust the listener from event 1: capture-driven PI
+                         * immediately, no blind phase, no sync gate. */
+                        garudaData.timing.zcSynced = true;
+                        garudaData.timing.goodZcCount =
+                            (uint16_t)RT_ZC_SYNC_THRESHOLD;
+                    }
+#endif
 #if FEATURE_PLL_STARTUP
                     if (garudaData.hwzc.pllStartActive)
                     {
@@ -4219,7 +4248,19 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
                      * Init before state change: ADC ISR (prio 6) can
                      * preempt Timer1 (prio 5) between the two lines. */
                     STARTUP_Init(&garudaData);
-#if FEATURE_IF_STARTUP
+#if FEATURE_AM32_STARTUP
+                    /* AM32-style: no align, no ramp. Seed the listener's
+                     * period guess and enter CL; the ADC-ISR entry block
+                     * does the one blind kick + HWZC arm (startMotor()
+                     * semantics, AM32 main.c:977). */
+                    garudaData.rampStepPeriod =
+                        (uint16_t)ERPM_TO_STEP_TICKS(AM32_START_SEED_ERPM);
+                    g_am32EntryPending = 1;
+#if FEATURE_HW_OVERCURRENT
+                    HAL_CMP3_SetThreshold(RT_OC_CMP3_DAC_VAL);
+#endif
+                    garudaData.state = ESC_CLOSED_LOOP;
+#elif FEATURE_IF_STARTUP
                     /* I-f self-aligns from the clean override-low bridge state.
                      * STARTUP_Init's SineInit briefly wrote sine duties + released
                      * overrides; IF_StartupInit (same tick) overwrites to balanced
