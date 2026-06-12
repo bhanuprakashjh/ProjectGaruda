@@ -341,7 +341,7 @@ void InitPWMGenerator1(void)
     PG1F1PCI1bits.AQSS = 0b010;     /* LEB active as acceptance qualifier */
     PG1F1PCI1bits.PSYNC = 0;
     PG1F1PCI1bits.PPS = 1;          /* Inverted polarity */
-    PG1F1PCI2 = 0; /* PCI source: TODO P1b - map AK128 PSS 0b01000 to MC510 one-hot source */
+    PG1F1PCI2 = 0x00000100UL; /* PCI source one-hot: bit8 = PPS PCI8R (board FLTLAT_OC_OV, = AK128 PSS 0b01000) */
     PG1F1PCI1bits.BPEN = 0;
     PG1F1PCI1bits.BPSEL = 0;
     PG1F1PCI1bits.TERMPS = 0;
@@ -350,7 +350,7 @@ void InitPWMGenerator1(void)
     PG1F1PCI1bits.TQPS = 0;
     PG1F1PCI1bits.TQSS = 0;
 #if FEATURE_HW_OVERCURRENT && OC_PROTECT_MODE == 1
-    PG1F1PCI2 = 0; /* PCI source: TODO P1b - map AK128 PSS 0b11101 to MC510 one-hot source */
+    PG1F1PCI2 = 0x40000000UL; /* PCI source one-hot: bit30 = Comparator 3 output (= AK128 PSS 0b11101 CMP3) */
     PG1F1PCI1bits.PPS = 0;          /* Non-inverted */
 #endif
 #else
@@ -401,7 +401,7 @@ void InitPWMGenerator1(void)
 #if FEATURE_HW_OVERCURRENT && (OC_PROTECT_MODE == 0 || OC_PROTECT_MODE == 2) && OC_CLPCI_ENABLE
 #if GARUDA_TARGET_AK512
     PG1CLPCI1   = 0x0000;
-    PG1CLPCI2 = 0; /* PCI source: TODO P1b - map AK128 PSS 0b11101 to MC510 one-hot source */
+    PG1CLPCI2 = 0x40000000UL; /* PCI source one-hot: bit30 = Comparator 3 output (= AK128 PSS 0b11101 CMP3) */
     PG1CLPCI1bits.PPS = 0;         /* Non-inverted (CMP3 high = overcurrent) */
     PG1CLPCI1bits.TERM = 1;        /* Auto-terminate when PCI source goes inactive */
     PG1CLPCI1bits.ACP = 0b011;    /* Latched acceptance (recommended with LEB) */
@@ -574,7 +574,7 @@ void InitPWMGenerator2(void)
     PG2F1PCI1bits.AQSS = 0b010;     /* LEB as acceptance qualifier */
     PG2F1PCI1bits.PSYNC = 0;
     PG2F1PCI1bits.PPS = 1;
-    PG2F1PCI2 = 0; /* PCI source: TODO P1b - map AK128 PSS 0b01000 to MC510 one-hot source */
+    PG2F1PCI2 = 0x00000100UL; /* PCI source one-hot: bit8 = PPS PCI8R (board FLTLAT_OC_OV, = AK128 PSS 0b01000) */
     PG2F1PCI1bits.BPEN = 0;
     PG2F1PCI1bits.BPSEL = 0;
     PG2F1PCI1bits.TERMPS = 0;
@@ -583,7 +583,7 @@ void InitPWMGenerator2(void)
     PG2F1PCI1bits.TQPS = 0;
     PG2F1PCI1bits.TQSS = 0;
 #if FEATURE_HW_OVERCURRENT && OC_PROTECT_MODE == 1
-    PG2F1PCI2 = 0; /* PCI source: TODO P1b - map AK128 PSS 0b11101 to MC510 one-hot source */
+    PG2F1PCI2 = 0x40000000UL; /* PCI source one-hot: bit30 = Comparator 3 output (= AK128 PSS 0b11101 CMP3) */
     PG2F1PCI1bits.PPS = 0;          /* Non-inverted */
 #endif
 #else
@@ -628,7 +628,7 @@ void InitPWMGenerator2(void)
 #if FEATURE_HW_OVERCURRENT && (OC_PROTECT_MODE == 0 || OC_PROTECT_MODE == 2) && OC_CLPCI_ENABLE
 #if GARUDA_TARGET_AK512
     PG2CLPCI1   = 0x0000;
-    PG2CLPCI2 = 0; /* PCI source: TODO P1b - map AK128 PSS 0b11101 to MC510 one-hot source */
+    PG2CLPCI2 = 0x40000000UL; /* PCI source one-hot: bit30 = Comparator 3 output (= AK128 PSS 0b11101 CMP3) */
     PG2CLPCI1bits.PPS = 0;
     PG2CLPCI1bits.TERM = 1;
     PG2CLPCI1bits.ACP = 0b011;    /* Latched acceptance (recommended with LEB) */
@@ -796,7 +796,7 @@ void InitPWMGenerator3(void)
     PG3F1PCI1bits.AQSS = 0b010;     /* LEB as acceptance qualifier */
     PG3F1PCI1bits.PSYNC = 0;
     PG3F1PCI1bits.PPS = 1;
-    PG3F1PCI2 = 0; /* PCI source: TODO P1b - map AK128 PSS 0b01000 to MC510 one-hot source */
+    PG3F1PCI2 = 0x00000100UL; /* PCI source one-hot: bit8 = PPS PCI8R (board FLTLAT_OC_OV, = AK128 PSS 0b01000) */
     PG3F1PCI1bits.BPEN = 0;
     PG3F1PCI1bits.BPSEL = 0;
     PG3F1PCI1bits.TERMPS = 0;
@@ -805,7 +805,7 @@ void InitPWMGenerator3(void)
     PG3F1PCI1bits.TQPS = 0;
     PG3F1PCI1bits.TQSS = 0;
 #if FEATURE_HW_OVERCURRENT && OC_PROTECT_MODE == 1
-    PG3F1PCI2 = 0; /* PCI source: TODO P1b - map AK128 PSS 0b11101 to MC510 one-hot source */
+    PG3F1PCI2 = 0x40000000UL; /* PCI source one-hot: bit30 = Comparator 3 output (= AK128 PSS 0b11101 CMP3) */
     PG3F1PCI1bits.PPS = 0;          /* Non-inverted */
 #endif
 #else
@@ -850,7 +850,7 @@ void InitPWMGenerator3(void)
 #if FEATURE_HW_OVERCURRENT && (OC_PROTECT_MODE == 0 || OC_PROTECT_MODE == 2) && OC_CLPCI_ENABLE
 #if GARUDA_TARGET_AK512
     PG3CLPCI1   = 0x0000;
-    PG3CLPCI2 = 0; /* PCI source: TODO P1b - map AK128 PSS 0b11101 to MC510 one-hot source */
+    PG3CLPCI2 = 0x40000000UL; /* PCI source one-hot: bit30 = Comparator 3 output (= AK128 PSS 0b11101 CMP3) */
     PG3CLPCI1bits.PPS = 0;
     PG3CLPCI1bits.TERM = 1;
     PG3CLPCI1bits.ACP = 0b011;    /* Latched acceptance (recommended with LEB) */

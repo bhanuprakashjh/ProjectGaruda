@@ -160,7 +160,13 @@ void MapGPIOHWFunction(void)
      * TRISB11 = 1 (input) from TRISB=0xFFFF init above.
      * ANSELB11 = 0 (digital) from ANSELB=0x0000 init above.
      * ================================================================ */
+#if GARUDA_TARGET_AK512
+    /* MC510 DIM: fault is still DIM:040 -> device pin 1, CVDTX19/RP65/RE0
+     * (matches AN957 for this board). TRIS/ANSEL handled by port init. */
+    _PCI8R = 65;
+#else
     _PCI8R = 28;
+#endif
 
     /* ================================================================
      * UART PPS mapping

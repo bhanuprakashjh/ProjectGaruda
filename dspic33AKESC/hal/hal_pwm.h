@@ -65,7 +65,11 @@ extern "C" {
 #define PCI_CLIMIT_EVT_PG1    PG1STATbits.CLEVT
 #define PCI_CLIMIT_EVT_PG2    PG2STATbits.CLEVT
 #define PCI_CLIMIT_EVT_PG3    PG3STATbits.CLEVT
+#if GARUDA_TARGET_AK512
+#define PCI_CLIMIT_EVT_MASK   0x00020000UL   /* CLEVT = bit17 on MC510 */
+#else
 #define PCI_CLIMIT_EVT_MASK   0x2000u
+#endif
 #endif
 
 /* FLTEVT = Fault PCI Event flag (W1C latch, bit 14 = 0x4000).
@@ -82,7 +86,11 @@ extern "C" {
 #define PCI_FAULT_EVT_PG2     PG2STATbits.FLTEVT
 #define PCI_FAULT_EVT_PG3     PG3STATbits.FLTEVT
 #endif
+#if GARUDA_TARGET_AK512
+#define PCI_FAULT_EVT_MASK    0x00040000UL   /* FLT1EVT = bit18 on MC510 */
+#else
 #define PCI_FAULT_EVT_MASK    0x4000u
+#endif
 
 void InitPWMGenerators(void);
 void InitPWMGenerator1(void);
