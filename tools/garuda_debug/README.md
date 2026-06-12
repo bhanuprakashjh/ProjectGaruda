@@ -4,19 +4,36 @@ Cross-platform debug tooling for the Garuda ESC, built on one shared serial-prot
 library so every tool (and the upcoming GUI) speaks GSP identically — no more
 "works on my machine" or a tool breaking when the firmware wire format changes.
 
-This is **v0**: the protocol library + the shareable session-bundle format.
-Live debug GUI (PySide6 + pyqtgraph) and the diagnostic engine build on top.
+Contents: the GSP protocol library, the **live debug GUI** (PySide6 +
+pyqtgraph: telemetry, scope, ZC lab, params, auto-recorded sessions), the
+serial **broker** (GUI + MCP + analyzers share one board), the **MCP server**,
+and rule-based analyzers.
 
-## Install
+## Install (Linux / Windows / macOS)
 
 ```bash
-# from this directory; -e keeps it editable while we iterate
-pip install -e tools/garuda_debug
-#   or, isolated:
-pipx install ./tools/garuda_debug
+# from the repo root; -e keeps it editable while we iterate
+pip install -e "tools/garuda_debug[gui]"
+#   protocol library only (no GUI):  pip install -e tools/garuda_debug
 ```
 
-Only runtime dep is `pyserial`. The GUI extras (`pip install -e ".[gui]"`) come in v1.
+### Windows notes
+
+- Use **native Windows Python** (3.9+ from python.org) — NOT WSL: WSL2 cannot
+  see COM ports.
+- In PowerShell: `py -m venv venv ; .\venv\Scripts\activate ;
+  pip install -e "tools\garuda_debug[gui]"`.
+- COM ports are exclusive on Windows: close MPLAB's Data Visualizer / any
+  terminal before connecting. The GUI tags held ports as `[BUSY]` in the
+  connect error and the port list.
+
+## Run the GUI
+
+```bash
+garuda-gui          # auto-starts the broker, auto-detects the board port
+```
+
+Every run is auto-recorded to `sessions/` as a shareable bundle.
 
 ## Use
 
