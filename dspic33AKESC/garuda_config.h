@@ -1063,7 +1063,18 @@ extern "C" {
  * gate falling-SW to engage only below HWZC_FALLING_SW_MAX_ERPM (0 = no gate).
  * Set 0 to revert to rising-only/coast (the proven 232k baseline). */
 #define FEATURE_HWZC_FALLING_SW        1   /* falling ZC via SW OFF-center sample */
+#if GARUDA_TARGET_AK512
+/* AK512 bench 2026-06-12 (polarity-split cap diag, stepped GSP ramp): rising
+ * comparator captures sit ~500 permille of T at every speed 30k-92k; falling
+ * SW captures walk 547 -> 733 -> 901 permille (max 955) as the sector shrinks
+ * toward the 45 kHz sample floor + RC lag. Above ~70k the late falling
+ * captures destabilize the PI during accel transients (Ia spikes to the 22 A
+ * region -> PSU sag -> UV at ~100k). Cap falling-SW at 70k; rising-only
+ * carries the top end (the AK128 ran 234k rising-only above its ceiling). */
+#define HWZC_FALLING_SW_MAX_ERPM       70000
+#else
 #define HWZC_FALLING_SW_MAX_ERPM       0   /* 0 = falling-SW at all speeds; else cap */
+#endif
 /* Falling-polarity ZC fix (2026-06-07, investigation closed). Root cause
  * (measured): the ON-time HW comparator detects RISING perfectly but is silent
  * on FALLING above ~20k — during PWM-ON the driven phase couples into the

@@ -828,14 +828,20 @@ void HWZC_OnPiPeriodExpired(volatile GARUDA_DATA_T *pData)
         uint32_t capValue = pData->hwzc.lastCaptureHR - pData->hwzc.lastCommStamp;
         uint32_t setValue = ((uint32_t)advFp8 * T) >> 8;
 
-        /* bring-up diag: capture position in sector, even if rejected */
-        if (T > 0)
-            pData->hwzc.dbgLastCapPm = (uint16_t)(((uint64_t)capValue * 1000u) / T);
+        /* bring-up diag: capture position in sector, even if rejected —
+         * split by ZC polarity (even sectors 0/2/4 = rising comparator path,
+         * odd 1/3/5 = falling RC-filtered SW path). */
+        if (T > 0) {
+            uint16_t pm = (uint16_t)(((uint64_t)capValue * 1000u) / T);
+            if (pData->currentStep & 1)
+                pData->hwzc.dbgPiCrossSector = pm;   /* falling-sector cap */
+            else
+                pData->hwzc.dbgLastCapPm = pm;       /* rising-sector cap */
+        }
 
         /* Cross-sector reject (same gate in both float and int paths). */
         if (capValue > T) {
             pData->hwzc.dbgPiMissCount++;
-            pData->hwzc.dbgPiCrossSector++;
             pData->hwzc.captureValid = false;
             goto pi_commutate;
         }
