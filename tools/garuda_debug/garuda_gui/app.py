@@ -1835,10 +1835,60 @@ class MainWindow(QtWidgets.QMainWindow):
         e.accept()
 
 
+def _start_sim_broker(motor: str):
+    """Spawn the SIL twin as the broker (sim mode) and wait for it.
+
+    Looks for tools/garuda_sil next to this package (dev checkout layout).
+    The GUI then connects to it exactly as if it were a board. Returns the
+    Popen so the caller can terminate it on exit, or None on failure.
+    """
+    import subprocess, time as _t
+    from garuda_gsp.broker import broker_running
+    if broker_running():
+        print("garuda-gui --sim: a broker is ALREADY running on 47800 "
+              "(a real board session?). Connecting to it instead — stop it "
+              "first if you wanted the simulator.")
+        return None
+    here = os.path.dirname(os.path.abspath(__file__))
+    sil = os.path.normpath(os.path.join(here, "..", "..", "garuda_sil"))
+    script = os.path.join(sil, "sil", "sim_broker.py")
+    so = os.path.join(sil, "libgaruda_sil.so")
+    if not os.path.exists(script):
+        print(f"garuda-gui --sim: simulator not found at {sil} "
+              "(sim mode needs the dev checkout with tools/garuda_sil)")
+        return None
+    if not os.path.exists(so):
+        print(f"garuda-gui --sim: twin core not built — run: bash {sil}/build.sh")
+        return None
+    cmd = [sys.executable, script]
+    if motor and motor != "2810":
+        cmd += ["--motor", motor]
+        if motor == "vex":
+            cmd += ["--vbus", "10"]
+    proc = subprocess.Popen(cmd)
+    end = _t.time() + 8.0
+    while _t.time() < end:
+        if broker_running():
+            print(f"garuda-gui --sim: twin serving ({motor or '2810'})")
+            return proc
+        if proc.poll() is not None:
+            print("garuda-gui --sim: sim broker exited at startup")
+            return None
+        _t.sleep(0.1)
+    return proc
+
+
 def main():
     ap = argparse.ArgumentParser(description="Garuda Studio GUI")
     ap.add_argument("--port", default=None)
+    ap.add_argument("--sim", nargs="?", const="2810", default=None,
+                    metavar="MOTOR",
+                    help="connect to the SIL twin instead of a board "
+                         "(optionally: --sim vex)")
     args = ap.parse_args()
+    sim_proc = None
+    if args.sim:
+        sim_proc = _start_sim_broker(args.sim)
     app = QtWidgets.QApplication(sys.argv)
     app.setStyle("Fusion")
     pal = QtGui.QPalette()
@@ -1851,7 +1901,13 @@ def main():
     app.setPalette(pal)
     w = MainWindow(args.port)
     w.show()
-    sys.exit(app.exec())
+    rc = app.exec()
+    if sim_proc is not None:
+        try:
+            sim_proc.terminate()
+        except Exception:
+            pass
+    sys.exit(rc)
 
 
 if __name__ == "__main__":
