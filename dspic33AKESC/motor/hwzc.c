@@ -209,6 +209,7 @@ void HWZC_Disable(volatile GARUDA_DATA_T *pData)
     HAL_ADC_DisableComparatorIE(FLOATING_PHASE_A);
     HAL_ADC_DisableComparatorIE(FLOATING_PHASE_B);
     HAL_ADC_DisableComparatorIE(FLOATING_PHASE_C);
+    HAL_ADC_BemfBurstOff();   /* leftover 1 MHz burst starves AD1CH3 ISR */
 #else
     HAL_ADC_DisableComparatorIE(1);
     HAL_ADC_DisableComparatorIE(2);

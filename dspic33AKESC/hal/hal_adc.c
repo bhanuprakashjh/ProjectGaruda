@@ -476,6 +476,20 @@ void HAL_ADC_InitHighSpeedBEMF(void)
  * AK512: dedicated channel per phase — handle IS the floating phase
  * (0 = VA/AD1CH1, 1 = VB/AD1CH2, 2 = VC/AD2CH2); no PINSEL writes ever.
  */
+#if GARUDA_TARGET_AK512
+/* Silence all three high-speed BEMF burst channels. MUST be called whenever
+ * HWZC shuts down: a leftover TRG1SRC=34 channel keeps 4x-bursting at 1 MHz
+ * and permanently starves the PWM-triggered control channel on the same AD
+ * core (AD1CH3 = the 45 kHz ISR source) -> board runs exactly once per
+ * reset, every later start is silent/inert. Found on bench 2026-06-12. */
+void HAL_ADC_BemfBurstOff(void)
+{
+    AD1CH1CON1bits.TRG1SRC = 0;
+    AD1CH2CON1bits.TRG1SRC = 0;
+    AD2CH2CON1bits.TRG1SRC = 0;
+}
+#endif
+
 uint8_t HAL_ADC_SelectBemfPhase(uint8_t floatPhase)
 {
 #if GARUDA_TARGET_AK512

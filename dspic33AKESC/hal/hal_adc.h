@@ -167,6 +167,9 @@ void HAL_ADC_UpdateComparatorThreshold(uint8_t adcCore, uint16_t threshold);
  *   AK512: handle = floating phase (0=VA/AD1CH1, 1=VB/AD1CH2, 2=VC/AD2CH2);
  *          dedicated channels, PINSEL is never touched at runtime. */
 uint8_t HAL_ADC_SelectBemfPhase(uint8_t floatPhase);
+#if GARUDA_TARGET_AK512
+void HAL_ADC_BemfBurstOff(void);
+#endif
 
 #if GARUDA_TARGET_AK512
 /* Raw data of a high-speed BEMF channel by comparator handle (verify reads,

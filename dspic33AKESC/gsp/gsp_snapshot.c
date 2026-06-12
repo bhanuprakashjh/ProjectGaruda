@@ -254,8 +254,15 @@ void GSP_CaptureSnapshot(GSP_SNAPSHOT_T *dst)
     dst->speedPiZcsSinceEnable = src->hwzc.dbgPiNoCap;        /* silent PI events */
     dst->speedPiTarget         = (int32_t)src->hwzc.dbgLastCapPm; /* cap pos ‰ of T */
     dst->speedPiLastError      = (int32_t)src->hwzc.dbgPiCrossSector;
-    dst->speedPiOutputDuty     = (uint16_t)(((uint16_t)AD1CH3CON1bits.TRG1SRC << 8)
-                               | ((uint16_t)PG1CONbits.ON << 5)
+    dst->speedPiOutputDuty     = (uint16_t)(
+                                 ((uint16_t)PG1STATbits.SEVT    << 12)
+                               | ((uint16_t)PG1STATbits.FFEVT   << 11)
+                               | ((uint16_t)PG1STATbits.CLEVT   << 10)
+                               | ((uint16_t)PG1STATbits.FLT1EVT << 9)
+                               | ((uint16_t)PG1STATbits.SACT    << 8)
+                               | ((uint16_t)PG1STATbits.FFACT   << 7)
+                               | ((uint16_t)PG1STATbits.CLACT   << 6)
+                               | ((uint16_t)PG1STATbits.FLT1ACT << 5)
                                | ((uint16_t)AD3CONbits.ADRDY << 4)
                                | ((uint16_t)AD2CONbits.ADRDY << 3)
                                | ((uint16_t)AD1CONbits.ADRDY << 2)
