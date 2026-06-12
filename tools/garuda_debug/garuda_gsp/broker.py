@@ -273,7 +273,12 @@ def ensure_broker(port=None, wait=5.0):
     The board's port must be free — close any direct connection first."""
     if broker_running():
         return None
-    args = [sys.executable, "-m", "garuda_gsp.broker"]
+    if getattr(sys, "frozen", False):
+        # PyInstaller bundle: there is no -m machinery — re-exec ourselves
+        # with --broker (handled by gui_launcher.main).
+        args = [sys.executable, "--broker"]
+    else:
+        args = [sys.executable, "-m", "garuda_gsp.broker"]
     if port:
         args += ["--port", str(port)]
     try:

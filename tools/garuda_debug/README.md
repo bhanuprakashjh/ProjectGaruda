@@ -17,6 +17,11 @@ pip install -e "tools/garuda_debug[gui]"
 #   protocol library only (no GUI):  pip install -e tools/garuda_debug
 ```
 
+### Windows: two-command install (recommended)
+
+See **[INSTALL_WINDOWS.md](INSTALL_WINDOWS.md)** — `uv` one-liner, no Python
+preinstall needed, `uv tool upgrade garuda-debug` to update.
+
 ### Windows notes
 
 - Use **native Windows Python** (3.9+ from python.org) — NOT WSL: WSL2 cannot
