@@ -107,8 +107,24 @@ _Static_assert(CL_DIFF_IDLE_PCT_X10 >= 1, "diff idle floor must be > 0 (0V idle 
 #define TICKLE_CHARGE_TIME_MICROSEC     1.0f
 #define TICKLE_CHARGE_DUTY              (LOOPTIME_TCY - (uint32_t)(TICKLE_CHARGE_TIME_MICROSEC * 16 * PWM_CLOCK_MHZ))
 
-/* ADC sampling point (trigger position within PWM period) */
+/* ADC sampling point (PG1TRIGA position within the PWM period). This is WHERE
+ * in the cycle the mid-ON BEMF/current sample is taken AND when the 45 kHz
+ * control ISR fires — so it anchors the SCCP2 ZC timestamp for the high-speed
+ * mid-ON ZC path (HWZC_OnSoftwareSample).
+ *
+ * The value is PWM-MODULE-SPECIFIC, not portable. The 106 maps count 0 to the
+ * center of the driven ON pulse, so 0 = mid-ON there. On the MC510's PWM the
+ * center-aligned ON pulse centers at LOOPTIME_TCY/2 (AN957 samples phase
+ * current mid-ON at exactly LOOPTIME_TCY/2) — so 0 here samples at the period
+ * boundary (mid-OFF/freewheel), ~half a PWM period (~11 us) away from mid-ON.
+ * That fixed timestamp offset becomes a commutation phase error of omega*11us,
+ * which GROWS LINEARLY with eRPM: bench 2026-06-13 showed current rising ~linearly
+ * to the 22 A OC chop and desync ~174k (vs the 106's 232k). Re-derive per module. */
+#if GARUDA_TARGET_AK512
+#define ADC_SAMPLING_POINT              ((uint32_t)(LOOPTIME_TCY / 2))
+#else
 #define ADC_SAMPLING_POINT              0
+#endif
 
 /* Phase 2: Timer1-tick to ADC ISR tick conversion.
  * Timer1 tick = 100 us. The ADC ISR is PG1TRIGA-triggered once per PWM

@@ -1005,12 +1005,26 @@ extern "C" {
  * by reading dbgFilterOffset on the bench and watching commutation phase.
  *
  * Disabled by default. Enable with FEATURE_HWZC_FILTER_COMP=1 to test. */
+#if GARUDA_TARGET_AK512
+/* AK512 (2026-06-13): OFF. This comp gives speed-growing effective advance to
+ * cancel the BEMF-divider RC lag — necessary on the AK128 where the threshold
+ * was the duty-MODEL neutral (zero lag, so the float's RC lag was uncompensated).
+ * But the AK512 runs FEATURE_VIRTUAL_NEUTRAL: the measured (VA+VB+VC)/3 goes
+ * through the SAME RC dividers as the floating phase, so the comparison already
+ * self-cancels most of that lag. Running both DOUBLE-advances — ω·τ grows with
+ * speed → ZC pinned at 67% of sector (scope, vs ~58% expected) → reactive
+ * current that climbs with eRPM and exceeds the AK128 at every matched speed
+ * (bench PSU, user-confirmed). With VN the comp is redundant; let the
+ * timing-advance SCHEDULE be the only intentional advance. */
+#define FEATURE_HWZC_FILTER_COMP    0
+#else
 #define FEATURE_HWZC_FILTER_COMP    1   /* Restored after diagnostic. Comp off vs on
                                          * showed IDENTICAL ~135k miss-onset threshold
                                          * — so the misses aren't comp-caused. But
                                          * comp DOES help current/efficiency by giving
                                          * effective advance to compensate the 24° RC
                                          * filter lag at high RPM. Keep enabled. */
+#endif
 #define HWZC_FILTER_K_Q15           102943706UL  /* For τ=30µs; recompute if filter changes */
 /* Sector PI synchronizer (Phase A — break the 204k reactive ceiling).
  *
