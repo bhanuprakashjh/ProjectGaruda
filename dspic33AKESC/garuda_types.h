@@ -90,6 +90,11 @@ typedef struct
      * Windowed: reset to {0xFFFF,0} on each snapshot read. */
     uint16_t fallOffBemfMin;
     uint16_t fallOffBemfMax;
+    /* AK512 filter-comp: TRUE measured BEMF amplitude source (replaces the
+     * duty-coupled zcThreshold). bemfDevPeak = running peak |float - neutral|
+     * for the current sector; latched into zcAmpForFilterComp once per sector. */
+    uint16_t bemfDevPeak;
+    uint8_t  ampPrevStep;
     /* P1: Measured neutral from active-rail tracking + ZC events */
     uint16_t phaseBHigh;         /* Phase B ADC reading when B=PWM (high rail) */
     uint16_t phaseBLow;          /* Phase B ADC reading when B=LOW (low rail) */

@@ -1015,8 +1015,28 @@ extern "C" {
  * speed → ZC pinned at 67% of sector (scope, vs ~58% expected) → reactive
  * current that climbs with eRPM and exceeds the AK128 at every matched speed
  * (bench PSU, user-confirmed). With VN the comp is redundant; let the
- * timing-advance SCHEDULE be the only intentional advance. */
-#define FEATURE_HWZC_FILTER_COMP    0
+ * timing-advance SCHEDULE be the only intentional advance.
+ *
+ * UPDATE 2026-06-13b: comp ON over-advanced -> REGEN (Ibus -17A) above ~120k,
+ * 213k/UV. ROOT CAUSE: the offset magnitude uses zcAmpForFilterComp, which is a
+ * slow-IIR of zcThreshold = the duty-MODEL neutral (vbusRaw*duty/2) -> it scales
+ * with DUTY, not with the BEMF swing. At high speed duty is high (76%) so the
+ * offset balloons and the detection-advance blows past the RC lag. WORSE, this
+ * threshold-advance DOUBLE-COUNTS with the FEATURE_TIMING_ADVANCE schedule
+ * (commDelay = stepPeriod*(30-advDeg)/60) — both are speed-proportional advances.
+ * Two advances, one of them duty-corrupted, = the regen.
+ * FIX: keep the ONE clean mechanism (the timing-advance schedule, a direct
+ * angle/time advance, duty-independent) and TUNE it. timingAdvMaxDeg is a live
+ * GSP param -> sweep the high-speed advance at the bench with no rebuild.
+ *
+ * UPDATE 2026-06-13c: comp RE-ENABLED with the fix the note above asked for —
+ * it now uses a TRUE MEASURED BEMF amplitude (bemf.bemfDevPeak: peak
+ * |float-neutral| per sector, garuda_service.c) instead of zcThreshold. That
+ * kills the duty positive-feedback that caused the regen, so the comp is the
+ * pure RC-lag (omega*tau) correction at all speeds — the 106's intent, made
+ * scale/duty-robust. Keep timingAdvMaxDeg modest (~25) so the comp carries the
+ * lag, not a double-counted schedule. */
+#define FEATURE_HWZC_FILTER_COMP    1
 #else
 #define FEATURE_HWZC_FILTER_COMP    1   /* Restored after diagnostic. Comp off vs on
                                          * showed IDENTICAL ~135k miss-onset threshold
@@ -1102,10 +1122,17 @@ extern "C" {
  * threshold puts rising crossings at 78% of sector vs falling 67% (ideal
  * ~65% incl. RC lag) -> asymmetric over-advance -> 22 A at speed. Triplen
  * (3x f) neutral ripple is expected and smoothed by the zcThreshold IIR. */
-#if GARUDA_TARGET_AK512
+/* A/B TEST 2026-06-13: VN OFF. The (VA+VB+VC)/3 neutral above ASSUMED 3
+ * simultaneous independent ADC samples, but VA=AD1CH4 and VB=AD1CH3 BOTH live
+ * on AD1 -> they convert SEQUENTIALLY (~0.3-1us skew), so the neutral is not a
+ * simultaneous snapshot; the skew->threshold-error grows at high duty (sample
+ * near the fast switching edges) = the same high-speed regime that fails.
+ * Reverting to the duty*Vbus/2 model (the clean, noise-free reference the 106
+ * used to reach 232k) to isolate whether VN is contributing to the high-duty
+ * current climb. If high-speed improves -> VN's skewed neutral was a real term. */
+#define FEATURE_VIRTUAL_NEUTRAL        0
+#if 0  /* prior AK512 default (measured neutral) — re-enable to compare */
 #define FEATURE_VIRTUAL_NEUTRAL        1
-#else
-#define FEATURE_VIRTUAL_NEUTRAL        0   /* 106: VA/VC share one muxed channel */
 #endif
 /* Falling-polarity ZC fix (2026-06-07, investigation closed). Root cause
  * (measured): the ON-time HW comparator detects RISING perfectly but is silent

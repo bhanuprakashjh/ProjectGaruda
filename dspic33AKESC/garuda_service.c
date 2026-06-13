@@ -1129,18 +1129,36 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
         }
 
 #if FEATURE_HWZC_FILTER_COMP
-        /* Slow-IIR amplitude estimate for filter-comp offset magnitude.
-         * Time constant 2^11 × (1/PWMFREQ) ≈ 2048 / 45kHz = 46 ms — long
-         * enough that a step duty change doesn't instantly inflate the
-         * filter-comp offset, but fast enough to converge within ~150 ms
-         * of any sustained operating point. This decouples the offset
-         * magnitude from the fast zcThreshold IIR, which prevents the
-         * 4000-sector PI drift that bit Phase A at 75%+ duty.
-         *
-         * Seeded to zcThreshold on first tick to avoid a long start-up
-         * convergence (zcAmpForFilterComp==0 would over-cancel comp at
-         * startup). Non-CL path also resets to current zcThreshold so
-         * morph→CL handoff doesn't carry stale state. */
+#if GARUDA_TARGET_AK512
+        /* AK512: filter-comp amplitude = TRUE measured BEMF swing, NOT
+         * zcThreshold. zcThreshold is the duty*Vbus neutral DC level; feeding
+         * it made the comp offset scale with DUTY -> positive feedback (timing
+         * error -> current -> duty -> bigger offset -> more advance -> more
+         * error) that ran the 510 into regen above ~120k. The peak
+         * |float - neutral| (bemfDevPeak, accumulated in the bemfRaw block
+         * below) is duty-independent and tracks the real rotor BEMF, so
+         * offset = amp*omega*tau stays the pure RC-lag correction at all
+         * speeds. Latch once per sector on step change; IIR ~32 sectors. */
+        {
+            uint8_t step = garudaData.currentStep;
+            if (garudaData.bemf.ampPrevStep != step) {
+                garudaData.bemf.ampPrevStep = step;
+                uint16_t pk = garudaData.bemf.bemfDevPeak;
+                garudaData.bemf.bemfDevPeak = 0;   /* reset for the new sector */
+                if (pk) {
+                    if (garudaData.bemf.zcAmpForFilterComp == 0)
+                        garudaData.bemf.zcAmpForFilterComp = pk;
+                    else {
+                        int32_t dAmp = (int32_t)pk
+                                     - (int32_t)garudaData.bemf.zcAmpForFilterComp;
+                        garudaData.bemf.zcAmpForFilterComp = (uint16_t)(
+                            (int32_t)garudaData.bemf.zcAmpForFilterComp + (dAmp >> 5));
+                    }
+                }
+            }
+        }
+#else
+        /* 106 (UNCHANGED, bench-proven to 232k): slow IIR of zcThreshold. */
         if (garudaData.bemf.zcAmpForFilterComp == 0) {
             garudaData.bemf.zcAmpForFilterComp = garudaData.bemf.zcThreshold;
         } else {
@@ -1151,10 +1169,9 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                            + (ampDelta >> 11));   /* ~46 ms time constant */
         }
         if (garudaData.state != ESC_CLOSED_LOOP) {
-            /* Out of CL — keep tracking instantaneously so we're ready
-             * for next CL entry with a sensible seed. */
             garudaData.bemf.zcAmpForFilterComp = garudaData.bemf.zcThreshold;
         }
+#endif
 #endif
 
 #if FEATURE_ADC_CMP_ZC
@@ -1212,6 +1229,22 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
             garudaData.bemf.bemfRaw = phaseAC_val;
             garudaData.bemf.bemfSampleValid = true;
         }
+
+#if FEATURE_HWZC_FILTER_COMP && GARUDA_TARGET_AK512
+        /* Accumulate the TRUE BEMF swing for the filter-comp amplitude (latched
+         * per sector by the block above): peak |float - neutral| while WATCHING,
+         * BOTH polarities. Duty-independent -> no positive-feedback runaway. */
+        if (garudaData.hwzc.enabled
+            && garudaData.hwzc.phase == HWZC_WATCHING
+            && garudaData.bemf.bemfSampleValid)
+        {
+            uint16_t b  = garudaData.bemf.bemfRaw;
+            uint16_t th = garudaData.bemf.zcThreshold;
+            uint16_t dev = (b > th) ? (uint16_t)(b - th) : (uint16_t)(th - b);
+            if (dev > garudaData.bemf.bemfDevPeak)
+                garudaData.bemf.bemfDevPeak = dev;
+        }
+#endif
 
 #if FEATURE_ADC_CMP_ZC
         /* Diagnostic: falling-sector OFF-center BEMF envelope. Capture bemfRaw
