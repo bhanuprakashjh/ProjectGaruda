@@ -173,9 +173,12 @@ static const GSP_PARAMS_T profileDefaults[7] = {
                                         * 3k-handoff gap and trimming the pulse ~22->~19.6A.
                                         * Lowering further is a dead end (idle is floored
                                         * by MIN_DUTY in the trap waveform). Was 6. */
-        .timingAdvMaxDeg    = 25,      /* 2810 low-L (25µH) needs more advance than
-                                        * A2212 (30µH) at extreme eRPM. 25° close to
-                                        * max safe; PATA used level-3 = 22.5° */
+        .timingAdvMaxDeg    = 20,      /* AK512 bench 2026-06-13: 25° OVER-advances ->
+                                        * falling-ZC sectors lost >210k -> desync/UV at
+                                        * ~214k on accel. 20° reaches full 260k cap
+                                        * (AK128 parity), holds clean. 10° also safe but
+                                        * less mid-band advance. (Remaining hard-decel-chop
+                                        * desync ~220k is the duty-down-slew issue, not advance.) */
         .hwzcCrossoverErpm  = 1500,    /* Enable HWZC immediately after morph */
         .ocSwLimitMa        = 18000,   /* Soft limit. Board shunt saturates ~22A */
         .ocFaultMa          = 21000,   /* SW hard fault just below sensor saturation */
