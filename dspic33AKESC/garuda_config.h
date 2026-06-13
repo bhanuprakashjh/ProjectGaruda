@@ -1104,7 +1104,17 @@ extern "C" {
  * toward the 45 kHz sample floor + RC lag. Above ~70k the late falling
  * captures destabilize the PI during accel transients (Ia spikes to the 22 A
  * region -> PSU sag -> UV at ~100k). Cap falling-SW at 70k; rising-only
- * carries the top end (the AK128 ran 234k rising-only above its ceiling). */
+ * carries the top end (the AK128 ran 234k rising-only above its ceiling).
+ *
+ * UPDATE 2026-06-13: TESTED cap 70k->150k (idea: the now-active filter-comp
+ * compensates the falling RC lag, so falling sectors could stay active higher).
+ * RESULT: REVERTED — it reintroduced the ~100k accel-transient UV exactly as
+ * warned above (every run died 95-107k with Ibus -22A). The comp fixes the
+ * STEADY-STATE falling timing but not the ACCEL-TRANSIENT instability (the
+ * late falling capture still feeds the PI a bad period during fast ramps).
+ * Conclusion: 70k cap stays. ALSO proves the 120-140k rough band is NOT the
+ * falling-coast (extending falling-SW made it worse, not better) -> it's the
+ * comp-amp saturation transition (~125k = float starts railing). */
 #define HWZC_FALLING_SW_MAX_ERPM       70000
 #else
 #define HWZC_FALLING_SW_MAX_ERPM       0   /* 0 = falling-SW at all speeds; else cap */
