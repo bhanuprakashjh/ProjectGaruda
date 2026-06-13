@@ -121,6 +121,21 @@ _Static_assert(CL_DIFF_IDLE_PCT_X10 >= 1, "diff idle floor must be > 0 (0V idle 
  * which GROWS LINEARLY with eRPM: bench 2026-06-13 showed current rising ~linearly
  * to the 22 A OC chop and desync ~174k (vs the 106's 232k). Re-derive per module. */
 #if GARUDA_TARGET_AK512
+/* Sample at the OFF-CENTER (freewheel) point, NOT the ON-pulse center.
+ * EMPIRICAL (4 bench points, fire-time within the 22.2us PWM period):
+ *   t=0       (TRIGA0  /CA0) -> 174k
+ *   t=5.55us  (MPER2   /CA0) -> 215k  <-- PEAK
+ *   t=11.1us  (TRIGA0  /CA1, pulse center) -> 174k+OC   (refutes "center")
+ *   t=16.7us  (MPER2   /CA1) -> 115k
+ * Quality peaks at t=5.55us = the MIDDLE of cycle-1's freewheel window (at low/
+ * mid duty the ON pulse sits in the LAST ~5-50% of the cycle, so MPER/2 lands
+ * in the clean freewheel where the floating phase shows BEMF undistorted by
+ * driven-phase coupling — matches the firmware's OFF-center detection design).
+ * The pulse CENTER (boundary) is NOISY for this scheme, not optimal.
+ * KNOWN LIMIT: this is a FIXED point; above ~50% duty the ON pulse swallows
+ * MPER/2 -> sample no longer OFF-center -> current climbs to OC near the top.
+ * The 106 reached 232k by using the 1 MHz ADC comparator at high speed instead
+ * of this fixed mid-sample (see study notes / next step). */
 #define ADC_SAMPLING_POINT              ((uint32_t)(LOOPTIME_TCY / 2))
 #else
 #define ADC_SAMPLING_POINT              0

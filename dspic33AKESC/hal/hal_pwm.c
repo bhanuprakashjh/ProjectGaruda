@@ -458,10 +458,9 @@ void InitPWMGenerator1(void)
     PG1DTbits.DTH = DEADTIME_COUNTS;
     PG1DTbits.DTL = DEADTIME_COUNTS;
 
-    /* CAHALF=0 is the empirical best (bench 2026-06-13): with TRIGA=LOOPTIME_TCY/2
-     * it gave ceiling 215k / current halved. CAHALF=1 made it WORSE (ceiling
-     * 115k, current peak onset much earlier) — the sample-timing gradient says
-     * stay on the up-count half. Residual fine-tune is via TRIGA, scope-guided. */
+    /* CAHALF=0 (cycle-1 half) + TRIGA=MPER/2 = the freewheel-center sample, the
+     * empirical optimum (215k). CAHALF=1 trials BOTH made it worse (115k, OC) —
+     * see ADC_SAMPLING_POINT for the 4-point fire-time/quality table. */
     PG1TRIGAbits.CAHALF = 0;
     PG1TRIGAbits.TRIGA = ADC_SAMPLING_POINT;
     PG1TRIGB    = 0x0000;
