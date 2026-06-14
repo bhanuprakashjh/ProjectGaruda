@@ -87,6 +87,7 @@ static uint32_t BuildFeatureFlags(void)
     if (FEATURE_RX_AUTO)         f |= (1UL << 22);
     if (FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3 || FEATURE_FOC_AN1078) f |= (1UL << 23);
     if (FEATURE_BURST_SCOPE)         f |= (1UL << 24);
+    if (FEATURE_LIVE_TUNE)           f |= (1UL << 25);  /* safe 6-step knobs settable while spinning */
     return f;
 }
 
@@ -352,7 +353,33 @@ static void HandleSetParam(const uint8_t *payload, uint8_t payloadLen)
     bool is_an1078_live = (paramId >= PARAM_ID_AN1078_THETA_BASE_DEGX10 &&
                            paramId <= PARAM_ID_AN1078_ID_FW_MAX_DECIA);
 
-    if (!is_an1078_live && garudaData.state != ESC_IDLE) {
+    /* FEATURE_LIVE_TUNE: a SAFE subset of 6-step knobs that the control loop
+     * already reads live in the 24 kHz ISR (timing advance, ZC blanking/
+     * deadband/demag, sync/filter thresholds, duty slew) may be set while
+     * spinning so the GUI sliders take effect in real time.  Protection
+     * thresholds (Vbus/OC) and startup params are deliberately NOT included —
+     * they still require IDLE to avoid a mid-run discontinuity or a safety
+     * change under load. */
+    bool is_live_tunable = false;
+#if FEATURE_LIVE_TUNE
+    switch (paramId) {
+        case PARAM_ID_TIMING_ADV_MAX_DEG:
+        case PARAM_ID_ZC_BLANKING_PCT:
+        case PARAM_ID_ZC_ADC_DEADBAND:
+        case PARAM_ID_ZC_DEMAG_DUTY_THRESH:
+        case PARAM_ID_ZC_DEMAG_BLANK_EXTRA:
+        case PARAM_ID_ZC_SYNC_THRESHOLD:
+        case PARAM_ID_ZC_FILTER_THRESHOLD:
+        case PARAM_ID_DUTY_SLEW_UP:
+        case PARAM_ID_DUTY_SLEW_DOWN:
+            is_live_tunable = true;
+            break;
+        default:
+            break;
+    }
+#endif
+
+    if (!is_an1078_live && !is_live_tunable && garudaData.state != ESC_IDLE) {
         SendError(GSP_ERR_WRONG_STATE);
         return;
     }

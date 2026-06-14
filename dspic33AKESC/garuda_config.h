@@ -84,6 +84,11 @@ extern "C" {
                                               * GSP stop command or power cycle. */
 #define FEATURE_TIMING_ADVANCE   1  /* Phase B3: Linear timing advance by RPM — RE-ENABLED 2026-05-26 to compensate detection-chain latency at high RPM. Original baseline schedule: 0° below 3k eRPM, linear ramp to 22° at MAX_CLOSED_LOOP_ERPM (70k for 2810), clamped 22° above. */
 #define FEATURE_DYNAMIC_BLANKING 1  /* Phase C1: Speed+duty-aware blanking (extra blank at high duty/demag) */
+#define FEATURE_LIVE_TUNE        1  /* Allow a SAFE subset of ISR-live 6-step knobs (timing advance, ZC
+                                     * blanking/deadband/demag, sync/filter thresholds, duty slew) to be
+                                     * SET via GSP while the motor spins — for live tuning from the GUI.
+                                     * Protection (Vbus/OC) and startup params still require IDLE.
+                                     * Advertised on featureFlags bit 25 so the GUI enables those sliders. */
 #define FEATURE_VBUS_SAG_LIMIT   1  /* Phase C2: Bus voltage sag power limiting (reduce duty on Vbus dip) */
 #define FEATURE_BEMF_INTEGRATION 1  /* Phase E: Shadow integration estimator (shadow-only, no control) */
 #define FEATURE_SINE_STARTUP     1  /* RESTORED 2026-06-10: back to the proven sine startup (I-f parked).
@@ -130,7 +135,7 @@ extern "C" {
 #define PLL_START_CAPTURE_FLOOR_ERPM 2500  /* ignore captures below (BEMF noise floor) */
 #define PLL_START_SYNC_CAPS            6   /* consecutive plausible captures = synced */
 
-#define FEATURE_AM32_STARTUP    1  /* 2026-06-12 bench experiment: AM32-style "kick + listen".
+#define FEATURE_AM32_STARTUP    0  /* 2026-06-12 bench experiment: AM32-style "kick + listen".
                                     * NO align, NO ramp, NO blind schedule: on arm-complete,
                                     * one blind commutation at MIN_DUTY from the unknown rotor
                                     * angle, HWZC armed immediately with the period seeded at
@@ -160,10 +165,10 @@ extern "C" {
                                     * ARM_BEEP_MS after the normal arm window. */
 #define ARM_BEEP_MS          2000  /* melody length (delays startup by this much) */
 #define ARM_BEEP_TICKS       (uint32_t)(ARM_BEEP_MS * 10u)
-#define ARM_BEEP_FREQ1_HZ     800  /* note 1 (first ~ARM_BEEP_MS/3) */
-#define ARM_BEEP_FREQ2_HZ    1200  /* note 2 */
-#define ARM_BEEP_FREQ3_HZ    1600  /* note 3 — rising chirp */
-#define ARM_BEEP_DUTY_PCT       3  /* drive strength — louder; = profile align duty class. 4+ NOT
+#define ARM_BEEP_FREQ1_HZ     500  /* note 1 (first ~ARM_BEEP_MS/3) */
+#define ARM_BEEP_FREQ2_HZ    800  /* note 2 */
+#define ARM_BEEP_FREQ3_HZ    1000  /* note 3 — rising chirp */
+#define ARM_BEEP_DUTY_PCT       4  /* drive strength — louder; = profile align duty class. 4+ NOT
                                     * recommended at 24V: burst peaks approach the 18A SW OC. */
 #define PLL_START_TARGET_ERPM      10000   /* blind schedule ceiling (hold if unsynced) */
 #define FEATURE_SKIP_MORPH      0  /* PARKED 2026-06-10 (bench-proven 9/9 but engage is
