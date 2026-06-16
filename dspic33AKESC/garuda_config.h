@@ -410,8 +410,8 @@ extern "C" {
                                       * current (Ia 0.5, Ibus 0) and could not spin -> CMP3->CLPCI chop
                                       * chain CONFIRMED LIVE. Now 0 = chop at the real DAC threshold. */
 
-#define MOTOR_PROFILE  2   /* 1 = A2212 1400KV @12V (own tune, 2026-06-16). 2 = 2810. 4 = Cobra,
-                              * 5 = XRotor, 6 = VEX 4000KV micro. */
+#define MOTOR_PROFILE  2   /* 0=Hurst 1=A2212@12V 2=2810@24V 3=5055 4=Cobra 5=XRotor
+                              * 6=VEX 4000KV  7=1407 4000KV @2S  8=1407 4000KV @3S */
 
 #if MOTOR_PROFILE == 0
 /* === Hurst DMB2424B10002 (long Hurst, MCLV-48V-300W bench motor) ===
@@ -698,6 +698,62 @@ extern "C" {
 #define RAMP_CURRENT_GATE_MA      7000
 #define FEATURE_PRESYNC_RAMP       0
 #define OC_CLPCI_ENABLE            0
+
+#elif MOTOR_PROFILE == 7
+/* === 1407 4000KV 9N12P (6PP) @ 2S (8.4V max), FPV 3" ===
+ * Mirror of profileDefaults[GSP_PROFILE_1407_2S] (runtime uses GSP; keep in
+ * sync). Based on the VEX 4000KV/6PP profile. A2212 lessons: PP=6, handoff chop
+ * ON for the low-L startup pulse, per-profile falling-SW gate (HWZC_FALLING_SW
+ * below). All ESTIMATES — bench-tune. */
+#define MOTOR_POLE_PAIRS             6
+#define DEADTIME_NS                300
+#define ALIGN_DUTY_PERCENT          25
+#define RAMP_DUTY_PERCENT           25
+#define INITIAL_ERPM               300
+#define RAMP_TARGET_ERPM         12000
+#define MAX_CLOSED_LOOP_ERPM    202000     /* 4000 * 8.4V * 6pp ~ 202k (under ~260k ceiling) */
+#define RAMP_ACCEL_ERPM_PER_S     8000
+#define SINE_ALIGN_MODULATION_PCT   50
+#define SINE_RAMP_MODULATION_PCT    50
+#define ZC_DEMAG_DUTY_THRESH        45
+#define ZC_DEMAG_BLANK_EXTRA_PERCENT 18
+#define HWZC_CROSSOVER_ERPM       6000
+#define CL_IDLE_DUTY_PERCENT        16     /* ~32k idle at 8.4V; soft-start ramps into it */
+#define SINE_PHASE_OFFSET_DEG       60
+#define OC_LIMIT_MA               9000
+#define OC_STARTUP_MA            10000
+#define OC_FAULT_MA               9500
+#define OC_SW_LIMIT_MA            7250
+#define RAMP_CURRENT_GATE_MA      7000
+#define FEATURE_PRESYNC_RAMP       0
+#define OC_CLPCI_ENABLE            1       /* handoff chop on for the low-L startup pulse */
+
+#elif MOTOR_PROFILE == 8
+/* === 1407 4000KV 9N12P (6PP) @ 3S (12.6V max), FPV 3" ===
+ * Same motor as profile 7 at 3S. maxCL capped 260k (no-load ~302k > sensorless
+ * ceiling). Lower duties than 2S. Mirror of profileDefaults[GSP_PROFILE_1407_3S]. */
+#define MOTOR_POLE_PAIRS             6
+#define DEADTIME_NS                300
+#define ALIGN_DUTY_PERCENT          20
+#define RAMP_DUTY_PERCENT           20
+#define INITIAL_ERPM               300
+#define RAMP_TARGET_ERPM         12000
+#define MAX_CLOSED_LOOP_ERPM    260000     /* capped at sensorless ceiling (no-load ~302k) */
+#define RAMP_ACCEL_ERPM_PER_S     8000
+#define SINE_ALIGN_MODULATION_PCT   40
+#define SINE_RAMP_MODULATION_PCT    40
+#define ZC_DEMAG_DUTY_THRESH        45
+#define ZC_DEMAG_BLANK_EXTRA_PERCENT 18
+#define HWZC_CROSSOVER_ERPM       6000
+#define CL_IDLE_DUTY_PERCENT        11     /* ~33k idle at 12.6V */
+#define SINE_PHASE_OFFSET_DEG       60
+#define OC_LIMIT_MA               9000
+#define OC_STARTUP_MA            10000
+#define OC_FAULT_MA               9500
+#define OC_SW_LIMIT_MA            7250
+#define RAMP_CURRENT_GATE_MA      7000
+#define FEATURE_PRESYNC_RAMP       0
+#define OC_CLPCI_ENABLE            1
 
 #else
 #error "Unknown MOTOR_PROFILE — see garuda_config.h"
@@ -1207,6 +1263,11 @@ extern "C" {
                                                 * rising-only carry above (the 2810 ran rising-only to 234k).
                                                 * Tune: raise if rising-only stalls early, lower if 40k wall
                                                 * persists. */
+#elif MOTOR_PROFILE == 7 || MOTOR_PROFILE == 8
+#define HWZC_FALLING_SW_MAX_ERPM       50000   /* 1407 4000KV: high-KV low-L like the A2212, so gate
+                                                * falling-SW low and let rising-only carry above (the
+                                                * 2810 ran rising-only to 234k @ 70k). START 50k; tune
+                                                * per cell (raise if rising-only stalls early). */
 #else
 #define HWZC_FALLING_SW_MAX_ERPM       70000
 #endif

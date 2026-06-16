@@ -52,7 +52,7 @@ static uint8_t activeProfile;
     .ifCurrentCa          = 600, \
     .ifRampErpmPerS       = 12000
 
-static const GSP_PARAMS_T profileDefaults[7] = {
+static const GSP_PARAMS_T profileDefaults[9] = {
     [GSP_PROFILE_HURST] = {
         .rampTargetErpm     = 2000,
         .rampAccelErpmPerS  = 1000,
@@ -467,6 +467,105 @@ static const GSP_PARAMS_T profileDefaults[7] = {
         .focLsMicroH         = 9,
         .focKeUvSRad         = 230,
         .focVbusNomCentiV    = 1000,
+        .focMaxCurrentCentiA = 725,
+        .focMaxElecRadS      = 25000,
+        .focKpDqMilli        = 58,
+        .focKiDq             = 1382,
+        .focObsLpfAlphaMilli = 200,
+        .focAlignIqCentiA    = 200,
+        .focRampIqCentiA     = 300,
+        .focAlignTimeMs      = 800,
+        .focIqRampTimeMs     = 300,
+        .focRampRateRps2     = 400,
+        .focHandoffRadS      = 1000,
+        .focFaultOcCentiA    = 900,
+        .focFaultStallDeciRadS = 50,
+        .an1078ThetaBaseDegX10 = 200,
+        .an1078ThetaKE7        = 800,
+        .an1078KslideMv        = 2500,
+        .an1078IdFwMaxDecia    = 120,
+    },
+    [GSP_PROFILE_1407_2S] = {
+        /* === 1407 4000KV 9N12P (6PP) @ 2S (7.4V nom / 8.4V max), FPV 3" ===
+         * Based on the VEX 4000KV/6PP profile (same KV & pole count). Values are
+         * physics/template ESTIMATES — bench-tune. Rs/Ls measured numbers wanted.
+         * A2212 lessons baked in: PP=6 set right; CL-entry soft-start (global)
+         * engages (idle 16% >> MIN_DUTY); per-profile falling-SW gate (config.h);
+         * handoff chop ON (config.h OC_CLPCI_ENABLE=1) for the low-L startup. */
+        .rampTargetErpm     = 12000,   /* high-KV: BEMF undetectable below ~12k (VEX lesson) */
+        .rampAccelErpmPerS  = 8000,
+        .rampDutyPct        = 25,
+        .clIdleDutyPct      = 16,      /* ~32k eRPM idle at 8.4V; soft-start ramps into it */
+        .timingAdvMaxDeg    = 22,      /* A2212 sweet spot ~23; start 22, tune at top */
+        .hwzcCrossoverErpm  = 6000,
+        .ocSwLimitMa        = 7250,
+        .ocFaultMa          = 9500,
+        .motorPolePairs     = 6,
+        .alignDutyPct       = 25,
+        .initialErpm        = 300,
+        .maxClosedLoopErpm  = 202000,  /* 4000 * 8.4V * 6pp ~= 202k (under ~260k ceiling) */
+        .sineAlignModPct    = 50,
+        .sineRampModPct     = 50,
+        .zcDemagDutyThresh  = 45,
+        .zcDemagBlankExtraPct = 18,
+        .ocLimitMa          = 9000,
+        .ocStartupMa        = 10000,
+        .rampCurrentGateMa  = 7000,
+        TUNING_DEFAULTS,
+        .vbusUvAdc          = 320,     /* ~6V (2S min ~6.6V) */
+        .focRsMilliOhm       = 220,    /* ESTIMATE — measure on the 1407 */
+        .focLsMicroH         = 9,      /* ESTIMATE — measure */
+        .focKeUvSRad         = 230,    /* 4000KV/6PP (same as VEX) */
+        .focVbusNomCentiV    = 740,    /* 7.4V (2S nominal) */
+        .focMaxCurrentCentiA = 725,
+        .focMaxElecRadS      = 25000,
+        .focKpDqMilli        = 58,
+        .focKiDq             = 1382,
+        .focObsLpfAlphaMilli = 200,
+        .focAlignIqCentiA    = 200,
+        .focRampIqCentiA     = 300,
+        .focAlignTimeMs      = 800,
+        .focIqRampTimeMs     = 300,
+        .focRampRateRps2     = 400,
+        .focHandoffRadS      = 1000,
+        .focFaultOcCentiA    = 900,
+        .focFaultStallDeciRadS = 50,
+        .an1078ThetaBaseDegX10 = 200,
+        .an1078ThetaKE7        = 800,
+        .an1078KslideMv        = 2500,
+        .an1078IdFwMaxDecia    = 120,
+    },
+    [GSP_PROFILE_1407_3S] = {
+        /* === 1407 4000KV 9N12P (6PP) @ 3S (11.1V nom / 12.6V max), FPV 3" ===
+         * Same motor as profile 7, scaled to 3S. No-load top ~302k EXCEEDS the
+         * ~260k sensorless ceiling -> maxClosedLoopErpm CAPPED at 260000 (caps
+         * before the top-end desync; a 3" prop won't free-spin there anyway).
+         * Lower duties than 2S (more volts for the same current). ESTIMATES. */
+        .rampTargetErpm     = 12000,
+        .rampAccelErpmPerS  = 8000,
+        .rampDutyPct        = 20,      /* 12.6V -> less duty than 2S for same current */
+        .clIdleDutyPct      = 11,      /* ~33k eRPM idle at 12.6V */
+        .timingAdvMaxDeg    = 22,
+        .hwzcCrossoverErpm  = 6000,
+        .ocSwLimitMa        = 7250,
+        .ocFaultMa          = 9500,
+        .motorPolePairs     = 6,
+        .alignDutyPct       = 20,
+        .initialErpm        = 300,
+        .maxClosedLoopErpm  = 260000,  /* capped at sensorless ceiling (no-load 4000*12.6*6 ~= 302k) */
+        .sineAlignModPct    = 40,      /* 12.6V: less mod than 2S for the same align current */
+        .sineRampModPct     = 40,
+        .zcDemagDutyThresh  = 45,
+        .zcDemagBlankExtraPct = 18,
+        .ocLimitMa          = 9000,
+        .ocStartupMa        = 10000,
+        .rampCurrentGateMa  = 7000,
+        TUNING_DEFAULTS,
+        .vbusUvAdc          = 480,     /* ~9V (3S min ~9.9V) */
+        .focRsMilliOhm       = 220,    /* ESTIMATE — measure */
+        .focLsMicroH         = 9,      /* ESTIMATE — measure */
+        .focKeUvSRad         = 230,
+        .focVbusNomCentiV    = 1110,   /* 11.1V (3S nominal) */
         .focMaxCurrentCentiA = 725,
         .focMaxElecRadS      = 25000,
         .focKpDqMilli        = 58,
