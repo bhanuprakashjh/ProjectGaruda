@@ -719,7 +719,8 @@ typedef struct
 #endif
 
 #if FEATURE_HW_OVERCURRENT
-    uint16_t ibusRaw;             /* Bus current ADC (biased ~2048, ~93 counts/A) */
+    uint16_t ibusRaw;             /* Bus current ADC (biased ~2048, ~93 counts/A) — instantaneous conduction */
+    uint16_t ibusAvg;             /* IIR low-pass of ibusRaw (~5.7ms TC) — smooth trend */
     uint16_t ibusMax;             /* Peak bus current since last clear */
     uint32_t clpciTripCount;      /* Coarse CLPCI activity counter via CLEVT polling.
                                    * One ADC tick (41.7us) may collapse multiple chop

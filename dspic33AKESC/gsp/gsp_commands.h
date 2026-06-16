@@ -254,9 +254,15 @@ typedef struct __attribute__((packed)) {
      * viable. min==0xFFFF means no falling-WATCHING samples this window. */
     uint16_t fallOffBemfMin;
     uint16_t fallOffBemfMax;
+
+    /* 2026-06-14 (2B) — IIR low-pass of ibusRaw (45kHz EMA, ~5.7ms TC), same
+     * 2048-biased ~93 counts/A frame. ibusRaw = instantaneous conduction
+     * (pulse-center, for limiting/peak); ibusAvg = smoothed trend. Appended at
+     * the end so older decoders that stop at 246B still parse the rest. */
+    uint16_t ibusAvg;
 } GSP_SNAPSHOT_T;
 
-_Static_assert(sizeof(GSP_SNAPSHOT_T) == 246, "GSP_SNAPSHOT_T wire size mismatch");
+_Static_assert(sizeof(GSP_SNAPSHOT_T) == 248, "GSP_SNAPSHOT_T wire size mismatch");
 
 /* GSP_RX_STATUS_T — 12 bytes, returned by GET_RX_STATUS */
 typedef struct __attribute__((packed)) {

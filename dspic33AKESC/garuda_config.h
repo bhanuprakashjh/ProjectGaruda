@@ -79,12 +79,37 @@ extern "C" {
                                      * IF_BRIDGE caused. CMP3 is analog/continuous so it sees the
                                      * true ON-time motoring peak the valley-sampled ADC misses.
                                      * Armed only at CL entry (align/OL/morph keep STARTUP_DAC). */
-#define OC_CMP3_HANDOFF_MA   12000  /* Hand-off chop current cap (mA). Below STARTUP(~22A) and
-                                     * operational(~20A); above idle draw. Lower = gentler
-                                     * spin-up / smaller pulse; too low may not clear the gap. */
-#define HANDOFF_CHOP_MS       1000  /* Window after CL entry to hold the low chop (ms). Must
+#define OC_CMP3_HANDOFF_MA     300  /* 2026-06-16 USE THE CHOP to tame the A2212 CL-entry inrush.
+                                     * MEASURED CAL: 6000 didn't bite (~10A); 500 clamped ~8.5A;
+                                     * 300 = push lower (~6-7A?) for an even smaller spike + longer
+                                     * ramp. A LOWER chop = smaller peak AND gentler torque ->
+                                     * longer spin-up. Held for HANDOFF_CHOP_MS (covers the ramp)
+                                     * then auto-restores 18A operational (top-end UNAFFECTED).
+                                     * FLOOR WATCH: too low truncates the ON-window so far that
+                                     * low-speed ZC detection / breakaway from 2k fails (stall or
+                                     * desync) -> raise back toward 400. Must stay > bias (assert). */
+#define HANDOFF_CHOP_MS       2000  /* 2026-06-16 1000->2000: lower chop = gentler torque = LONGER
+                                     * spin-up, so widen the window to cover it (else it expires
+                                     * mid-ramp and the current un-clamps -> end-of-ramp spike).
+                                     * Window after CL entry to hold the low chop (ms). Must
                                      * exceed the hand-off->past-the-gap accel time. Idle draw
                                      * is < cap so holding it there is inert. */
+
+/* ── CL-ENTRY SOFT-START ──────────────────────────────────────────────────
+ * At CL entry the duty normally steps straight to the idle floor (e.g. 8%)
+ * while BEMF is ~0, so the phase current slams to its inrush peak. This ramps
+ * the duty up from CL_ENTRY_START_PCT to the idle floor over CL_ENTRY_RAMP_MS,
+ * so the current builds GRADUALLY as the rotor speeds up and BEMF rises ->
+ * smaller inrush PEAK + longer/gentler ramp, with the SAME final idle speed
+ * (unlike lowering CL idle duty, which also lowers idle RPM). Unlike the CMP3
+ * chop, this limits the actual applied voltage so it cuts the inductive current
+ * the chop can't. Tune: START_PCT lower = smaller peak, but must stay above the
+ * entry-speed equilibrium (~2k handoff) or the rotor coasts/desyncs -> raise it;
+ * RAMP_MS longer = gentler. START_PCT must be >= the deadtime MIN_DUTY (~3%). */
+#define FEATURE_CL_ENTRY_SOFTSTART   1
+#define CL_ENTRY_START_PCT           4    /* initial CL-entry duty %  (peak knob) */
+#define CL_ENTRY_RAMP_MS           400    /* ms to climb START_PCT -> CL idle duty */
+
 #define FEATURE_THROTTLE_ZERO_AUTO_DISARM 0  /* When 1, motor disarms to IDLE state if
                                               * throttle stays below ARM_THROTTLE_ZERO_ADC
                                               * for 50ms. When 0, motor keeps running at
@@ -162,7 +187,7 @@ extern "C" {
 #error "FEATURE_AM32_STARTUP and FEATURE_PLL_STARTUP both own CL entry - pick one"
 #endif
 
-#define FEATURE_ARM_BEEP        1  /* 2026-06-12: arm melody through the motor windings.
+#define FEATURE_ARM_BEEP        0  /* 2026-06-12: arm melody through the motor windings.
                                     * Sequence: button -> quiet 500ms arm (OC auto-zero
                                     * calibrates undisturbed) -> ARM_BEEP_MS of music (three
                                     * sequential pitches, 45kHz PWM burst-gated at each note's
@@ -225,14 +250,24 @@ extern "C" {
 #define FEATURE_LEARN_MODULES    0  /* master: ring buffer + quality + health */
 #define FEATURE_ADAPTATION       0  /* requires FEATURE_LEARN_MODULES */
 #define FEATURE_COMMISSION       0  /* requires FEATURE_LEARN_MODULES */
-#define FEATURE_EEPROM_V2        1  /* NVM persistent storage for GSP params */
-#define FEATURE_PARAMS_FORCE_DEFAULTS 0 /* Bring-up: 1 = skip the EEPROM overlay so
-                                         * compiled profileDefaults[]/.h edits ALWAYS
-                                         * win on reflash (NVM save still builds). Set
-                                         * back to 0 for normal persistence. See also
-                                         * the automatic defaults-signature guard in
-                                         * gsp_params.c, which invalidates stale EEPROM
-                                         * whenever profileDefaults[MOTOR_PROFILE] changes. */
+#define FEATURE_EEPROM_V2        1  /* NVM persistent storage DRIVER for GSP params */
+
+/* ── EEPROM parameter persistence — THE development/production switch ──────
+ * 0 = DEVELOPMENT: gsp_params.c profileDefaults[] are the ONLY source of truth.
+ *     The EEPROM overlay is never read at boot and GSP "save" never writes NVM,
+ *     so code edits ALWAYS win and no stale EEPROM can shadow them (the trap that
+ *     cost flash cycles tuning the A2212). Live GSP tuning still works but is
+ *     RAM-only and reverts to the compiled values on the next power cycle.
+ * 1 = PRODUCTION: persist tuned params to EEPROM and overlay them at boot
+ *     (signature-gated). Requires FEATURE_EEPROM_V2=1. Flip to 1 for release.
+ * Gates: gsp_params.c LoadFromConfig/SaveToConfig (no-op when 0), the main.c boot
+ * overlay, and the GSP SAVE_CONFIG / LOAD_PROFILE EEPROM writes. */
+#define FEATURE_GSP_EEPROM       0
+
+/* Legacy name, now DERIVED from the switch above (was a separate bring-up flag).
+ * Forces compiled defaults at boot whenever EEPROM persistence is disabled. */
+#define FEATURE_PARAMS_FORCE_DEFAULTS  (!FEATURE_GSP_EEPROM)
+
 #define FEATURE_X2CSCOPE         0  /* X2CScope via UART1 (bring-up debug) */
 #define FEATURE_GSP              1  /* Garuda Serial Protocol via UART1 */
 
@@ -317,7 +352,59 @@ extern "C" {
  * All motor-dependent parameters are grouped here for easy swapping.
  * Board-specific and feature-tuning parameters are below.
  *──────────────────────────────────────────────────────────────────────────*/
-#define MOTOR_PROFILE  2   /* 2 = 2810 (bench baseline). 4 = Cobra, 5 = XRotor, 6 = VEX 4000KV micro. */
+/* ── Bus-current ON-center / OA3-ring probe (dev-only, defined early so the
+ * per-profile OC_CLPCI_ENABLE gate below can see it) ───────────────────────
+ * Step toward bus-current current-limited startup (CMP3 hardware cycle-chop).
+ * =1 turns ARM into a static sector-0 hold: pot sweeps the LEB blanking window
+ * (PG1LEB) while CMP3 cycle-chop is enabled, so the chop trip-rate (surfaced in
+ * the eRPM telemetry column) reveals how long the OA3 turn-on ring lasts — sized
+ * blind, no scope. Default 0. MUST be 0 before merge. */
+#define FEATURE_IBUS_PROBE  0
+
+/* 2026-06-14: sample BUS current (AD3CH1/OA3) at the ACTIVE-VECTOR PULSE CENTER
+ * (PG1TRIGB=0) instead of sharing the BEMF freewheel-center trigger (PG1TRIGA=
+ * MPER/2). The freewheel-center sample reads link current ≈0/negative (idle 0.2A
+ * vs PSU 0.6A; negative & 2-level-aliased at top speed). Pulse-center samples
+ * where motoring current actually flows through the DC-link shunt → true Ibus.
+ * No added ADC load (same one conversion/period, own AD3 core; BEMF untouched).
+ * Set 0 to revert to the shared freewheel-center trigger. */
+/* ISOLATION TEST 2026-06-14: generate the ADTR2 trigger (PG1TRIGB) but leave ALL
+ * ADC channels on ADTR1 (nothing consumes ADTR2). If the motor still UVs at high
+ * speed -> the ADTR2 trigger GENERATION itself disrupts (PWM/ADC arbiter). If it
+ * reaches 260k clean -> the disruption is AD3CH1 CONVERTING on ADTR2 (extra
+ * conversion load). Set 0 after the test. Independent of FEATURE_IBUS_ONCENTER. */
+#define AK512_ADTR2_ISOLATION_TEST  0   /* RESULT: ADTR2 generation alone = clean 260k. So the
+                                          * high-speed break is AD3CH1 CONVERTING on ADTR2 (splitting
+                                          * the two AD3 conversions across two trigger instants), NOT
+                                          * the trigger broadcast. Second-trigger ibus path is dead. */
+
+#define FEATURE_IBUS_ONCENTER  0   /* 2026-06-14: KEEP OFF. Root cause (by elimination) is the
+                                    * SECOND PWM-ADC trigger (ADTR2) itself, NOT the sample instant:
+                                    * count-0, MPER/8, Vbus@MPER/2 vs count-0 ALL fail; only the
+                                    * ADTR1-triggered (freewheel) config reaches 260k. Using ADTR2
+                                    * for AD3CH1 breaks high-speed commutation -> desync -> UV. */
+
+/* EXPERIMENT 1a (2026-06-15): every prior FEATURE_IBUS_ONCENTER attempt kept
+ * VBUS on ADTR1 while IBUS moved to ADTR2 — so AD3 converted at TWO instants
+ * (a SPLIT). This puts BOTH AD3 conversions (IBUS + VBUS) on the SINGLE ADTR2
+ * (mid-ON) trigger: AD3 fires at exactly one instant, never split. VBUS at
+ * mid-ON is harmless (bus voltage is slow). Hypothesis: the split — not the
+ * mid-ON instant — was what broke high-speed commutation. WIN = stays clean to
+ * ~260k AND Ibus reads real (idle ~0.6A, rises with load). Set 0 to revert. */
+#define FEATURE_BUS_BOTH_ONCENTER  0   /* PARKED 2026-06-16 (proven: clean 260k + real bus current).
+                                          * Set 1 to resume the mid-ON dual-AD3 bus-current measurement. */
+
+/* BRINGUP DIAG (2026-06-13): force the CMP3 trip threshold below the OA3 rest
+ * level so the comparator is permanently tripped. If the CMP3->CLPCI chop chain
+ * is actually wired, PWM is chopped to ~0 and the motor CANNOT spin up. This is
+ * a decisive go/no-go: motor refuses to spin => chop works; motor idles normally
+ * => chain is dead (INPSEL/CLPCI wrong). Set to 0 (or remove) before merge. */
+#define AK512_CHOP_ALWAYS_TEST  0   /* STEP-1 PASSED 2026-06-16: with ALWAYS_TEST=1 the motor made ZERO
+                                      * current (Ia 0.5, Ibus 0) and could not spin -> CMP3->CLPCI chop
+                                      * chain CONFIRMED LIVE. Now 0 = chop at the real DAC threshold. */
+
+#define MOTOR_PROFILE  1   /* 1 = A2212 1400KV @12V (own tune, 2026-06-16). 2 = 2810. 4 = Cobra,
+                              * 5 = XRotor, 6 = VEX 4000KV micro. */
 
 #if MOTOR_PROFILE == 0
 /* === Hurst DMB2424B10002 (long Hurst, MCLV-48V-300W bench motor) ===
@@ -359,14 +446,8 @@ extern "C" {
                                             * current rose 20% (early shoot-through signature).
                                             * 300 ns is the bottom of useful deadtime range
                                             * on this PWM + FET combo. */
-#define ALIGN_DUTY_PERCENT          12     /* Was 8 (bare-motor). Prop load needs more torque
-                                            * to hold alignment — 8% let the rotor walk under
-                                            * cogging+prop inertia. 12V*12%/0.065=22A stall peak
-                                            * (supply CC limits to 10A). */
-#define RAMP_DUTY_PERCENT           22     /* Was 15 (bare-motor). Prop stall torque on 8x4.5
-                                            * needs ~20-25% duty to break away and accelerate
-                                            * through OL ramp. Bare motor will draw more current
-                                            * but the 10A supply CC still protects. */
+#define ALIGN_DUTY_PERCENT           6     /* 2026-06-16 lowered 8->6 to cut startup current (~14A high). */
+#define RAMP_DUTY_PERCENT           10     /* 2026-06-16 lowered 15->10 (main startup-current driver). */
 #define INITIAL_ERPM               100     /* Very slow start: 100ms per step — prop can follow */
 #define RAMP_TARGET_ERPM          2000     /* Lowered from 3000 for prop start. Prop mass
                                             * + inertia cannot accelerate to 3000 eRPM in the
@@ -374,36 +455,19 @@ extern "C" {
                                             * HWZC crossover (need sufficient BEMF margin) and
                                             * comfortably above the SW ZC floor. */
 #define MAX_CLOSED_LOOP_ERPM    120000     /* 1400KV * 12V * 7pp */
-#define RAMP_ACCEL_ERPM_PER_S      400     /* 4.75 s OL ramp — prop needs long dwell.
-                                            * Bare-motor was 3000 (1 s ramp); dropped to 1000
-                                            * didn't help because prop inertia at 8x4.5 is
-                                            * ~6× higher than bare rotor. 400 eRPM/s gives
-                                            * the rotor enough time per step to physically
-                                            * accelerate the prop and produce real BEMF by
-                                            * the time CL entry happens. */
-#define SINE_ALIGN_MODULATION_PCT   10     /* Was 4 (bare-motor). Prop requires stronger
-                                            * align current to actually hold the rotor in
-                                            * position against static friction. */
-#define SINE_RAMP_MODULATION_PCT    25     /* Was 12. Prop load + 0.065Ω A2212 + 12V: at
-                                            * 12% modulation the peak phase-phase voltage is
-                                            * ~2.9 V, current clamped at 10 A supply CC, but
-                                            * the 10 A is short transient peaks — average
-                                            * torque is not enough to accelerate the prop
-                                            * through the sine ramp. 25% gives ~6 V peak
-                                            * phase-phase — enough average torque even with
-                                            * supply clamping. */
+#define RAMP_ACCEL_ERPM_PER_S     3000     /* 2026-06-16 BARE-MOTOR 1 s ramp (was 400 for prop inertia). */
+#define SINE_ALIGN_MODULATION_PCT    4     /* 2026-06-16 BARE-MOTOR (was 10 for prop). */
+#define SINE_RAMP_MODULATION_PCT    12     /* 2026-06-16 BARE-MOTOR (was 25 for prop). */
 #define ZC_DEMAG_DUTY_THRESH        40     /* Low-L = more demag */
 #define ZC_DEMAG_BLANK_EXTRA_PERCENT 18    /* Aggressive demag blanking */
 #define HWZC_CROSSOVER_ERPM       1500     /* Reverted — 868b2ff milestone value.
                                             * Raising to 3000 moved HWZC activation to end
                                             * of ramp but SW ZC hadn't established a clean
                                             * lock yet, seed was wrong. Stick with 1500. */
-#define CL_IDLE_DUTY_PERCENT        18     /* Was 12 (bare-motor). Prop load requires higher
-                                            * idle duty to maintain rotation after morph exit —
-                                            * 12% was only breaking the motor into CL then the
-                                            * prop inertia stalled it, causing HWZC to lock onto
-                                            * PWM noise at floor. 18% keeps the motor spinning
-                                            * with an 8x4.5 prop at no-load on bench. */
+#define CL_IDLE_DUTY_PERCENT         8     /* 2026-06-16 lowered 12->8: THIS is the startup-current
+                                            * driver (CL idle duty vs tiny low-speed BEMF on the 0.065R
+                                            * A2212). 12%=~13A inrush; 8% ~8-9A. Idle speed drops too
+                                            * (~13k->~9k). If ZC gets rough/desyncs at idle, raise to 10. */
 #define SINE_PHASE_OFFSET_DEG       60     /* Sine-to-trap offset (unused when sine disabled) */
 #define OC_LIMIT_MA              12000     /* CMP3 CLPCI chopping (12A) */
 #define OC_STARTUP_MA            22000     /* High: let 10A supply CC be the limiter, not CMP3 */
@@ -416,9 +480,12 @@ extern "C" {
                                             * because lower V/L means slower current rise → less
                                             * braking torque during wrong commutation. */
 #define FEATURE_PRESYNC_RAMP       0       /* Disabled: standard forced OL_RAMP (reliable no-prop) */
-#define OC_CLPCI_ENABLE            0       /* CLPCI disabled for A2212: OA3 ringing (25x gain)
-                                            * causes 54-80% false trip rate, LEB can't fix.
-                                            * Protection via software ADC + board FPCI instead. */
+#define OC_CLPCI_ENABLE            1       /* 2026-06-16 RE-ENABLED: CMP3->CLPCI current-limit chop.
+                                            * Prior note (kept): A2212 OA3 ringing (25x gain) caused
+                                            * 54-80% false trips, LEB couldn't fix — but that was BEFORE
+                                            * the INPSEL=3 fix (CMP3 now watches OA3 output, AN957). If it
+                                            * false-trips (stutter / can't accelerate / spurious chop at low
+                                            * current), set back to 0. OC_LIMIT_MA=12000 = operational chop. */
 
 #elif MOTOR_PROFILE == 2
 /* === 2810 1350KV (7-8" FPV/cine drone motor) ===
@@ -481,13 +548,19 @@ extern "C" {
                                             * motor consistent torque budget across the
                                             * full throttle range. */
 #define SINE_PHASE_OFFSET_DEG       60     /* Same as other profiles */
-#define OC_LIMIT_MA              20000     /* CMP3 chop. Board shunt saturates ~22A */
-#define OC_STARTUP_MA            22000     /* Near sensor saturation — relaxed during startup */
+/* 2026-06-13: HW-chop isolation test. CMP3->CLPCI chop set to 16A and the SW
+ * soft-limit pushed ABOVE it (20A) so the SOFTWARE limiter stays inert and the
+ * HARDWARE chop is the only thing capping the startup balloon -> a clean read on
+ * Ibus of whether the AN957-style CMP3 chop works. Restore (20000/22000/18000)
+ * once confirmed. */
+#define OC_LIMIT_MA              20000     /* restored to production baseline 2026-06-16 (chop parked) */
+#define OC_STARTUP_MA            22000     /* production startup OC */
 #define OC_FAULT_MA              21000     /* SW hard fault just below saturation */
-#define OC_SW_LIMIT_MA           18000     /* SW soft limit (duty reduction starts) */
-#define RAMP_CURRENT_GATE_MA     10000     /* Hold ramp accel if ibus >10A during OL */
+#define OC_SW_LIMIT_MA           18000     /* production SW soft limit (below CMP3 operational) */
+#define RAMP_CURRENT_GATE_MA     10000     /* production: hold ramp accel when ibus > 10A */
 #define FEATURE_PRESYNC_RAMP       0       /* Standard forced OL_RAMP */
-#define OC_CLPCI_ENABLE            0       /* CLPCI disabled: same OA3 ringing issue as A2212 */
+#define OC_CLPCI_ENABLE            0       /* PARKED 2026-06-16: CMP3->CLPCI cycle-chop PROVEN (current-limited
+                                            * startup works). Off for baseline; set 1 to resume chop tuning. */
 
 #elif MOTOR_PROFILE == 3
 /* === 5055 ~580KV (colleague's motor — ADJUST KV AS NEEDED) ===
@@ -829,6 +902,7 @@ extern "C" {
  * speed so we can bench-verify the current cap. Current loop reuses the
  * profile's tuned FOC gains (focKpDqMilli / focKiDq). Default OFF. */
 #define FEATURE_IF_STARTUP        0   /* PARKED 2026-06-10: op-amp current-sense wall (see memory). Code stays, compiled out. */
+/* FEATURE_IBUS_PROBE defined near MOTOR_PROFILE (above). */
 #define IF_START_ERPM           800   /* (reserved) initial open-loop eRPM */
 #define IF_HANDOFF_ERPM       11000   /* speed I-f ramps to and holds (M1) — just above
                                        * the ~10k MIN_DUTY 6-step idle so it's continuous */
@@ -1115,7 +1189,18 @@ extern "C" {
  * Conclusion: 70k cap stays. ALSO proves the 120-140k rough band is NOT the
  * falling-coast (extending falling-SW made it worse, not better) -> it's the
  * comp-amp saturation transition (~125k = float starts railing). */
+#if MOTOR_PROFILE == 1
+#define HWZC_FALLING_SW_MAX_ERPM       35000   /* A2212 1400KV @12V (2026-06-16 pass 1): falling BEMF is
+                                                * half-amplitude (12V) AND the motor is faster (1400KV), so
+                                                * the falling-SW captures walk late and destabilize the PI
+                                                * ~30k earlier than the 2810's 70k -> desync at the rising
+                                                * ->falling crossover ~40k. Cap falling-SW at 35k; let
+                                                * rising-only carry above (the 2810 ran rising-only to 234k).
+                                                * Tune: raise if rising-only stalls early, lower if 40k wall
+                                                * persists. */
+#else
 #define HWZC_FALLING_SW_MAX_ERPM       70000
+#endif
 #else
 #define HWZC_FALLING_SW_MAX_ERPM       0   /* 0 = falling-SW at all speeds; else cap */
 #endif
@@ -1602,11 +1687,12 @@ extern "C" {
 /* CMP3 settings */
 #define OC_CMP_HYSTERESIS       0b11  /* 45mV hysteresis (max, for noise immunity) */
 #define OC_CMP_FILTER_EN        1     /* 1=enable CMP3 digital filter, 0=disable */
-#define OC_LEB_BLANKING_NS     1000   /* Leading-edge blanking (ns). Applied to BOTH the
-                                       * board U25B FPCI input (RPn) AND our CMP3 CLPCI.
-                                       * Blanks the switching transient (FET rise + ringing
-                                       * + deadtime body-diode transient). 2810 @ 24V has
-                                       * ~1µs ringing tail. 1000ns = 400 clocks @ 400MHz. */
+#define OC_LEB_BLANKING_NS      200   /* Leading-edge blanking (ns). 2026-06-13: cut 1000->200.
+                                       * At 45kHz the 5%-duty CL-idle ON-pulse is only ~1.1us, so a
+                                       * 1000ns LEB blanked ~90% of it and CMP3 never saw the current
+                                       * -> the chop never engaged at low duty. 200ns clears the FET
+                                       * switching edge while leaving the comparator a real window.
+                                       * 200ns = 80 clocks @ 400MHz. Watch for false trips on noise. */
 
 #endif /* FEATURE_HW_OVERCURRENT */
 

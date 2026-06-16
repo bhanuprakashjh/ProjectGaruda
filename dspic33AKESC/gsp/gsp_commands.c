@@ -48,6 +48,7 @@
 #if FEATURE_BURST_SCOPE
 #include "scope/scope_burst.h"
 #endif
+#include "hal/hal_comparator.h"
 
 /* ── Telemetry streaming state ──────────────────────────────────────── */
 
@@ -352,7 +353,15 @@ static void HandleSetParam(const uint8_t *payload, uint8_t payloadLen)
     bool is_an1078_live = (paramId >= PARAM_ID_AN1078_THETA_BASE_DEGX10 &&
                            paramId <= PARAM_ID_AN1078_ID_FW_MAX_DECIA);
 
-    if (!is_an1078_live && garudaData.state != ESC_IDLE) {
+    /* The CMP3 hardware current-limit thresholds are live-tunable: the user
+     * dials the chop current "by feel" while the motor spins.  GSP_ParamSet
+     * recomputes the derived DAC value; we re-apply it to the comparator
+     * immediately below so the new limit takes effect this instant rather
+     * than waiting for the next state transition. */
+    bool is_oc_live = (paramId == PARAM_ID_OC_LIMIT_MA ||
+                       paramId == PARAM_ID_OC_STARTUP_MA);
+
+    if (!is_an1078_live && !is_oc_live && garudaData.state != ESC_IDLE) {
         SendError(GSP_ERR_WRONG_STATE);
         return;
     }
@@ -371,6 +380,20 @@ static void HandleSetParam(const uint8_t *payload, uint8_t payloadLen)
          paramId == PARAM_ID_FOC_KE_UV_S_RAD)) {
         extern AN_Motor_T s_foc_an;
         AN_SMCInit(&s_foc_an.smc);
+    }
+#endif
+
+#if (OC_PROTECT_MODE == 2) && OC_CLPCI_ENABLE
+    /* Live re-apply of the CMP3 current-limit threshold.  GSP_ParamSet has
+     * already recomputed gspDerived.ocCmp3DacVal / ocCmp3StartupDac; push the
+     * one that is active in the current state straight to the DAC so the chop
+     * changes under the user's hand while spinning.  ESC_CLOSED_LOOP uses the
+     * operational limit; every other (startup) state uses the startup limit. */
+    if (result == PARAM_OK && is_oc_live) {
+        uint16_t dac = (garudaData.state == ESC_CLOSED_LOOP)
+                         ? (uint16_t)RT_OC_CMP3_DAC_VAL
+                         : (uint16_t)RT_OC_CMP3_STARTUP_DAC;
+        HAL_CMP3_SetThreshold(dac);
     }
 #endif
 
@@ -399,7 +422,7 @@ static void HandleSaveConfig(const uint8_t *payload, uint8_t payloadLen)
     (void)payload;
     (void)payloadLen;
 
-#if FEATURE_EEPROM_V2
+#if FEATURE_EEPROM_V2 && FEATURE_GSP_EEPROM
     uint32_t remaining = EEPROM_GetCooldownRemainingMs(garudaData.systemTick);
     if (remaining > 0) {
         uint8_t resp[2];
@@ -519,7 +542,7 @@ static void HandleLoadProfile(const uint8_t *payload, uint8_t payloadLen)
     /* Auto-save profile to EEPROM so it persists across resets.
      * Without this, selecting A2212 in GUI then resetting reverts
      * to compile-time MOTOR_PROFILE (Hurst). */
-#if FEATURE_EEPROM_V2
+#if FEATURE_EEPROM_V2 && FEATURE_GSP_EEPROM
     {
         GARUDA_CONFIG_T cfg;
         EEPROM_LoadConfig(&cfg);

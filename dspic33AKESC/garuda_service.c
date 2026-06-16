@@ -474,6 +474,13 @@ static void IF_StartupTick(uint16_t raw_ia, uint16_t raw_ib)
 }
 #endif /* FEATURE_IF_STARTUP */
 
+#if FEATURE_IBUS_PROBE
+/* PROBE: count of CMP3 rising-edge fires latched via _CMP3IF (set per cycle,
+ * polled+cleared in the ADC ISR). Surfaced as the hijacked eRPM column so we
+ * see the comparator output directly, independent of the CLPCI chop chain. */
+volatile uint32_t g_cmp3FireCount = 0;
+#endif
+
 #if FEATURE_CL_DIFF_IDLE || FEATURE_CL_COAST_VERIFY
 /* ── Coast-listen lock acquisition (2026-06-10) ──────────────────────────
  * At CL entry, instead of trusting the morph's lock (bench: the morph can
@@ -1579,7 +1586,14 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
     {
         uint16_t rawBus = ADCBUF_IBUS;
         s_ocZeroRaw = rawBus;                       /* for the ARMED cal */
+#if FEATURE_IBUS_ONCENTER
+        /* Pulse-center (active-vector) conduction current swings OA3 BELOW the
+         * rest bias, so the deviation is inverted vs the old freewheel sample.
+         * Mirror it back into the 2048 frame: positive = motoring conduction. */
+        int32_t corr = (2048 + (int32_t)g_ocBiasAdc) - (int32_t)rawBus;
+#else
         int32_t corr = (int32_t)rawBus + (2048 - (int32_t)g_ocBiasAdc);
+#endif
         if (corr < 0)    corr = 0;
         if (corr > 4095) corr = 4095;
         garudaData.ibusRaw = (uint16_t)corr;
@@ -1592,6 +1606,15 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
     /* Track peak for diagnostics */
     if (garudaData.ibusRaw > garudaData.ibusMax)
         garudaData.ibusMax = garudaData.ibusRaw;
+
+    /* IIR low-pass (EMA, alpha=1/256 -> ~5.7ms TC @45kHz) of the instantaneous
+     * conduction sample -> ibusAvg: a smooth trend for the host to display
+     * alongside ibusInst. Q8 accumulator seeded at the 2048 bias (=0 A). */
+    {
+        static int32_t s_ibusAvgAcc = (int32_t)2048 << 8;
+        s_ibusAvgAcc += (int32_t)garudaData.ibusRaw - (s_ibusAvgAcc >> 8);
+        garudaData.ibusAvg = (uint16_t)(s_ibusAvgAcc >> 8);
+    }
 
     /* Count CLPCI activity via CLEVT latched event flags.
      * Poll all 3 generators — active PWM phase rotates with commutation.
@@ -1606,6 +1629,13 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
         PG2STAT = PCI_CLIMIT_EVT_MASK;
         PG3STAT = PCI_CLIMIT_EVT_MASK;
     }
+#endif
+
+#if FEATURE_IBUS_PROBE
+    /* Live CMP3 output LEVEL. With the probe DAC forced below the OA3 rest, this
+     * should read 1 continuously if CMP3 is wired to OA3 — independent of motor
+     * current or the freewheel sample point. 0 = comparator blind to OA3. */
+    g_cmp3FireCount = (uint32_t)DAC3CMPbits.CMPSTAT;
 #endif
 
 #ifdef ENABLE_PWM_FAULT_PCI
@@ -3830,11 +3860,38 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
 #endif
                 if (mappedDuty > cap) mappedDuty = cap;
 
+#if FEATURE_CL_ENTRY_SOFTSTART
+                /* CL-ENTRY SOFT-START: cap duty to a ceiling that ramps linearly
+                 * from CL_ENTRY_START_DUTY up to the requested (idle) duty over
+                 * CL_ENTRY_RAMP_TICKS. The phase current then builds gradually
+                 * with the rising BEMF instead of stepping to full idle duty
+                 * against ~0 BEMF at entry -> smaller inrush PEAK + longer ramp,
+                 * final idle speed unchanged. Stops limiting once the ceiling
+                 * reaches the idle floor. */
+                {
+                    static uint16_t clEntryTick = CL_ENTRY_RAMP_TICKS;
+                    if (prevAdcState != ESC_CLOSED_LOOP)
+                        clEntryTick = 0;                 /* arm at CL entry */
+                    if (clEntryTick < CL_ENTRY_RAMP_TICKS) {
+                        uint32_t span = (RT_CL_IDLE_DUTY > CL_ENTRY_START_DUTY)
+                                      ? (RT_CL_IDLE_DUTY - CL_ENTRY_START_DUTY) : 0u;
+                        uint32_t entryCeil = CL_ENTRY_START_DUTY +
+                            ((span * (uint32_t)clEntryTick) / CL_ENTRY_RAMP_TICKS);
+                        if (mappedDuty > entryCeil) mappedDuty = entryCeil;
+                        clEntryTick++;
+                    }
+                }
+#endif
+
 #if FEATURE_DUTY_SLEW
                 {
                     static uint32_t prevDuty = 0;
                     if (prevAdcState != ESC_CLOSED_LOOP)
+#if FEATURE_CL_ENTRY_SOFTSTART
+                        prevDuty = CL_ENTRY_START_DUTY;  /* low baseline so the soft-start ramp isn't fought by a down-slew */
+#else
                         prevDuty = garudaData.duty;
+#endif
 
                     /* Post-sync settle: use reduced slew-up rate for
                      * POST_SYNC_SETTLE_MS after ZC lock. This prevents
@@ -4346,7 +4403,15 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
                      * Init before state change: ADC ISR (prio 6) can
                      * preempt Timer1 (prio 5) between the two lines. */
                     STARTUP_Init(&garudaData);
-#if FEATURE_AM32_STARTUP
+#if FEATURE_IBUS_PROBE
+                    /* Bus-current chop probe: keep the sine align ACTIVE (the
+                     * proven bridge drive — STARTUP_Init already set sine.active
+                     * + released overrides). Hold it in ESC_ALIGN (don't advance)
+                     * and sweep the CMP3 chop threshold there. The earlier
+                     * SetCommutationStep path never energized the bridge from
+                     * this entry → zero current; the sine drive does. */
+                    garudaData.state = ESC_ALIGN;
+#elif FEATURE_AM32_STARTUP
                     /* AM32-style: no align, no ramp. Seed the listener's
                      * period guess and enter CL; the ADC-ISR entry block
                      * does the one blind kick + HWZC arm (startMotor()
@@ -4386,7 +4451,36 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
 #endif
 
         case ESC_ALIGN:
-#if FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3 || FEATURE_FOC_AN1078
+#if FEATURE_IBUS_PROBE
+            /* Hold the PROVEN sine align (ignore its completion return so the
+             * bridge keeps driving real current ~1.5A), and sweep the CMP3 chop
+             * threshold over a FINE 0..3A range (the align current is small).
+             * As the pot rises the threshold drops; when it crosses the real
+             * current the chop fires → eRPM (trip-rate, hijacked) JUMPS and Ibus
+             * DROPS toward the threshold. Trip current: A ≈ 3 × (4095 − thr)/4095.
+             * eRPM lighting + Ibus falling = the hardware current chop WORKS. */
+            (void)STARTUP_SineAlign(&garudaData);
+            PG1LEBbits.LEB = 80u;
+            /* INPSEL SCAN (2026-06-13): force DAC3 to 30 (below the OA3 ~78 rest)
+             * so the comparator + input should read HIGH on whichever input the
+             * op-amp actually lands on. SWEEP THE POT through 5 zones; eRPM
+             * (= live CMPSTAT, 10000/0) lights in the zone whose input sees OA3:
+             *   pot 0-20%   INPSEL=0  CMP_A = RA5 = OA3OUT   (expected winner)
+             *   pot 20-40%  INPSEL=1  CMP_B = RB5 = OA3IN+
+             *   pot 40-60%  INPSEL=2  CMP_C = RA6 = OA3IN-
+             *   pot 60-80%  INPSEL=3  CMP_D = RA1            (AN957's value)
+             *   pot 80-100% INPSEL=4  Bandgap 0.8V — CHAIN SELF-TEST: this MUST
+             *               read 10000 (993 > 30). If even THIS stays 0, the
+             *               comparator/DAC/CMPSTAT chain is broken, not the input. */
+            {
+                uint16_t z = garudaData.throttle;
+                uint8_t  sel = (z < 819u) ? 0u : (z < 1638u) ? 1u
+                             : (z < 2457u) ? 2u : (z < 3276u) ? 3u : 4u;
+                DAC3CMPbits.INPSEL = sel;
+                DAC3DATbits.DACDAT = 30u;
+            }
+            break;
+#elif FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3 || FEATURE_FOC_AN1078
             /* FOC: alignment handled in ADC ISR. Timer1 is a no-op. */
             break;
 #elif FEATURE_SINE_STARTUP

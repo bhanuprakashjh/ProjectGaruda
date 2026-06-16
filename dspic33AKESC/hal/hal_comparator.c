@@ -39,8 +39,12 @@ void InitializeCMPs(void)
     uint32_t *FPDMDACaddress;
     uint32_t FPDMDACdata, POSINLADJ, NEGINLADJ, DNLADJ;
 
-    /* DAC Calibration from flash at 0x7F20B0 */
-    FPDMDACaddress = (uint32_t *)(0x7F20B0);
+    /* DAC factory calibration (POSINLADJ/NEGINLADJ/DNLADJ) from flash.
+     * 2026-06-13: was 0x7F20B0 — WRONG, loaded garbage INL/DNL trim into the
+     * DAC, leaving the CMP3 reference corrupt (bench: the internal-bandgap CMP3
+     * self-test never asserted CMPSTAT, proving the comparator CORE was dead,
+     * not the input mux). Microchip AN957 on this exact MC510 reads 0x7F20E0. */
+    FPDMDACaddress = (uint32_t *)(0x7F20E0);
     FPDMDACdata = (uint32_t)(*FPDMDACaddress);
     POSINLADJ = (FPDMDACdata & 0x00FF0000) >> 16;
     NEGINLADJ = (FPDMDACdata & 0x0000FF00) >> 8;
@@ -200,9 +204,24 @@ static void CMP3_InitOvercurrent(void)
     DAC3CMP = 0;
     DAC3CMPbits.FLTREN = OC_CMP_FILTER_EN;
     DAC3CMPbits.CMPPOL = 0;         /* Non-inverted: HIGH when OA3OUT > DAC */
-    DAC3CMPbits.INPSEL = 0;         /* CMP3A = RA5 = OA3OUT */
+    /* ROOT CAUSE of the dead chop (2026-06-13): on MC510 the OA3 output reaches
+     * CMP3 on input D (INPSEL=3), NOT input A. INPSEL=0 watched the wrong node
+     * -> CMP3 never tripped -> no chop, and the on-chip OC fault never worked
+     * (hence the board-U25B fallback). Authority: Microchip AN957 on this exact
+     * MCLV-48V-300W + MC510 DIM (internal op-amp) sets INPSEL=3 for the DC-bus
+     * OC comparator. Ibus telemetry stayed correct because the ADC reads OA3 on
+     * its own channel (AD3CH1), independent of the comparator input mux. */
+    DAC3CMPbits.INPSEL = 3;         /* CMP_D = OA3 output -> CMP3 (AN957) */
     DAC3CMPbits.HYSPOL = 0;         /* Hysteresis on rising edge */
     DAC3CMPbits.HYSSEL = OC_CMP_HYSTERESIS;
+#if FEATURE_IBUS_PROBE
+    /* PROBE diagnostic: latch every rising edge of the comparator output in the
+     * _CMP3IF interrupt flag (IEC stays 0 -> no ISR, just the latch). The ADC
+     * ISR polls/clears it, so we see CMP3 fire even though the ADC samples at
+     * freewheel-center where the bus current is ~0. Isolates "comparator sees
+     * the current" from "CLPCI chops the output". */
+    DAC3CONbits.IRQM = 0b01;        /* event/IF-latch on rising edge */
+#endif
 #else
     DAC3CON = 0;
     DAC3CONbits.FLTREN = OC_CMP_FILTER_EN;
@@ -216,7 +235,11 @@ static void CMP3_InitOvercurrent(void)
      * (A2212: 0.065 ohm), stall current during align/ramp easily exceeds
      * the operational threshold, causing CLPCI to chop away startup torque.
      * Lowered to OC_CMP3_DAC_VAL after ZC sync via HAL_CMP3_SetThreshold(). */
+#if AK512_CHOP_ALWAYS_TEST
+    DAC3DATbits.DACDAT = 40;   /* BRINGUP DIAG: below OA3 rest -> always tripped */
+#else
     DAC3DATbits.DACDAT = OC_CMP3_STARTUP_DAC;
+#endif
 
     DAC3SLPCON = 0;
     DAC3SLPDAT = 0;
@@ -238,11 +261,21 @@ void HAL_CMP3_EnableOvercurrent(void)
  */
 void HAL_CMP3_SetThreshold(uint16_t dacVal)
 {
+#if AK512_CHOP_ALWAYS_TEST
+    /* BRINGUP DIAG: force trip below OA3 rest (~78) so CMP3 is always tripped.
+     * If CLPCI is wired the motor cannot spin. STRIP before merge. */
+    (void)dacVal;
+    DAC3DATbits.DACDAT = 40;
+    return;
+#endif
 #if FEATURE_OC_AUTOZERO
-    /* The DAC compares the RAW OA3OUT, whose true rest is ~78 counts — not
-     * the 2048 the threshold math assumes. Shift the 2048-frame threshold
-     * into the measured frame (no-op until the ARMED cal runs: bias=2048).
-     * Without this, CMP3 chopped/faulted ~22A above the configured mA. */
+    /* This board's OA3 output rests at ~g_ocBiasAdc (~78 counts), NOT the 2048
+     * mid-rail the OC_TRIP_MV math assumes (AN957's board is biased at 2048; this
+     * one isn't — that's why ibus ADC rests near 0). So the comparator input is
+     * in the 78-frame and the 2048-frame threshold MUST be shifted down by
+     * (2048 - bias) to land on the real signal. 2026-06-13: removing this shift
+     * (mistaken 2048-frame assumption) put the threshold ~1970 counts too high so
+     * CMP3 never tripped — the "cap" seen was just the structural CL-idle current. */
     extern volatile uint16_t g_ocBiasAdc;
     int32_t v = (int32_t)dacVal - (2048 - (int32_t)g_ocBiasAdc);
     if (v < 1)    v = 1;

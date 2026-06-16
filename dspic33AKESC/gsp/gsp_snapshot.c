@@ -63,6 +63,7 @@ void GSP_CaptureSnapshot(GSP_SNAPSHOT_T *dst)
 #if FEATURE_HW_OVERCURRENT
     dst->ibusRaw     = src->ibusRaw;
     dst->ibusMax     = src->ibusMax;
+    dst->ibusAvg     = src->ibusAvg;
 #endif
 
     /* BEMF/ZC */
@@ -81,6 +82,19 @@ void GSP_CaptureSnapshot(GSP_SNAPSHOT_T *dst)
         dst->stepPeriod = (olErpm >= 1u) ? (uint16_t)(450000UL / olErpm) : 0u;
     } else if (src->state < ESC_OL_RAMP) {
         dst->stepPeriod = 0u;   /* IDLE/ARMED/DETECT/ALIGN: not yet spinning */
+    }
+#endif
+#if FEATURE_IBUS_PROBE
+    /* DIRECT CMP3-output probe: surface the CMP3 rising-edge fire-RATE (latched
+     * via _CMP3IF in the ADC ISR) in the eRPM column (host shows eRPM =
+     * 450000/stepPeriod). This is the comparator itself, NOT the CLPCI chop:
+     *   eRPM non-zero as pot rises  -> CMP3 sees the current (INPSEL/OA3 OK)
+     *   eRPM stays 0 at full pot    -> CMP3 blind (DAC forced below rest, so
+     *                                  this means the input mux/routing is wrong)
+     * Pair with Ibus: eRPM up + Ibus collapsing = the chop itself also works. */
+    {
+        extern volatile uint32_t g_cmp3FireCount;   /* live CMP3 CMPSTAT level */
+        dst->stepPeriod = (g_cmp3FireCount != 0u) ? 45u : 0u;  /* eRPM 10000 / 0 */
     }
 #endif
     dst->goodZcCount = src->timing.goodZcCount;

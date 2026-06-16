@@ -103,6 +103,12 @@ void ChargeBootstrapCapacitors(void);
 void HAL_PWM_SetCommutationStep(uint8_t step);
 void HAL_PWM_SetDutyCycle(uint32_t duty);
 
+#if FEATURE_IBUS_PROBE
+/* Move the PG1TRIGA ADC sample from freewheel-center to mid-ON (period center)
+ * so AD3CH1 (IBUS) reads the true DC-link current during PWM-ON. Dev probe. */
+void HAL_PWM_IbusProbeOnCenter(void);
+#endif
+
 #if FEATURE_CL_DIFF_IDLE
 /* Differential-low CL drive mode flag (hal_pwm.c). 1 = LOW phase complementary
  * at MIN_DUTY, effective volts = duty − base. Service code owns the swaps;

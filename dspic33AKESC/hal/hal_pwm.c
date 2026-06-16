@@ -264,8 +264,8 @@ void InitPWMGenerator1(void)
     PG1EVT2     = 0x0000;
     PG1EVT1bits.ADTR1PS = 0;
     PG1EVT1bits.ADTR1EN3 = 0;
-    PG1EVT1bits.ADTR1EN2 = 0;
-    PG1EVT1bits.ADTR1EN1 = 1;      /* PG1TRIGA triggers ADC */
+    PG1EVT1bits.ADTR1EN2 = 0;      /* ADTR1 (PWM1 Trigger 1) = TRIGA only -> BEMF, untouched */
+    PG1EVT1bits.ADTR1EN1 = 1;      /* PG1TRIGA (freewheel-center) triggers ADC — BEMF */
     PG1EVT1bits.UPDTRG = 1;        /* DC write triggers UPDATE */
     PG1EVT1bits.PGTRGSEL = 0;
 #ifdef ENABLE_PWM_FAULT_PCI
@@ -276,7 +276,14 @@ void InitPWMGenerator1(void)
     PG1EVT1bits.SIEN = 0;
     PG1EVT1bits.IEVTSEL = 3;       /* Time base interrupts disabled */
     PG1EVT2bits.ADTR2EN3 = 0;
+#if FEATURE_IBUS_ONCENTER || FEATURE_BUS_BOTH_ONCENTER || AK512_ADTR2_ISOLATION_TEST
+    PG1EVT2bits.ADTR2EN2 = 1;      /* ADTR2 (PWM1 Trigger 2) sourced from PG1TRIGB
+                                    * = pulse-center -> bus current (AN957 samples all
+                                    * currents at TRIGA=0; we use TRIGB=0 on ADTR2 so
+                                    * BEMF keeps TRIGA=MPER/2 on ADTR1). AD3CH1.TRG1SRC=5. */
+#else
     PG1EVT2bits.ADTR2EN2 = 0;
+#endif
     PG1EVT2bits.ADTR2EN1 = 0;
     PG1EVT1bits.ADTR1OFS = 0;
 #else
@@ -406,8 +413,20 @@ void InitPWMGenerator1(void)
     PG1CLPCI1bits.TERM = 1;        /* Auto-terminate when PCI source goes inactive */
     PG1CLPCI1bits.ACP = 0b011;    /* Latched acceptance (recommended with LEB) */
     PG1CLPCI1bits.PSYNC = 0;
-    PG1CLPCI1bits.AQSS = 0b010;   /* LEB active as acceptance qualifier */
-    PG1CLPCI1bits.AQPS = 1;       /* Inverted: accept only when LEB inactive */
+    /* 2026-06-13: match AN957 — NO acceptance qualifier (always accept the CMP3
+     * trip). The old LEB-gated qualifier (AQSS=2/AQPS=1) likely never satisfied,
+     * so the trip was never accepted and the chop never fired even at 94% duty /
+     * 21A real bus current. CMP3's own LEB/hysteresis/filter handle the edge. */
+    PG1CLPCI1bits.AQSS = 0b000;   /* no acceptance qualifier (forced accept) */
+    PG1CLPCI1bits.AQPS = 0;
+    /* CLMOD=0 is the CHOP mode: on an accepted CL-PCI trip the CLDAT[1:0] bits
+     * define the output levels -> CLDAT=0 forces PWMH/PWML LOW for the rest of
+     * the cycle (TERM auto-recovers next cycle) = cycle-by-cycle truncation.
+     * (Datasheet bit15: CLMOD=1 INVERTS the outputs instead — wrong/hazardous;
+     * the prior CLMOD=1 "fix" was backwards. AN957 on this board uses CLMOD=0.)
+     * The real dead-chop cause was CMP3 INPSEL (hal_comparator.c), not CLMOD. */
+    PG1IOCON2bits.CLDAT = 0b00;   /* on CL trip: force PWMH/PWML LOW (truncate pulse) */
+    PG1IOCON2bits.CLMOD = 0;      /* chop-to-CLDAT mode (not output inversion) */
 #else
     PG1CLPCI    = 0x0000;
     PG1CLPCIbits.PSS = 0b11101;    /* Comparator 3 output */
@@ -463,7 +482,26 @@ void InitPWMGenerator1(void)
      * see ADC_SAMPLING_POINT for the 4-point fire-time/quality table. */
     PG1TRIGAbits.CAHALF = 0;
     PG1TRIGAbits.TRIGA = ADC_SAMPLING_POINT;
+    /* Bus-current sample point (FEATURE_IBUS_ONCENTER). NOT count-0: that's the
+     * PWM period boundary (reload/EOC) — the noisiest instant (BEMF was worse
+     * there too, 174k vs 215k). Sampling AD3 there corrupted vbusRaw -> bad ZC
+     * threshold (rawThresh = vbusRaw*duty) -> commutation desync + false UV at
+     * high speed. Offset MPER/8 into the up-count ON pulse instead: still inside
+     * conduction for duty >~25% (the high-speed regime), clear of the boundary. */
+#if FEATURE_BUS_BOTH_ONCENTER
+    /* Exp 1a': TRUE pulse-center = the documented "DC-link carries full motor
+     * current" instant (CAHALF=1, TRIGB=0, period center, t≈11.1us). In
+     * center-aligned PWM the ON pulse stays centered here at ANY duty, so the
+     * bus shunt is always sampled mid-conduction — fixes the ~0 reads at
+     * low/mid duty that MPER/8 gave (it fell outside the pulse below ~25%). */
+    PG1TRIGBbits.CAHALF = 1;
+    PG1TRIGBbits.TRIGB  = 0;
+#elif FEATURE_IBUS_ONCENTER || AK512_ADTR2_ISOLATION_TEST
+    PG1TRIGBbits.CAHALF = 0;
+    PG1TRIGBbits.TRIGB  = (uint32_t)(LOOPTIME_TCY / 8);  /* MPER/8 into the up-count ON pulse (split-era) */
+#else
     PG1TRIGB    = 0x0000;
+#endif
     PG1TRIGC    = 0x0000;
 }
 
@@ -636,8 +674,8 @@ void InitPWMGenerator2(void)
     PG2CLPCI1bits.TERM = 1;
     PG2CLPCI1bits.ACP = 0b011;    /* Latched acceptance (recommended with LEB) */
     PG2CLPCI1bits.PSYNC = 0;
-    PG2CLPCI1bits.AQSS = 0b010;   /* LEB active as acceptance qualifier */
-    PG2CLPCI1bits.AQPS = 1;       /* Inverted: accept only when LEB inactive */
+    PG2CLPCI1bits.AQSS = 0b000;   /* no acceptance qualifier (forced accept) — AN957 */
+    PG2CLPCI1bits.AQPS = 0;
 #else
     PG2CLPCI    = 0x0000;
     PG2CLPCIbits.PSS = 0b11101;    /* Comparator 3 output */
@@ -858,8 +896,8 @@ void InitPWMGenerator3(void)
     PG3CLPCI1bits.TERM = 1;
     PG3CLPCI1bits.ACP = 0b011;    /* Latched acceptance (recommended with LEB) */
     PG3CLPCI1bits.PSYNC = 0;
-    PG3CLPCI1bits.AQSS = 0b010;   /* LEB active as acceptance qualifier */
-    PG3CLPCI1bits.AQPS = 1;       /* Inverted: accept only when LEB inactive */
+    PG3CLPCI1bits.AQSS = 0b000;   /* no acceptance qualifier (forced accept) — AN957 */
+    PG3CLPCI1bits.AQPS = 0;
 #else
     PG3CLPCI    = 0x0000;
     PG3CLPCIbits.PSS = 0b11101;    /* Comparator 3 output */
@@ -1046,6 +1084,18 @@ void HAL_PWM_SetDutyCycle(uint32_t duty)
     PWM_PDC2 = duty;
     PWM_PDC1 = duty;
 }
+
+#if FEATURE_IBUS_PROBE
+void HAL_PWM_IbusProbeOnCenter(void)
+{
+    /* Mid-ON sample = CAHALF=1, TRIGA=0 (period center, t≈11.1us) per the
+     * 4-point fire-time table in ADC_SAMPLING_POINT. There the DC-link shunt
+     * carries the full motor current; the default freewheel point (CAHALF=0,
+     * TRIGA=MPER/2) reads ~0 at low duty. AD3CH1 (IBUS) rides PG1TRIGA. */
+    PG1TRIGAbits.CAHALF = 1;
+    PG1TRIGAbits.TRIGA  = 0;
+}
+#endif
 
 #if (FEATURE_SINE_STARTUP || FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3 || FEATURE_FOC_AN1078 || FEATURE_IF_STARTUP)
 /**
