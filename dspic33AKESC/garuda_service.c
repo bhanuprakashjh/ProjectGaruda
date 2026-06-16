@@ -3105,6 +3105,14 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
 #elif FEATURE_BEMF_CLOSED_LOOP
         case ESC_CLOSED_LOOP:
         {
+#if FEATURE_HANDOFF_CHOP
+            /* Handoff-chop arm latch: set at CL entry (below) BEFORE the
+             * coast-listen block can `break` and skip the rest of the case,
+             * then consumed by the handoff-chop block once driving resumes.
+             * Fixes the chop never arming on the coast-listen entry path
+             * (2810) — the old `prevAdcState != CL` arm was eaten by the break. */
+            static bool hcArmPending = false;
+#endif
             /* Throttle-zero shutdown: if pot returns to zero after being raised,
              * gracefully stop. Don't wait for desync — at low duty the HW ZC
              * comparator can trigger on noise indefinitely, keeping the motor
@@ -3121,6 +3129,9 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                 {
                     hasSeenThrottle = false;
                     zeroThrottleCount = 0;
+#if FEATURE_HANDOFF_CHOP
+                    hcArmPending = true;   /* arm entry chop before any coast-listen break */
+#endif
                 }
 
                 if (garudaData.throttle >= ARM_THROTTLE_ZERO_ADC)
@@ -4256,7 +4267,8 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                 {
                     static uint16_t hcCtr = 0;
                     static bool hcActive = false;
-                    if (prevAdcState != ESC_CLOSED_LOOP) {
+                    if (hcArmPending) {        /* armed at CL entry; survives the coast-listen break */
+                        hcArmPending = false;
                         hcActive = true;
                         hcCtr = 0;
                     }

@@ -66,7 +66,10 @@ extern "C" {
                                      * it decays by >>SHIFT/tick (6 ≈ 1.5%/tick, holds the
                                      * peak ~2-3ms across the inter-commutation gap so the
                                      * back-off doesn't chatter). Smaller = holds longer. */
-#define FEATURE_HANDOFF_CHOP     0  /* Sub-MIN_DUTY OL->CL current bound via the CMP3 HARDWARE
+#define FEATURE_HANDOFF_CHOP     1  /* 2026-06-16 ENABLED for 2810: current-limits the CL-entry
+                                     * speed-gap pulse (rotor 2-3k vs ~10.4k idle equilib at MIN_DUTY)
+                                     * that duty/soft-start can't touch (idle already at the floor).
+                                     * Sub-MIN_DUTY OL->CL current bound via the CMP3 HARDWARE
                                      * cycle-by-cycle chop (CLPCI), not duty. The startup CMP3
                                      * threshold is set HIGH (OC_CMP3_STARTUP_DAC ~22A) to not
                                      * chop startup torque — which is exactly why the hand-off
@@ -79,7 +82,11 @@ extern "C" {
                                      * IF_BRIDGE caused. CMP3 is analog/continuous so it sees the
                                      * true ON-time motoring peak the valley-sampled ADC misses.
                                      * Armed only at CL entry (align/OL/morph keep STARTUP_DAC). */
-#define OC_CMP3_HANDOFF_MA     300  /* 2026-06-16 USE THE CHOP to tame the A2212 CL-entry inrush.
+#define OC_CMP3_HANDOFF_MA     500  /* 2026-06-16 500 for 2810 entry-chop (bench cal ~400cfg=~4A;
+                                     * proven 400-600 clamps 16A->4-6A and still spins 260k). NOTE
+                                     * global: applies to whatever MOTOR_PROFILE is built. Tune:
+                                     * stalls/can't clear gap -> raise; pulse still high -> lower.
+                                     * (prior A2212 note, kept:) USE THE CHOP to tame CL-entry inrush.
                                      * MEASURED CAL: 6000 didn't bite (~10A); 500 clamped ~8.5A;
                                      * 300 = push lower (~6-7A?) for an even smaller spike + longer
                                      * ramp. A LOWER chop = smaller peak AND gentler torque ->
@@ -403,7 +410,7 @@ extern "C" {
                                       * current (Ia 0.5, Ibus 0) and could not spin -> CMP3->CLPCI chop
                                       * chain CONFIRMED LIVE. Now 0 = chop at the real DAC threshold. */
 
-#define MOTOR_PROFILE  1   /* 1 = A2212 1400KV @12V (own tune, 2026-06-16). 2 = 2810. 4 = Cobra,
+#define MOTOR_PROFILE  2   /* 1 = A2212 1400KV @12V (own tune, 2026-06-16). 2 = 2810. 4 = Cobra,
                               * 5 = XRotor, 6 = VEX 4000KV micro. */
 
 #if MOTOR_PROFILE == 0
@@ -559,8 +566,10 @@ extern "C" {
 #define OC_SW_LIMIT_MA           18000     /* production SW soft limit (below CMP3 operational) */
 #define RAMP_CURRENT_GATE_MA     10000     /* production: hold ramp accel when ibus > 10A */
 #define FEATURE_PRESYNC_RAMP       0       /* Standard forced OL_RAMP */
-#define OC_CLPCI_ENABLE            0       /* PARKED 2026-06-16: CMP3->CLPCI cycle-chop PROVEN (current-limited
-                                            * startup works). Off for baseline; set 1 to resume chop tuning. */
+#define OC_CLPCI_ENABLE            1       /* 2026-06-16 ENABLED: arms CMP3->CLPCI so the handoff
+                                            * entry-chop (FEATURE_HANDOFF_CHOP) can current-limit the
+                                            * 2810 CL-entry speed-gap pulse. Restores to operational
+                                            * (OC_LIMIT_MA) after HANDOFF_CHOP_MS; top-end untouched. */
 
 #elif MOTOR_PROFILE == 3
 /* === 5055 ~580KV (colleague's motor — ADJUST KV AS NEEDED) ===
