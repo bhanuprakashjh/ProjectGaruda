@@ -82,7 +82,17 @@ extern "C" {
                                      * IF_BRIDGE caused. CMP3 is analog/continuous so it sees the
                                      * true ON-time motoring peak the valley-sampled ADC misses.
                                      * Armed only at CL entry (align/OL/morph keep STARTUP_DAC). */
-#define OC_CMP3_HANDOFF_MA     500  /* 2026-06-16 500 for 2810 entry-chop (bench cal ~400cfg=~4A;
+#define OC_CMP3_HANDOFF_MA     500  /* 2026-06-16 Handoff WINDOW is NOT the live mechanism on 2810:
+                                     * sweeping this 500/300/150 changed nothing because the
+                                     * OPERATIONAL chop (gspDerived.ocCmp3DacVal = profile ocLimitMa)
+                                     * is what's active at CL entry. The real lever is the profile's
+                                     * ocLimitMa (lowered to 600 = morning's proven 4-7A). Left 500
+                                     * here as a neutral default. (orig note:) 500 for 2810 entry-chop
+                                     * (Ia held 15A through the 5%-duty handoff). The CMP3 sense is
+                                     * the FILTERED bus current; at MIN_DUTY (~5%) its average is
+                                     * ~5x below the phase peak, so a 500cfg threshold sits above it.
+                                     * Lowered so the filtered signal crosses. FLOOR WATCH below.
+                                     * (was) 500 for 2810 entry-chop (bench cal ~400cfg=~4A;
                                      * proven 400-600 clamps 16A->4-6A and still spins 260k). NOTE
                                      * global: applies to whatever MOTOR_PROFILE is built. Tune:
                                      * stalls/can't clear gap -> raise; pulse still high -> lower.
@@ -173,6 +183,14 @@ extern "C" {
 #define PLL_START_CAPTURE_FLOOR_ERPM 2500  /* ignore captures below (BEMF noise floor) */
 #define PLL_START_SYNC_CAPS            6   /* consecutive plausible captures = synced */
 
+/* 2026-06-17 PER-PROFILE: high-KV micro motors (VEX prof 6, 1407 prof 7/8 @10V)
+ * can't use the AM32 kick — BEMF is below the detection floor at the kick instant
+ * so it phantom-locks instantly. They force the SINE OL ramp (drags the rotor to
+ * rampTargetErpm where BEMF is real before any ZC). Everything else (2810 etc.)
+ * keeps the AM32 kick+listen default. */
+#if MOTOR_PROFILE == 6 || MOTOR_PROFILE == 7 || MOTOR_PROFILE == 8
+#define FEATURE_AM32_STARTUP    0
+#else
 #define FEATURE_AM32_STARTUP    1  /* 2026-06-12 bench experiment: AM32-style "kick + listen".
                                     * NO align, NO ramp, NO blind schedule: on arm-complete,
                                     * one blind commutation at MIN_DUTY from the unknown rotor
@@ -181,9 +199,8 @@ extern "C" {
                                     * the normal sector PI + defensive machinery do EVERYTHING
                                     * (AM32 main.c:977 startMotor() semantics; their polling/
                                     * voting low-speed mode maps onto our defensive PI).
-                                    * Known risk: phantom captures below the BEMF floor can
-                                    * fiction-lock (the VEX failure mode) -- that is what the
-                                    * experiment measures. Mutually exclusive w/ PLL_STARTUP. */
+                                    * Mutually exclusive w/ PLL_STARTUP. */
+#endif
 #define AM32_START_SEED_ERPM       0   /* initial period guess. 0 = derive from the
                                             * active profile: (2/3)*rampTargetErpm —
                                             * gives the bench-proven 2000 on profile 2
@@ -410,7 +427,10 @@ extern "C" {
                                       * current (Ia 0.5, Ibus 0) and could not spin -> CMP3->CLPCI chop
                                       * chain CONFIRMED LIVE. Now 0 = chop at the real DAC threshold. */
 
-#define MOTOR_PROFILE  2   /* 0=Hurst 1=A2212@12V 2=2810@24V 3=5055 4=Cobra 5=XRotor
+#define MOTOR_PROFILE  6   /* 2026-06-17 VEX: profile 6 now carries the baked λ=230 + 6PP +
+                              * proven low-hand-off startup (ported from profile 2). No live
+                              * 0x72 override needed. Switch back to 2 for the 2810.
+                              * 0=Hurst 1=A2212@12V 2=2810@24V 3=5055 4=Cobra 5=XRotor
                               * 6=VEX 4000KV  7=1407 4000KV @2S  8=1407 4000KV @3S */
 
 #if MOTOR_PROFILE == 0
@@ -678,23 +698,26 @@ extern "C" {
  * profileDefaults[GSP_PROFILE_VEX] in gsp_params.c — keep the two in sync. */
 #define MOTOR_POLE_PAIRS             6
 #define DEADTIME_NS                300
-#define ALIGN_DUTY_PERCENT          25
-#define RAMP_DUTY_PERCENT           25
+#define ALIGN_DUTY_PERCENT          14     /* 2026-06-16 25->14: 25% drew ~5.5A -> OC_SW trip at align */
+#define RAMP_DUTY_PERCENT           14     /* 2026-06-16 25->14: keep startup current under 7.25A OC */
 #define INITIAL_ERPM               300
-#define RAMP_TARGET_ERPM         12000
+#define RAMP_TARGET_ERPM         28000     /* 2026-06-16 force OL to where BEMF is real, sustainable @14% */
 #define MAX_CLOSED_LOOP_ERPM    252000     /* 4000 * 10V * 6pp ≈ 240k */
 #define RAMP_ACCEL_ERPM_PER_S     8000
-#define SINE_ALIGN_MODULATION_PCT   50     /* ~6A against 0.44Ω at 10V */
-#define SINE_RAMP_MODULATION_PCT    50
+#define SINE_ALIGN_MODULATION_PCT   28     /* 2026-06-16 50->28: 50% drew ~5.6A -> OC_SW trip */
+#define SINE_RAMP_MODULATION_PCT    28     /* 2026-06-16 50->28: keep startup current under 7.25A OC */
 #define ZC_DEMAG_DUTY_THRESH        45
 #define ZC_DEMAG_BLANK_EXTRA_PERCENT 18
-#define HWZC_CROSSOVER_ERPM       6000
+#define HWZC_CROSSOVER_ERPM      24000     /* 2026-06-16 6k->24k: HWZC engages only where BEMF is solid */
 #define CL_IDLE_DUTY_PERCENT        14
 #define SINE_PHASE_OFFSET_DEG       60
 #define OC_LIMIT_MA               9000
 #define OC_STARTUP_MA            10000
-#define OC_FAULT_MA               9500
-#define OC_SW_LIMIT_MA            7250
+#define OC_FAULT_MA              14000     /* 2026-06-16 9500->14000: align inrush (9µH spikes in 1 PWM
+                                            * cycle) false-tripped OC_SW before the rotor moved. HW CMP3
+                                            * chop (9-10A) bounds real current; SW fault sits above it. */
+#define OC_SW_LIMIT_MA           13000     /* 2026-06-16 7250->13000: above the HW chop so the inrush
+                                            * peak no longer false-trips OC_SW at align (=stall, brief) */
 #define RAMP_CURRENT_GATE_MA      7000
 #define FEATURE_PRESYNC_RAMP       0
 #define OC_CLPCI_ENABLE            0
@@ -842,6 +865,17 @@ extern "C" {
                                              * to push the profile-2 (2810) default of 25° into
                                              * EEPROM if it isn't already there. */
 #endif
+
+/* 2026-06-17 RETRACTED: HWZC_ADV_FULL_ERPM=25000 was added on the wrong theory
+ * that the VEX's half-speed/high-current came from advance STARVATION. The real
+ * cause was the ABS_FLOOR(λ) clamp using the 2810's flux (583 vs 230) — fixed by
+ * focKeUvSRad=230 in the VEX profile. With λ correct, this override made things
+ * WORSE: compressing the whole 0->20° ramp into 3k-25k put ~18° advance at ~22k,
+ * over-advancing -> desync/phantom above 20k (snaps to the 32k ABS_FLOOR ceiling).
+ * Removed so advance ramps gradually to maxClosedLoopErpm like every other motor
+ * (~1.6° at 22k). If a motor genuinely needs more mid-band advance, raise
+ * timingAdvMaxDeg (param 0x22), don't steepen the ramp endpoint. */
+/* (no HWZC_ADV_FULL_ERPM define — RT_TIMING_ADV_FULL_ERPM falls back to maxCL) */
 
 /* Dynamic Blanking (Phase C1) — motor-specific params in motor profile above */
 
@@ -1050,7 +1084,13 @@ extern "C" {
                                         * budget. Reads HS GPIO of currently
                                         * PWMing phase (PWM1H=RD2 / PWM2H=RD0 /
                                         * PWM3H=RC3) and rejects if LOW. */
-#define FEATURE_HWZC_VERIFY_READS  1
+/* 2026-06-17 PER-PROFILE: high-KV micros (6/7/8) run the coherence check OFF —
+ * it rejects marginal-but-real crossings on their weak 10V BEMF. 2810 etc. keep it ON. */
+#if MOTOR_PROFILE == 6 || MOTOR_PROFILE == 7 || MOTOR_PROFILE == 8
+#define FEATURE_HWZC_VERIFY_READS  0
+#else
+#define FEATURE_HWZC_VERIFY_READS  1   /* default ON */
+#endif
 #define HWZC_VERIFY_READS          1   /* 3 → 1 (2026-05-26 post-203k): the verify
                                         * loop now restructured to wait-then-read
                                         * so a single re-read after ~1 µs catches
@@ -1084,23 +1124,32 @@ extern "C" {
 #define HWZC_HYSTERESIS_ERPM   500   /* Hysteresis band for crossover (prevents oscillation) */
 #define HWZC_SYNC_THRESHOLD      6   /* Consecutive HW ZCs to declare sync */
 #define HWZC_MISS_LIMIT          3   /* Missed HW ZCs before fallback to software ZC (low for debug) */
-#define HWZC_CMP_DEADBAND        4   /* ADC counts deadband for comparator sanity check */
+/* 2026-06-17 PER-PROFILE: high-KV micros (6/7/8) use a smaller deadband so their
+ * ~6-count 10V BEMF can cross; 2810 etc. keep the default 4. */
+#if MOTOR_PROFILE == 6 || MOTOR_PROFILE == 7 || MOTOR_PROFILE == 8
+#define HWZC_CMP_DEADBAND        2
+#else
+#define HWZC_CMP_DEADBAND        4   /* ADC counts deadband for comparator sanity check (default) */
+#endif
+#define HWZC_THRESH_BIAS_DOWN    0   /* 2026-06-16 back to 0: using the proportional ZC_DUTY_DIVISOR
+                                      * knob instead (fixed bias couldn't scale across duty). Was: ADC counts subtracted from
+                                      * zcThreshold to pull the ZC detection DOWN toward the true
+                                      * neutral. VN parks the threshold ABOVE where this motor's BEMF
+                                      * crosses, and the filter-comp can't subtract on falling sectors.
+                                      * Tune: ZC still high -> raise; overshot below -> lower. 0 = off
+                                      * (REVERT to 0 for the 2810). */
 #define HWZC_IIR_FREEZE_ZC_COUNT  3  /* Freeze stepPeriodHR IIR until goodZcCount reaches this.
                                       * Protects against phantom-driven IIR collapse during the
                                       * fragile first ~1ms after morph→CL handoff, where a single
                                       * mistimed ZC used to pull stepPeriodHR to floor and stall
                                       * the motor. Seeded stepPeriodHR drives commDelay until the
                                       * motor locks in and the adaptive IIR takes over. */
-#define HWZC_MIN_INTERVAL_PCT   50   /* Reject ZC if interval < this % of stepPeriodHR.
-                                      * Loosened 75 → 50 (2026-05-26) to address the 50%
-                                      * miss rate at >135k eRPM. Mechanism: at high RPM
-                                      * (sector ~ 3 PWM cycles), PWM ripple through the
-                                      * 5.5kHz BEMF filter can shift the comparator firing
-                                      * time by up to one PWM period (= ~30% of T at 135k).
-                                      * The previous 75% gate then rejected these REAL but
-                                      * PWM-shifted captures, causing sectors to miss
-                                      * entirely. Plausibility gate (capValue > T) and PI
-                                      * delta clamp absorb the residual noise. */
+#define HWZC_MIN_INTERVAL_PCT   50   /* 2026-06-17 (VEX) 30->50: restored. The 30 was only needed
+                                      * while the ABS_FLOOR(λ=563) clamp pinned the motor at half
+                                      * speed (weak BEMF). With λ=230 the motor reaches true speed,
+                                      * BEMF is healthy, and 30 was letting an early false ZC collapse
+                                      * the period into a too-fast phantom (~32k @ 10% duty desync).
+                                      * 50 rejects sub-half-interval crossings. (orig 75->50.) */
 #define HWZC_SAMC               3    /* Sample time for high-speed channels (~205ns conversion) */
 #define HWZC_ADC_SAMPLE_HZ   1000000  /* High-speed ADC trigger rate (SCCP3). Max ~4.9 MHz. */
 #define HWZC_STALL_DUTY_PCT     30   /* % of MAX_DUTY below which floor-speed is implausible.
@@ -1263,6 +1312,16 @@ extern "C" {
                                                 * rising-only carry above (the 2810 ran rising-only to 234k).
                                                 * Tune: raise if rising-only stalls early, lower if 40k wall
                                                 * persists. */
+#elif MOTOR_PROFILE == 6
+#define HWZC_FALLING_SW_MAX_ERPM       45000   /* VEX 4000KV @10V (2026-06-17 bench): the rising/falling
+                                                * asymmetry (eRPM oscillation that ends in a phantom) BUILDS
+                                                * from ~46k as the falling-SW OFF-center captures walk late
+                                                * (half-amplitude BEMF @10V + high KV — the A2212/1407 lesson,
+                                                * more extreme). 70k default desynced ~70k; 58k cap still
+                                                * desynced ~57-74k. Coast falling at 45k — BEFORE the
+                                                * oscillation builds — and let rising-only mid-ON carry above
+                                                * (ran clean to 74k once falling was out; 2810 did rising-only
+                                                * to 234k). Raise if rising-only stalls early. */
 #elif MOTOR_PROFILE == 7 || MOTOR_PROFILE == 8
 #define HWZC_FALLING_SW_MAX_ERPM       50000   /* 1407 4000KV: high-KV low-L like the A2212, so gate
                                                 * falling-SW low and let rising-only carry above (the
@@ -1551,17 +1610,9 @@ extern "C" {
 #define HWZC_PI_CAP_MIN_DEN            2   /* default: 1/2 of setValue */
 #define HWZC_PI_CAP_MAX_NUM            3   /* upper bound = setValue × NUM/DEN */
 #define HWZC_PI_CAP_MAX_DEN            2   /* default: 3/2 of setValue */
-#define HWZC_FILTER_AMP_PCT         50    /* BEMF amplitude as % of zcThreshold.
-                                           * Tested 50 vs 35: AMP=35 helped at 74-78% duty
-                                           * (ibusPkNeg -0.61A vs -0.88A) but made 78-82% WORSE
-                                           * (-4.87A vs -3.53A) and PI period SHORTER (5217 vs
-                                           * 5266 HR ticks), still desyncing. This proved
-                                           * filter comp was NOT the dominant driver of the
-                                           * 79% wall. The real cause is symmetric PI delta
-                                           * clamp letting integrator drift toward shorter
-                                           * period at BEMF ceiling. Restored to 50 since
-                                           * larger drift correction is handled by the new
-                                           * asymmetric clamp (see HWZC_PI_NEG_DELTA_CLAMP_*). */
+#define HWZC_FILTER_AMP_PCT         50    /* reverted to 2810 value 2026-06-16 (VEX ZC-comp
+                                           * experiments removed). BEMF amplitude as % of
+                                           * zcThreshold for the RC filter-lag compensation. */
 #define HWZC_FILTER_MAX_OMEGA_Q15   24000 /* Cap ω·τ at ~0.73 rad (≈42° equiv).
                                            * Bumped 20000→24000 after 203k run where cap was
                                            * engaged at 200k+ (ω·τ_Q15=20588 → clamped). Lets
@@ -1594,7 +1645,7 @@ extern "C" {
  * never crosses), not firing-and-rejected → pure visibility problem. Restored
  * to 50 (symmetric, identical to the proven 232k build). The knob stays for the
  * eventual per-polarity SAMPLE-POINT fix; filter-comp is NOT that fix. */
-#define HWZC_FILTER_AMP_PCT_FALLING 50
+#define HWZC_FILTER_AMP_PCT_FALLING 50   /* reverted to 2810 value 2026-06-16 */
 #endif
 
 /* Speed PI — per-ZC interval-based speed PID (Phase 2 of CLAUDE.md roadmap).

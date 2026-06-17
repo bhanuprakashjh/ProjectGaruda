@@ -309,11 +309,11 @@ static inline uint32_t ComputeCommDelay(uint32_t stepPeriodHR,
     uint16_t advDeg;
     if (eRPM <= RT_RAMP_TARGET_ERPM)
         advDeg = TIMING_ADVANCE_MIN_DEG;
-    else if (eRPM >= RT_MAX_CLOSED_LOOP_ERPM)
+    else if (eRPM >= RT_TIMING_ADV_FULL_ERPM)
         advDeg = RT_TIMING_ADV_MAX_DEG;
     else
     {
-        uint32_t range = RT_MAX_CLOSED_LOOP_ERPM - RT_RAMP_TARGET_ERPM;
+        uint32_t range = RT_TIMING_ADV_FULL_ERPM - RT_RAMP_TARGET_ERPM;
         uint32_t pos = eRPM - RT_RAMP_TARGET_ERPM;
         advDeg = TIMING_ADVANCE_MIN_DEG +
             (uint16_t)((uint32_t)(RT_TIMING_ADV_MAX_DEG - TIMING_ADVANCE_MIN_DEG)
@@ -785,10 +785,10 @@ void HWZC_OnPiPeriodExpired(volatile GARUDA_DATA_T *pData)
     uint32_t eRPM = (T > 0) ? HWZC_TICKS_TO_ERPM(T) : 0;
     if (eRPM <= RT_RAMP_TARGET_ERPM)
         advDeg = TIMING_ADVANCE_MIN_DEG;
-    else if (eRPM >= RT_MAX_CLOSED_LOOP_ERPM)
+    else if (eRPM >= RT_TIMING_ADV_FULL_ERPM)
         advDeg = RT_TIMING_ADV_MAX_DEG;
     else {
-        uint32_t range = RT_MAX_CLOSED_LOOP_ERPM - RT_RAMP_TARGET_ERPM;
+        uint32_t range = RT_TIMING_ADV_FULL_ERPM - RT_RAMP_TARGET_ERPM;
         uint32_t pos = eRPM - RT_RAMP_TARGET_ERPM;
         advDeg = TIMING_ADVANCE_MIN_DEG +
             (uint16_t)((uint32_t)(RT_TIMING_ADV_MAX_DEG - TIMING_ADVANCE_MIN_DEG)
@@ -1198,10 +1198,10 @@ void HWZC_OnSoftwareSample(volatile GARUDA_DATA_T *pData)
             uint16_t advDeg;
             if (eRPM <= RT_RAMP_TARGET_ERPM)
                 advDeg = TIMING_ADVANCE_MIN_DEG;
-            else if (eRPM >= RT_MAX_CLOSED_LOOP_ERPM)
+            else if (eRPM >= RT_TIMING_ADV_FULL_ERPM)
                 advDeg = RT_TIMING_ADV_MAX_DEG;
             else {
-                uint32_t range = RT_MAX_CLOSED_LOOP_ERPM - RT_RAMP_TARGET_ERPM;
+                uint32_t range = RT_TIMING_ADV_FULL_ERPM - RT_RAMP_TARGET_ERPM;
                 uint32_t pos   = eRPM - RT_RAMP_TARGET_ERPM;
                 advDeg = TIMING_ADVANCE_MIN_DEG +
                     (uint16_t)((uint32_t)(RT_TIMING_ADV_MAX_DEG - TIMING_ADVANCE_MIN_DEG)
@@ -1262,10 +1262,10 @@ void HWZC_OnSoftwareSample(volatile GARUDA_DATA_T *pData)
         uint16_t advDeg;
         if (eRPM <= RT_RAMP_TARGET_ERPM)
             advDeg = TIMING_ADVANCE_MIN_DEG;
-        else if (eRPM >= RT_MAX_CLOSED_LOOP_ERPM)
+        else if (eRPM >= RT_TIMING_ADV_FULL_ERPM)
             advDeg = RT_TIMING_ADV_MAX_DEG;
         else {
-            uint32_t range = RT_MAX_CLOSED_LOOP_ERPM - RT_RAMP_TARGET_ERPM;
+            uint32_t range = RT_TIMING_ADV_FULL_ERPM - RT_RAMP_TARGET_ERPM;
             uint32_t pos   = eRPM - RT_RAMP_TARGET_ERPM;
             advDeg = TIMING_ADVANCE_MIN_DEG +
                 (uint16_t)((uint32_t)(RT_TIMING_ADV_MAX_DEG - TIMING_ADVANCE_MIN_DEG)

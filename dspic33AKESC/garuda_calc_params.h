@@ -181,7 +181,15 @@ _Static_assert(ZC_STEP_MISS_LIMIT >= 1,        "ZC_STEP_MISS_LIMIT must be >= 1"
  * which had +1.7% bias (2^18=262144 vs 2*LOOPTIME_TCY=266636).
  * neutral = Vbus * duty / (2 * LOOPTIME_TCY).
  * Compile-time constant — compiler strength-reduces to reciprocal multiply. */
+/* 2026-06-17 PER-PROFILE: high-KV micros (VEX prof 6, 1407 prof 7/8 @10V) lower the
+ * Vdc*D/2 threshold ~23% (2.6 vs 2.0) to pull detection onto neutral on their tiny BEMF.
+ * 2810 and everything else use the exact Vdc*D/2 neutral (2.0). MOTOR_PROFILE comes from
+ * garuda_config.h, which is included before this header. */
+#if MOTOR_PROFILE == 6 || MOTOR_PROFILE == 7 || MOTOR_PROFILE == 8
+#define ZC_DUTY_DIVISOR  ((26UL * LOOPTIME_TCY) / 10UL)
+#else
 #define ZC_DUTY_DIVISOR  (2UL * LOOPTIME_TCY)
+#endif
 _Static_assert(ZC_DUTY_DIVISOR > 0 && ZC_DUTY_DIVISOR < 0x100000UL,
                "ZC_DUTY_DIVISOR out of expected range");
 _Static_assert(ZC_AD2_SETTLE_SAMPLES >= 1 && ZC_AD2_SETTLE_SAMPLES <= 4,
@@ -689,6 +697,18 @@ _Static_assert(RAMP_CURRENT_GATE_ADC < OC_CMP3_DAC_VAL,
   #define RT_HWZC_MIN_STEP_TICKS          HWZC_MIN_STEP_TICKS
   #define RT_HWZC_NOISE_FLOOR_TICKS       HWZC_NOISE_FLOOR_TICKS
   #define RT_VBUS_UV_STARTUP_ADC          VBUS_UV_STARTUP_ADC
+#endif
+
+/* Timing-advance ramp ENDPOINT — the eRPM at which the advance schedule reaches
+ * timingAdvMaxDeg. Historically this was MAX_CLOSED_LOOP_ERPM, which starves
+ * advance for any motor that OPERATES well below its top-speed cap (e.g. a
+ * 4000KV micro motor running at 40k on a 260k cap gets only ~3°). Decoupled so
+ * advance reaches full value at the actual operating speed. Define
+ * HWZC_ADV_FULL_ERPM to override; else falls back to the speed cap (no change). */
+#ifdef HWZC_ADV_FULL_ERPM
+#define RT_TIMING_ADV_FULL_ERPM  HWZC_ADV_FULL_ERPM
+#else
+#define RT_TIMING_ADV_FULL_ERPM  RT_MAX_CLOSED_LOOP_ERPM
 #endif
 
 #ifdef __cplusplus

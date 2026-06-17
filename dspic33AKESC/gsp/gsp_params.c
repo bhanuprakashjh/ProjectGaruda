@@ -208,9 +208,9 @@ static const GSP_PARAMS_T profileDefaults[9] = {
                                         * amplitude is not the limit, the iron is. Was 5. */
         .zcDemagDutyThresh  = 40,      /* Same as A2212 — low L → more demag */
         .zcDemagBlankExtraPct = 20,    /* Aggressive demag blanking (low L = long tail) */
-        .ocLimitMa          = 20000,   /* CMP3 chop. Slightly below sensor saturation
-                                        * (~22A). 2810 peaks at 30A+ commutation but
-                                        * hardware chop keeps average under control */
+        .ocLimitMa          = 20000,   /* 2026-06-17 reverted 600->20000 to the committed 2810
+                                        * baseline (CMP3 chop parked just below sensor saturation;
+                                        * the 600 value was the bring-up chop experiment). */
         .ocStartupMa        = 22000,   /* Startup relaxed near sensor saturation */
         .rampCurrentGateMa  = 10000,   /* Gate ramp accel if bus >10A during OL */
         TUNING_DEFAULTS,
@@ -438,25 +438,40 @@ static const GSP_PARAMS_T profileDefaults[9] = {
          * UV ≈4.8V). NOTE: phase dividers are 48V-scaled — BEMF lives in the
          * bottom ~435mV of the ADC at 10V; a divider rescale is the real
          * long-term fix (4.8x signal). */
-        .rampTargetErpm     = 12000,   /* EXPERIMENT-DERIVED — do not lower */
-        .rampAccelErpmPerS  = 8000,    /* 1.5s ramp; 20g rotor takes it */
-        .rampDutyPct        = 25,
-        .clIdleDutyPct      = 14,      /* idle ~1.4V → ~34k eRPM (5.6k mech) */
-        .timingAdvMaxDeg    = 25,
-        .hwzcCrossoverErpm  = 6000,    /* scaled with the hand-off */
-        .ocSwLimitMa        = 7250,    /* = max torque current */
-        .ocFaultMa          = 9500,
+        /* 2026-06-17 BENCH-PROVEN startup: ported from profile 2 (5010/2810).
+         * The earlier "high hand-off" strategy (rampTarget=28k, crossover=24k,
+         * align=14%, mod=28) was built on the theory that 4000KV BEMF is
+         * undetectable below ~12k. That theory is RETRACTED — the real cause of
+         * the half-speed/high-current was the ABS_FLOOR(λ) clamp using the wrong
+         * motor's flux (583 vs 230). With focKeUvSRad=230 below, the low-hand-off
+         * 2810 strategy runs the VEX clean: ALIGN/OL at ~2% duty, MORPH at 3k,
+         * CL idle ~10.8k @ 0.3A, smooth climb. (run gui_auto_20260617_073714.) */
+        .rampTargetErpm     = 3000,    /* low hand-off — BEMF is detectable here once the
+                                        * λ clamp is gone; no need to drag OL to 28k */
+        .rampAccelErpmPerS  = 3000,    /* ~1s ramp 300->3000 */
+        .rampDutyPct        = 8,       /* ramp duty cap (sine mod sets the real current) */
+        .clIdleDutyPct      = 4,       /* clamps to MIN_DUTY -> ~10.8k idle @ λ=230 */
+        .timingAdvMaxDeg    = 20,      /* proven 2810 value; live-tune 0x22 if needed */
+        .hwzcCrossoverErpm  = 1500,    /* engage HWZC right after morph */
+        .ocSwLimitMa        = 9000,    /* SW soft backstop above the CMP3 chop */
+        .ocFaultMa          = 11000,   /* SW hard fault (small motor: stall 14A) */
         .motorPolePairs     = 6,
-        .alignDutyPct       = 25,
-        .initialErpm        = 300,
-        .maxClosedLoopErpm  = 252000,  /* 4000KV x 10V x 6pp ~ 240k +5% */
-        .sineAlignModPct    = 50,      /* ~6A align against 0.44Ω at 10V */
-        .sineRampModPct     = 50,      /* ~5.7A ramp current */
-        .zcDemagDutyThresh  = 45,
-        .zcDemagBlankExtraPct = 18,
-        .ocLimitMa          = 9000,    /* CMP3 chop */
-        .ocStartupMa        = 10000,
-        .rampCurrentGateMa  = 7000,
+        .alignDutyPct       = 3,       /* gentle align */
+        .initialErpm        = 150,     /* gentle first steps */
+        .maxClosedLoopErpm  = 240000,  /* runtime speed clamp = nominal no-load (4000KV x 10V x 6pp).
+                                        * Field-weakening (advance) carries the rotor well past this:
+                                        * bench reaches real closed-loop detection to ~285k, and rides
+                                        * the clamp beyond. Live-tune 0x11 up to the descriptor max
+                                        * (350000) to explore; 240k is a safe default. The advance
+                                        * anchor is the compile-time RT_TIMING_ADV_FULL_ERPM, NOT this. */
+        .sineAlignModPct    = 3,       /* low-mod align — R_LN≈0.22Ω, keep current ~3A */
+        .sineRampModPct     = 5,       /* low-mod forced ramp */
+        .zcDemagDutyThresh  = 40,
+        .zcDemagBlankExtraPct = 20,    /* low-L motor: long demag tail */
+        .ocLimitMa          = 600,     /* CMP3 chop ~6A bus — the real current bound for the
+                                        * 7.25A-max-torque VEX (same shunt/board as 2810) */
+        .ocStartupMa        = 22000,   /* startup relaxed (chop does the bounding) */
+        .rampCurrentGateMa  = 10000,
         TUNING_DEFAULTS,
         /* 10V-supply override (TUNING default 500 ≈ 9.3V leaves 0.7V margin
          * at a 10V bus — any sag faults). 320 ≈ 6.0V; startup UV derives to
@@ -604,7 +619,7 @@ static const PARAM_DESCRIPTOR_T paramDescriptors[] = {
     { PARAM_ID_CL_IDLE_DUTY_PCT,      PARAM_TYPE_U8,  PARAM_GROUP_CLOSED_LOOP,  0,       30, offsetof(GSP_PARAMS_T, clIdleDutyPct),      1 },
     { PARAM_ID_TIMING_ADV_MAX_DEG,    PARAM_TYPE_U8,  PARAM_GROUP_CLOSED_LOOP,  0,       45, offsetof(GSP_PARAMS_T, timingAdvMaxDeg),     1 },
     { PARAM_ID_HWZC_CROSSOVER_ERPM,   PARAM_TYPE_U16, PARAM_GROUP_CLOSED_LOOP, 500,   20000, offsetof(GSP_PARAMS_T, hwzcCrossoverErpm),  2 },
-    { PARAM_ID_MAX_CL_ERPM,           PARAM_TYPE_U32, PARAM_GROUP_CLOSED_LOOP, 5000, 260000, offsetof(GSP_PARAMS_T, maxClosedLoopErpm),  4 },
+    { PARAM_ID_MAX_CL_ERPM,           PARAM_TYPE_U32, PARAM_GROUP_CLOSED_LOOP, 5000, 350000, offsetof(GSP_PARAMS_T, maxClosedLoopErpm),  4 },  /* was 260000; raised so high-KV micros (e.g. VEX profile 6) can live-tune past the old cap and find their true field-weakened ceiling. This is the PI period-floor clamp + advance anchor; sensorless detection still works ~256k on the VEX (rej>0), so the wall was this descriptor, not the BEMF/sampling limit. */
     { PARAM_ID_ZC_DEMAG_DUTY_THRESH,  PARAM_TYPE_U8,  PARAM_GROUP_CLOSED_LOOP,  20,      90, offsetof(GSP_PARAMS_T, zcDemagDutyThresh),  1 },
     { PARAM_ID_ZC_DEMAG_BLANK_EXTRA,  PARAM_TYPE_U8,  PARAM_GROUP_CLOSED_LOOP,   0,      30, offsetof(GSP_PARAMS_T, zcDemagBlankExtraPct), 1 },
     /* Current Protection (group 2) */

@@ -1135,6 +1135,15 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
             garudaData.bemf.zcThreshold = rawThresh;
         }
 
+#if HWZC_THRESH_BIAS_DOWN
+        /* TEMP (VEX/1407 @10V): pull the published detection threshold DOWN by a
+         * fixed bias toward the true neutral. Applied to the OUTPUT only — the IIR
+         * state (zcThreshSmooth) stays unbiased so the bias doesn't compound. */
+        garudaData.bemf.zcThreshold =
+            (garudaData.bemf.zcThreshold > HWZC_THRESH_BIAS_DOWN)
+                ? (uint16_t)(garudaData.bemf.zcThreshold - HWZC_THRESH_BIAS_DOWN) : 0;
+#endif
+
 #if FEATURE_HWZC_FILTER_COMP
 #if GARUDA_TARGET_AK512
         /* AK512: filter-comp amplitude = TRUE measured BEMF swing, NOT
