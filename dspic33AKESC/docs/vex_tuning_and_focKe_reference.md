@@ -212,16 +212,28 @@ Use a **high `timingAdvMaxDeg` (~40)** with the **240 k anchor**. Because the an
 |---|---|---|
 | `focKeUvSRad` | **230** | `5.5132e6/(4000·6)`; lifts the `ABS_FLOOR` clamp to the VEX's true no-load |
 | `motorPolePairs` | 6 | (telemetry/FOC only; not in 6-step timing) |
-| `maxClosedLoopErpm` | 240 000 | advance anchor = 4000KV·10V·6PP; far anchor keeps advance growing with speed |
-| `timingAdvMaxDeg` | **~40** | high advance to cover detection lag at the top (72 k→214 k); harmless at low speed |
+| `maxClosedLoopErpm` | 240 000 | **runtime speed clamp**, set to nominal no-load (4000KV·10V·6PP). NOT the advance anchor — that is the compile-time `RT_TIMING_ADV_FULL_ERPM`. Commutation timing advance carries the rotor well past this; live-tune `0x11` up to explore. |
+| `timingAdvMaxDeg` | **20** | committed default (proven 2810 value). Live-tune `0x22` higher only if the top end needs more lead; 20 already reaches the advance-limited ceiling. |
 | `HWZC_FALLING_SW_MAX_ERPM` | 45 000 | coast falling before the mid-band oscillation builds |
 | startup (rampTarget/crossover/align/mod/clIdle) | 3000 / 1500 / 3 % / 3-5 % / 4 % | ported from the proven profile-2 low-hand-off startup |
 | OC chain (`ocLimitMa`/`ocSwLimitMa`/`ocFaultMa`) | 600 / 9000 / 11000 | scaled to a 7.25 A-max-torque, 14 A-stall motor |
 
-**Outcome:** idle ~10.8 k @ 0.3 A; clean climb to **~214 000 eRPM** at ~1.5–2 A (the 10 V BEMF ceiling, where back-EMF ≈ 8.9 V); top stop is an OC trip at the ceiling, not a desync.
+**Outcome:** idle ~10.8 k @ 0.3 A; clean climb at 2–4 A to **~285 000 eRPM with real closed-loop detection** (`rej` > 0). The motor runs *past* its 240 k nominal no-load — this is 6-step, so there is **no field weakening** (no d-axis current). The mechanism is pure **commutation timing advance**: firing each step ahead of the BEMF zero-cross compensates the inductive phase lag and detection delay, so torque stays aligned and the motor keeps accelerating above the naive no-load number with duty to spare.
+
+### 7a. The "260 k / 300 k" ceiling — it's the firmware cap, not the motor
+
+`maxClosedLoopErpm` is **both** the per-profile default *and* the hard speed clamp (`hwzcMinStepTicks = 1e9/maxClosedLoopErpm`, the floor the PI commutation period can't undershoot). The GUI's SET_PARAM is bounded by the descriptor `PARAM_ID_MAX_CL_ERPM` max in `gsp_params.c` — originally **260000**, raised this session to **350000** so high-KV micros can be live-tuned past it.
+
+- When the rotor hits the clamp, `rej` drops to **0 %** and `Ia` jumps to ~9–10 A: that "260 k/300 k" reading is the *commanded clamp value*, not a measured speed, and the current is the commutation slipping against a rotor it's holding back. **Don't dwell there** — it's pure heat on a 14 mm stator.
+- The honest closed-loop ceiling (where `rej` is still > 0, i.e. real ZC is being accepted) is **~285 k at 10 V**. Above that, detection thins out (45 kHz sampling → < 2 samples/sector) and it rides the clamp.
+- To run genuinely faster you'd need a higher PWM/ADC rate (more samples/sector), not just a higher cap.
+
+### 7b. Known follow-up — OC_SW on hard decel
+
+Snapping the throttle down from 280 k+ trips `OC_SW` (phase current spikes to ~22 A during the regen/braking transient as the commanded speed falls faster than the rotor). This is a **decel-ramp/braking** issue, separate from the steady-state tune — a duty-down slew limiter is the fix. Steady-state and accel are clean.
 
 ---
 
 ## 8. One-paragraph summary for the next person
 
-The VEX wasn't a 6-step limitation — it was the wrong motor flux constant. `focKeUvSRad` (a FOC-grouped parameter, but pure motor physics = the back-EMF constant) is read by the **6-step** `ABS_FLOOR` false-lock guard to compute the no-load period the commutation period may not undershoot. Running the VEX on the 2810's profile fed it λ=583 instead of 230, putting that floor 2.45× too slow and pinning the motor at 130%·(230/583)=51% of its no-load speed with big reactive current — exactly the measured deficit. Fix λ (`= 5.5132e6/(KV·PP)`), then give the motor enough **timing advance** at the top (high `timingAdvMaxDeg` against the far 240 k anchor, so advance grows with speed to cover the detection lag), and cap the **falling-SW** detector low for high-KV motors. With all three, the VEX runs idle→214 k at ~1.5 A.
+The VEX wasn't a 6-step limitation — it was the wrong motor flux constant. `focKeUvSRad` (a FOC-grouped parameter, but pure motor physics = the back-EMF constant) is read by the **6-step** `ABS_FLOOR` false-lock guard to compute the no-load period the commutation period may not undershoot. Running the VEX on the 2810's profile fed it λ=583 instead of 230, putting that floor 2.45× too slow and pinning the motor at 130%·(230/583)=51% of its no-load speed with big reactive current — exactly the measured deficit. Fix λ (`= 5.5132e6/(KV·PP)`), let the **timing advance** grow with speed (the ramp endpoint `RT_TIMING_ADV_FULL_ERPM` is now decoupled from the speed cap; default `timingAdvMaxDeg=20` is enough), and cap the **falling-SW** detector low for high-KV motors. With all three the VEX runs idle→**~285 k at 2–4 A with real detection**, running past its 240 k nominal no-load on **commutation timing advance** (this is 6-step — no field weakening / no d-axis current; the phase lead just compensates the inductive + detection lag so torque stays aligned). The "260 k/300 k" numbers seen earlier are the *firmware speed clamp* (descriptor max, raised 260 k→350 k this session), not the motor — sitting on the clamp shows `rej`=0 and ~10 A and is just heat. Open follow-up: `OC_SW` trips on hard decel from 280 k+ (a braking-transient issue, not the steady-state tune).
