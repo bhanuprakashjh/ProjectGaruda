@@ -1,0 +1,1504 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>Garuda 6-Step Sensorless BLDC ESC — Firmware Application Note</title>
+<style>
+  :root{
+    --ink:#1a1f29; --mut:#5b6472; --line:#c9d2de; --soft:#eef2f7;
+    --accent:#0b5cad; --accent2:#0a7d57; --warn:#9a4b00; --red:#a11212;
+    --code-bg:#f6f8fb; --code-ink:#1d2733;
+  }
+  *{box-sizing:border-box;}
+  html{font-size:10.6px;}
+  body{
+    font-family:"Segoe UI",-apple-system,Helvetica,Arial,sans-serif;
+    color:var(--ink); line-height:1.5; margin:0;
+  }
+  /* ---- print page setup ---- */
+  @page{
+    size:A4; margin:17mm 15mm 16mm 15mm;
+    @bottom-center{ content:counter(page); font-family:"Segoe UI",sans-serif; font-size:9px; color:#6a7484; }
+    @top-right{ content:"Garuda 6-Step ESC — Firmware Application Note"; font-size:8px; color:#9aa3b2; }
+  }
+  @page :first{ @top-right{content:""} @bottom-center{content:""} }
+  h1,h2,h3,h4{ color:var(--ink); line-height:1.22; margin:0 0 .35em; font-weight:650; }
+  h2{ font-size:1.52rem; border-bottom:2.5px solid var(--accent); padding-bottom:5px; margin-top:6px;
+      page-break-before:always; page-break-after:avoid; }
+  h3{ font-size:1.16rem; color:var(--accent); margin-top:1.5em; page-break-after:avoid; }
+  h4{ font-size:1.0rem; color:var(--accent2); margin-top:1.2em; page-break-after:avoid; }
+  p{ margin:.45em 0; }
+  ul,ol{ margin:.4em 0 .6em; padding-left:1.4em; }
+  li{ margin:.16em 0; }
+  code{ font-family:"JetBrains Mono","Consolas",monospace; background:var(--code-bg);
+        border:1px solid #e2e8f1; border-radius:3px; padding:.5px 4px; font-size:.86em; color:var(--code-ink); }
+  pre{ background:var(--code-bg); border:1px solid #dde5ef; border-left:3px solid var(--accent);
+       border-radius:4px; padding:9px 12px; overflow:auto; font-size:.82rem; line-height:1.42;
+       font-family:"JetBrains Mono","Consolas",monospace; color:var(--code-ink);
+       page-break-inside:avoid; margin:.6em 0; }
+  pre .c{ color:#7a8699; } pre .k{ color:#0b5cad; } pre .n{ color:#a11212; }
+  table{ border-collapse:collapse; width:100%; margin:.7em 0; font-size:.8rem; page-break-inside:auto; }
+  th,td{ border:1px solid var(--line); padding:3.5px 6px; text-align:left; vertical-align:top; }
+  th{ background:#e9f0f8; font-weight:650; color:#2a3banged; }
+  th{ color:#243246; }
+  tr:nth-child(even) td{ background:#f7fafd; }
+  .mono{ font-family:"JetBrains Mono","Consolas",monospace; }
+  .small{ font-size:.78rem; color:var(--mut); }
+  .eq{ background:#fbfcfe; border:1px solid #e1e8f1; border-radius:5px; padding:8px 12px;
+       margin:.6em 0; font-family:"JetBrains Mono","Consolas",monospace; font-size:.84rem;
+       page-break-inside:avoid; }
+  .eq .lbl{ float:right; color:#94a0b2; font-family:"Segoe UI",sans-serif; font-size:.82em; }
+  .note{ background:#f0f7ff; border:1px solid #cfe2f7; border-left:4px solid var(--accent);
+         border-radius:4px; padding:7px 12px; margin:.6em 0; font-size:.86rem; page-break-inside:avoid; }
+  .warnbox{ background:#fff7ec; border:1px solid #f0dcbb; border-left:4px solid var(--warn);
+         border-radius:4px; padding:7px 12px; margin:.6em 0; font-size:.86rem; page-break-inside:avoid; }
+  .keybox{ background:#f0faf5; border:1px solid #c5e6d5; border-left:4px solid var(--accent2);
+         border-radius:4px; padding:7px 12px; margin:.6em 0; font-size:.86rem; page-break-inside:avoid; }
+  figure{ margin:1em 0; page-break-inside:avoid; text-align:center; }
+  figure svg{ max-width:100%; height:auto; border:1px solid #e6ecf4; border-radius:6px; background:#fff; }
+  figcaption{ font-size:.78rem; color:var(--mut); margin-top:5px; text-align:center; }
+  .tag{ display:inline-block; font-family:"JetBrains Mono",monospace; font-size:.72rem;
+        background:#eaf1f9; border:1px solid #cfdcec; border-radius:3px; padding:0 5px; color:#244; }
+  /* cover */
+  .cover{ height:262mm; display:flex; flex-direction:column; justify-content:center;
+          page-break-after:always; padding:0 6mm; }
+  .cover .kicker{ font-family:"JetBrains Mono",monospace; letter-spacing:3px; color:var(--accent);
+                  font-size:.95rem; text-transform:uppercase; }
+  .cover h1{ font-size:3.0rem; line-height:1.08; margin:.25em 0 .15em; font-weight:680; }
+  .cover .sub{ font-size:1.35rem; color:var(--mut); font-weight:400; }
+  .cover .meta{ margin-top:30px; font-size:.92rem; color:var(--ink); }
+  .cover .meta b{ color:var(--accent); }
+  .cover .rule{ height:4px; width:120px; background:var(--accent); margin:18px 0; border-radius:2px;}
+  .toc a{ color:var(--ink); text-decoration:none; }
+  .toc ol{ list-style:none; padding-left:0; counter-reset:toc; }
+  .toc > ol > li{ counter-increment:toc; margin:.3em 0; font-weight:600; font-size:.96rem; }
+  .toc > ol > li::before{ content:counter(toc) ".  "; color:var(--accent); font-family:"JetBrains Mono",monospace;}
+  .toc ol ol{ counter-reset:sub; padding-left:1.6em; }
+  .toc ol ol li{ counter-increment:sub; font-weight:400; font-size:.86rem; color:var(--mut); margin:.12em 0;}
+  .lead{ font-size:.96rem; color:#344; }
+  svg text{ font-family:"Segoe UI",sans-serif; }
+  .sigfig{ color:var(--red); font-weight:600; }
+</style>
+</head>
+<body>
+
+<!-- ============================= COVER ============================= -->
+<section class="cover">
+  <div class="kicker">Firmware Application Note &nbsp;·&nbsp; AKESC / dsPIC33AK</div>
+  <h1>Garuda 6-Step<br>Sensorless BLDC ESC</h1>
+  <div class="sub">Architecture, control algorithms, timing &amp; the complete signal-processing mathematics</div>
+  <div class="rule"></div>
+  <div class="meta">
+    <p><b>Target&nbsp;MCU:</b> dsPIC33AK512MC510 (MC510 / “AK512”) — 100&nbsp;MHz FCY, 400&nbsp;MHz PWM clock<br>
+    <b>Board:</b> MCLV-48V-300W + EV67N21A DIM &nbsp;·&nbsp; 3&nbsp;mΩ shunt, ×24.95 amps<br>
+    <b>Topology:</b> 3-phase 6-step trapezoidal, sensorless BEMF zero-cross commutation<br>
+    <b>Scheme:</b> ADC-digital-comparator HWZC + software ZC, sector-PI PLL, RC filter-lag compensation<br>
+    <b>Reference build:</b> <span class="mono">MOTOR_PROFILE&nbsp;6</span> (VEX 14&nbsp;mm 4000&nbsp;KV, 6&nbsp;PP) on branch <span class="mono">ak512-port</span></p>
+  </div>
+  <p class="small" style="margin-top:34px;">This document is generated from a full read of the firmware source tree
+  (<span class="mono">dspic33AKESC/</span>). Every formula, constant, register and API in this note is taken directly from the code;
+  file/line citations use the form <span class="mono">file.c:line</span>. &nbsp;Pure-6-step paths are documented as live; FOC paths are noted where they share infrastructure.</p>
+</section>
+
+<!-- ============================= TOC ============================= -->
+<section class="toc">
+  <h2 style="page-break-before:avoid;">Contents</h2>
+  <ol>
+    <li><a href="#sys">System Overview &amp; Architecture</a>
+      <ol><li>Clock tree &amp; time bases</li><li>Interrupt / task structure</li><li>Data model</li></ol></li>
+    <li><a href="#sm">Control State Machine &amp; Startup</a>
+      <ol><li>States &amp; transitions</li><li>Align → ramp → morph → closed-loop</li><li>Startup strategies</li><li>Fault handling &amp; recovery</li></ol></li>
+    <li><a href="#pwm">PWM Generation &amp; 6-Step Commutation</a>
+      <ol><li>The PWM peripheral</li><li>Override-based 6-step drive</li><li>ADC triggers</li></ol></li>
+    <li><a href="#zc">Zero-Crossing Detection</a>
+      <ol><li>Two detection paths</li><li>Neutral / threshold mathematics</li><li>Sample point in the PWM cycle</li><li>Falling-SW per-polarity detection</li><li>Validation &amp; rejection logic</li></ol></li>
+    <li><a href="#pll">Commutation Timing: PLL, Sector-PI &amp; IIR</a>
+      <ol><li>The autonomous-timer PLL</li><li>The sector PI controller</li><li>The IIR period filter</li></ol></li>
+    <li><a href="#fc">RC Filter-Lag Compensation — Full Mathematics</a>
+      <ol><li>The physical lag</li><li>The threshold-bias formula</li><li>Per-polarity asymmetry</li><li>The amplitude source</li></ol></li>
+    <li><a href="#adv">Timing Advance</a></li>
+    <li><a href="#abs">ABS_FLOOR False-Lock Guard &amp; the λ Math</a></li>
+    <li><a href="#prot">Protection &amp; Auxiliary Control</a>
+      <ol><li>The overcurrent ladder</li><li>OC auto-zero bias</li><li>Bus-voltage tiers</li><li>Outer speed PI (parked)</li></ol></li>
+    <li><a href="#gsp">GSP Host Protocol &amp; Parameter System</a>
+      <ol><li>Wire protocol &amp; CRC</li><li>Command set</li><li>Parameter &amp; descriptor tables</li><li>Telemetry snapshot</li></ol></li>
+    <li><a href="#math">Consolidated Mathematics Reference</a></li>
+    <li><a href="#appx">Appendix: Feature Flags &amp; Glossary</a></li>
+  </ol>
+</section>
+
+<!-- ============================= 1 SYSTEM ============================= -->
+<h2 id="sys">1&nbsp;&nbsp;System Overview &amp; Architecture</h2>
+<p class="lead">The Garuda AKESC firmware drives a 3-phase brushless motor with no position sensor. Rotor position
+is inferred from the back-EMF (BEMF) of whichever phase is momentarily not driven. The firmware energises two of the three
+phases (one high-side PWM, one low-side ground return) and leaves the third floating; the floating phase's terminal voltage
+crosses the motor's virtual neutral exactly half-way between commutations, and that <em>zero-crossing</em> (ZC) is the timing
+reference for the entire control loop.</p>
+
+<p>Two ZC detectors run cooperatively: a low-speed <b>software ZC</b> that thresholds the floating-phase ADC sample inside the
+control ISR, and a high-speed <b>hardware ZC (HWZC)</b> built on the on-chip ADC digital comparators plus SCCP capture/timers.
+A <b>sector-PI PLL</b> tracks the commutation period in 10&nbsp;ns resolution and schedules the next commutation autonomously,
+with timing advance, an RC-filter-lag compensator, and an absolute no-load floor guarding against false harmonic lock.</p>
+
+<figure>
+<svg viewBox="0 0 760 330" width="760" height="330" role="img" aria-label="System block diagram">
+  <defs>
+    <marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#5b6472"/></marker>
+    <marker id="arb" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto">
+      <path d="M0,0 L7,3 L0,6 Z" fill="#0b5cad"/></marker>
+  </defs>
+  <style>
+    .blk{fill:#f3f7fc;stroke:#9db4d0;stroke-width:1.2;rx:6;}
+    .blkk{fill:#eef8f2;stroke:#76b694;stroke-width:1.2;}
+    .blkp{fill:#fff5ea;stroke:#d9a96a;stroke-width:1.2;}
+    .t{font-size:11px;fill:#243246;} .ts{font-size:9px;fill:#5b6472;}
+    .e{stroke:#5b6472;stroke-width:1.3;fill:none;marker-end:url(#ar);}
+    .eb{stroke:#0b5cad;stroke-width:1.6;fill:none;marker-end:url(#arb);}
+  </style>
+  <!-- motor -->
+  <rect class="blkk" x="14" y="135" width="90" height="60" rx="6"/>
+  <text class="t" x="59" y="160" text-anchor="middle">BLDC</text>
+  <text class="t" x="59" y="174" text-anchor="middle">motor</text>
+  <!-- bridge -->
+  <rect class="blk" x="140" y="120" width="96" height="90" rx="6"/>
+  <text class="t" x="188" y="150" text-anchor="middle">3× half</text>
+  <text class="t" x="188" y="164" text-anchor="middle">bridge</text>
+  <text class="ts" x="188" y="182" text-anchor="middle">ATA6847</text>
+  <text class="ts" x="188" y="196" text-anchor="middle">gate driver</text>
+  <!-- sense -->
+  <rect class="blk" x="140" y="232" width="96" height="62" rx="6"/>
+  <text class="t" x="188" y="256" text-anchor="middle">BEMF ÷</text>
+  <text class="ts" x="188" y="270" text-anchor="middle">RC LPF τ≈30µs</text>
+  <text class="ts" x="188" y="283" text-anchor="middle">shunt + OA1/2/3</text>
+  <!-- PWM -->
+  <rect class="blk" x="290" y="40" width="120" height="56" rx="6"/>
+  <text class="t" x="350" y="62" text-anchor="middle">PWM PG1/2/3</text>
+  <text class="ts" x="350" y="78" text-anchor="middle">400 MHz, center-aligned</text>
+  <text class="ts" x="350" y="90" text-anchor="middle">complementary + override</text>
+  <!-- ADC -->
+  <rect class="blk" x="290" y="232" width="120" height="62" rx="6"/>
+  <text class="t" x="350" y="256" text-anchor="middle">ADC AD1/2/3</text>
+  <text class="ts" x="350" y="270" text-anchor="middle">+ digital comparators</text>
+  <text class="ts" x="350" y="283" text-anchor="middle">CMP3 OC chop</text>
+  <!-- core -->
+  <rect class="blkp" x="300" y="120" width="160" height="90" rx="7"/>
+  <text class="t" x="380" y="142" text-anchor="middle" style="font-weight:700">Control core</text>
+  <text class="ts" x="380" y="158" text-anchor="middle">ADC ISR @ 45 kHz</text>
+  <text class="ts" x="380" y="171" text-anchor="middle">state machine · ZC · morph</text>
+  <text class="ts" x="380" y="184" text-anchor="middle">SCCP1 PLL · sector-PI</text>
+  <text class="ts" x="380" y="197" text-anchor="middle">SCCP2 10 ns timestamp</text>
+  <!-- gsp -->
+  <rect class="blk" x="520" y="120" width="110" height="90" rx="6"/>
+  <text class="t" x="575" y="150" text-anchor="middle">GSP</text>
+  <text class="ts" x="575" y="166" text-anchor="middle">UART1 115k2</text>
+  <text class="ts" x="575" y="180" text-anchor="middle">params · telemetry</text>
+  <text class="ts" x="575" y="194" text-anchor="middle">CRC-16-CCITT</text>
+  <!-- host -->
+  <rect class="blkk" x="668" y="135" width="78" height="60" rx="6"/>
+  <text class="t" x="707" y="160" text-anchor="middle">Host</text>
+  <text class="ts" x="707" y="176" text-anchor="middle">GUI / MCP</text>
+  <!-- edges -->
+  <path class="eb" d="M236 150 L288 110"/><text class="ts" x="262" y="120">gate cmd</text>
+  <path class="e" d="M104 150 L138 150"/>
+  <path class="e" d="M104 180 C120 210,120 250,138 258"/>
+  <path class="e" d="M236 262 L288 262"/><text class="ts" x="246" y="252">BEMF, V, I</text>
+  <path class="eb" d="M350 96 L350 118"/>
+  <path class="eb" d="M350 230 L350 212"/>
+  <path class="eb" d="M460 165 L518 165"/>
+  <path class="eb" d="M630 165 L666 165"/>
+  <path class="e" d="M188 232 L188 212"/>
+</svg>
+<figcaption><b>Figure 1.</b> Top-level signal flow. The control core (orange) runs entirely on-chip; the host link is optional
+and never in the commutation path.</figcaption>
+</figure>
+
+<h3>1.1&nbsp;&nbsp;Clock tree &amp; time bases</h3>
+<p>The oscillator (<span class="mono">clock.c:99</span>) starts from the 8&nbsp;MHz FRC and runs PLL1 with
+M=100, N1=1, N2=4, N3=1:</p>
+<div class="eq">F<sub>VCO</sub> = 8 MHz × 100 / 1 = 800 MHz &nbsp;→&nbsp; F<sub>OSC</sub> = 8×100/(1·4·1) = <b>200 MHz</b> &nbsp;→&nbsp; F<sub>CY</sub> = <b>100 MHz</b><span class="lbl">clock.c</span></div>
+<p>Per-peripheral generators: CLK5 = 800/2 = <b>400 MHz</b> (PWM, <code>PWM_CLOCK_MHZ=400</code>); CLK6 = 100 MHz (ADC);
+CLK7 = 400 MHz (DAC/CMP). Every SCCP timer uses <code>CLKSEL=0</code> = F<sub>CY</sub>, so <code>SCCP_CLOCK_HZ = 100&nbsp;000&nbsp;000</code>
+and <b>1 high-resolution (HR) tick = 10 ns</b>. The four key time bases:</p>
+<table>
+<tr><th>Time base</th><th>Rate / period</th><th>Source</th><th>Role</th></tr>
+<tr><td>PWM &amp; control ISR</td><td><code>PWMFREQUENCY_HZ = 45 000</code> → 22.22 µs</td><td>PG1 center-aligned</td><td>One ADC conversion set + one control-ISR pass per period</td></tr>
+<tr><td>SCCP2 (HR timestamp)</td><td>100 MHz, 10 ns, wraps ≈ 42.9 s</td><td>free-running</td><td>Stamps every ZC; the period/eRPM measurement clock</td></tr>
+<tr><td>SCCP1 (one-shot)</td><td>100 MHz, programmable</td><td>software-triggered</td><td>Schedules blanking expiry &amp; the next commutation</td></tr>
+<tr><td>SCCP3 (periodic)</td><td>1 MHz (100-tick period)</td><td>periodic trigger</td><td>Free-running 1 MHz ADC trigger for the HWZC comparator channel</td></tr>
+<tr><td>Timer1</td><td>1:8 prescale → 100 µs (10 kHz)</td><td>F<sub>CY</sub>/8</td><td>Arm/align/ramp/recovery counters, buttons, 1 ms systemTick</td></tr>
+</table>
+<p>The PWM master period register is</p>
+<div class="eq">LOOPTIME_TCY = (LOOPTIME_µs × 8 × PWM_CLOCK_MHZ) − 16 = (22.222 × 8 × 400) − 16 ≈ <b>71 095 counts</b><span class="lbl">garuda_calc_params.h:31</span></div>
+<p>The ×8 = (×2 center-aligned up/down) × (×4 high-resolution divider). Duty is in the same counts, so
+<code>duty / LOOPTIME_TCY</code> is the duty fraction <i>D</i>. Two structural minimums fall out of the 300&nbsp;ns deadtime:</p>
+<div class="eq">DEADTIME_COUNTS = (DEADTIME_NS/1000)×16×400 = 0.3×16×400 = <b>1920</b> &nbsp;&nbsp;|&nbsp;&nbsp; MIN_DUTY = 2×DEADTIME_COUNTS = <b>3840</b><span class="lbl">garuda_calc_params.h:36–39</span></div>
+<p><code>MIN_DUTY</code> (= 2× deadtime, ≈ 5.4 % duty) is the floor below which there is no usable on-time after the module swallows
+deadtime on both edges. This single fact sets the ≈ 10&nbsp;k&nbsp;eRPM closed-loop idle wall referenced throughout the project.</p>
+
+<h3>1.2&nbsp;&nbsp;Interrupt / task structure</h3>
+<p>All control runs in interrupts; <code>main()</code> does only background housekeeping (buttons, GSP service,
+heartbeat watchdog, CPU-load estimate, intent-flag → state transitions). No control math executes in <code>main</code>.</p>
+<table>
+<tr><th>Context</th><th>Priority</th><th>Rate</th><th>Owns</th></tr>
+<tr><td>Comparator ZC ISRs + SCCP1 <span class="mono">_CCT1</span></td><td>7 (top)</td><td>event / sub-µs</td><td>HWZC state machine: blanking, capture, sector-PI, commutation</td></tr>
+<tr><td>ADC ISR <span class="mono">GARUDA_ADC_INTERRUPT</span></td><td>6–7</td><td>45 kHz</td><td>Fault checks, threshold update, software ZC, the whole morph blend, the 6-step switch</td></tr>
+<tr><td>Timer1 <span class="mono">_T1Interrupt</span></td><td>5</td><td>10 kHz</td><td>Arm/align/ramp/recovery timing, button debounce, systemTick</td></tr>
+<tr><td>SCCP4 input-capture / DShot DMA</td><td>4 / 1</td><td>RX edges</td><td>Throttle pulse / DShot decode (not in the motor loop)</td></tr>
+<tr><td><span class="mono">main()</span> while(1)</td><td>—</td><td>background</td><td>GSP, buttons, heartbeat, CPU-load — no control</td></tr>
+</table>
+<div class="note"><b>Priority-7 preempts the ADC ISR</b>, so once HWZC is enabled the hardware ZC edge is serviced with bounded
+latency even if the 45 kHz ADC ISR is mid-pass. The two paths share the <code>GARUDA_DATA_T</code> state and use a
+<i>seqlock</i> (<code>hwzc.writeSeq</code>) on the 32-bit <code>stepPeriodHR</code> so a lower-priority reader never tears it.</div>
+
+<h3>1.3&nbsp;&nbsp;Data model</h3>
+<p>One <code>GARUDA_DATA_T</code> aggregate (<span class="mono">garuda_types.h:633</span>) holds the whole control state.
+Sub-structures used throughout this note:</p>
+<ul>
+<li><code>BEMF_STATE_T bemf</code> — <code>bemfRaw</code> (u16, floating-phase ADC), <code>zcThreshold</code> (u16, the neutral threshold),
+<code>zcAmpForFilterComp</code> (u16, slow-IIR measured BEMF amplitude), <code>bemfDevPeak</code> (u16, running peak |float−neutral|),
+<code>bemfSampleValid</code> (bool).</li>
+<li><code>HWZC_STATE_T hwzc</code> — <code>phase</code> (IDLE/BLANKING/WATCHING/COMM_PENDING), <code>stepPeriodHR</code> (u32, HR ticks, seqlock-protected),
+<code>timerPeriod</code> (u32, PI-controlled commutation period), <code>integratorF</code> (float PI integrator), <code>lastZcStamp</code>/<code>lastCommStamp</code>/<code>lastCaptureHR</code> (u32 HR),
+<code>goodZcCount</code>/<code>missCount</code>/<code>totalZcCount</code>/<code>noiseRejectCount</code>, plus per-sector diagnostic arrays.</li>
+<li><code>timing</code> — software-ZC period/flags; <code>sine</code>, <code>morph</code> — startup sub-state; <code>speedPi</code> — outer loop (parked).</li>
+</ul>
+<p><code>gspParams</code> (runtime parameters) and <code>gspDerived</code> (ISR-facing precomputed constants) feed the loop through a
+<code>RT_*</code> macro layer; the compile-time <code>#define</code>s are the seed defaults and define every formula.</p>
+
+<!-- ============================= 2 STATE MACHINE ============================= -->
+<h2 id="sm">2&nbsp;&nbsp;Control State Machine &amp; Startup</h2>
+<p>The motor is driven by an explicit state machine, <code>ESC_STATE_T</code> (<span class="mono">garuda_types.h:21</span>).
+Ordering is enforced by <code>_Static_assert</code>s because the voltage-fault gates compare the enum value with
+<code>&gt;=</code>/<code>&lt;=</code>.</p>
+
+<figure>
+<svg viewBox="0 0 760 360" width="760" height="360" role="img" aria-label="State transition graph">
+  <defs>
+    <marker id="sa" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#34506e"/></marker>
+    <marker id="sr" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto"><path d="M0,0 L8,3 L0,6 Z" fill="#a11212"/></marker>
+  </defs>
+  <style>
+    .st{fill:#eef4fb;stroke:#5d83ad;stroke-width:1.3;} .stm{fill:#fff3e8;stroke:#d49a5c;stroke-width:1.3;}
+    .stf{fill:#fbedec;stroke:#c06a6a;stroke-width:1.3;} .stg{fill:#ecf8f1;stroke:#73b492;stroke-width:1.3;}
+    .lbl{font-size:11px;fill:#1f2c3a;font-weight:600;} .cnd{font-size:8.2px;fill:#46566a;}
+    .ed{stroke:#34506e;stroke-width:1.3;fill:none;marker-end:url(#sa);}
+    .edf{stroke:#a11212;stroke-width:1.2;fill:none;marker-end:url(#sr);stroke-dasharray:4 3;}
+  </style>
+  <!-- nodes row1 -->
+  <rect class="stg" x="12"  y="20" width="86" height="38" rx="6"/><text class="lbl" x="55" y="43" text-anchor="middle">IDLE</text>
+  <rect class="stg" x="130" y="20" width="86" height="38" rx="6"/><text class="lbl" x="173" y="43" text-anchor="middle">ARMED</text>
+  <rect class="st"  x="248" y="20" width="86" height="38" rx="6"/><text class="lbl" x="291" y="43" text-anchor="middle">ALIGN</text>
+  <rect class="st"  x="366" y="20" width="96" height="38" rx="6"/><text class="lbl" x="414" y="43" text-anchor="middle">OL_RAMP</text>
+  <rect class="stm" x="496" y="14" width="118" height="50" rx="6"/><text class="lbl" x="555" y="33" text-anchor="middle">MORPH</text>
+  <text class="cnd" x="555" y="46" text-anchor="middle">CONVERGE→</text>
+  <text class="cnd" x="555" y="56" text-anchor="middle">WIN_HiZ→HiZ</text>
+  <!-- CL -->
+  <rect class="st"  x="496" y="150" width="118" height="44" rx="6"/><text class="lbl" x="555" y="170" text-anchor="middle">CLOSED_LOOP</text>
+  <text class="cnd" x="555" y="184" text-anchor="middle">HWZC / SW-ZC drives commutation</text>
+  <!-- recovery / fault -->
+  <rect class="st"  x="300" y="150" width="110" height="44" rx="6"/><text class="lbl" x="355" y="170" text-anchor="middle">RECOVERY</text>
+  <text class="cnd" x="355" y="184" text-anchor="middle">coast 200 ms</text>
+  <rect class="stf" x="300" y="262" width="110" height="40" rx="6"/><text class="lbl" x="355" y="286" text-anchor="middle">FAULT</text>
+  <!-- edges forward -->
+  <path class="ed" d="M98 39 L128 39"/>
+  <path class="ed" d="M216 39 L246 39"/>
+  <path class="ed" d="M334 39 L364 39"/>
+  <path class="ed" d="M462 39 L494 39"/>
+  <text class="cnd" x="113" y="33" text-anchor="middle">start</text>
+  <text class="cnd" x="231" y="33" text-anchor="middle">thr&lt;200, 500ms</text>
+  <text class="cnd" x="349" y="33" text-anchor="middle">align done</text>
+  <text class="cnd" x="478" y="33" text-anchor="middle">eRPM≥rampTgt</text>
+  <path class="ed" d="M555 64 L555 148"/><text class="cnd" x="560" y="110" text-anchor="start">goodZc≥4 ∧ rising∧falling ∧ stableZc</text>
+  <!-- CL -> recovery -->
+  <path class="ed" d="M494 178 L412 176"/><text class="cnd" x="452" y="170" text-anchor="middle">ZC timeout /</text><text class="cnd" x="452" y="200" text-anchor="middle">no-capture 150ms</text>
+  <!-- recovery -> align -->
+  <path class="ed" d="M310 152 C260 110, 250 70, 282 58"/><text class="cnd" x="250" y="120" text-anchor="middle">attempts&lt;3</text>
+  <!-- recovery -> fault -->
+  <path class="edf" d="M355 194 L355 260"/><text class="cnd" x="360" y="230" text-anchor="start">attempts≥3</text>
+  <!-- CL -> fault -->
+  <path class="edf" d="M500 194 C440 240, 415 250, 412 272"/><text class="cnd" x="470" y="250" text-anchor="middle">OV/UV/OC/PCI</text>
+  <!-- fault -> idle -->
+  <path class="ed" d="M300 282 C120 300, 40 200, 50 60"/><text class="cnd" x="70" y="240" text-anchor="middle">SW1 / GSP clear</text>
+  <!-- CL -> idle auto-disarm -->
+  <path class="ed" d="M555 194 C600 280, 120 320, 55 60"/><text class="cnd" x="300" y="330" text-anchor="middle">throttle-zero auto-disarm (50 ms)</text>
+</svg>
+<figcaption><b>Figure 2.</b> State graph (live SINE-startup + HWZC build). Green = idle/disarmed, blue = running, orange = handoff,
+red dashed = fault paths. AM32-kick, I-f and PLL-start are alternate strategies (§2.3) that bypass ALIGN/RAMP/MORPH.</figcaption>
+</figure>
+
+<h3>2.1&nbsp;&nbsp;States &amp; transitions</h3>
+<table>
+<tr><th>State (value)</th><th>Bridge</th><th>Behaviour &amp; exit condition</th></tr>
+<tr><td>ESC_IDLE (0)</td><td>off</td><td>Disarmed. Resets OC auto-zero accumulators. → ARMED on SW1 / GSP start / RX auto-arm.</td></tr>
+<tr><td>ESC_ARMED (1)</td><td>off</td><td>Throttle-zero gate; bus-ADC rest bias auto-zeroed for OC cal. → ALIGN when <code>throttle &lt; 200</code> held 500 ms.</td></tr>
+<tr><td>ESC_DETECT (2)</td><td>—</td><td>FOC-V2 auto-commissioning only; unreachable in 6-step.</td></tr>
+<tr><td>ESC_ALIGN (3)</td><td>on</td><td>Rotor lock — holds a sine vector at Phase-A peak for <code>ALIGN_TIME_MS=500</code>. → OL_RAMP.</td></tr>
+<tr><td>ESC_OL_RAMP (4)</td><td>on</td><td>Open-loop forced commutation; sine V/f field ramps <code>INITIAL_ERPM → rampTargetErpm</code>. → MORPH.</td></tr>
+<tr><td>ESC_MORPH (5)</td><td>on</td><td>Sine→trapezoid blend + progressive Hi-Z + BEMF acquisition (sub-phases CONVERGE→WINDOWED_HIZ→HIZ). → CL on ZC lock, → FAULT on timeout.</td></tr>
+<tr><td>ESC_CLOSED_LOOP (6)</td><td>on</td><td>Normal run. Commutation from detected ZC. Duty mapped from throttle with a <code>CL_IDLE_DUTY</code> floor.</td></tr>
+<tr><td>ESC_RECOVERY (8)</td><td>off</td><td>Desync coast-down; counts <code>recoveryCounter</code>, then restarts or faults.</td></tr>
+<tr><td>ESC_FAULT (9)</td><td>off</td><td>Latched; requires SW1 / GSP clear to return to IDLE.</td></tr>
+<tr><td>ESC_IF_RAMP (10)</td><td>on</td><td>I-f current-controlled spin-up; compiled out in this build.</td></tr>
+</table>
+
+<h3>2.2&nbsp;&nbsp;Align → open-loop ramp → morph → closed-loop</h3>
+<p>The bring-up is the firmware's most intricate sequence. In the active <b>sine-startup</b> build:</p>
+<ul>
+<li><b>ALIGN</b> — <code>STARTUP_SineInit()</code> seeds the sine angle to 90° (Phase-A peak), amplitude
+<code>RT_SINE_MIN_AMPLITUDE</code>, releases all PWM overrides (3-phase complementary), and holds for 500 ms while
+<code>STARTUP_SineAlign()</code> counts <code>alignCounter</code> down.</li>
+<li><b>OL_RAMP</b> — <code>STARTUP_SineRamp()</code> integrates an eRPM in Q16
+(<code>erpmFrac += RT_SINE_ERPM_RAMP_RATE_Q16</code>), sets the angle increment, and linearly interpolates the
+amplitude from min to max — a constant-V/f forced field. Commutation here is <i>implicit</i>: the rotating sine field
+is the forced commutation, looked up from a 256-entry Q15 <code>sineTable256</code>.</li>
+<li><b>MORPH</b> — three sub-phases:
+  <ol>
+  <li><span class="tag">CONVERGE</span> blends <code>duty = sine·(256−α)/256 + trap·α/256</code> with α stepping 0→256 over
+  <code>MORPH_CONVERGE_SECTORS=12</code> sectors. The trap floating phase uses a <b>virtual neutral</b>
+  <code>(trapDuty+MIN_DUTY)/2</code>, not 50 % — a 50 %-centred float against the ~5–7 % active rails would push
+  ~5 V across 0.13 Ω = 39 A on low-resistance motors; the virtual neutral keeps the disconnection current ≈ 1 A.</li>
+  <li><span class="tag">WINDOWED_HIZ</span> opens a progressively wider Hi-Z window on the floating phase, polling BEMF
+  inside it while still force-commutating, and adapts <code>timing.stepPeriod</code> toward the measured ZC interval (IIR ≫3).</li>
+  <li><span class="tag">HIZ</span> full Hi-Z; on <code>goodZcCount ≥ 4</code> with <b>both</b> rising and falling ZC working and a fresh
+  ZC this tick, <code>zcSynced=true</code> and the state advances to CLOSED_LOOP — a bumpless "hot handoff" that skips ZC
+  re-init and raises the CMP3 threshold to operational.</li>
+  </ol></li>
+</ul>
+<p>At the CONVERGE→WINDOWED_HIZ boundary the firmware deliberately drops <code>duty=MIN_DUTY</code> (coast) so near-zero voltage is
+applied while clean BEMF is acquired, and seeds the forced timing
+<code>handoff = TIMER1_TO_ADC_TICKS(rampStepPeriod)</code> (see §10 for the historical ×12/5 bug in that macro).</p>
+
+<figure>
+<svg viewBox="0 0 760 280" width="760" height="280" role="img" aria-label="Startup timeline">
+  <style>
+    .ax{stroke:#9aa3b2;stroke-width:1;} .gl{stroke:#e6ecf4;stroke-width:1;}
+    .lab{font-size:9px;fill:#5b6472;} .lab2{font-size:10px;fill:#243246;font-weight:600;}
+    .erp{stroke:#0b5cad;stroke-width:2;fill:none;} .dty{stroke:#0a7d57;stroke-width:2;fill:none;}
+    .ph{font-size:8.6px;fill:#34506e;} .band{opacity:.5;}
+  </style>
+  <!-- phase bands -->
+  <rect class="band" x="60"  y="20" width="80"  height="200" fill="#ecf8f1"/>
+  <rect class="band" x="140" y="20" width="80"  height="200" fill="#eef4fb"/>
+  <rect class="band" x="220" y="20" width="150" height="200" fill="#eef4fb"/>
+  <rect class="band" x="370" y="20" width="120" height="200" fill="#fff3e8"/>
+  <rect class="band" x="490" y="20" width="230" height="200" fill="#f4faf6"/>
+  <text class="ph" x="100" y="34" text-anchor="middle">ARM</text>
+  <text class="ph" x="180" y="34" text-anchor="middle">ALIGN 500ms</text>
+  <text class="ph" x="295" y="34" text-anchor="middle">OL_RAMP (V/f)</text>
+  <text class="ph" x="430" y="34" text-anchor="middle">MORPH</text>
+  <text class="ph" x="600" y="34" text-anchor="middle">CLOSED_LOOP</text>
+  <!-- axes -->
+  <line class="ax" x1="60" y1="220" x2="730" y2="220"/>
+  <line class="ax" x1="60" y1="40" x2="60" y2="220"/>
+  <text class="lab2" x="14" y="120" transform="rotate(-90,14,120)">eRPM / duty</text>
+  <text class="lab" x="730" y="234" text-anchor="end">time →</text>
+  <!-- eRPM trace -->
+  <path class="erp" d="M60 218 L140 218 L220 216 C300 205,330 120,370 118 C400 116,430 130,490 118 C560 90,650 70,730 70"/>
+  <!-- duty trace -->
+  <path class="dty" d="M60 218 L140 180 L220 165 C300 150,360 150,370 150 L385 205 C420 200,470 196,490 190 C560 150,650 120,730 110"/>
+  <!-- coast notch annotation -->
+  <line class="gl" x1="385" y1="40" x2="385" y2="220" stroke-dasharray="3 3"/>
+  <text class="lab" x="388" y="218" text-anchor="start">duty→MIN_DUTY (coast)</text>
+  <!-- legend -->
+  <line x1="560" y1="250" x2="585" y2="250" class="erp"/><text class="lab" x="590" y="253">eRPM (commanded→measured)</text>
+  <line x1="380" y1="250" x2="405" y2="250" class="dty"/><text class="lab" x="410" y="253">duty</text>
+</svg>
+<figcaption><b>Figure 3.</b> Startup envelope. eRPM is flat through ARM/ALIGN, ramps under V/f in OL_RAMP, dips slightly through MORPH,
+then follows throttle in CL. Duty rises under V/f, drops to <code>MIN_DUTY</code> at the morph coast notch, then slews up from the CL idle floor.</figcaption>
+</figure>
+
+<h3>2.3&nbsp;&nbsp;Startup strategies</h3>
+<table>
+<tr><th>Strategy</th><th>Flag</th><th>Mechanism</th><th>Active?</th></tr>
+<tr><td>Sine V/f startup</td><td><code>FEATURE_SINE_STARTUP=1</code></td><td>ALIGN→RAMP→MORPH→CL as above</td><td><b>yes</b> (profile 6)</td></tr>
+<tr><td>Classic trap</td><td><code>FEATURE_SINE_STARTUP=0</code></td><td>step-0 hold → forced step ramp → CL</td><td>no</td></tr>
+<tr><td>AM32 kick + listen</td><td><code>FEATURE_AM32_STARTUP=1</code></td><td>no align/ramp: ARMED→CL, one blind commutation, HWZC trusted from event 1</td><td>no (off for micros 6/7/8)</td></tr>
+<tr><td>I-f current-controlled</td><td><code>FEATURE_IF_STARTUP=1</code></td><td>closed current loop on shunts + forced angle ramp</td><td>no (parked)</td></tr>
+<tr><td>PLL-from-align</td><td><code>FEATURE_PLL_STARTUP=1</code></td><td>seed slow eRPM, blind accel, hand over on 6 consecutive plausible captures</td><td>no</td></tr>
+</table>
+
+<h3>2.4&nbsp;&nbsp;Fault handling &amp; recovery</h3>
+<p>Active detectors (all but PCI run in the ADC ISR):</p>
+<ul>
+<li><b>OV</b> — <code>vbusRaw &gt; RT_VBUS_OVERVOLTAGE_ADC</code> (3600 ≈ 67 V) for 3 samples → reset CMP3, disable outputs.</li>
+<li><b>UV</b> — <code>vbusRaw &lt; uvThreshold</code> (500 ≈ 9.3 V run; relaxed to 400 pre-sync) for 3 samples.</li>
+<li><b>OC software</b> — <code>ibusRaw &gt; OC_FAULT_ADC_VAL</code> debounced 3 consecutive ticks (a single rail-spiking sample used to latch a phantom).</li>
+<li><b>Board PCI</b> — hardware FPCI (combined OC+OV) in <code>_PWMInterrupt</code>; captures a frozen phase-current snapshot.</li>
+<li><b>Desync</b> — two watchdogs: software-ZC timeout, and an HWZC <b>no-capture watchdog</b> (<code>totalZcCount</code> stalls for 150 ms while the autonomous timer keeps commutating on a stale period).</li>
+</ul>
+<p>On desync the bridge is disabled and the state → RECOVERY with <code>recoveryCounter = RT_DESYNC_COAST_COUNTS</code>
+(200 ms coast). After the rotor coasts, if attempts <code>&lt; 3</code> the firmware re-runs <code>STARTUP_Init()</code> and re-enters ALIGN;
+a successful sync zeroes the attempt counter. FAULT is terminal until cleared.</p>
+
+<!-- ============================= 3 PWM ============================= -->
+<h2 id="pwm">3&nbsp;&nbsp;PWM Generation &amp; 6-Step Commutation</h2>
+<p>Three PWM generators drive the three half-bridges: <b>PG1 = Phase A (master)</b>, PG2 = B, PG3 = C (slaves).
+All are <code>MODSEL=4</code> center-aligned, complementary (<code>PMOD=0</code>) with hardware deadtime, and PG2/PG3 are
+phase-locked to PG1's start-of-cycle. The master holds <code>MPER = LOOPTIME_TCY</code>; <code>MAX_DUTY = LOOPTIME_TCY·99/100</code>.</p>
+
+<h3>3.1&nbsp;&nbsp;Override-based 6-step drive</h3>
+<p>6-step does <b>not</b> modulate three phases. Each phase is in one of three states per sector, applied through the
+<b>override registers</b> (<code>PGxIOCON2</code>), written as single atomic 32-bit stores so inter-phase skew is ≈ 30 ns
+(vs ≈ 90 ns for read-modify-write bitfields — skew on a sector edge can spike Vbus·di/dt past the board fault threshold):</p>
+<table>
+<tr><th>Encoding</th><th><code>PGxIOCON2</code></th><th>Effect</th></tr>
+<tr><td><code>PWM_ACTIVE</code></td><td><code>0x00000000</code></td><td>Complementary PWM from <code>PGxDC</code> (HS modulated, LS complementary + deadtime)</td></tr>
+<tr><td><code>LOW</code></td><td><code>0x00301000</code></td><td>H forced LOW, L forced HIGH → phase hard-tied to ground (return path)</td></tr>
+<tr><td><code>FLOAT</code></td><td><code>0x00300000</code></td><td>Both H and L LOW → half-bridge high-Z (the BEMF-sensed floating phase)</td></tr>
+</table>
+<p><code>HAL_PWM_SetCommutationStep(step)</code> (<span class="mono">hal_pwm.c:1010</span>) indexes the commutation table and writes the
+three IOCON2 words. <code>HAL_PWM_SetDutyCycle(duty)</code> writes the slaves first, master last (the master write broadcasts an UPDATE so
+all three load synchronously); only the <code>PWM_ACTIVE</code> phase's duty produces output.</p>
+
+<table>
+<tr><th>Step</th><th>A</th><th>B</th><th>C</th><th>Float</th><th>ZC polarity</th></tr>
+<tr><td>0</td><td>PWM</td><td>LOW</td><td>FLOAT</td><td>C</td><td>+1 rising</td></tr>
+<tr><td>1</td><td>FLOAT</td><td>LOW</td><td>PWM</td><td>A</td><td>−1 falling</td></tr>
+<tr><td>2</td><td>LOW</td><td>FLOAT</td><td>PWM</td><td>B</td><td>+1 rising</td></tr>
+<tr><td>3</td><td>LOW</td><td>PWM</td><td>FLOAT</td><td>C</td><td>−1 falling</td></tr>
+<tr><td>4</td><td>FLOAT</td><td>PWM</td><td>LOW</td><td>A</td><td>+1 rising</td></tr>
+<tr><td>5</td><td>PWM</td><td>FLOAT</td><td>LOW</td><td>B</td><td>−1 falling</td></tr>
+</table>
+<div class="keybox"><b>Even steps (0/2/4) are rising-ZC sectors; odd steps (1/3/5) are falling-ZC sectors.</b> The floating phase rotates
+C→A→B→C→A→B and the polarity alternates. <code>zcPolarity</code> (±1, <span class="mono">commutation.c:28</span>) is the master selector used everywhere.</div>
+
+<h3>3.2&nbsp;&nbsp;ADC triggers from the PWM</h3>
+<p>Only PG1 emits ADC triggers. <code>PG1TRIGA</code> (<code>CAHALF=0, TRIGA=ADC_SAMPLING_POINT</code>) drives ADTR1, the primary
+BEMF/Vbus/Ibus sample. On the MC510 <code>ADC_SAMPLING_POINT = LOOPTIME_TCY/2</code> — mid-period in the up-count half = the
+<b>freewheel / OFF-centre</b>, chosen by an empirical fire-time sweep (MPER/2 reached 215 k eRPM vs 174 k + OC at pulse-centre).
+A second trigger <code>PG1TRIGB</code> (<code>CAHALF=1, TRIGB=0</code> = period-centre, mid-ON) is used only by the bus-current experiments.</p>
+
+<figure>
+<svg viewBox="0 0 760 300" width="760" height="300" role="img" aria-label="PWM period with sample points">
+  <style>
+    .ax{stroke:#9aa3b2;stroke-width:1;} .h{stroke:#0b5cad;stroke-width:2;fill:none;}
+    .l{stroke:#0a7d57;stroke-width:1.6;fill:none;} .bemf{stroke:#a0508a;stroke-width:1.8;fill:none;}
+    .lab{font-size:9px;fill:#5b6472;} .lab2{font-size:9.5px;fill:#243246;font-weight:600;}
+    .dt{fill:#f3d9b0;opacity:.7;} .smp{stroke:#a11212;stroke-width:1.4;stroke-dasharray:4 3;}
+    .leb{fill:#dfe9f5;opacity:.7;}
+  </style>
+  <!-- time axis -->
+  <line class="ax" x1="50" y1="250" x2="720" y2="250"/>
+  <text class="lab" x="720" y="266" text-anchor="end">one PWM period = 22.22 µs (MPER ≈ 71095) →</text>
+  <!-- HS waveform (center aligned, ~50% shown) -->
+  <text class="lab2" x="46" y="70" text-anchor="end">PWMxH</text>
+  <path class="h" d="M50 90 L250 90 L250 50 L520 50 L520 90 L720 90"/>
+  <!-- LS complementary -->
+  <text class="lab2" x="46" y="150" text-anchor="end">PWMxL</text>
+  <path class="l" d="M50 130 L240 130 L240 170 L530 170 L530 130 L720 130"/>
+  <!-- deadtime shading -->
+  <rect class="dt" x="240" y="46" width="12" height="128"/>
+  <rect class="dt" x="520" y="46" width="12" height="128"/>
+  <text class="lab" x="246" y="200" text-anchor="middle">deadtime</text>
+  <text class="lab" x="246" y="211" text-anchor="middle">300 ns (1920)</text>
+  <!-- floating phase BEMF terminal -->
+  <text class="lab2" x="46" y="225" text-anchor="end">V_float</text>
+  <path class="bemf" d="M50 240 C120 238,170 215,250 215 L520 215 C560 232,640 240,720 240"/>
+  <text class="lab" x="385" y="208" text-anchor="middle">~D·Vbus/2 during ON</text>
+  <!-- LEB after edges -->
+  <rect class="leb" x="252" y="50" width="20" height="40"/>
+  <text class="lab" x="262" y="44" text-anchor="middle">LEB 200ns</text>
+  <!-- sample points -->
+  <line class="smp" x1="150" y1="40" x2="150" y2="258"/>
+  <text class="lab2" x="150" y="284" text-anchor="middle" fill="#a11212">PG1TRIGA · MPER/2</text>
+  <text class="lab" x="150" y="294" text-anchor="middle">BEMF/Vbus/Ibus (OFF-centre)</text>
+  <line class="smp" x1="385" y1="40" x2="385" y2="258"/>
+  <text class="lab2" x="385" y="284" text-anchor="middle" fill="#a11212">PG1TRIGB · centre</text>
+  <text class="lab" x="385" y="294" text-anchor="middle">mid-ON bus current (expt)</text>
+  <!-- 1 MHz comparator burst dots -->
+  <g fill="#a0508a"><circle cx="265" cy="215" r="2"/><circle cx="300" cy="215" r="2"/><circle cx="335" cy="215" r="2"/><circle cx="370" cy="215" r="2"/><circle cx="405" cy="215" r="2"/><circle cx="440" cy="215" r="2"/><circle cx="475" cy="215" r="2"/><circle cx="510" cy="215" r="2"/></g>
+  <text class="lab" x="540" y="160" text-anchor="start">• SCCP3 1 MHz comparator</text>
+  <text class="lab" x="540" y="171" text-anchor="start">  samples (HWZC, ON-time)</text>
+</svg>
+<figcaption><b>Figure 4.</b> One center-aligned PWM period. The HS pulse sits in the cycle centre; the OFF-centre <code>PG1TRIGA</code>
+sample (red) lands in clean freewheel where the floating-phase BEMF is undistorted, while the HWZC comparator re-evaluates at 1 MHz during ON-time.
+Leading-edge blanking (LEB, 200 ns = 80 counts) masks the CMP3/FPCI fault inputs across each switching edge.</figcaption>
+</figure>
+
+<!-- ============================= 4 ZC ============================= -->
+<h2 id="zc">4&nbsp;&nbsp;Zero-Crossing Detection</h2>
+<p class="lead">This is the heart of the sensorless scheme. With one phase floating, its terminal voltage swings about the motor's
+virtual neutral and crosses it half-way between commutations. The firmware compares the floating-phase voltage against a
+computed neutral threshold; the crossing instant, stamped to 10 ns, is the timing reference the PLL locks to.</p>
+
+<h3>4.1&nbsp;&nbsp;Two detection paths</h3>
+<table>
+<tr><th>Path</th><th>Source</th><th>Where it runs</th><th>Used when</th></tr>
+<tr><td><b>Software ZC</b></td><td>ADC ISR samples <code>bemfRaw</code> once/PWM period and binary-thresholds it</td><td>45 kHz ADC ISR (<code>bemf_zc.c</code>)</td><td>low speed, before/around handoff</td></tr>
+<tr><td><b>Hardware ZC</b></td><td>ADC on-chip digital comparator fires the instant the live 1 MHz conversion crosses <code>CMPLO</code></td><td>priority-7 comparator + SCCP1 ISRs (<code>hwzc.c</code>)</td><td>above <code>hwzcCrossoverErpm</code></td></tr>
+</table>
+<p>The handoff is gated by <code>RT_HWZC_CROSSOVER_ERPM</code> (per profile: 1500 for the 2810/A2212, 24000 for the VEX "engages only
+where BEMF is solid") with <code>HWZC_HYSTERESIS_ERPM=500</code>. The switch is taken at a <i>true software-ZC deadline</i> so the
+hardware path inherits a clean rotor angle. <code>HWZC_Enable()</code> seeds <code>stepPeriodHR</code> from the software period and
+back-dates <code>lastZcStamp</code> by half a step so the first measured interval is ≈ one full step:</p>
+<div class="eq">stepPeriodHR = HWZC_ADC_TO_SCCP2(timing.stepPeriod) &nbsp;&nbsp;|&nbsp;&nbsp; lastZcStamp = now − stepPeriodHR/2<span class="lbl">hwzc.c:134,141</span></div>
+
+<h3>4.2&nbsp;&nbsp;Neutral / threshold mathematics</h3>
+<p>During PWM-ON the floating terminal sits at roughly half the applied phase voltage, i.e. <i>V<sub>dc</sub>·D/2</i>. The threshold
+is recomputed every ISR tick from the bus ADC and the commanded duty:</p>
+<div class="eq">rawThresh = (vbusRaw × duty) / ZC_DUTY_DIVISOR<span class="lbl">garuda_service.c:1040+</span></div>
+<p>where the divisor selects the neutral model:</p>
+<div class="eq">
+ZC_DUTY_DIVISOR = 2·LOOPTIME_TCY &nbsp;&nbsp;→&nbsp; exact V<sub>dc</sub>·D/2 &nbsp;&nbsp;(default, 2810 et al.)<br>
+ZC_DUTY_DIVISOR = (26·LOOPTIME_TCY)/10 &nbsp;→&nbsp; V<sub>dc</sub>·D/2.6 &nbsp;(≈ 23 % lower, micros 6/7/8)
+<span class="lbl">garuda_calc_params.h:189–192</span></div>
+<p>Because <code>duty/LOOPTIME_TCY = D</code> and <code>vbusRaw</code> is in ADC counts, <code>rawThresh</code> comes out in ADC counts.
+High-KV micros use the 2.6 divisor to pull the threshold down onto their tiny BEMF neutral. In closed loop the raw value is
+smoothed by a symmetric ¼-gain IIR (re-seeded instantly on CL entry):</p>
+<div class="eq">zcThreshSmooth += (rawThresh − zcThreshSmooth + 2) &gt;&gt; 2 &nbsp;&nbsp;(α = ¼, τ ≈ 0.17 ms)<span class="lbl">garuda_service.c:1124</span></div>
+<p>Optional refinements: <code>FEATURE_VIRTUAL_NEUTRAL</code> replaces the duty model with the measured average
+<i>(V<sub>A</sub>+V<sub>B</sub>+V<sub>C</sub>)/3</i>; <code>FEATURE_CL_DIFF_IDLE</code> lifts <code>thrDuty</code> by 3·MIN_DUTY for differential idle;
+and <code>HWZC_THRESH_BIAS_DOWN</code> (=0 by default) can subtract a fixed bias for very-low-BEMF motors. A running peak
+<code>bemf.bemfDevPeak = max|float − neutral|</code> per sector is captured for the filter compensator (§6).</p>
+
+<h3>4.3&nbsp;&nbsp;Sample point in the PWM cycle</h3>
+<p>Two distinct instants are sampled (Figure 4): the HWZC comparator channels convert <b>at 1 MHz during ON-time</b>
+(<code>TRG1SRC=34</code> = SCCP3), so the digital comparator continuously re-evaluates the ON-time crossing; the 45 kHz ISR
+<code>bemfRaw</code> is the <b>OFF-centre freewheel</b> sample (<code>TRG1SRC=4</code> = PG1TRIGA), used by software ZC, the falling-SW detector,
+and <code>bemfDevPeak</code>. After commutation, detection is masked through a <b>blanking</b> window to skip diode-freewheel/demag ringing:</p>
+<div class="eq">
+HW: blankTicks = period × HWZC_BLANKING_PERCENT/100 &nbsp;(14 %), min 1 µs<br>
+SW: blankBase = stepPeriod × ZC_BLANKING_PERCENT/100 &nbsp;(3 %); + demag extra when D &gt; zcDemagDutyThresh, capped at stepPeriod/4
+<span class="lbl">hwzc.c:286 · bemf_zc.c</span></div>
+
+<figure>
+<svg viewBox="0 0 760 230" width="760" height="230" role="img" aria-label="BEMF crossing with blanking and ZC">
+  <style>
+    .ax{stroke:#9aa3b2;stroke-width:1;} .bemf{stroke:#0b5cad;stroke-width:2.2;fill:none;}
+    .neu{stroke:#5b6472;stroke-width:1.2;stroke-dasharray:5 4;} .dead{stroke:#9aa3b2;stroke-width:1;stroke-dasharray:2 2;}
+    .lab{font-size:9px;fill:#5b6472;} .lab2{font-size:9.5px;fill:#243246;font-weight:600;}
+    .blank{fill:#f1ddc4;opacity:.65;} .zc{fill:#a11212;} .com{fill:#0a7d57;}
+  </style>
+  <line class="ax" x1="50" y1="190" x2="720" y2="190"/>
+  <line class="ax" x1="50" y1="30" x2="50" y2="190"/>
+  <!-- one sector -->
+  <text class="lab2" x="385" y="216" text-anchor="middle">one 60° electrical sector  (T = stepPeriodHR / timerPeriod ticks)</text>
+  <!-- neutral line -->
+  <line class="neu" x1="50" y1="110" x2="720" y2="110"/>
+  <text class="lab" x="724" y="113" text-anchor="start">neutral = zcThreshold</text>
+  <!-- BEMF rising ramp -->
+  <path class="bemf" d="M50 175 C150 172,210 168,250 160 C330 144,440 76,540 60 C600 52,670 48,720 46"/>
+  <!-- blanking -->
+  <rect class="blank" x="50" y="30" width="105" height="160"/>
+  <text class="lab" x="100" y="48" text-anchor="middle">BLANKING 14%</text>
+  <text class="lab" x="100" y="60" text-anchor="middle">(demag/diode ring)</text>
+  <!-- ZC point -->
+  <circle class="zc" cx="385" cy="110" r="4.5"/>
+  <line class="dead" x1="385" y1="30" x2="385" y2="190"/>
+  <text class="lab2" x="385" y="26" text-anchor="middle" fill="#a11212">ZC (zcStamp, 10 ns)</text>
+  <!-- deadband band -->
+  <line class="dead" x1="50" y1="102" x2="720" y2="102"/>
+  <line class="dead" x1="50" y1="118" x2="720" y2="118"/>
+  <text class="lab" x="724" y="124" text-anchor="start">± HWZC_CMP_DEADBAND</text>
+  <!-- commutation point -->
+  <circle class="com" cx="560" cy="190" r="4.5"/>
+  <line class="dead" x1="560" y1="60" x2="560" y2="190"/>
+  <text class="lab2" x="560" y="206" text-anchor="middle" fill="#0a7d57">commutate</text>
+  <text class="lab" x="475" y="150" text-anchor="middle">(30−advDeg)/60 · T after ZC</text>
+  <!-- plausibility -->
+  <text class="lab" x="220" y="180" text-anchor="middle">reject if interval &lt; 50%·T</text>
+</svg>
+<figcaption><b>Figure 5.</b> A single rising sector. BEMF ramps across the neutral threshold at mid-sector. The first 14 % is blanked,
+the threshold carries a ± deadband, the crossing is the ZC, and commutation fires <code>(30−advDeg)/60</code> of the sector later.</figcaption>
+</figure>
+
+<h3>4.4&nbsp;&nbsp;Falling-SW per-polarity detection</h3>
+<p>During PWM-ON the driven phase capacitively couples into the floating phase and biases it <i>up</i>. This <b>assists rising-ZC</b>
+detection but <b>swamps the falling crossing</b>, so on odd (falling) sectors the ON-time comparator goes silent at speed (100 % of
+misses were on odd sectors). Clean falling BEMF only exists in the PWM-OFF freewheel — exactly the <code>bemfRaw</code> OFF-centre sample.</p>
+<p>With <code>FEATURE_HWZC_FALLING_SW=1</code> the firmware arms the HW comparator <b>only on rising sectors</b>
+(<span class="mono">hwzc.c:341–350</span>); falling sectors are detected by a software compare on the OFF-centre sample:</p>
+<pre><span class="c">// falling-SW: in WATCHING, on a falling sector, OFF-centre sample vfo</span>
+fth = HWZC_ApplyFilterComp(thresh, falling) <span class="c">- deadband</span>;
+<span class="k">if</span> (vfo &lt; fth &amp;&amp; intoSector &gt; timerPeriod&gt;&gt;2 &amp;&amp; !captureValid) {
+    lastCaptureHR = zc; captureValid = <span class="k">true</span>;   <span class="c">// one accept per sector</span>
+    goodZcCount++; totalZcCount++;
+}</pre>
+<p>A speed gate <code>HWZC_FALLING_SW_MAX_ERPM</code> (per profile: 35 k A2212, 45 k VEX, 50 k 1407, 70 k 2810) disengages the
+falling-SW path above it — at high eRPM the OFF-centre sample (~1 PWM period resolution) is too coarse and the rising comparator can
+carry both polarities. A mirror <code>FEATURE_HWZC_LOWSPD_OFFCTR</code> detects <i>both</i> polarities on the OFF-centre sample at low
+speed, removing the ON-time min-duty floor and enabling a low-duty CL handoff.</p>
+
+<h3>4.5&nbsp;&nbsp;Validation &amp; rejection logic</h3>
+<p><code>HWZC_OnZcDetected()</code> (<span class="mono">hwzc.c:402</span>) runs cheap gates first:</p>
+<ol>
+<li><b>First-ZC bypass</b> — the very first ZC after enable skips the plausibility gate and IIR (the seeded <code>lastZcStamp</code>
+is a half-step guess; the first interval can be 10–190 % of a step). It just anchors the stamp.</li>
+<li><b>PWM-state gate</b> (<code>FEATURE_HWZC_PWM_GATE</code>) — reads the H-side GPIO of the PWMing phase; if PWM is OFF, reject.
+ON-time crossings (≈ D·Vbus/2) and OFF-time pseudo-crossings (≈ 0 V) are different regimes; mixing them gives 60° slip → 22 A spike.</li>
+<li><b>Interval / plausibility gate</b> — reject if the interval is implausibly short:
+<div class="eq">interval &lt; max( stepPeriodHR × HWZC_MIN_INTERVAL_PCT/100 , RT_HWZC_MIN_STEP_TICKS ) → reject<span class="lbl">hwzc.c:501</span></div>
+<code>HWZC_MIN_INTERVAL_PCT = 50</code>. A shorter interval implies the motor &gt; doubled speed in one sector — a PWM-ripple re-fire.</li>
+<li><b>Deadband / hysteresis</b> — the comparator <code>CMPLO</code> is shifted toward the signal by <code>HWZC_CMP_DEADBAND</code>
+(2 counts for micros, else 4): rising <code>thresh+DB</code>, falling <code>thresh−DB</code>, so ripple straddling neutral doesn't chatter.</li>
+<li><b>Coherence verify</b> (<code>FEATURE_HWZC_VERIFY_READS</code>) — <i>wait one ADC conversion (~1 µs)</i> then re-read a fresh
+sample. A real crossing stays on the crossed side; a ripple phantom flips back → reject. (Re-reading immediately would only see the trigger sample, hence wait-first.)</li>
+</ol>
+<div class="note"><b>What "reject %" (<code>rej</code>) means.</b> Rejections fire mostly during PWM-OFF, so
+<code>rej% ≈ (1 − duty)</code> — the OFF-window fraction. A high <code>rej%</code> is <em>not</em> guessing: it is the comparator
+correctly firing on filtered freewheel ripple and being rejected. The meaningful signal is accept-vs-miss per sector
+(<code>dbgPiMissBySector[6]</code> proved the falling-polarity masking).</div>
+<p>On accept the IIR updates only when the ZC is consecutive (<code>stepsSinceLastHwZc==1</code>) and
+<code>goodZcCount ≥ HWZC_IIR_FREEZE_ZC_COUNT</code> (3 — the freeze prevents a mistimed morph-exit ZC from ratcheting the period to floor).</p>
+
+<!-- ============================= 5 PLL ============================= -->
+<h2 id="pll">5&nbsp;&nbsp;Commutation Timing: PLL, Sector-PI &amp; IIR</h2>
+<p>The commutation period is tracked in 10 ns SCCP2 ticks. Conversion to/from electrical RPM folds the 100 MHz clock,
+6 sectors/erev and 60 s/min into a single constant:</p>
+<div class="eq">HWZC_TICKS_TO_ERPM(t) = 1×10<sup>9</sup> / t &nbsp;&nbsp;|&nbsp;&nbsp; HWZC_ERPM_TO_TICKS(e) = 1×10<sup>9</sup> / e<span class="lbl">garuda_calc_params.h:417</span></div>
+<p>So a <code>stepPeriodHR</code> of 5000 ticks (50 µs) = 200 000 eRPM. The build runs <code>FEATURE_HWZC_SECTOR_PI=1</code>, so the
+<b>autonomous-timer + PI</b> architecture is live; the reactive IIR path runs only when PI is compiled off, and as the seed.</p>
+
+<h3>5.1&nbsp;&nbsp;The autonomous-timer PLL</h3>
+<p>In sector-PI mode, detection is decoupled from commutation. SCCP1 (a 32-bit one-shot) is armed in
+<code>HWZC_OnBlankingExpired</code> to fire at <code>lastCommStamp + timerPeriod</code>; that expiry dispatches to
+<code>HWZC_OnPiPeriodExpired</code>, which runs the PI correction and then commutates. A ZC arriving between merely timestamps
+<code>lastCaptureHR</code> — it does not reschedule. A missed ZC simply leaves <code>timerPeriod</code> unchanged (robust by design).
+This structure lifted the ceiling from ~204 k (reactive wobble) to 240 k+.</p>
+
+<figure>
+<svg viewBox="0 0 760 300" width="760" height="300" role="img" aria-label="PLL block diagram">
+  <defs><marker id="pa" markerWidth="9" markerHeight="9" refX="7" refY="3" orient="auto"><path d="M0,0 L7,3 L0,6 Z" fill="#34506e"/></marker></defs>
+  <style>
+    .b{fill:#eef4fb;stroke:#5d83ad;stroke-width:1.2;} .bp{fill:#fff3e8;stroke:#d49a5c;stroke-width:1.2;}
+    .bg{fill:#ecf8f1;stroke:#73b492;stroke-width:1.2;} .t{font-size:9.5px;fill:#243246;} .ts{font-size:8.2px;fill:#5b6472;}
+    .e{stroke:#34506e;stroke-width:1.3;fill:none;marker-end:url(#pa);} .sum{fill:#fff;stroke:#34506e;stroke-width:1.3;}
+  </style>
+  <rect class="bg" x="10" y="20" width="92" height="44" rx="5"/><text class="t" x="56" y="38" text-anchor="middle">BEMF pin</text><text class="ts" x="56" y="52" text-anchor="middle">RC LPF τ=30µs</text>
+  <rect class="b" x="124" y="20" width="104" height="44" rx="5"/><text class="t" x="176" y="36" text-anchor="middle">ADC digital</text><text class="ts" x="176" y="49" text-anchor="middle">comparator CMPLO</text><text class="ts" x="176" y="60" text-anchor="middle">±deadband, +filtComp</text>
+  <rect class="b" x="252" y="20" width="104" height="44" rx="5"/><text class="t" x="304" y="38" text-anchor="middle">ZC IRQ →</text><text class="ts" x="304" y="51" text-anchor="middle">lastCaptureHR (10ns)</text>
+  <!-- sum -->
+  <circle class="sum" cx="420" cy="42" r="15"/><text class="t" x="420" y="46" text-anchor="middle">−</text>
+  <text class="ts" x="420" y="78" text-anchor="middle">capValue − setValue</text>
+  <text class="ts" x="420" y="90" text-anchor="middle">= delta</text>
+  <!-- clamp -->
+  <rect class="b" x="470" y="20" width="96" height="44" rx="5"/><text class="t" x="518" y="36" text-anchor="middle">clamp</text><text class="ts" x="518" y="49" text-anchor="middle">−T/32 … +T/16</text><text class="ts" x="518" y="60" text-anchor="middle">(high RPM)</text>
+  <!-- PI -->
+  <rect class="bp" x="600" y="14" width="150" height="58" rx="6"/><text class="t" x="675" y="32" text-anchor="middle" style="font-weight:700">Float PI</text><text class="ts" x="675" y="46" text-anchor="middle">intF += Ki·δ  (Ki=0.0625)</text><text class="ts" x="675" y="58" text-anchor="middle">T = intF + Kp·δ (Kp=0.25)</text>
+  <!-- setValue / advance -->
+  <rect class="bp" x="335" y="120" width="170" height="40" rx="5"/><text class="t" x="420" y="138" text-anchor="middle">setValue = ((30+advDeg)·T)/60</text><text class="ts" x="420" y="151" text-anchor="middle">advDeg from speed (§7)</text>
+  <!-- timer -->
+  <rect class="bp" x="560" y="120" width="190" height="48" rx="6"/><text class="t" x="655" y="139" text-anchor="middle" style="font-weight:700">SCCP1 one-shot PLL</text><text class="ts" x="655" y="153" text-anchor="middle">fires at lastCommStamp + T</text>
+  <!-- commutate -->
+  <rect class="bg" x="560" y="210" width="190" height="42" rx="5"/><text class="t" x="655" y="228" text-anchor="middle">COMMUTATION_AdvanceStep</text><text class="ts" x="655" y="242" text-anchor="middle">updates lastCommStamp</text>
+  <!-- guards -->
+  <rect class="b" x="335" y="210" width="200" height="42" rx="5"/><text class="t" x="435" y="228" text-anchor="middle">guards on T:</text><text class="ts" x="435" y="241" text-anchor="middle">ABS_FLOOR · DEFENSIVE · MIN_STEP</text>
+  <!-- slow IIR feedback -->
+  <rect class="b" x="120" y="210" width="190" height="42" rx="5"/><text class="t" x="215" y="226" text-anchor="middle">slow IIR (shift 11)</text><text class="ts" x="215" y="240" text-anchor="middle">→ stepPeriodForFilterComp → ω·τ</text>
+  <!-- edges -->
+  <path class="e" d="M102 42 L122 42"/><path class="e" d="M228 42 L250 42"/><path class="e" d="M356 42 L404 42"/>
+  <path class="e" d="M435 42 L468 42"/><path class="e" d="M566 42 L598 42"/>
+  <path class="e" d="M675 72 L675 118"/><path class="e" d="M560 144 L508 140"/>
+  <path class="e" d="M655 168 L655 208"/><path class="e" d="M558 231 L536 231"/>
+  <path class="e" d="M655 252 C655 280, 215 280, 215 254"/>
+  <path class="e" d="M215 210 C215 110, 230 64, 250 60" stroke-dasharray="4 3"/>
+  <text class="ts" x="150" y="285">T → filter-comp (broken +fb)</text>
+  <path class="e" d="M420 120 C420 100, 420 70, 420 58"/>
+</svg>
+<figcaption><b>Figure 6.</b> The sector-PI PLL. The ZC capture is differenced against the advance-derived setpoint; the clamped error
+drives a float PI that sets the commutation period <i>T</i>; an autonomous one-shot fires commutation at <code>lastCommStamp+T</code>.
+A deliberately slow IIR breaks the filter-comp positive-feedback path.</figcaption>
+</figure>
+
+<h3>5.2&nbsp;&nbsp;The sector PI controller</h3>
+<p>The controlled quantity is the position of the captured ZC within the sector. With the autonomous timer firing
+<code>OnPiPeriodExpired</code> just before commutation, the elapsed time from the sector's start commutation to the ZC is</p>
+<div class="eq">capValue = lastCaptureHR − lastCommStamp &nbsp;&nbsp;(modular u32)<span class="lbl">hwzc.c:828</span></div>
+<p>The setpoint is the expected ZC position, advanced by the schedule (Q8 fixed-point):</p>
+<div class="eq">advFp8 = ((30 + advDeg)·256)/60 &nbsp;∈ [128, 256] &nbsp;&nbsp;|&nbsp;&nbsp; setValue = (advFp8·T) ≫ 8 &nbsp;≈ ((30+advDeg)/60)·T<span class="lbl">hwzc.c:804,829</span></div>
+<div class="eq">delta = capValue − setValue &nbsp;&nbsp;(signed phase error; → 0 at lock)<span class="lbl">hwzc.c:849</span></div>
+<p>The error is clamped <b>asymmetrically and RPM-dependently</b> before the loop:</p>
+<div class="eq">
+T &lt; HWZC_PI_CLAMP_HIGH_TICKS (≥150 k eRPM): &nbsp; +cap = T/16 , &nbsp;−cap = T/32<br>
+else (low/mid RPM): &nbsp; symmetric ±T/8
+<span class="lbl">hwzc.c:851–859</span></div>
+<p>A <b>negative</b> delta means "shrink the period" (commutate faster). At the BEMF ceiling the rotor cannot accelerate, so a
+negative drift would commutate ahead of the rotor → wrong-angle → 22 A spike → UV cascade. The tighter negative clamp (T/32)
+blocks that while the looser positive clamp (T/16) keeps the loop responsive to genuine slowdowns. A separate
+<code>FEATURE_HWZC_HANDOFF_DAMP</code> hard-limits negative delta to <code>T≫6</code> for the first 24 commutations after CL entry.</p>
+<p>The active loop is a parallel-form float PI, gains specified in PLL form (ω<sub>n</sub>=0.25, ζ=0.5):</p>
+<div class="eq">
+integratorF += K<sub>i</sub>·delta , &nbsp; K<sub>i</sub> = ω<sub>n</sub><sup>2</sup> = 0.0625<br>
+T = integratorF + K<sub>p</sub>·delta , &nbsp; K<sub>p</sub> = 2ζω<sub>n</sub> = 0.25 ,&nbsp; both clamped ≥ RT_HWZC_MIN_STEP_TICKS
+<span class="lbl">hwzc.c:890–898</span></div>
+<p>Because ω<sub>n</sub> is in rad <i>per sector-event</i>, the loop's absolute bandwidth scales with rotor speed (≈ 56 Hz at 14 k eRPM,
+≈ 915 Hz at 230 k) — it widens with speed, matching the rotor timescale. The <b>defensive</b> sub-mode
+(<code>FEATURE_HWZC_PI_DEFENSIVE</code>) tracks silence: after 6 silent sectors it walks the integrator <i>larger</i> by 1 %/event so a
+slipping rotor can recapture, exiting after 2 good captures — a soft self-heal that replaced a hard desync watchdog.</p>
+
+<h3>5.3&nbsp;&nbsp;The IIR period filter (reactive seed)</h3>
+<p>In the reactive path, the period is a first-order IIR over measured intervals:</p>
+<div class="eq">newPeriod = (3·stepPeriodHR + interval) / 4 &nbsp;&nbsp;(α = ¼) , floored at RT_HWZC_MIN_STEP_TICKS<span class="lbl">hwzc.c:608</span></div>
+<p>guarded by: <b>(1)</b> consecutive-only (<code>stepsSinceLastHwZc==1</code>, so multi-step timeout intervals don't contaminate it);
+<b>(2)</b> freeze for the first 3 good ZCs after enable; <b>(3)</b> a seqlock (<code>writeSeq++ … writeSeq++</code>) so a lower-priority
+reader never tears the 32-bit write. In PI mode this IIR is paused — <code>stepPeriodHR</code> is mirrored from the PI's <code>timerPeriod</code>,
+and a <i>separate</i> slow IIR (shift 11, ≈ 11 ms) feeds the filter compensator.</p>
+
+<!-- ============================= 6 FILTER COMP ============================= -->
+<h2 id="fc">6&nbsp;&nbsp;RC Filter-Lag Compensation — Full Mathematics</h2>
+<p class="lead">The board's BEMF sense pin sits behind a passive RC low-pass (τ ≈ 30 µs). A first-order low-pass delays the apparent
+zero-crossing by a phase angle that grows with rotor speed, so the comparator fires <em>late</em>. The compensator shifts the
+comparator threshold <em>away from neutral</em> by exactly that lag so the comparator trips early, recovering the true pre-filter
+ZC. This section gives the complete math, including the ZC threshold-bias term.</p>
+
+<h3>6.1&nbsp;&nbsp;The physical lag</h3>
+<p>A first-order low-pass with time constant τ introduces, at electrical frequency ω<sub>e</sub>, a phase lag
+φ = arctan(ω<sub>e</sub>τ) ≈ ω<sub>e</sub>τ for small angles. The firmware works in the small-angle regime and caps the term (below).
+ω<sub>e</sub> follows directly from the sector period: with <code>stepPeriodHR = 1e9/eRPM</code> (HR ticks) and
+f<sub>elec</sub> = eRPM/60, the product ω<sub>e</sub>τ is computed as a Q15 fixed-point quantity.</p>
+
+<h3>6.2&nbsp;&nbsp;The threshold-bias formula</h3>
+<p>The compensator <code>HWZC_ApplyFilterComp(thresh, risingZc)</code> (<span class="mono">hwzc.h:48</span>) computes the bias step by step:</p>
+<div class="eq">
+<b>(1)</b> omegaTauQ15 = HWZC_FILTER_K_Q15 / stepP<br>
+<b>(2)</b> <span class="k">if</span> omegaTauQ15 &gt; HWZC_FILTER_MAX_OMEGA_Q15 (24000) → clamp to 24000<br>
+<b>(3)</b> amp = bemf.zcAmpForFilterComp ; &nbsp;<span class="k">if</span> amp==0 → amp = thresh<br>
+<b>(4)</b> ampPct = risingZc ? HWZC_FILTER_AMP_PCT : HWZC_FILTER_AMP_PCT_FALLING &nbsp;(both 50)<br>
+<b>(5)</b> offset = ((amp × omegaTauQ15) ≫ 15) × ampPct / 100<br>
+<b>(6)</b> <span class="k">if</span> offset &gt; HWZC_FILTER_MAX_OFFSET (600) → clamp to 600<br>
+<b>(7)</b> rising: <b>return thresh − offset</b> &nbsp;&nbsp;|&nbsp;&nbsp; falling: <b>return thresh + offset</b>
+<span class="lbl">hwzc.h:70–98</span></div>
+
+<p>The constant <code>HWZC_FILTER_K_Q15</code> folds τ, the SCCP clock and the Q15 scale so that step (1) yields ω<sub>e</sub>τ in Q15 directly:</p>
+<div class="eq">
+HWZC_FILTER_K_Q15 = 2π · 10<sup>9</sup> · τ · 32768 / 60 &nbsp;=&nbsp; 2π · 10<sup>9</sup> · 30×10<sup>−6</sup> · 32768 / 60 &nbsp;≈&nbsp; <b>102 943 706</b>
+<span class="lbl">garuda_config.h:1236</span></div>
+<p><b>Why this works:</b> <code>stepP</code> (HR ticks) = 10<sup>9</sup>/eRPM and f<sub>elec</sub> = eRPM/60, so</p>
+<div class="eq">
+omegaTauQ15 = K/stepP = [2π·10<sup>9</sup>·τ·32768/60] · [eRPM/10<sup>9</sup>] = 2π·(eRPM/60)·τ·32768 = (ω<sub>e</sub>τ)·32768
+</div>
+<p>i.e. the division by <code>stepP</code> turns the folded constant into ω<sub>e</sub>τ expressed in Q15 (32768 = 1.0 rad). The cap of
+24000 limits ω<sub>e</sub>τ to ≈ 0.73 rad (≈ 42°), preventing the offset blowing up at very high RPM (the cap engages around 200 k).</p>
+
+<p><b>The amplitude scaling (step 5)</b> converts the phase offset into an ADC-count threshold shift. For a near-sinusoidal BEMF of
+peak amplitude <code>amp</code> crossing zero, a small time/phase shift δφ moves the crossing voltage by ≈ <code>amp·δφ</code>; here
+δφ = ω<sub>e</sub>τ (Q15), so <code>(amp × omegaTauQ15) ≫ 15 = amp·ω<sub>e</sub>τ</code> is the count-shift needed to trip the comparator
+exactly one filter-lag early. The <code>× ampPct/100</code> (50 %) is an empirical de-rating — the linear small-angle model over-predicts,
+and 50 % matched the bench at the proven speeds.</p>
+
+<h3>6.3&nbsp;&nbsp;The ZC threshold-bias chain end-to-end</h3>
+<p>It is worth following the full threshold a comparator actually sees, because three distinct biases stack:</p>
+<div class="eq">
+CMPLO<sub>final</sub> = [ zcThreshold ]  ∓  offset<sub>filtComp</sub>  ±  HWZC_CMP_DEADBAND
+</div>
+<ul>
+<li><b>zcThreshold</b> — the duty-model neutral <code>vbusRaw·duty/ZC_DUTY_DIVISOR</code>, ¼-IIR-smoothed (§4.2).</li>
+<li><b>∓ offset<sub>filtComp</sub></b> — pulls the threshold <i>toward the oncoming signal</i> (down for rising, up for falling) by the
+filter-lag amount above, so the comparator fires early enough to cancel the RC delay.</li>
+<li><b>± deadband</b> — pushes the threshold a fixed 2–4 counts <i>away</i> from neutral in the crossing direction (rising
+<code>+DB</code>, falling <code>−DB</code>) so PWM ripple straddling neutral cannot chatter the comparator.</li>
+</ul>
+<p>Sign convention together: for a <b>rising</b> sector the net is <code>thresh − offset + DB</code>; for a <b>falling</b> sector
+<code>thresh + offset − DB</code>. The two biases act in opposite senses by design — the filter-comp advances the trip, the deadband
+guards against chatter — and the same <code>HWZC_ApplyFilterComp</code> result is used at every CMPLO write site (initial arm in
+<code>HWZC_OnCommutation</code>, the live ISR refresh, the verify path, and the falling-SW software compare) so all paths stay consistent.</p>
+
+<h3>6.4&nbsp;&nbsp;The amplitude source — why measured, not duty-derived</h3>
+<div class="keybox">The offset uses <code>zcAmpForFilterComp</code> — the <em>measured</em> BEMF amplitude (a slow ≈ 46 ms IIR of
+<code>bemfDevPeak</code>) — <b>not</b> the live <code>zcThreshold</code>. This is critical: <code>zcThreshold ∝ duty</code>, so feeding it into the
+offset would make the compensation duty-dependent and create a regen positive-feedback path (more duty → bigger offset → earlier
+fire → period shrinks → more duty). The measured amplitude lags with rotor inertia and reflects the <em>real</em> BEMF magnitude the
+RC lag acts on. This is the "<code>bemfDevPeak</code> vs <code>zcThreshold</code>" fix that centred the ZC from ~15 % to ~50 % of the sector.</div>
+<p>A second positive-feedback break is in the <i>period</i> source: in PI mode <code>stepP</code> for step (1) is the slow IIR
+<code>stepPeriodForFilterComp</code> (shift 11), not the live <code>timerPeriod</code>. Otherwise a PI period-shrink would grow ω<sub>e</sub>τ → grow
+the offset → fire earlier → shrink the period further. The slow IIR keeps that loop gain ≪ 1.</p>
+
+<figure>
+<svg viewBox="0 0 720 220" width="720" height="220" role="img" aria-label="Filter-lag compensation">
+  <style>
+    .ax{stroke:#9aa3b2;stroke-width:1;} .tru{stroke:#0b5cad;stroke-width:2;fill:none;}
+    .fil{stroke:#a0508a;stroke-width:2;fill:none;stroke-dasharray:5 3;} .neu{stroke:#5b6472;stroke-width:1;stroke-dasharray:5 4;}
+    .sh{stroke:#0a7d57;stroke-width:1.4;stroke-dasharray:3 3;} .lab{font-size:9px;fill:#5b6472;} .lab2{font-size:9.5px;fill:#243246;font-weight:600;}
+  </style>
+  <line class="ax" x1="40" y1="180" x2="700" y2="180"/>
+  <!-- neutral -->
+  <line class="neu" x1="40" y1="105" x2="700" y2="105"/><text class="lab" x="704" y="108">neutral (zcThreshold)</text>
+  <!-- shifted threshold (rising: down) -->
+  <line class="sh" x1="40" y1="128" x2="700" y2="128"/><text class="lab" x="704" y="131" fill="#0a7d57">CMPLO − offset</text>
+  <!-- true BEMF -->
+  <path class="tru" d="M40 175 C160 170,230 140,320 105 C400 74,520 40,700 28"/>
+  <!-- filtered (lagged) -->
+  <path class="fil" d="M40 178 C170 175,250 158,350 122 C440 90,560 52,700 36"/>
+  <!-- crossings -->
+  <circle cx="320" cy="105" r="4" fill="#0b5cad"/><text class="lab2" x="320" y="98" text-anchor="middle">t_true</text>
+  <circle cx="392" cy="105" r="4" fill="#a0508a"/><text class="lab2" x="402" y="100" text-anchor="start" fill="#a0508a">t_late (filtered)</text>
+  <!-- where filtered hits shifted threshold = t_true -->
+  <circle cx="322" cy="128" r="4" fill="#0a7d57"/>
+  <line x1="320" y1="80" x2="320" y2="180" stroke="#9aa3b2" stroke-width="1" stroke-dasharray="2 2"/>
+  <text class="lab" x="150" y="60">filtered trace crosses the SHIFTED threshold back at t_true</text>
+</svg>
+<figcaption><b>Figure 7.</b> Filter-lag compensation (rising sector). The RC-filtered BEMF (dashed magenta) crosses neutral late at
+<code>t_late</code>; lowering the comparator threshold by <code>offset = amp·ω<sub>e</sub>τ·50%</code> makes the filtered trace reach the shifted
+threshold (green) back at <code>t_true</code>. Falling sectors raise the threshold by the mirror amount.</figcaption>
+</figure>
+
+<!-- ============================= 7 ADVANCE ============================= -->
+<h2 id="adv">7&nbsp;&nbsp;Timing Advance</h2>
+<div class="warnbox"><b>This is 6-step commutation phase advance, NOT field weakening.</b> There is no d-axis current and no space-vector
+modulation. Advance simply moves the commutation instant earlier in the sector to compensate the inductive lag (phase current
+cannot switch instantly) plus the detection/filter latency, which lets the motor run past its nominal no-load speed.</div>
+<p>The advance angle is a linear interpolation of speed, identical in all three sites (<code>ComputeCommDelay</code>,
+<code>HWZC_OnPiPeriodExpired</code>, the SW path):</p>
+<div class="eq">
+eRPM ≤ RT_RAMP_TARGET_ERPM &nbsp;→&nbsp; advDeg = TIMING_ADVANCE_MIN_DEG (0°)<br>
+eRPM ≥ RT_TIMING_ADV_FULL_ERPM &nbsp;→&nbsp; advDeg = RT_TIMING_ADV_MAX_DEG<br>
+else &nbsp;→&nbsp; advDeg = MIN + (MAX−MIN)·(eRPM − RAMP_TARGET)/(FULL − RAMP_TARGET)
+<span class="lbl">hwzc.c:307–323</span></div>
+<p>Advance is baked into <b>both</b> sides of the loop: in reactive mode the schedule fires early —
+<code>commDelay = stepPeriodHR·(30−advDeg)/60</code> — and in PI mode the setpoint shifts —
+<code>setValue = ((30+advDeg)·T)/60</code> — so the loop holds the same phase relationship. The endpoint
+<code>RT_TIMING_ADV_FULL_ERPM</code> is <b>decoupled</b> from the speed cap (it defaults to <code>RT_MAX_CLOSED_LOOP_ERPM</code> but can be
+overridden), so a motor operating far below its cap still gets meaningful advance growth instead of a near-flat ramp.</p>
+
+<figure>
+<svg viewBox="0 0 700 240" width="700" height="240" role="img" aria-label="Advance vs eRPM">
+  <style>.ax{stroke:#9aa3b2;stroke-width:1.2;} .gl{stroke:#e6ecf4;stroke-width:1;} .rmp{stroke:#0b5cad;stroke-width:2.4;fill:none;}
+    .lab{font-size:9px;fill:#5b6472;} .lab2{font-size:9.5px;fill:#243246;font-weight:600;} .d{stroke:#a11212;stroke-width:1;stroke-dasharray:4 3;}</style>
+  <line class="ax" x1="60" y1="190" x2="660" y2="190"/><line class="ax" x1="60" y1="40" x2="60" y2="190"/>
+  <text class="lab2" x="360" y="222" text-anchor="middle">eRPM</text>
+  <text class="lab2" x="22" y="120" transform="rotate(-90,22,120)">advDeg</text>
+  <text class="lab" x="60" y="204" text-anchor="middle">0</text>
+  <text class="lab" x="120" y="204" text-anchor="middle">3 000</text>
+  <text class="lab" x="620" y="204" text-anchor="middle">240 000</text>
+  <text class="lab" x="48" y="194" text-anchor="end">0°</text>
+  <text class="lab" x="48" y="64" text-anchor="end">20°</text>
+  <!-- flat 0 to rampTarget -->
+  <path class="rmp" d="M60 190 L120 190 L620 60"/>
+  <line class="d" x1="120" y1="60" x2="120" y2="190"/><text class="lab" x="120" y="54" text-anchor="middle">RAMP_TARGET</text>
+  <line class="d" x1="620" y1="60" x2="620" y2="190"/><text class="lab" x="600" y="54" text-anchor="middle">FULL_ERPM = maxCL</text>
+  <text class="lab" x="350" y="110" text-anchor="middle" fill="#0b5cad">slope ≈ 20° / 237 000 (~1.6° @ 22 k)</text>
+  <line class="d" x1="60" y1="60" x2="660" y2="60"/><text class="lab" x="660" y="56" text-anchor="end">timingAdvMaxDeg = 20° (assert ceiling 25°)</text>
+</svg>
+<figcaption><b>Figure 8.</b> Advance ramp for the reference profile: 0° up to <code>RAMP_TARGET_ERPM</code> (3000), linear to
+<code>timingAdvMaxDeg</code> (20°) at <code>RT_TIMING_ADV_FULL_ERPM</code> (240 000), flat above. The same eRPM (240 000) also sets the
+period floor <code>RT_HWZC_MIN_STEP_TICKS = 1e9/240000 ≈ 4167 ticks</code>.</figcaption>
+</figure>
+
+<!-- ============================= 8 ABS FLOOR ============================= -->
+<h2 id="abs">8&nbsp;&nbsp;ABS_FLOOR False-Lock Guard &amp; the λ Math</h2>
+<p>The relative gates of §4.5 are ratiometric; they cannot catch a cumulative harmonic ratchet where the PI slowly walks onto a
+half- or third-period phantom lock. <code>FEATURE_HWZC_ABS_FLOOR</code> adds an <b>absolute</b> operating-point floor from no-load
+physics: the rotor cannot spin faster than the no-load speed for the present duty and bus voltage.</p>
+<p>The no-load sector period in HR ticks is computed from the motor's flux constant λ (= <code>focKeUvSRad</code>, in µV·s/rad):</p>
+<div class="eq">
+dutyFrac = duty / LOOPTIME_TCY &nbsp;;&nbsp; vbus_v = vbusRaw × VBUS_SCALE_V_PER_COUNT &nbsp;;&nbsp; λ = gspParams.focKeUvSRad<br>
+P<sub>ff</sub> = 181.380 × λ / (vbus_v × dutyFrac) &nbsp;&nbsp;[HR ticks]<br>
+floorP = P<sub>ff</sub> × (100 / HWZC_ABS_FLOOR_OVERSPEED_PCT) &nbsp;&nbsp;(overspeed 130 → allow 130 % of no-load)
+<span class="lbl">hwzc.c:920–953</span></div>
+<p>The constant <b>181.380</b> folds the SCCP clock (10<sup>8</sup>), the 6 sectors/erev, the 2π, and the BEMF↔period algebra so
+<code>P<sub>ff</sub></code> comes out directly in 10 ns ticks. The guard is applied only above
+<code>HWZC_ABS_FLOOR_MIN_DUTYFRAC=0.03</code> and <code>vbus_v &gt; 6</code>.</p>
+<div class="eq"><b>SHRINK-ONLY:</b> clamp only when (timerPeriod &lt; floorP) AND (timerPeriod &lt; T) — the PI is <i>driving</i> the period below the floor.<span class="lbl">hwzc.c:942</span></div>
+<p>A period already below the floor but <i>growing</i> is a genuine high-speed coast-down through the floor and is left alone (the
+rotor really is that fast); only an accelerating shrink at idle duty is provably a false-lock.</p>
+<div class="warnbox"><b>Why a wrong λ pins the motor.</b> <code>P<sub>ff</sub> ∝ λ</code>. If λ is too high (e.g. the 2810's 583 used on a motor whose
+true flux is 230), <code>P<sub>ff</sub></code> and <code>floorP</code> inflate, the floor sits <em>above</em> the real no-load period, and the guard
+clamps the period up to <code>floorP</code> every sector — pinning eRPM at <i>130 %·(λ<sub>true</sub>/λ<sub>set</sub>) = 130 %·(230/583) ≈ 51 %</i> of no-load
+with large reactive current. This is exactly the VEX "half-speed/high-current" symptom; the fix was setting <code>focKeUvSRad = 5.5132×10<sup>6</sup>/(KV·PP)</code>.
+The same formula seeds the PI integrator at handoff (one-shot, slow-only).</div>
+
+<!-- ============================= 9 PROTECTION ============================= -->
+<h2 id="prot">9&nbsp;&nbsp;Protection &amp; Auxiliary Control</h2>
+<h3>9.1&nbsp;&nbsp;The overcurrent ladder</h3>
+<p>Bus current is sensed on the OA3 op-amp off the low-side DC-link shunt. The count↔amp frame is defined once:</p>
+<div class="eq">
+OC_TRIP_MV(ma) = OC_VREF_MV + (ma · OC_SHUNT_MOHM · OC_GAIN_X100 / 100000) = 1650 + ma·3·2495/100000<br>
+OC_MV_TO_COUNTS(mv) = mv · 4096 / 3300 &nbsp;&nbsp;→&nbsp;&nbsp; ≈ 93 counts/A, 2048 = 0 A
+<span class="lbl">garuda_calc_params.h:480</span></div>
+<p>Four layers act in sequence (reference profile values):</p>
+<table>
+<tr><th>Layer</th><th>mA</th><th>counts</th><th>Mechanism</th></tr>
+<tr><td>HW CMP3 chop (run)</td><td>9 000</td><td>2883</td><td>Analog cycle-by-cycle CLPCI truncation of each PWM pulse</td></tr>
+<tr><td>HW CMP3 chop (startup)</td><td>10 000</td><td>2976</td><td>Elevated during align/OL/morph so torque isn't chopped</td></tr>
+<tr><td>SW soft limit</td><td>13 000</td><td>3255</td><td>Proportional duty reduction (a slow backstop, sits above the chop here)</td></tr>
+<tr><td>SW hard fault</td><td>14 000</td><td>3347</td><td>3-consecutive-sample debounce → <code>FAULT_OVERCURRENT</code></td></tr>
+</table>
+<p>The SW soft limiter reduces duty in proportion to the excess:
+<code>reduction = excess·(duty−MIN_DUTY)/range</code>, guarded by <code>duty &gt; MIN_DUTY</code> to prevent unsigned underflow.</p>
+
+<figure>
+<svg viewBox="0 0 700 250" width="700" height="250" role="img" aria-label="OC ladder">
+  <style>.ax{stroke:#9aa3b2;stroke-width:1.2;} .lab{font-size:9px;fill:#5b6472;} .lab2{font-size:9.5px;fill:#243246;font-weight:600;}
+    .l1{stroke:#0a7d57;} .l2{stroke:#cf8a2c;} .l3{stroke:#c9a400;} .l4{stroke:#a11212;}</style>
+  <line class="ax" x1="120" y1="220" x2="120" y2="30"/>
+  <text class="lab2" x="80" y="125" transform="rotate(-90,80,125)">bus current</text>
+  <text class="lab" x="116" y="224" text-anchor="end">0 A (2048)</text>
+  <!-- ladder lines -->
+  <line class="l1" x1="120" y1="160" x2="660" y2="160" stroke-width="2"/><text class="lab2" x="664" y="163" fill="#0a7d57">9 A — CMP3 chop (run)</text>
+  <line class="l2" x1="120" y1="135" x2="660" y2="135" stroke-width="2" stroke-dasharray="6 3"/><text class="lab2" x="664" y="138" fill="#cf8a2c">10 A — CMP3 chop (startup)</text>
+  <line class="l3" x1="120" y1="95" x2="660" y2="95" stroke-width="2"/><text class="lab2" x="664" y="98" fill="#c9a400">13 A — SW soft (duty cut)</text>
+  <line class="l4" x1="120" y1="65" x2="660" y2="65" stroke-width="2.4"/><text class="lab2" x="664" y="68" fill="#a11212">14 A — SW hard FAULT (3-tick)</text>
+  <line x1="120" y1="200" x2="660" y2="200" stroke="#9aa3b2" stroke-dasharray="4 3"/><text class="lab" x="664" y="203">7 A — ramp accel gate</text>
+  <!-- regime columns -->
+  <rect x="180" y="40" width="160" height="180" fill="#fff7ec" opacity=".5"/><text class="lab" x="260" y="236" text-anchor="middle">STARTUP regime</text>
+  <rect x="420" y="40" width="160" height="180" fill="#ecf8f1" opacity=".5"/><text class="lab" x="500" y="236" text-anchor="middle">RUN regime (after sync)</text>
+</svg>
+<figcaption><b>Figure 9.</b> The four-layer OC ladder. The HW chop is the fast cycle-by-cycle limiter (10 A during startup, 9 A in run);
+the SW soft/hard layers are slower backstops above it. On a low-resistance micro the soft limit is deliberately placed above the chop.</figcaption>
+</figure>
+
+<h3>9.2&nbsp;&nbsp;OC auto-zero bias</h3>
+<p>The OC math assumes a 1.65 V / 2048-count rest, but on this board the OA3 chain rests at ≈ 78 counts. <code>FEATURE_OC_AUTOZERO</code>
+measures the true rest during ARMED (bridge off, 64 samples) and re-centres everything into the 2048 frame — but <b>only if</b> the
+sample spread ≤ 16 counts (a quiescence gate; a quick re-arm with the rotor still coasting puts regen ripple on the bus and would
+latch a bias ≈ 7 A wrong). Three things are corrected with the same delta <code>(2048 − g_ocBiasAdc)</code>:</p>
+<div class="eq">
+ibusRaw_corrected = rawBus + (2048 − g_ocBiasAdc) &nbsp;&nbsp;(freewheel/non-inverted path)<br>
+CMP3 DAC: &nbsp; v = dacVal − (2048 − g_ocBiasAdc) &nbsp;&nbsp;(single choke HAL_CMP3_SetThreshold)
+<span class="lbl">garuda_service.c:1596 · hal_comparator.c:271</span></div>
+<p>Until the cal runs, <code>g_ocBiasAdc = 2048</code> makes the shift a no-op — a graceful legacy fallback.</p>
+
+<h3>9.3&nbsp;&nbsp;Bus-voltage tiers</h3>
+<p>Scale: <code>VBUS_SCALE_V_PER_COUNT = 3.3·23.2/4095 = 0.018696 V/count</code>. All tiers use a 3-sample filter. Two sticky-hysteresis
+FSMs sit between the regen brake and the hard OV fault:</p>
+<table>
+<tr><th>Tier</th><th>ADC / volts</th><th>Action</th></tr>
+<tr><td>Hard OV fault</td><td>3600 / ~67 V</td><td>3-sample → FAULT, reset CMP3, outputs off</td></tr>
+<tr><td>Emergency hold (on/off)</td><td>1620 / 1450 (~30 / ~27 V)</td><td>freeze slew-down entirely (3 V hyst, min 20 ms)</td></tr>
+<tr><td>Regen brake (on/off)</td><td>1500 / 1290 (~28 / ~24 V)</td><td>slew-down ÷16 (4 V hyst, min 10 ms)</td></tr>
+<tr><td>Vbus sag (limit/recover)</td><td>900 / 1000 (~17 / ~19 V)</td><td>reduce duty (depth·8)≫4</td></tr>
+<tr><td>UV fault (run / startup)</td><td>500 / 400 (~9.3 / ~7.4 V)</td><td>3-sample → FAULT (relaxed pre-sync)</td></tr>
+</table>
+<p>The regen brake gets first chance (slow the deceleration so the bus cap absorbs the energy); if Vbus still climbs, the emergency
+hold freezes slew-down completely, breaking the positive-feedback loop that previously drove a 47.8 V PSU-OV trip. Only the regen
+direction is frozen — rising duty (which consumes regen) still passes.</p>
+
+<h3>9.4&nbsp;&nbsp;Outer speed PI (parked)</h3>
+<p><code>FEATURE_SPEED_PI=0</code>. A per-ZC eRPM control loop exists (<code>speed_pi.c</code>) working in eRPM space (constant plant gain
+≈ 3.2 eRPM/tick vs 16× variation in period space). Algorithm per ZC: throttle→target map, measured = 1e9/stepPeriodHR, a 5 %
+deadband (error <i>shifted</i> not clamped), a bench-fit feedforward <code>ff = 0.310·target + 400</code>, a PI on the residual
+(<code>Kp=0.03, Ki=0.001</code>) with a tight ±8000-tick integrator clamp and back-calculation anti-windup. It is parked because the inner
+HWZC timing PI and this outer loop form a nested loop that cascades to PSU-OV → phantom 200 k → UV above ~80 k; revival needs an
+absolute output slew limiter first. Its telemetry (<code>speedPiTarget/LastError/OutputDuty/IntegratorF</code>) is still plumbed.</p>
+
+<!-- ============================= 10 GSP ============================= -->
+<h2 id="gsp">10&nbsp;&nbsp;GSP Host Protocol &amp; Parameter System</h2>
+<p>The Garuda Serial Protocol is a binary command/telemetry API over UART1 at 115.2 kbps, polled (no UART ISR), pumped from
+<code>main()</code> via <code>GSP_Service()</code> (PumpRx → ParserProcess → TelemTick → PumpTx). It is the host-facing API for the GUI and MCP tooling.</p>
+
+<h3>10.1&nbsp;&nbsp;Wire protocol &amp; CRC</h3>
+<figure>
+<svg viewBox="0 0 720 120" width="720" height="120" role="img" aria-label="GSP frame layout">
+  <style>.f{stroke:#5d83ad;stroke-width:1.2;} .lab{font-size:9px;fill:#5b6472;} .lab2{font-size:10px;fill:#243246;font-weight:600;} .mono{font-family:monospace;font-size:9.5px;}</style>
+  <rect class="f" x="20"  y="40" width="70"  height="34" fill="#ecf8f1"/><text class="lab2" x="55" y="61" text-anchor="middle">0x02</text><text class="lab" x="55" y="86" text-anchor="middle">START</text>
+  <rect class="f" x="90"  y="40" width="70"  height="34" fill="#eef4fb"/><text class="lab2" x="125" y="61" text-anchor="middle">LEN</text><text class="lab" x="125" y="86" text-anchor="middle">cmd+payload</text>
+  <rect class="f" x="160" y="40" width="80"  height="34" fill="#eef4fb"/><text class="lab2" x="200" y="61" text-anchor="middle">CMD_ID</text>
+  <rect class="f" x="240" y="40" width="300" height="34" fill="#fff8ef"/><text class="lab2" x="390" y="61" text-anchor="middle">PAYLOAD … (0–248, little-endian)</text>
+  <rect class="f" x="540" y="40" width="80"  height="34" fill="#fbedec"/><text class="lab2" x="580" y="61" text-anchor="middle">CRC16</text><text class="lab" x="580" y="86" text-anchor="middle">big-endian</text>
+  <!-- LEN bracket -->
+  <line x1="90" y1="100" x2="540" y2="100" stroke="#5b6472"/><text class="lab" x="315" y="113" text-anchor="middle">LEN counts CMD_ID + PAYLOAD (1–249); CRC over these too; START excluded</text>
+</svg>
+<figcaption><b>Figure 10.</b> GSP frame. <code>LEN</code> counts <code>CMD_ID</code>+payload (not START or CRC). The CRC is CRC-16-CCITT
+(poly <code>0x1021</code>, init <code>0xFFFF</code>, MSB-first, no final XOR/reflection) over <code>LEN</code>+<code>CMD_ID</code>+payload, sent high byte first.</figcaption>
+</figure>
+<p>Versioning is pull-based: the host issues <code>GET_INFO (0x01)</code> and reads <code>protocolVersion</code>
+(<code>GSP_PROTOCOL_VERSION=3</code>) from the 24-byte INFO frame, then decodes everything else accordingly. Snapshot fields are
+append-only so older decoders parse the prefix and ignore the tail. On CRC mismatch the frame is silently dropped; the host retries.</p>
+
+<h3>10.2&nbsp;&nbsp;Command set</h3>
+<table>
+<tr><th>Opcode</th><th>Name</th><th>Req payload</th><th>Response</th></tr>
+<tr><td>0x00</td><td>PING</td><td>0</td><td>echo</td></tr>
+<tr><td>0x01</td><td>GET_INFO</td><td>0</td><td>INFO (24 B)</td></tr>
+<tr><td>0x02</td><td>GET_SNAPSHOT</td><td>0</td><td>SNAPSHOT (248 B)</td></tr>
+<tr><td>0x03 / 0x04 / 0x05</td><td>START / STOP / CLEAR_FAULT</td><td>0</td><td>ACK / ERR_WRONG_STATE</td></tr>
+<tr><td>0x06</td><td>SET_THROTTLE</td><td>2 (u16 0–2000)</td><td>ACK</td></tr>
+<tr><td>0x07</td><td>SET_THROTTLE_SRC</td><td>1 (u8)</td><td>ACK</td></tr>
+<tr><td>0x08</td><td>HEARTBEAT</td><td>0</td><td>ACK</td></tr>
+<tr><td>0x10</td><td>GET_PARAM</td><td>2 (u16 id)</td><td>id+value (6 B)</td></tr>
+<tr><td>0x11</td><td>SET_PARAM</td><td>6 (id u16 + value u32)</td><td>id+value (6 B) / ERR</td></tr>
+<tr><td>0x12 / 0x13</td><td>SAVE_CONFIG / LOAD_DEFAULTS</td><td>0</td><td>ACK / ERR_EEPROM_THROTTLED</td></tr>
+<tr><td>0x14 / 0x15</td><td>TELEM_START / STOP</td><td>1 (Hz) / 0</td><td>actualRate / ACK</td></tr>
+<tr><td>0x16</td><td>GET_PARAM_LIST</td><td>0/1 (startIdx)</td><td>paginated descriptors (≤20/page)</td></tr>
+<tr><td>0x17</td><td>LOAD_PROFILE</td><td>1 (u8)</td><td>profileId / ERR</td></tr>
+<tr><td>0x20</td><td>AUTO_DETECT</td><td>0</td><td>ACK / ERR_WRONG_STATE</td></tr>
+<tr><td>0x26 / 0x27</td><td>GET_RX_STATUS / RX_INJECT</td><td>0 / 4</td><td>status / ACK</td></tr>
+<tr><td>0x30–0x32</td><td>SCOPE_ARM / STATUS / READ</td><td>8 / 0 / 2</td><td>burst-scope</td></tr>
+<tr><td>0x80</td><td>TELEM_FRAME</td><td>—</td><td>seq(u16)+SNAPSHOT (unsolicited stream)</td></tr>
+<tr><td>0xFF</td><td>ERROR</td><td>—</td><td>errCode(u8)[+aux]</td></tr>
+</table>
+<p>Errors: 0x01 UNKNOWN_CMD, 0x02 BAD_LENGTH, 0x03 BUSY, 0x04 WRONG_STATE, 0x05 OUT_OF_RANGE, 0x06 UNKNOWN_PARAM,
+0x07 CROSS_VALIDATION, 0x08 EEPROM_THROTTLED. Motor-control commands set intent flags (<code>gspStartIntent</code> etc.) consumed by
+the state machine, decoupling the polled host loop from the control ISR.</p>
+
+<h3>10.3&nbsp;&nbsp;Parameter &amp; descriptor system</h3>
+<p>The 58-entry descriptor table (<code>paramDescriptors[]</code>) carries <code>{id, type, group, min, max, offset, size}</code>; every
+<code>SET_PARAM</code> is bounds-checked then <b>cross-validated</b> for bilateral invariants
+(<code>initialErpm &lt; rampTargetErpm &lt; maxClosedLoopErpm</code>; <code>ocSwLimit &lt; ocLimit ≤ ocFault</code>; <code>vbusUv &lt; vbusOv</code>; …), then
+<code>GSP_RecomputeDerived()</code> refreshes the ISR-facing constants. Selected control parameters:</p>
+<table>
+<tr><th>ID</th><th>Name</th><th>Type</th><th>Min</th><th>Max</th><th>Units / role</th></tr>
+<tr><td>0x15</td><td>RAMP_TARGET_ERPM</td><td>u16</td><td>500</td><td>20000</td><td>OL ramp endpoint</td></tr>
+<tr><td>0x22</td><td>TIMING_ADV_MAX_DEG</td><td>u8</td><td>0</td><td>45</td><td>max commutation advance °</td></tr>
+<tr><td>0x30</td><td>HWZC_CROSSOVER_ERPM</td><td>u16</td><td>500</td><td>20000</td><td>eRPM to enable HWZC</td></tr>
+<tr><td>0x53</td><td>MAX_CL_ERPM</td><td>u32</td><td>5000</td><td>350000</td><td>PI period-floor clamp + advance anchor</td></tr>
+<tr><td>0x20</td><td>CL_IDLE_DUTY_PCT</td><td>u8</td><td>0</td><td>30</td><td>CL idle duty floor %</td></tr>
+<tr><td>0x58 / 0x59</td><td>OC_LIMIT / OC_STARTUP_MA</td><td>u16</td><td>501 / 5000</td><td>22000</td><td>CMP3 chop (run / startup), live-tunable</td></tr>
+<tr><td>0x41 / 0x42</td><td>OC_FAULT / OC_SW_LIMIT_MA</td><td>u16</td><td>1000 / 500</td><td>22000</td><td>SW hard / soft OC</td></tr>
+<tr><td>0x72</td><td>FOC_KE_UV_S_RAD</td><td>u16</td><td>1</td><td>65000</td><td>λ — read by the 6-step ABS_FLOOR (§8)</td></tr>
+<tr><td>0x56 / 0x57</td><td>ZC_DEMAG_DUTY / BLANK_EXTRA</td><td>u8</td><td>20 / 0</td><td>90 / 30</td><td>demag blanking</td></tr>
+<tr><td>0x6C / 0x6D</td><td>MORPH_LOCK_ZC / TOL_PCT</td><td>u8</td><td>2 / 5</td><td>20 / 60</td><td>morph→CL lock gate</td></tr>
+</table>
+<div class="note"><b>Live tuning.</b> There is no <code>FEATURE_LIVE_TUNE</code> symbol; live tuning is state-gate exceptions in
+<code>HandleSetParam</code>: all SET_PARAM is IDLE-only <em>except</em> the AN1078 IDs <code>0x90–0x93</code> and the OC chop IDs
+<code>0x58/0x59</code> (which push straight to <code>HAL_CMP3_SetThreshold()</code>). With <code>FEATURE_GSP_EEPROM=0</code> in this dev build,
+all writes are RAM-only and revert to <code>profileDefaults[MOTOR_PROFILE]</code> on reset/reflash. A CRC-16 defaults-signature at
+EEPROM offset 100 auto-invalidates a stale overlay when a profile's compiled defaults change.</div>
+
+<h3>10.4&nbsp;&nbsp;Telemetry snapshot</h3>
+<p>The 248-byte packed <code>GSP_SNAPSHOT_T</code> is captured tear-safely (8/16-bit atomic, 32-bit double-read,
+<code>stepPeriodHR</code> via the <code>writeSeq</code> seqlock; window peaks read-and-reset each capture so each frame is the most-recent
+~20 ms envelope). Key fields (offsets):</p>
+<table>
+<tr><th>Off</th><th>Field</th><th>Type</th><th>Meaning</th></tr>
+<tr><td>0–3</td><td>state, faultCode, currentStep, direction</td><td>u8×4</td><td>FSM + sector</td></tr>
+<tr><td>4 / 6</td><td>throttle / dutyPct</td><td>u16 / u8</td><td>0–2000 / duty·100/LOOPTIME_TCY</td></tr>
+<tr><td>8 / 10 / 14 / 16</td><td>vbusRaw / ibusRaw / bemfRaw / zcThreshold</td><td>u16</td><td>ADC counts</td></tr>
+<tr><td>18 / 20</td><td>stepPeriod / goodZcCount</td><td>u16</td><td>eRPM = 450000/stepPeriod (host)</td></tr>
+<tr><td>30 / 31 / 40</td><td>hwzcEnabled / hwzcPhase / hwzcStepPeriodHR</td><td>u8/u8/u32</td><td>HR period (seqlock)</td></tr>
+<tr><td>32 / 36</td><td>hwzcTotalZcCount / TotalMissCount</td><td>u32</td><td>measured vs guessed</td></tr>
+<tr><td>52 / 56</td><td>clpciTripCount / fpciTripCount</td><td>u32</td><td>HW chop / fault PCI</td></tr>
+<tr><td>170</td><td>hwzcNoiseReject</td><td>u32</td><td>ZCs rejected (off-time / interval gate)</td></tr>
+<tr><td>198 / 200</td><td>ibusWinMax / Min</td><td>u16</td><td>bus current window (negative = freewheel artifact)</td></tr>
+<tr><td>208–228</td><td>speedPi* block</td><td>mixed</td><td>parked outer-loop telemetry</td></tr>
+<tr><td>228</td><td>cpuLoadPermille</td><td>u16</td><td>main-loop CPU load vs motor-off baseline</td></tr>
+<tr><td>230</td><td>hwzcMissBySector[6]</td><td>u16×6</td><td>per-sector guess tally (proved falling-polarity masking)</td></tr>
+<tr><td>242 / 244</td><td>fallOffBemfMin / Max</td><td>u16</td><td>falling-sector OFF-centre envelope</td></tr>
+<tr><td>246</td><td>ibusAvg</td><td>u16</td><td>IIR low-pass of ibusRaw (~5.7 ms TC) — last field</td></tr>
+</table>
+
+<!-- ============================= 11 MATH ============================= -->
+<h2 id="math">11&nbsp;&nbsp;Consolidated Mathematics Reference</h2>
+<p>Every quantitative relationship in the firmware, in one place. Reference profile values shown where they make the formula concrete.</p>
+
+<h3>11.1&nbsp;&nbsp;Clock, period &amp; duty</h3>
+<div class="eq">
+F<sub>CY</sub> = 100 MHz &nbsp;·&nbsp; PWM_CLOCK_MHZ = 400 &nbsp;·&nbsp; SCCP_CLOCK_HZ = 10<sup>8</sup> (1 HR tick = 10 ns)<br>
+LOOPTIME_µs = 10<sup>6</sup>/PWMFREQUENCY_HZ = 10<sup>6</sup>/45000 = 22.222 µs<br>
+LOOPTIME_TCY = (22.222 × 8 × 400) − 16 ≈ 71 095 &nbsp;&nbsp;(MPER)<br>
+MAX_DUTY = LOOPTIME_TCY × 99/100 &nbsp;·&nbsp; D = duty / LOOPTIME_TCY<br>
+DEADTIME_COUNTS = (DEADTIME_NS/1000)×16×400 = 1920 &nbsp;·&nbsp; MIN_DUTY = 2×DEADTIME_COUNTS = 3840
+</div>
+
+<h3>11.2&nbsp;&nbsp;Period ↔ eRPM (the 1e9 constant)</h3>
+<div class="eq">
+6 steps/erev ⇒ step-frequency = eRPM/10 Hz ⇒ stepPeriod = 10/eRPM s = (10/eRPM)·10<sup>8</sup> ticks<br>
+HWZC_TICKS_TO_ERPM(t) = HWZC_ERPM_TO_TICKS(e) = 10<sup>9</sup>/x &nbsp;&nbsp;(self-inverse)<br>
+HWZC_ADC_TO_SCCP2(t) = t × (10<sup>8</sup>/45000) ≈ t × 2222 &nbsp;·&nbsp; RT_HWZC_MIN_STEP_TICKS = 10<sup>9</sup>/maxClosedLoopErpm<br>
+TIMER1_TO_ADC_TICKS(t) = t × PWMFREQUENCY_HZ/10000 = t × 4.5 &nbsp;&nbsp;(was ×12/5 — the 24 kHz bug, fixed)
+</div>
+
+<h3>11.3&nbsp;&nbsp;ZC neutral threshold</h3>
+<div class="eq">
+rawThresh = vbusRaw × duty / ZC_DUTY_DIVISOR<br>
+ZC_DUTY_DIVISOR = 2·LOOPTIME_TCY (→ V<sub>dc</sub>D/2) &nbsp;|&nbsp; (26·LOOPTIME_TCY)/10 (→ V<sub>dc</sub>D/2.6, micros)<br>
+zcThreshSmooth += (rawThresh − zcThreshSmooth + 2) ≫ 2 &nbsp;&nbsp;(α = ¼)
+</div>
+
+<h3>11.4&nbsp;&nbsp;Filter-lag compensation (threshold bias)</h3>
+<div class="eq">
+HWZC_FILTER_K_Q15 = 2π·10<sup>9</sup>·τ·32768/60 = 102 943 706 &nbsp;(τ = 30 µs)<br>
+omegaTauQ15 = K/stepP = (ω<sub>e</sub>τ)·32768 , &nbsp; clamp ≤ HWZC_FILTER_MAX_OMEGA_Q15 = 24000 (≈ 0.73 rad)<br>
+amp = zcAmpForFilterComp (else thresh) &nbsp;·&nbsp; ampPct = 50 (rising and falling)<br>
+offset = ((amp × omegaTauQ15) ≫ 15) × ampPct/100 , &nbsp; clamp ≤ HWZC_FILTER_MAX_OFFSET = 600<br>
+rising: CMPLO = thresh − offset + DEADBAND &nbsp;·&nbsp; falling: CMPLO = thresh + offset − DEADBAND<br>
+HWZC_CMP_DEADBAND = 2 (micros) / 4 (default)
+</div>
+
+<h3>11.5&nbsp;&nbsp;Timing advance</h3>
+<div class="eq">
+advDeg = MIN + (MAX−MIN)·(eRPM − RAMP_TARGET)/(FULL − RAMP_TARGET) , &nbsp; clamped [MIN, MAX]<br>
+MIN = TIMING_ADVANCE_MIN_DEG = 0° &nbsp;·&nbsp; MAX = timingAdvMaxDeg (20°) &nbsp;·&nbsp; FULL = RT_TIMING_ADV_FULL_ERPM<br>
+reactive: commDelay = stepPeriodHR·(30−advDeg)/60 &nbsp;·&nbsp; PI: setValue = ((30+advDeg)·T)/60<br>
+advFp8 = ((30+advDeg)·256)/60 ∈ [128,256]
+</div>
+
+<h3>11.6&nbsp;&nbsp;Sector PI &amp; IIR</h3>
+<div class="eq">
+capValue = lastCaptureHR − lastCommStamp &nbsp;·&nbsp; delta = capValue − setValue<br>
+clamp: high RPM +T/16 / −T/32 ; else ±T/8 &nbsp;·&nbsp; handoff-damp neg ≤ T≫6 (24 events)<br>
+K<sub>p</sub> = 2ζω<sub>n</sub> = 0.25 , K<sub>i</sub> = ω<sub>n</sub><sup>2</sup> = 0.0625 (ω<sub>n</sub>=0.25, ζ=0.5)<br>
+integratorF += K<sub>i</sub>·delta ; T = integratorF + K<sub>p</sub>·delta ; both ≥ RT_HWZC_MIN_STEP_TICKS<br>
+reactive IIR: newPeriod = (3·stepPeriodHR + interval)/4 &nbsp;·&nbsp; defensive: T ×= 1.01/event<br>
+filter-comp period: stepPeriodForFilterComp via slow IIR (shift 11)
+</div>
+
+<h3>11.7&nbsp;&nbsp;ABS_FLOOR no-load guard</h3>
+<div class="eq">
+P<sub>ff</sub> = 181.380 × λ / (vbus_v × dutyFrac) &nbsp;[HR ticks] , &nbsp; λ = focKeUvSRad (µV·s/rad)<br>
+floorP = P<sub>ff</sub> × 100/HWZC_ABS_FLOOR_OVERSPEED_PCT (130) , &nbsp; applied if dutyFrac &gt; 0.03 ∧ vbus_v &gt; 6<br>
+shrink-only: clamp T → floorP iff (T &lt; floorP ∧ T &lt; T<sub>prev</sub>)<br>
+λ for a new motor: focKeUvSRad = round(5.5132×10<sup>6</sup>/(KV·PP))
+</div>
+
+<h3>11.8&nbsp;&nbsp;Current &amp; voltage sensing</h3>
+<div class="eq">
+OC_TRIP_MV(ma) = 1650 + ma·3·2495/100000 &nbsp;·&nbsp; OC_MV_TO_COUNTS(mv) = mv·4096/3300<br>
+⇒ ≈ 93 counts/A, 2048 = 0 A &nbsp;·&nbsp; ibus_corrected = rawBus + (2048 − g_ocBiasAdc)<br>
+CMP3 DAC: v = dacVal − (2048 − g_ocBiasAdc) &nbsp;·&nbsp; auto-zero gate: 64 samples, spread ≤ 16<br>
+VBUS_SCALE_V_PER_COUNT = 3.3·23.2/4095 = 0.018696 V/count<br>
+SW soft OC: reduction = (ibus−OC_SW_LIMIT)·(duty−MIN_DUTY)/range
+</div>
+
+<h3>11.9&nbsp;&nbsp;Blanking &amp; gates</h3>
+<div class="eq">
+HW blank = period × HWZC_BLANKING_PERCENT/100 (14 %), min 1 µs<br>
+SW blank = stepPeriod × ZC_BLANKING_PERCENT/100 (3 %) + demag(D &gt; zcDemagDutyThresh), cap stepPeriod/4<br>
+plausibility: reject interval &lt; max(stepPeriodHR×HWZC_MIN_INTERVAL_PCT/100 (50 %), RT_HWZC_MIN_STEP_TICKS)<br>
+LEB = OC_LEB_BLANKING_NS/1000 × PWM_CLOCK_MHZ = 200/1000 × 400 = 80 counts
+</div>
+
+<h3>11.10&nbsp;&nbsp;GSP framing</h3>
+<div class="eq">
+CRC16: crc=0xFFFF; crc ^= byte≪8; ×8: crc = (crc&amp;0x8000) ? (crc≪1)^0x1021 : crc≪1<br>
+over LEN+CMD_ID+PAYLOAD (START excluded), TX high-byte-first &nbsp;·&nbsp; host eRPM = 450000/stepPeriod
+</div>
+
+<!-- ============================= 12 APPENDIX ============================= -->
+<h2 id="appx">12&nbsp;&nbsp;Appendix: Feature Flags &amp; Glossary</h2>
+<h3>12.1&nbsp;&nbsp;Key feature flags (reference build)</h3>
+<table>
+<tr><th>Flag</th><th>State</th><th>Effect</th></tr>
+<tr><td>FEATURE_ADC_CMP_ZC</td><td>1</td><td>Hardware comparator ZC path enabled</td></tr>
+<tr><td>FEATURE_HWZC_SECTOR_PI</td><td>1</td><td>Autonomous-timer + PI architecture (vs reactive)</td></tr>
+<tr><td>FEATURE_HWZC_PI_FLOAT</td><td>1</td><td>Float parallel-form PI (ω<sub>n</sub>/ζ gains)</td></tr>
+<tr><td>FEATURE_HWZC_PI_DEFENSIVE</td><td>1</td><td>Relax-when-silent self-heal</td></tr>
+<tr><td>FEATURE_HWZC_FILTER_COMP</td><td>1</td><td>RC filter-lag threshold compensation (§6)</td></tr>
+<tr><td>FEATURE_HWZC_FALLING_SW</td><td>1</td><td>Per-polarity: HW comparator rising-only, SW falling</td></tr>
+<tr><td>FEATURE_HWZC_ABS_FLOOR</td><td>1</td><td>No-load period floor from λ (§8)</td></tr>
+<tr><td>FEATURE_TIMING_ADVANCE</td><td>1</td><td>Speed-scheduled commutation advance (§7)</td></tr>
+<tr><td>FEATURE_SINE_STARTUP</td><td>1</td><td>Sine V/f align→ramp→morph startup</td></tr>
+<tr><td>FEATURE_OC_AUTOZERO</td><td>1</td><td>Bus-ADC rest-bias re-centering (§9.2)</td></tr>
+<tr><td>FEATURE_VBUS_FAULT / REGEN_BRAKE / EMERGENCY_HOLD</td><td>1</td><td>Multi-tier bus-voltage protection (§9.3)</td></tr>
+<tr><td>FEATURE_SPEED_PI</td><td>0</td><td>Outer eRPM loop — parked (§9.4)</td></tr>
+<tr><td>FEATURE_AM32_STARTUP / IF_STARTUP / PLL_STARTUP</td><td>0</td><td>Alternate startup strategies (off for micros)</td></tr>
+<tr><td>FEATURE_GSP / GSP_EEPROM</td><td>1 / 0</td><td>Host protocol on; persistence off (RAM-only tuning)</td></tr>
+</table>
+
+<h3>12.2&nbsp;&nbsp;Glossary</h3>
+<table>
+<tr><th>Term</th><th>Meaning</th></tr>
+<tr><td>ZC</td><td>Zero-crossing — the floating-phase BEMF crossing the virtual neutral; the rotor-position reference</td></tr>
+<tr><td>HWZC / SW-ZC</td><td>Hardware (digital comparator) vs software (ADC-ISR threshold) zero-cross detection</td></tr>
+<tr><td>HR tick</td><td>SCCP2 high-resolution timestamp tick = 10 ns (100 MHz)</td></tr>
+<tr><td>stepPeriodHR / timerPeriod</td><td>Measured / PI-controlled commutation (60° sector) period in HR ticks</td></tr>
+<tr><td>eRPM</td><td>Electrical RPM = mechanical RPM × pole-pairs</td></tr>
+<tr><td>MORPH</td><td>The sine→trapezoid handoff state that blends open-loop drive into closed-loop ZC commutation</td></tr>
+<tr><td>λ (focKeUvSRad)</td><td>Motor flux/back-EMF constant, µV·s/rad electrical; read by the 6-step ABS_FLOOR guard</td></tr>
+<tr><td>advance</td><td>6-step commutation phase lead (NOT field weakening) compensating inductive + detection lag</td></tr>
+<tr><td>chop (CLPCI)</td><td>Cycle-by-cycle hardware current limit: CMP3 truncates each PWM pulse via the PWM current-limit PCI</td></tr>
+<tr><td>rej%</td><td>Fraction of comparator fires rejected (≈ PWM-OFF fraction) — not a guess rate</td></tr>
+<tr><td>GSP</td><td>Garuda Serial Protocol — the UART command/telemetry API</td></tr>
+</table>
+
+<p class="small" style="margin-top:22px;border-top:1px solid var(--line);padding-top:8px;">
+<b>Document scope &amp; provenance.</b> Generated from a complete read of <span class="mono">dspic33AKESC/</span> on branch
+<span class="mono">ak512-port</span>, reference build <span class="mono">MOTOR_PROFILE 6</span> (VEX 4000 KV). Constants and citations reflect the
+source as committed; values in <span class="mono">gspParams</span> are runtime-tunable and may differ per active profile. Stale in-code comments
+referencing a "24 kHz ADC ISR" are superseded by <span class="mono">PWMFREQUENCY_HZ = 45000</span> throughout.</p>
+
+<!-- ============================= 13 WORKED EXAMPLE ============================= -->
+<h2 id="ex">13&nbsp;&nbsp;Worked Example — One Commutation Cycle at 100 000 eRPM</h2>
+<p>To make the timing chain concrete, trace a single sector with the reference profile (45 kHz PWM, <code>maxClosedLoopErpm</code>=240 000,
+<code>timingAdvMaxDeg</code>=20°, <code>RAMP_TARGET_ERPM</code>=3000) running steadily at 100 000 eRPM, duty ≈ 38 %, Vbus ≈ 10 V.</p>
+
+<h4>Step A — period in HR ticks</h4>
+<div class="eq">stepPeriodHR = 10<sup>9</sup>/eRPM = 10<sup>9</sup>/100 000 = <b>10 000 ticks = 100 µs</b> per 60° sector<br>
+one electrical revolution = 6 × 100 µs = 600 µs ⇒ 1 667 erev/s</div>
+<p>At 45 kHz the ADC ISR runs every 22.22 µs, so a 100 µs sector spans only <b>≈ 4.5 ADC samples</b> — already coarse for the software
+path, which is why HWZC (1 MHz comparator) owns detection here.</p>
+
+<h4>Step B — advance angle</h4>
+<div class="eq">advDeg = 0 + (20−0)·(100 000 − 3 000)/(240 000 − 3 000) = 20·(97 000/237 000) = <b>8.18° → 8°</b><br>
+advFp8 = ((30+8)·256)/60 = 9728/60 = <b>162</b> &nbsp;(Q8, = 0.633)</div>
+
+<h4>Step C — setpoint &amp; commutation instant</h4>
+<div class="eq">setValue = (advFp8·T)≫8 = (162·10 000)/256 = <b>6328 ticks</b> (= 63.3 % into the sector)<br>
+reactive commDelay = T·(30−advDeg)/60 = 10 000·(22/60) = <b>3667 ticks</b> after the ZC</div>
+<p>The ZC ideally lands at the sector midpoint (5000 ticks / 30°). With 8° advance the loop holds the ZC at 6328 ticks past the
+<i>previous</i> commutation, so commutation fires 8° before the next rotor sector boundary — covering the inductive + detection lag.</p>
+
+<h4>Step D — filter-lag compensation bias</h4>
+<div class="eq">omegaTauQ15 = K/stepP = 102 943 706 / 10 000 = <b>10 294</b> (= ω<sub>e</sub>τ = 0.314 rad = 18°)<br>
+ω<sub>e</sub> = 2π·(100 000/60) = 10 472 rad/s ⇒ ω<sub>e</sub>τ = 10 472·30µs = 0.314 ✓ (matches)<br>
+assume amp (zcAmpForFilterComp) ≈ 220 counts ⇒ offset = (220·10 294 ≫ 15)·50/100 = (69)·0.5 = <b>35 counts</b><br>
+rising CMPLO = zcThreshold − 35 + 4(deadband) ; falling CMPLO = zcThreshold + 35 − 4</div>
+<p>So at 100 k the comparator threshold is pulled ≈ 35 counts toward the oncoming signal to cancel an 18° RC lag — the
+single largest dynamic correction in the loop, and the reason ZC stays centred rather than walking late with speed.</p>
+
+<h4>Step E — blanking &amp; plausibility window</h4>
+<div class="eq">blankTicks = 10 000·14/100 = <b>1400 ticks (14 µs)</b> masked after each commutation<br>
+plausibility floor = max(10 000·50/100, RT_HWZC_MIN_STEP_TICKS=4167) = <b>5000 ticks</b> — any interval &lt; 5000 rejected</div>
+
+<h4>Step F — PI correction for a 200-tick early capture</h4>
+<div class="eq">say capValue = 6128 (200 ticks early) ⇒ delta = 6128 − 6328 = <b>−200</b><br>
+clamp (mid RPM, T &gt; 6667-tick HIGH threshold ⇒ symmetric ±T/8 = ±1250): −200 passes<br>
+integratorF += 0.0625·(−200) = −12.5 ⇒ T<sub>new</sub> = integratorF + 0.25·(−200) = T − 12.5 − 50 ≈ <b>9938 ticks</b><br>
+new commanded eRPM = 10<sup>9</sup>/9938 = <b>100 624</b> — a 0.6 % nudge faster to recentre the ZC</div>
+<p>The tight negative clamp (here T/8, tightening to T/32 above 150 k) prevents a string of early captures from ratcheting the period
+down onto a half-period phantom; the ABS_FLOOR guard (§8) is the absolute backstop if it ever tried.</p>
+
+<!-- ============================= 14 REGISTER REF ============================= -->
+<h2 id="reg">14&nbsp;&nbsp;Peripheral Register Configuration Reference</h2>
+<h3>14.1&nbsp;&nbsp;PWM generators (PG1/2/3)</h3>
+<table>
+<tr><th>Register / field</th><th>Value</th><th>Meaning</th></tr>
+<tr><td>PG1CON.MODSEL</td><td>4</td><td>Center-aligned PWM</td></tr>
+<tr><td>PGxIOCON1.PMOD</td><td>0</td><td>Complementary HS/LS with hardware deadtime</td></tr>
+<tr><td>PGxDTH / PGxDTL</td><td>1920</td><td>Deadtime high/low = 300 ns</td></tr>
+<tr><td>MPER</td><td>71 095</td><td>Master period = LOOPTIME_TCY</td></tr>
+<tr><td>PG1EVT1.ADTR1EN1</td><td>1</td><td>PG1TRIGA drives ADC trigger 1</td></tr>
+<tr><td>PG1TRIGA (CAHALF/TRIGA)</td><td>0 / MPER/2</td><td>ADC sample at freewheel OFF-centre</td></tr>
+<tr><td>PGxIOCON2 (override word)</td><td>0 / 0x301000 / 0x300000</td><td>PWM_ACTIVE / LOW / FLOAT</td></tr>
+<tr><td>PGxCLPCI2</td><td>0x40000000</td><td>PCI source = CMP3 output (bit30)</td></tr>
+<tr><td>PGxCLPCI1.AQSS / ACP</td><td>0b000 / 0b011</td><td>forced-accept, latched chop</td></tr>
+<tr><td>PGxLEB</td><td>80</td><td>Leading-edge blanking = 200 ns</td></tr>
+</table>
+<h3>14.2&nbsp;&nbsp;ADC channel map (AK512)</h3>
+<table>
+<tr><th>Signal</th><th>Channel / pin</th><th>Trigger</th><th>Sample</th></tr>
+<tr><td>Phase B BEMF (ISR src)</td><td>AD1CH3 / RA10</td><td>PG1TRIGA</td><td>OFF-centre, SAMC=5</td></tr>
+<tr><td>Phase A BEMF</td><td>AD1CH4 / RA9</td><td>PG1TRIGA</td><td>OFF-centre</td></tr>
+<tr><td>Phase C BEMF</td><td>AD2CH3 / RB8</td><td>PG1TRIGA</td><td>OFF-centre</td></tr>
+<tr><td>HWZC comparator (active float)</td><td>AD1CH1/2, AD2CH2</td><td>SCCP3 (TRG=34)</td><td>1 MHz, SAMC=3 (~205 ns)</td></tr>
+<tr><td>Vbus</td><td>AD3CH2 / RF0</td><td>PG1TRIGA</td><td>OFF-centre</td></tr>
+<tr><td>Ibus</td><td>AD3CH1 / RA5 (OA3OUT)</td><td>PG1TRIGA</td><td>SAMC=3</td></tr>
+<tr><td>Ia / Ib monitor</td><td>AD1CH0 / AD2CH0 (OA1/2OUT)</td><td>PG1TRIGA</td><td>mid-ON, SAMC=3</td></tr>
+<tr><td>Pot (throttle)</td><td>AD2CH1 / RB15</td><td>PG1TRIGA</td><td>—</td></tr>
+</table>
+<div class="note">Only the <b>active floating phase</b>'s HWZC channel is triggered (<code>TRG1SRC=34</code>); the other two are gated off
+(<code>TRG1SRC=0</code>). Two simultaneous 1 MHz burst channels on one AD core starve the PWM-triggered control channel — a bench-proven
+constraint, and why <code>HAL_ADC_BemfBurstOff()</code> must run on HWZC shutdown.</div>
+<h3>14.3&nbsp;&nbsp;Comparator / DAC (CMP3 OC chop)</h3>
+<table>
+<tr><th>Field</th><th>Value</th><th>Meaning</th></tr>
+<tr><td>DAC3CMP.INPSEL</td><td>3</td><td>CMP input D = OA3 output (the MC510 fix; INPSEL=0 watched the wrong node)</td></tr>
+<tr><td>DAC3CMP.CMPPOL</td><td>0</td><td>Output HIGH when OA3OUT &gt; DAC</td></tr>
+<tr><td>DAC3CMP.HYSSEL</td><td>0b11</td><td>45 mV hysteresis (max)</td></tr>
+<tr><td>DAC3CMP.FLTREN</td><td>1</td><td>Digital filter on</td></tr>
+<tr><td>DAC3DAT.DACDAT</td><td>OC_CMP3_*_DAC</td><td>Threshold, shifted by HAL_CMP3_SetThreshold for auto-zero</td></tr>
+<tr><td>DAC trim source</td><td>flash 0x7F20E0</td><td>Factory INL/DNL (wrong address left CMP3 reference dead)</td></tr>
+</table>
+<h3>14.4&nbsp;&nbsp;SCCP timers</h3>
+<table>
+<tr><th>Timer</th><th>Mode</th><th>Clock</th><th>Role</th></tr>
+<tr><td>SCCP1</td><td>32-bit one-shot</td><td>100 MHz</td><td>Blanking expiry &amp; next-commutation deadline</td></tr>
+<tr><td>SCCP2</td><td>32-bit free-run, PR=0xFFFFFFFF</td><td>100 MHz</td><td>10 ns ZC timestamp / period clock</td></tr>
+<tr><td>SCCP3</td><td>32-bit periodic, PR=100</td><td>100 MHz</td><td>1 MHz trigger for the HWZC comparator channel</td></tr>
+<tr><td>SCCP4</td><td>32-bit input capture</td><td>100 MHz</td><td>RX servo-PWM / DShot edge capture (not in motor loop)</td></tr>
+<tr><td>Timer1</td><td>1:8 prescale</td><td>F<sub>CY</sub>/8</td><td>100 µs system tick — arm/align/ramp/recovery counters</td></tr>
+</table>
+
+<!-- ============================= 15 FULL PARAM TABLE ============================= -->
+<h2 id="paramfull">15&nbsp;&nbsp;Complete Parameter Descriptor Table (58 entries)</h2>
+<p>Every settable parameter, in enumeration order, with type, group, bounds and units. Groups: 0 STARTUP, 1 CLOSED_LOOP,
+2 OVERCURRENT, 3 ZC_DETECT, 4 DUTY_SLEW, 5 VOLTAGE, 6 RECOVERY, 7 MOTOR_HW, 8 FOC_MOTOR, 9 FOC_TUNING, 10 FOC_STARTUP, 11 AN1078.</p>
+<table>
+<tr><th>ID</th><th>Name</th><th>T</th><th>Grp</th><th>Min</th><th>Max</th><th>Units</th></tr>
+<tr><td>0x15</td><td>RAMP_TARGET_ERPM</td><td>u16</td><td>0</td><td>500</td><td>20000</td><td>eRPM</td></tr>
+<tr><td>0x16</td><td>RAMP_ACCEL_ERPM_PER_S</td><td>u16</td><td>0</td><td>50</td><td>20000</td><td>eRPM/s</td></tr>
+<tr><td>0x17</td><td>RAMP_DUTY_PCT</td><td>u8</td><td>0</td><td>5</td><td>80</td><td>%</td></tr>
+<tr><td>0x51</td><td>ALIGN_DUTY_PCT</td><td>u8</td><td>0</td><td>2</td><td>50</td><td>%</td></tr>
+<tr><td>0x52</td><td>INITIAL_ERPM</td><td>u16</td><td>0</td><td>50</td><td>1000</td><td>eRPM</td></tr>
+<tr><td>0x54</td><td>SINE_ALIGN_MOD_PCT</td><td>u8</td><td>0</td><td>2</td><td>50</td><td>%</td></tr>
+<tr><td>0x55</td><td>SINE_RAMP_MOD_PCT</td><td>u8</td><td>0</td><td>5</td><td>80</td><td>%</td></tr>
+<tr><td>0x20</td><td>CL_IDLE_DUTY_PCT</td><td>u8</td><td>1</td><td>0</td><td>30</td><td>%</td></tr>
+<tr><td>0x22</td><td>TIMING_ADV_MAX_DEG</td><td>u8</td><td>1</td><td>0</td><td>45</td><td>°</td></tr>
+<tr><td>0x30</td><td>HWZC_CROSSOVER_ERPM</td><td>u16</td><td>1</td><td>500</td><td>20000</td><td>eRPM</td></tr>
+<tr><td>0x53</td><td>MAX_CL_ERPM</td><td>u32</td><td>1</td><td>5000</td><td>350000</td><td>eRPM</td></tr>
+<tr><td>0x56</td><td>ZC_DEMAG_DUTY_THRESH</td><td>u8</td><td>1</td><td>20</td><td>90</td><td>%</td></tr>
+<tr><td>0x57</td><td>ZC_DEMAG_BLANK_EXTRA</td><td>u8</td><td>1</td><td>0</td><td>30</td><td>%</td></tr>
+<tr><td>0x42</td><td>OC_SW_LIMIT_MA</td><td>u16</td><td>2</td><td>500</td><td>22000</td><td>mA</td></tr>
+<tr><td>0x41</td><td>OC_FAULT_MA</td><td>u16</td><td>2</td><td>1000</td><td>22000</td><td>mA</td></tr>
+<tr><td>0x58</td><td>OC_LIMIT_MA</td><td>u16</td><td>2</td><td>501</td><td>22000</td><td>mA</td></tr>
+<tr><td>0x59</td><td>OC_STARTUP_MA</td><td>u16</td><td>2</td><td>5000</td><td>22000</td><td>mA</td></tr>
+<tr><td>0x5A</td><td>RAMP_CURRENT_GATE_MA</td><td>u16</td><td>2</td><td>0</td><td>22000</td><td>mA</td></tr>
+<tr><td>0x64</td><td>ZC_BLANKING_PCT</td><td>u8</td><td>3</td><td>1</td><td>15</td><td>%</td></tr>
+<tr><td>0x65</td><td>ZC_ADC_DEADBAND</td><td>u8</td><td>3</td><td>0</td><td>20</td><td>counts</td></tr>
+<tr><td>0x66</td><td>ZC_SYNC_THRESHOLD</td><td>u8</td><td>3</td><td>4</td><td>20</td><td>—</td></tr>
+<tr><td>0x67</td><td>ZC_FILTER_THRESHOLD</td><td>u8</td><td>3</td><td>1</td><td>10</td><td>—</td></tr>
+<tr><td>0x60</td><td>DUTY_SLEW_UP</td><td>u8</td><td>4</td><td>1</td><td>20</td><td>%/ms</td></tr>
+<tr><td>0x61</td><td>DUTY_SLEW_DOWN</td><td>u8</td><td>4</td><td>1</td><td>50</td><td>%/ms</td></tr>
+<tr><td>0x62</td><td>POST_SYNC_SETTLE_MS</td><td>u16</td><td>4</td><td>100</td><td>5000</td><td>ms</td></tr>
+<tr><td>0x63</td><td>POST_SYNC_SLEW_DIV</td><td>u8</td><td>4</td><td>1</td><td>16</td><td>—</td></tr>
+<tr><td>0x68</td><td>VBUS_OV_ADC</td><td>u16</td><td>5</td><td>2000</td><td>4000</td><td>counts</td></tr>
+<tr><td>0x69</td><td>VBUS_UV_ADC</td><td>u16</td><td>5</td><td>200</td><td>2000</td><td>counts</td></tr>
+<tr><td>0x6A</td><td>DESYNC_COAST_MS</td><td>u16</td><td>6</td><td>50</td><td>1000</td><td>ms</td></tr>
+<tr><td>0x6B</td><td>DESYNC_MAX_RESTARTS</td><td>u8</td><td>6</td><td>0</td><td>10</td><td>—</td></tr>
+<tr><td>0x6C</td><td>MORPH_LOCK_ZC_COUNT</td><td>u8</td><td>0</td><td>2</td><td>20</td><td>—</td></tr>
+<tr><td>0x6D</td><td>MORPH_LOCK_TOL_PCT</td><td>u8</td><td>0</td><td>5</td><td>60</td><td>%</td></tr>
+<tr><td>0x6E</td><td>IF_CURRENT_CA</td><td>u16</td><td>0</td><td>100</td><td>2000</td><td>cA</td></tr>
+<tr><td>0x6F</td><td>IF_RAMP_ERPM_PER_S</td><td>u16</td><td>0</td><td>1000</td><td>60000</td><td>eRPM/s</td></tr>
+<tr><td>0x50</td><td>MOTOR_POLE_PAIRS</td><td>u8</td><td>7</td><td>1</td><td>20</td><td>—</td></tr>
+<tr><td>0x70</td><td>FOC_RS_MOHM</td><td>u16</td><td>8</td><td>10</td><td>10000</td><td>mΩ</td></tr>
+<tr><td>0x71</td><td>FOC_LS_UH</td><td>u16</td><td>8</td><td>1</td><td>10000</td><td>µH</td></tr>
+<tr><td>0x72</td><td>FOC_KE_UV_S_RAD</td><td>u16</td><td>8</td><td>1</td><td>65000</td><td>µV·s/rad (λ)</td></tr>
+<tr><td>0x73</td><td>FOC_VBUS_NOM_CV</td><td>u16</td><td>8</td><td>500</td><td>6000</td><td>cV</td></tr>
+<tr><td>0x74</td><td>FOC_MAX_CURRENT_CA</td><td>u16</td><td>8</td><td>50</td><td>5000</td><td>cA</td></tr>
+<tr><td>0x75</td><td>FOC_MAX_ELEC_RAD_S</td><td>u16</td><td>8</td><td>500</td><td>30000</td><td>rad/s</td></tr>
+<tr><td>0x76</td><td>FOC_KP_DQ_MILLI</td><td>u16</td><td>9</td><td>1</td><td>60000</td><td>×1e-3</td></tr>
+<tr><td>0x77</td><td>FOC_KI_DQ</td><td>u16</td><td>9</td><td>1</td><td>60000</td><td>—</td></tr>
+<tr><td>0x78</td><td>FOC_OBS_LPF_MILLI</td><td>u16</td><td>9</td><td>10</td><td>900</td><td>×1e-3</td></tr>
+<tr><td>0x79–0x80</td><td>FOC_ALIGN/RAMP_IQ, TIMES, RATE, HANDOFF, FAULTS</td><td>u16</td><td>10</td><td>—</td><td>—</td><td>FOC startup set</td></tr>
+<tr><td>0x90</td><td>AN1078_THETA_BASE_DEGX10</td><td>u16</td><td>11</td><td>0</td><td>3600</td><td>deg×10 (live)</td></tr>
+<tr><td>0x91</td><td>AN1078_THETA_K_E7</td><td>u16</td><td>11</td><td>0</td><td>1000</td><td>×1e-7 (live)</td></tr>
+<tr><td>0x92</td><td>AN1078_KSLIDE_MV</td><td>u16</td><td>11</td><td>100</td><td>30000</td><td>mV (live)</td></tr>
+<tr><td>0x93</td><td>AN1078_ID_FW_MAX_DECIA</td><td>u16</td><td>11</td><td>0</td><td>200</td><td>dA (live)</td></tr>
+</table>
+
+<!-- ============================= 16 RATIONALE ============================= -->
+<h2 id="rat">16&nbsp;&nbsp;Design Rationale &amp; Hard-Won Lessons</h2>
+<p>Several non-obvious design choices are the residue of measured failures. They are collected here because they are the parts most
+likely to be "fixed" incorrectly by a future maintainer.</p>
+<table>
+<tr><th>Choice</th><th>Naive alternative</th><th>Why the alternative fails</th></tr>
+<tr><td>OFF-centre ADC sample (MPER/2)</td><td>Pulse-centre sample</td><td>Pulse-centre lands in driven coupling → noisy; capped at 174 k + OC vs 215 k at MPER/2</td></tr>
+<tr><td>Filter-comp amplitude = measured BEMF</td><td>Use <code>zcThreshold</code> (∝ duty)</td><td>Duty-dependent offset → regen positive feedback → ZC walks / desync</td></tr>
+<tr><td>Slow IIR for filter-comp period</td><td>Live <code>timerPeriod</code></td><td>Shrink → bigger ω·τ → earlier fire → shrink: runaway</td></tr>
+<tr><td>Asymmetric PI clamp (neg tighter)</td><td>Symmetric clamp</td><td>Negative drift commutates ahead of rotor at ceiling → 22 A → UV</td></tr>
+<tr><td>HW comparator rising-only + SW falling</td><td>Comparator both polarities</td><td>PWM-ON coupling masks the falling crossing → 100 % odd-sector misses</td></tr>
+<tr><td>ABS_FLOOR shrink-only</td><td>Always clamp to floor</td><td>Would block a legitimate high-speed coast-down through the floor</td></tr>
+<tr><td>λ per motor (focKeUvSRad)</td><td>One λ for all</td><td>Wrong λ pins the motor at 130 %·(λ<sub>true</sub>/λ<sub>set</sub>) of no-load (the VEX 51 % symptom)</td></tr>
+<tr><td>3-sample OC fault debounce</td><td>Single-sample trip</td><td>One rail-spiking bus sample latched phantom OC with the bridge off</td></tr>
+<tr><td>OC auto-zero quiescence gate (spread ≤ 16)</td><td>Always latch the bias</td><td>Re-arm with coasting rotor latches a ~7 A-wrong bias from regen ripple</td></tr>
+<tr><td>Emergency-hold freezes slew-down only</td><td>Hard brake on OV</td><td>Braking dumps more regen → 47.8 V PSU-OV cascade; freezing breaks the loop</td></tr>
+<tr><td>TIMER1_TO_ADC_TICKS from PWMFREQUENCY_HZ</td><td>Hardcoded ×12/5</td><td>The 24→45 kHz migration left every seeded period 1.875× too fast ("5696 eRPM" handoff)</td></tr>
+</table>
+<div class="keybox"><b>The single most important invariant:</b> the firmware never commands the rotor <em>faster</em> than it can physically be —
+not via the PI (asymmetric clamp), not via harmonic lock (ABS_FLOOR), not via the speed map (period floor). Every speed-related guard
+is one-directional: it relaxes toward the measured rotor and refuses to push ahead of it. That is what makes a sensorless 6-step loop
+survive the BEMF ceiling instead of detonating into a wrong-angle current spike.</div>
+
+<!-- ============================= 17 FULL SNAPSHOT ============================= -->
+<h2 id="snapfull">17&nbsp;&nbsp;Complete Telemetry Snapshot Map (248 bytes)</h2>
+<p>The full packed <code>GSP_SNAPSHOT_T</code> layout. Float (FOC) fields are zero in pure-6-step builds; the 6-step phase-current block
+at 174+ is populated only when no FOC feature is enabled. Window-peak fields are read-and-reset each capture.</p>
+<table>
+<tr><th>Off</th><th>Field</th><th>Type</th><th>Meaning</th></tr>
+<tr><td>0</td><td>state</td><td>u8</td><td>ESC_STATE_T</td></tr>
+<tr><td>1</td><td>faultCode</td><td>u8</td><td>FAULT_CODE_T</td></tr>
+<tr><td>2</td><td>currentStep</td><td>u8</td><td>commutation sector 0–5</td></tr>
+<tr><td>3</td><td>direction</td><td>u8</td><td>rotation direction</td></tr>
+<tr><td>4</td><td>throttle</td><td>u16</td><td>0–2000</td></tr>
+<tr><td>6</td><td>dutyPct</td><td>u8</td><td>duty·100/LOOPTIME_TCY</td></tr>
+<tr><td>8</td><td>vbusRaw</td><td>u16</td><td>bus voltage ADC counts</td></tr>
+<tr><td>10</td><td>ibusRaw</td><td>u16</td><td>bus current (2048 bias, ~93 cnt/A)</td></tr>
+<tr><td>12</td><td>ibusMax</td><td>u16</td><td>bus current all-run peak</td></tr>
+<tr><td>14</td><td>bemfRaw</td><td>u16</td><td>floating-phase BEMF sample</td></tr>
+<tr><td>16</td><td>zcThreshold</td><td>u16</td><td>ZC neutral threshold</td></tr>
+<tr><td>18</td><td>stepPeriod</td><td>u16</td><td>T1-tick period; host eRPM=450000/stepPeriod</td></tr>
+<tr><td>20</td><td>goodZcCount</td><td>u16</td><td>consecutive good ZCs</td></tr>
+<tr><td>22 / 23 / 24</td><td>risingZcWorks / fallingZcWorks / zcSynced</td><td>u8</td><td>lock flags</td></tr>
+<tr><td>26 / 28</td><td>zcConfirmedCount / zcTimeoutForceCount</td><td>u16</td><td>confirmed / forced commutations</td></tr>
+<tr><td>30 / 31</td><td>hwzcEnabled / hwzcPhase</td><td>u8</td><td>HWZC enable + watch phase</td></tr>
+<tr><td>32 / 36</td><td>hwzcTotalZcCount / TotalMissCount</td><td>u32</td><td>cumulative measured / missed</td></tr>
+<tr><td>40</td><td>hwzcStepPeriodHR</td><td>u32</td><td>HR commutation period (seqlock)</td></tr>
+<tr><td>44</td><td>hwzcDbgLatchDisable</td><td>u8</td><td>diag</td></tr>
+<tr><td>46 / 47 / 48 / 50</td><td>morphSubPhase / morphStep / morphZcCount / morphAlpha</td><td>mixed</td><td>morph blend state &amp; α</td></tr>
+<tr><td>52 / 56</td><td>clpciTripCount / fpciTripCount</td><td>u32</td><td>CMP3 chop / fault-PCI trips</td></tr>
+<tr><td>60 / 64</td><td>systemTick / uptimeSec</td><td>u32</td><td>free-running tick / seconds</td></tr>
+<tr><td>68–148</td><td>foc* block (Id, Iq, theta, omega, Vbus, Ia/Ib, observer, flux, λ_est, PI integrators, modIndex, confidence, offsets)</td><td>f32/…</td><td>FOC telemetry — zero in 6-step</td></tr>
+<tr><td>150–169</td><td>smoResidual, pllInnovation, pllOmega, omegaOl, handoffCtr, smoObservable</td><td>f32/…</td><td>observer diagnostics (FOC)</td></tr>
+<tr><td>170</td><td>hwzcNoiseReject</td><td>u32</td><td>ZCs rejected (off-time/interval gate)</td></tr>
+<tr><td>174 / 176</td><td>iaRaw / ibRaw</td><td>u16</td><td>instantaneous phase A/B current</td></tr>
+<tr><td>178–184</td><td>iaMax/iaMin/ibMax/ibMin</td><td>u16</td><td>phase-current window envelope</td></tr>
+<tr><td>186–196</td><td>ia/ib *AtFault, *MaxAtFault, *MinAtFault</td><td>u16</td><td>frozen at first PCI</td></tr>
+<tr><td>198 / 200</td><td>ibusWinMax / ibusWinMin</td><td>u16</td><td>bus current window (neg = freewheel artifact)</td></tr>
+<tr><td>202–206</td><td>ibusAtFault / MaxAtFault / MinAtFault</td><td>u16</td><td>frozen at fault</td></tr>
+<tr><td>208 / 210</td><td>speedPiEnabled / ZcsSinceEnable</td><td>u8/u16</td><td>outer-loop state</td></tr>
+<tr><td>212 / 216 / 220 / 224</td><td>speedPiTarget / LastError / OutputDuty / IntegratorF</td><td>u32/i32/u32/f32</td><td>parked speed-PI telemetry</td></tr>
+<tr><td>228</td><td>cpuLoadPermille</td><td>u16</td><td>main-loop CPU load vs motor-off baseline</td></tr>
+<tr><td>230</td><td>hwzcMissBySector[6]</td><td>u16×6</td><td>per-sector guess tally</td></tr>
+<tr><td>242 / 244</td><td>fallOffBemfMin / Max</td><td>u16</td><td>falling-sector OFF-centre envelope</td></tr>
+<tr><td>246</td><td>ibusAvg</td><td>u16</td><td>IIR low-pass of ibusRaw (~5.7 ms TC) — last field</td></tr>
+</table>
+
+<!-- ============================= 18 PROFILE COMPARISON ============================= -->
+<h2 id="profiles">18&nbsp;&nbsp;Motor Profile Comparison</h2>
+<p>The firmware ships nine built-in profiles in <code>profileDefaults[]</code>, selected at compile time by <code>MOTOR_PROFILE</code>
+(direct index). The key per-profile timing/detection values illustrate how the same algorithms re-target across very different motors —
+note especially how the high-KV/low-inductance micros (6/7/8) push the HWZC crossover up and the falling-SW cap down.</p>
+<table>
+<tr><th>#</th><th>Profile</th><th>Motor</th><th>PP</th><th>HWZC cross.</th><th>Falling-SW cap</th><th>max CL eRPM</th></tr>
+<tr><td>0</td><td>HURST</td><td>Hurst DMB2424, high-R</td><td>5</td><td>1500</td><td>70 000 (default)</td><td>20 000</td></tr>
+<tr><td>1</td><td>A2212</td><td>A2212 1400 KV, low-R</td><td>7</td><td>1500</td><td>35 000</td><td>120 000</td></tr>
+<tr><td>2</td><td>5010 (=2810)</td><td>2810 1350 KV 12N14P</td><td>7</td><td>1500</td><td>70 000</td><td>260 000</td></tr>
+<tr><td>3</td><td>5055</td><td>5055-class</td><td>—</td><td>—</td><td>—</td><td>80 000</td></tr>
+<tr><td>4</td><td>COBRA</td><td>Cobra CM-2814/36 470 KV</td><td>7</td><td>—</td><td>—</td><td>—</td></tr>
+<tr><td>5</td><td>XROTOR</td><td>XRotor 3110 1150 KV</td><td>7</td><td>—</td><td>—</td><td>210 000</td></tr>
+<tr><td><b>6</b></td><td><b>VEX</b> (reference)</td><td>VEX 14 mm 4000 KV micro</td><td>6</td><td><b>24 000</b></td><td><b>45 000</b></td><td><b>240 000</b></td></tr>
+<tr><td>7</td><td>1407_2S</td><td>1407 4000 KV 9N12P @ 2S</td><td>6</td><td>6 000</td><td>50 000</td><td>202 000</td></tr>
+<tr><td>8</td><td>1407_3S</td><td>1407 4000 KV 9N12P @ 3S</td><td>6</td><td>6 000</td><td>50 000</td><td>260 000</td></tr>
+</table>
+<p>Three per-profile compile-time relaxations apply only to the high-KV micros (profiles 6/7/8), where the 10 V BEMF is only a few
+ADC counts above quantisation: the ZC neutral divisor (2.6 vs 2.0), <code>FEATURE_AM32_STARTUP</code> off (forced sine ramp instead of the
+phantom-prone kick), <code>FEATURE_HWZC_VERIFY_READS</code> off, and <code>HWZC_CMP_DEADBAND</code> 2 vs 4. Everything else — the 2810 and the
+larger motors — keeps the default, more conservative values. Profile selection therefore changes <em>tuning</em>, never the algorithm.</p>
+
+<h3>18.1&nbsp;&nbsp;Bringing up a new motor — checklist</h3>
+<ol>
+<li><b>λ first.</b> Set <code>focKeUvSRad = round(5.5132×10<sup>6</sup>/(KV·PP))</code>. A wrong λ pins the motor at a clean fraction of
+its real speed (§8) — diagnose this before touching anything else.</li>
+<li><b>Pole pairs.</b> <code>motorPolePairs</code> = magnet poles ÷ 2.</li>
+<li><b>Speed cap.</b> <code>maxClosedLoopErpm</code> = nominal no-load (KV·V·PP) is a safe default; this is also the advance anchor and the
+period floor. Live-tune <code>0x11</code> upward to explore field-… <em>(commutation-advance)</em>-limited headroom.</li>
+<li><b>Startup.</b> Port a proven low-hand-off startup (<code>rampTarget</code> ≈ 3000, <code>align/sineMod</code> low) before tuning the run loop.</li>
+<li><b>OC chain.</b> Scale <code>ocLimitMa/ocSwLimitMa/ocFaultMa</code> to the motor's stall current — the 24 V-class thresholds will never
+protect a 7 A micro.</li>
+<li><b>Crossover &amp; falling cap.</b> High-KV/low-L motors: raise <code>hwzcCrossoverErpm</code> (engage HWZC only where BEMF is solid)
+and lower <code>HWZC_FALLING_SW_MAX_ERPM</code> (coast falling before the mid-band oscillation builds).</li>
+</ol>
+
+<!-- ============================= 19 RUNTIME STRUCT ============================= -->
+<h2 id="rtstruct">19&nbsp;&nbsp;Runtime Parameter Struct (<code>GSP_PARAMS_T</code>)</h2>
+<p>The full runtime parameter aggregate, integer-scaled (no floats on the wire). <code>gspParams</code> is the live copy mutated by
+<code>SET_PARAM</code>; <code>gspDerived</code> holds the ISR-facing precomputed forms (duty caps in PWM counts, periods in ticks, OC ADC
+thresholds, CMP3 DAC values) refreshed by <code>GSP_RecomputeDerived()</code> after every change.</p>
+<table>
+<tr><th>Field</th><th>T</th><th>Units</th><th>Role</th></tr>
+<tr><td>rampTargetErpm / rampAccelErpmPerS / rampDutyPct</td><td>u16/u16/u8</td><td>eRPM, eRPM/s, %</td><td>open-loop ramp shape</td></tr>
+<tr><td>clIdleDutyPct</td><td>u8</td><td>%</td><td>CL idle duty floor (0 ⇒ MIN_DUTY)</td></tr>
+<tr><td>timingAdvMaxDeg</td><td>u8</td><td>°</td><td>max commutation advance</td></tr>
+<tr><td>hwzcCrossoverErpm</td><td>u16</td><td>eRPM</td><td>HWZC enable speed</td></tr>
+<tr><td>ocSwLimitMa / ocFaultMa / ocLimitMa / ocStartupMa</td><td>u16</td><td>mA</td><td>OC ladder (soft/hard/chop-run/chop-start)</td></tr>
+<tr><td>motorPolePairs</td><td>u8</td><td>—</td><td>pole pairs</td></tr>
+<tr><td>alignDutyPct / initialErpm</td><td>u8/u16</td><td>%, eRPM</td><td>align duty, first OL step</td></tr>
+<tr><td>maxClosedLoopErpm</td><td>u32</td><td>eRPM</td><td>period-floor clamp + advance anchor</td></tr>
+<tr><td>sineAlignModPct / sineRampModPct</td><td>u8</td><td>%</td><td>sine-startup modulation depth</td></tr>
+<tr><td>zcDemagDutyThresh / zcDemagBlankExtraPct</td><td>u8</td><td>%</td><td>demag-blanking schedule</td></tr>
+<tr><td>rampCurrentGateMa</td><td>u16</td><td>mA</td><td>OL accel current gate (0=off)</td></tr>
+<tr><td>dutySlewUpPctPerMs / dutySlewDownPctPerMs</td><td>u8</td><td>%/ms</td><td>duty slew limits</td></tr>
+<tr><td>postSyncSettleMs / postSyncSlewDivisor</td><td>u16/u8</td><td>ms, —</td><td>post-sync settle window</td></tr>
+<tr><td>zcBlankingPercent / zcAdcDeadband</td><td>u8</td><td>%, counts</td><td>SW-ZC blanking &amp; deadband</td></tr>
+<tr><td>zcSyncThreshold / zcFilterThreshold</td><td>u8</td><td>—</td><td>sync / noise-filter counts</td></tr>
+<tr><td>morphLockZcCount / morphLockTolPct</td><td>u8</td><td>—, %</td><td>morph→CL lock gate</td></tr>
+<tr><td>vbusOvAdc / vbusUvAdc</td><td>u16</td><td>counts</td><td>OV / UV thresholds</td></tr>
+<tr><td>desyncCoastMs / desyncMaxRestarts</td><td>u16/u8</td><td>ms, —</td><td>recovery coast &amp; retry cap</td></tr>
+<tr><td>focRsMilliOhm / focLsMicroH / focKeUvSRad</td><td>u16</td><td>mΩ, µH, µV·s/rad</td><td>motor model (λ read by 6-step ABS_FLOOR)</td></tr>
+<tr><td>focVbusNomCentiV / focMaxCurrentCentiA / focMaxElecRadS</td><td>u16</td><td>cV, cA, rad/s</td><td>FOC limits</td></tr>
+<tr><td>focKpDqMilli / focKiDq / focObsLpfAlphaMilli</td><td>u16</td><td>—</td><td>FOC current-loop &amp; observer gains</td></tr>
+<tr><td>focAlign/RampIqCentiA, focAlign/IqRampTimeMs, focRampRateRps2, focHandoffRadS</td><td>u16</td><td>cA, ms, rad/s²</td><td>FOC startup</td></tr>
+<tr><td>focFaultOcCentiA / focFaultStallDeciRadS</td><td>u16</td><td>cA, drad/s</td><td>FOC fault limits</td></tr>
+<tr><td>an1078ThetaBaseDegX10 / ThetaKE7 / KslideMv / IdFwMaxDecia</td><td>u16</td><td>deg×10, ×1e7, mV, dA</td><td>SMC observer (live-tunable)</td></tr>
+<tr><td>ifCurrentCa / ifRampErpmPerS</td><td>u16</td><td>cA, eRPM/s</td><td>I-f startup</td></tr>
+</table>
+<div class="note"><b>Cross-validation invariants</b> enforced on every <code>SET_PARAM</code> so the host cannot half-update an ordered pair:
+<code>initialErpm &lt; rampTargetErpm &lt; maxClosedLoopErpm</code>; <code>zcFilterThreshold &lt; zcSyncThreshold</code>;
+<code>ocSwLimitMa &lt; ocLimitMa ≤ ocFaultMa</code>; <code>ocStartupMa ≥ ocLimitMa</code>; <code>rampCurrentGateMa &lt; ocLimitMa</code> (if non-zero);
+<code>vbusUvAdc &lt; vbusOvAdc</code>.</div>
+
+<p class="small" style="margin-top:26px;border-top:2px solid var(--accent);padding-top:10px;">
+<b>End of application note.</b> &nbsp;19 sections · 18 tables · 10 figures. Every constant, register, formula and API herein is taken
+directly from the <span class="mono">dspic33AKESC/</span> source tree (branch <span class="mono">ak512-port</span>). For the firmware itself, the canonical
+references are <span class="mono">motor/hwzc.c</span> (ZC + PLL), <span class="mono">garuda_service.c</span> (ISR + state machine), <span class="mono">gsp/</span>
+(host protocol), and <span class="mono">hal/</span> (peripherals).</p>
+
+</body>
+</html>
+
+
+
+
+
+
