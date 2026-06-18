@@ -25,6 +25,7 @@ CMD_TELEM_START     = 0x14
 CMD_TELEM_STOP      = 0x15
 CMD_GET_PARAM_LIST  = 0x16
 CMD_LOAD_PROFILE    = 0x17
+CMD_GET_HWZC_DIAG   = 0x18   # per-sector cap/miss + rising/falling cap position
 CMD_SCOPE_ARM       = 0x30   # burst scope: arm + trigger config
 CMD_SCOPE_STATUS    = 0x31   # burst scope: state/trigIdx/sampleCount
 CMD_SCOPE_READ      = 0x32   # burst scope: page out samples

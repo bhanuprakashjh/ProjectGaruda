@@ -235,6 +235,27 @@ class GspClient:
         rpl = self._cmd(P.CMD_GET_SNAPSHOT, expect=P.CMD_GET_SNAPSHOT)
         return decode_snapshot(rpl, t=time.monotonic())
 
+    def get_hwzc_diag(self) -> dict:
+        """HWZC per-sector diagnostics (cmd 0x18). Returns a JSON-safe dict so
+        it forwards cleanly through the broker. rf_bias_pm = fall - rise is the
+        rising-HW vs falling-SW path-latency split, in permille of a sector."""
+        rpl = self._cmd(P.CMD_GET_HWZC_DIAG, expect=P.CMD_GET_HWZC_DIAG)
+        if len(rpl) < 60:                       # tolerate a short/zero frame
+            rpl = rpl + b"\x00" * (60 - len(rpl))
+        rise, fall, period, good, _ = struct.unpack_from("<HHIHH", rpl, 0)
+        cap  = list(struct.unpack_from("<6I", rpl, 12))
+        miss = list(struct.unpack_from("<6I", rpl, 36))
+        return {
+            "erpm":           int(1e9 / period) if period else 0,
+            "step_period_hr": period,
+            "good_zc":        good,
+            "rise_pm":        rise,          # rising-sector ZC position (permille of sector)
+            "fall_pm":        fall,          # falling-sector ZC position
+            "rf_bias_pm":     fall - rise,   # the Phase-1a signal
+            "cap_by_sector":  cap,           # uint32 tallies, diff across reads
+            "miss_by_sector": miss,
+        }
+
     # ── parameters ──────────────────────────────────────────────────────
     def get_param(self, param) -> int:
         pid = P.PARAM_IDS[param] if isinstance(param, str) else param
