@@ -185,8 +185,8 @@ _Static_assert(ZC_STEP_MISS_LIMIT >= 1,        "ZC_STEP_MISS_LIMIT must be >= 1"
  * Vdc*D/2 threshold ~23% (2.6 vs 2.0) to pull detection onto neutral on their tiny BEMF.
  * 2810 and everything else use the exact Vdc*D/2 neutral (2.0). MOTOR_PROFILE comes from
  * garuda_config.h, which is included before this header. */
-#if MOTOR_PROFILE == 6 || MOTOR_PROFILE == 7 || MOTOR_PROFILE == 8
-#define ZC_DUTY_DIVISOR  ((26UL * LOOPTIME_TCY) / 10UL)
+#if MOTOR_PROFILE == 6 || MOTOR_PROFILE == 7 || MOTOR_PROFILE == 8 || MOTOR_PROFILE == 2
+#define ZC_DUTY_DIVISOR  ((26UL * LOOPTIME_TCY) / 10UL)  /* 2026-06-18 TEST: profile 2 on the relaxed neutral threshold */
 #else
 #define ZC_DUTY_DIVISOR  (2UL * LOOPTIME_TCY)
 #endif

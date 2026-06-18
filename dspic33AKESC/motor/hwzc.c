@@ -930,8 +930,14 @@ void HWZC_OnPiPeriodExpired(volatile GARUDA_DATA_T *pData)
             if (dutyFrac > HWZC_ABS_FLOOR_MIN_DUTYFRAC && vbus_v > 6.0f
                 && lambdaPm > 0.0f) {
                 float P_ff = (181.380f * lambdaPm) / (vbus_v * dutyFrac);
-                uint32_t floorP = (uint32_t)(P_ff *
-                    (100.0f / (float)HWZC_ABS_FLOOR_OVERSPEED_PCT));
+                /* Duty-tiered overspeed ceiling: tight at idle/low duty (no
+                 * advance -> rotor can't exceed ~no-load, so a fast-chop phantom
+                 * at ~140% is clamped to ~no-load and the loop coasts to true
+                 * idle), loose at high duty where advance legitimately overspeeds. */
+                float overPct = (dutyFrac < HWZC_ABS_FLOOR_LOW_DUTYFRAC)
+                    ? (float)HWZC_ABS_FLOOR_OVERSPEED_PCT_LOW
+                    : (float)HWZC_ABS_FLOOR_OVERSPEED_PCT;
+                uint32_t floorP = (uint32_t)(P_ff * (100.0f / overPct));
                 /* SHRINK-ONLY: clamp only when the PI is DRIVING the period
                  * below the floor (commutating FASTER — the phantom). A period
                  * already below the floor but GROWING (T_new > T_entry) is a

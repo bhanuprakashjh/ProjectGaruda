@@ -4224,6 +4224,38 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                     }
                 }
 #endif
+
+#if FEATURE_HWZC_CAP_DUTY_HOLD
+                /* Anti cap-slam (HWZC-period twin of the SW-period guard above).
+                 * When eRPM is pinned within ~(1/2^SHIFT) of the maxClosedLoopErpm
+                 * clamp — i.e. stepPeriodHR at/near the period floor — the rotor
+                 * can't commutate faster, so any further duty rise just over-drives
+                 * the held speed (rotor outruns commutation -> rej->0 -> 22A ->
+                 * BOARD_PCI). Hold duty at its current value while pinned so the
+                 * motor settles at the cap at the duty that reached it. Only ever
+                 * HOLDS/LOWERS duty (mappedDuty can still fall on throttle-down) —
+                 * one-directional safe, no λ calibration. */
+                if (garudaData.hwzc.enabled
+                    && garudaData.hwzc.stepPeriodHR > 0
+                    && garudaData.hwzc.stepPeriodHR
+                       <= (RT_HWZC_MIN_STEP_TICKS
+                           + (RT_HWZC_MIN_STEP_TICKS >> CAP_DUTY_HOLD_MARGIN_SHIFT)))
+                {
+                    /* Hard ceiling first: near the cap, duty must not exceed the
+                     * BEMF-match equilibrium (empirically ~86% @24V on the 2810),
+                     * else the rotor outruns the commutation clamp -> 22A ->
+                     * BOARD_PCI. A FAST throttle ramp can cross into the band
+                     * already at 89-97% duty, which freeze-at-previous alone can't
+                     * undo (it latches the too-high entry value) — this caps it. */
+                    uint32_t capHoldMax =
+                        (uint32_t)(((uint32_t)CAP_DUTY_HOLD_MAX_PCT * (uint32_t)LOOPTIME_TCY) / 100u);
+                    if (capHoldMax < MIN_DUTY) capHoldMax = MIN_DUTY;
+                    if (mappedDuty > capHoldMax) mappedDuty = capHoldMax;
+                    /* Then freeze: don't let duty climb further while pinned. */
+                    if (mappedDuty > garudaData.duty) mappedDuty = garudaData.duty;
+                }
+#endif
+
                 garudaData.duty = mappedDuty;
 
 #if FEATURE_CL_DIFF_IDLE
@@ -4410,15 +4442,43 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
                 }
             }
 #endif
-            /* Verify throttle stays at zero for ARM_TIME */
-            if (garudaData.throttle < ARM_THROTTLE_ZERO_ADC)
+            /* Arm window + launch gate. The pot must sit near zero for ARM_TIME
+             * (the safety gate). With FEATURE_POT_START_STOP the motor then HOLDS
+             * armed-and-off until the pot is raised past THROTTLE_START_ADC;
+             * without it, the motor auto-starts when the arm window completes. */
             {
-                garudaData.armCounter++;
+                bool armReady =
 #if FEATURE_ARM_BEEP
-                if (garudaData.armCounter >= ARM_TIME_COUNTS + ARM_BEEP_TICKS)
+                    (garudaData.armCounter >= ARM_TIME_COUNTS + ARM_BEEP_TICKS);
 #else
-                if (garudaData.armCounter >= ARM_TIME_COUNTS)
+                    (garudaData.armCounter >= ARM_TIME_COUNTS);
 #endif
+                bool launchNow = false;
+
+                if (garudaData.throttle < ARM_THROTTLE_ZERO_ADC)
+                {
+                    garudaData.armCounter++;
+#if !FEATURE_POT_START_STOP
+                    if (armReady) launchNow = true;   /* auto-start once armed */
+#endif
+                    /* POT_START_STOP: stay ARMED & ready (motor off); the launch
+                     * fires below on a pot-raise. */
+                }
+#if FEATURE_POT_START_STOP
+                else if (armReady && garudaData.throttle >= THROTTLE_START_ADC)
+                {
+                    launchNow = true;   /* armed + pot raised past start → launch */
+                }
+                /* else: armed but pot between zero and start — hold ARMED, motor
+                 * off, keep the arm latch (don't reset armCounter). */
+#else
+                else
+                {
+                    garudaData.armCounter = 0; /* not armed — reset if pot not zero */
+                }
+#endif
+
+                if (launchNow)
                 {
                     /* Armed successfully — transition to ALIGN.
                      * Init before state change: ADC ISR (prio 6) can
@@ -4462,12 +4522,8 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
                     garudaData.state = ESC_ALIGN;
 #endif
                     LED2 = 1; /* Motor running indicator */
-                }
-            }
-            else
-            {
-                garudaData.armCounter = 0; /* Reset if throttle not zero */
-            }
+                }   /* if (launchNow) */
+            }   /* arm window + launch gate block */
             break;
 #endif
 

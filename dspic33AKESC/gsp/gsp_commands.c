@@ -169,6 +169,62 @@ static void HandleGetSnapshot(const uint8_t *payload, uint8_t payloadLen)
                      sizeof(snapshot));
 }
 
+/* ── HWZC per-sector diagnostics (0x18) ──────────────────────────────────
+ * Read-only telemetry for the per-sector-bias measurement session. Response
+ * payload (60 B, little-endian), all fields snapshot-of-the-moment:
+ *   [0]  u16  dbgLastCapPm        rising-sector capValue/T in permille (0..1000)
+ *   [2]  u16  dbgPiCrossSector    falling-sector capValue/T in permille
+ *   [4]  u32  stepPeriodHR        HR ticks; eRPM = 1e9 / stepPeriodHR
+ *   [8]  u16  goodZcCount         lock context
+ *   [10] u16  reserved (0)
+ *   [12] u32  dbgPiCapBySector[6] per-sector accepted-capture tally
+ *   [36] u32  dbgPiMissBySector[6] per-sector silent (no-capture) tally
+ * The R/F path-latency bias is (dbgPiCrossSector - dbgLastCapPm) in permille;
+ * the per-sector arrays are diffed across successive reads. */
+static void HandleGetHwzcDiag(const uint8_t *payload, uint8_t payloadLen)
+{
+    (void)payload;
+    (void)payloadLen;
+
+    uint8_t buf[60];
+    uint8_t *p = buf;
+
+#define GSP_DIAG_PUT16(v) do { uint16_t _v = (uint16_t)(v); \
+        *p++ = (uint8_t)(_v & 0xFF); *p++ = (uint8_t)(_v >> 8); } while (0)
+#define GSP_DIAG_PUT32(v) do { uint32_t _v = (uint32_t)(v); \
+        *p++ = (uint8_t)(_v & 0xFF);  *p++ = (uint8_t)((_v >> 8) & 0xFF); \
+        *p++ = (uint8_t)((_v >> 16) & 0xFF); *p++ = (uint8_t)((_v >> 24) & 0xFF); } while (0)
+
+#if FEATURE_HWZC_SECTOR_PI
+    /* Seqlock read of stepPeriodHR (Rule 13): retry while a write is in
+     * progress (odd writeSeq) or the value changed mid-read. */
+    uint32_t period = garudaData.hwzc.stepPeriodHR;
+    for (uint8_t tries = 0; tries < 4; tries++) {
+        uint16_t s0 = garudaData.hwzc.writeSeq;
+        period      = garudaData.hwzc.stepPeriodHR;
+        uint16_t s1 = garudaData.hwzc.writeSeq;
+        if (s0 == s1 && !(s0 & 1)) break;
+    }
+
+    GSP_DIAG_PUT16(garudaData.hwzc.dbgLastCapPm);
+    GSP_DIAG_PUT16(garudaData.hwzc.dbgPiCrossSector);
+    GSP_DIAG_PUT32(period);
+    GSP_DIAG_PUT16(garudaData.hwzc.goodZcCount);
+    GSP_DIAG_PUT16(0);
+    for (uint8_t i = 0; i < 6; i++) GSP_DIAG_PUT32(garudaData.hwzc.dbgPiCapBySector[i]);
+    for (uint8_t i = 0; i < 6; i++) GSP_DIAG_PUT32(garudaData.hwzc.dbgPiMissBySector[i]);
+#else
+    /* Sector-PI diagnostics not compiled in — return a zero-filled frame so
+     * the host still gets a well-formed, fixed-size response. */
+    for (uint8_t i = 0; i < (uint8_t)sizeof(buf); i++) *p++ = 0;
+#endif
+
+#undef GSP_DIAG_PUT16
+#undef GSP_DIAG_PUT32
+
+    GSP_SendResponse(GSP_CMD_GET_HWZC_DIAG, buf, (uint8_t)(p - buf));
+}
+
 /* ── Phase 1: Motor control handlers ────────────────────────────────── */
 
 static void HandleStartMotor(const uint8_t *payload, uint8_t payloadLen)
@@ -765,6 +821,7 @@ static const CMD_ENTRY_T cmdTable[] = {
     { GSP_CMD_PING,            0, HandlePing           },
     { GSP_CMD_GET_INFO,        0, HandleGetInfo        },
     { GSP_CMD_GET_SNAPSHOT,    0, HandleGetSnapshot    },
+    { GSP_CMD_GET_HWZC_DIAG,   0, HandleGetHwzcDiag    },
     /* Phase 1: motor control */
     { GSP_CMD_START_MOTOR,     0, HandleStartMotor     },
     { GSP_CMD_STOP_MOTOR,      0, HandleStopMotor      },

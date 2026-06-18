@@ -182,6 +182,23 @@ int main(void)
         }
 #endif
 
+#if FEATURE_POT_START_STOP
+        /* Pot start/stop: auto-arm from IDLE whenever the pot is low (no RC link
+         * required). The ESC_ARMED handler then holds the motor OFF until the pot
+         * is raised past THROTTLE_START_ADC, so the stop -> ready -> start cycle
+         * repeats from the pot alone after a throttle-zero auto-disarm. Arm-at-zero
+         * safety: a pot left up at power-on stays IDLE until it's cycled to zero. */
+        if (garudaData.state == ESC_IDLE
+            && garudaData.faultCode == FAULT_NONE
+            && garudaData.throttle < ARM_THROTTLE_ZERO_ADC)
+        {
+            garudaData.runCommandActive = true;
+            garudaData.desyncRestartAttempts = 0;
+            garudaData.armCounter = 0;
+            garudaData.state = ESC_ARMED;
+        }
+#endif
+
 #if FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3 || FEATURE_FOC_AN1078
         /* FOC LED2 state encoding:
          *   IDLE: OFF, ARMED: 5Hz blink, CLOSED_LOOP: solid ON, FAULT: fast blink */

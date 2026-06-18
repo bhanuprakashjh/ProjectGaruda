@@ -127,14 +127,20 @@ extern "C" {
 #define CL_ENTRY_START_PCT           4    /* initial CL-entry duty %  (peak knob) */
 #define CL_ENTRY_RAMP_MS           400    /* ms to climb START_PCT -> CL idle duty */
 
-#define FEATURE_THROTTLE_ZERO_AUTO_DISARM 0  /* When 1, motor disarms to IDLE state if
-                                              * throttle stays below ARM_THROTTLE_ZERO_ADC
-                                              * for 50ms. When 0, motor keeps running at
-                                              * CL_IDLE_DUTY when throttle is at zero —
-                                              * which matches the user's expectation that
-                                              * pot-zero = motor-idling, not motor-off.
-                                              * Stopping the motor in this mode requires
-                                              * GSP stop command or power cycle. */
+/* ── Pot start/stop (2026-06-18) ──────────────────────────────────────────
+ * FEATURE_POT_START_STOP=1: zero pot = motor STOPPED (bridge off, coasts to
+ * standstill); raise the pot past THROTTLE_START_ADC = motor starts. RC-ESC
+ * model with an arm-at-zero safety: the motor only launches after the pot has
+ * been seen at/near zero (ARMED "ready"), so a pot left up at power-on won't
+ * spin until it's cycled to zero first. Pulls in the existing throttle-zero
+ * auto-disarm (the stop half) + adds start-on-pot-raise + auto-re-arm.
+ * NOTE ("as is"): the start still runs the align/OL/morph sequence, so the
+ * motor JUMPS to the ~10.5k CL idle when the pot crosses the threshold, then
+ * tracks the pot up — not proportional from 0. Smooth-from-standstill is the
+ * follow-on soft-start current-control phase. Set 0 to revert to idle-floor. */
+#define FEATURE_POT_START_STOP   1
+#define THROTTLE_START_ADC      400   /* armed motor launches when pot ADC rises above this (hysteresis vs ARM_THROTTLE_ZERO_ADC=200) */
+#define FEATURE_THROTTLE_ZERO_AUTO_DISARM FEATURE_POT_START_STOP  /* stop-at-zero half (was standalone; now driven by POT_START_STOP) */
 #define FEATURE_TIMING_ADVANCE   1  /* Phase B3: Linear timing advance by RPM — RE-ENABLED 2026-05-26 to compensate detection-chain latency at high RPM. Original baseline schedule: 0° below 3k eRPM, linear ramp to 22° at MAX_CLOSED_LOOP_ERPM (70k for 2810), clamped 22° above. */
 #define FEATURE_DYNAMIC_BLANKING 1  /* Phase C1: Speed+duty-aware blanking (extra blank at high duty/demag) */
 #define FEATURE_VBUS_SAG_LIMIT   1  /* Phase C2: Bus voltage sag power limiting (reduce duty on Vbus dip) */
@@ -427,9 +433,11 @@ extern "C" {
                                       * current (Ia 0.5, Ibus 0) and could not spin -> CMP3->CLPCI chop
                                       * chain CONFIRMED LIVE. Now 0 = chop at the real DAC threshold. */
 
-#define MOTOR_PROFILE  6   /* 2026-06-17 VEX: profile 6 now carries the baked λ=230 + 6PP +
-                              * proven low-hand-off startup (ported from profile 2). No live
-                              * 0x72 override needed. Switch back to 2 for the 2810.
+#define MOTOR_PROFILE  2   /* 2026-06-18: 2810 @24V bench. Profile 2 carries the correct 2810
+                              * motor model (λ=583, 7PP, 24V, Rs=22mΩ, Ls=10µH, OC=20A) — the
+                              * VEX profile 6 (λ=230, 6PP, 11.1V) was the 40k decel-floor phantom.
+                              * Profile 6 still holds the dialed-in VEX 4000KV tuning; switch back
+                              * to 6 for that motor.
                               * 0=Hurst 1=A2212@12V 2=2810@24V 3=5055 4=Cobra 5=XRotor
                               * 6=VEX 4000KV  7=1407 4000KV @2S  8=1407 4000KV @3S */
 
@@ -1086,7 +1094,11 @@ extern "C" {
                                         * PWM3H=RC3) and rejects if LOW. */
 /* 2026-06-17 PER-PROFILE: high-KV micros (6/7/8) run the coherence check OFF —
  * it rejects marginal-but-real crossings on their weak 10V BEMF. 2810 etc. keep it ON. */
-#if MOTOR_PROFILE == 6 || MOTOR_PROFILE == 7 || MOTOR_PROFILE == 8
+#if MOTOR_PROFILE == 6 || MOTOR_PROFILE == 7 || MOTOR_PROFILE == 8 || MOTOR_PROFILE == 2
+/* 2026-06-18 TEST: profile 2 added — the coherence re-read corrupts ZC timing at
+ * high speed (~175k = ~2.5 ADC samples/step) -> circulating 22A. Trusting the
+ * comparator edge (OFF) is what runs profile 6 clean. Revert to the #else if this
+ * doesn't clear the 2810 top-end. */
 #define FEATURE_HWZC_VERIFY_READS  0
 #else
 #define FEATURE_HWZC_VERIFY_READS  1   /* default ON */
@@ -1126,8 +1138,8 @@ extern "C" {
 #define HWZC_MISS_LIMIT          3   /* Missed HW ZCs before fallback to software ZC (low for debug) */
 /* 2026-06-17 PER-PROFILE: high-KV micros (6/7/8) use a smaller deadband so their
  * ~6-count 10V BEMF can cross; 2810 etc. keep the default 4. */
-#if MOTOR_PROFILE == 6 || MOTOR_PROFILE == 7 || MOTOR_PROFILE == 8
-#define HWZC_CMP_DEADBAND        2
+#if MOTOR_PROFILE == 6 || MOTOR_PROFILE == 7 || MOTOR_PROFILE == 8 || MOTOR_PROFILE == 2
+#define HWZC_CMP_DEADBAND        2   /* 2026-06-18 TEST: profile 2 on the relaxed deadband */
 #else
 #define HWZC_CMP_DEADBAND        4   /* ADC counts deadband for comparator sanity check (default) */
 #endif
@@ -1600,8 +1612,34 @@ extern "C" {
  * legitimate operation (≈ no-load at full duty) sits above the floor untouched.
  * Validated offline in tools/garuda_debug/garuda_gui/pisim.py. Needs valid lambda. */
 #define FEATURE_HWZC_ABS_FLOOR          1
-#define HWZC_ABS_FLOOR_OVERSPEED_PCT  130   /* allow eRPM up to this % of no-load */
+#define HWZC_ABS_FLOOR_OVERSPEED_PCT  130   /* HIGH-duty ceiling: advance carries the rotor ~125% past no-load at the top */
 #define HWZC_ABS_FLOOR_MIN_DUTYFRAC  0.03f  /* skip below this duty (P_ff invalid) */
+/* 2026-06-18 decel-phantom fix: the 130% ceiling is only needed at HIGH duty,
+ * where timing advance legitimately carries the rotor past no-load. At IDLE/low
+ * duty there is NO advance overspeed (the motor sits at ~90% of no-load), so the
+ * 130% slack lets a fast decel-to-zero chop lock a phantom at ~140% of no-load
+ * (~15.9k @5% duty drawing ~13A) instead of coasting to true idle (~10.5k/1.1A).
+ * Below LOW_DUTYFRAC use a TIGHT ceiling so that phantom is clamped down to ~no-
+ * load. 100% = the physical idle ceiling; drop to ~95/92 if it still settles a
+ * touch high (true idle ≈ 92% of the formula no-load on this 2810). */
+#define HWZC_ABS_FLOOR_OVERSPEED_PCT_LOW  100  /* idle/low-duty ceiling (no advance) */
+#define HWZC_ABS_FLOOR_LOW_DUTYFRAC      0.12f /* below this duty, use the LOW ceiling */
+
+/* ── Anti cap-slam: hold duty at the maxClosedLoopErpm clamp ──────────────
+ * In direct-duty mode the throttle->duty map raises duty toward 100% regardless
+ * of speed. When eRPM is pinned at the maxClosedLoopErpm clamp (commutation
+ * period at its floor RT_HWZC_MIN_STEP_TICKS), the rotor can't commutate any
+ * faster, so the surplus duty over-drives the held speed: the rotor OUTRUNS the
+ * clamped commutation, the ZCs arrive early and get rejected (rej->0), the angle
+ * goes wrong, and Ia slams to ~22A -> BOARD_PCI. Fix: while eRPM is within a
+ * small margin of the clamp, don't let duty exceed its current value -> the
+ * motor settles at the cap at the duty that reached it, cleanly. This is the
+ * HWZC-period twin of the existing SW-period guard (which is blind once HWZC
+ * owns the period at speed). Only ever HOLDS/LOWERS duty -> one-directional safe.
+ * Calibration-free (no λ); works at whatever maxClosedLoopErpm is set. Default OFF. */
+#define FEATURE_HWZC_CAP_DUTY_HOLD       1
+#define CAP_DUTY_HOLD_MARGIN_SHIFT       3   /* engage when within period-floor/2^N (~12%) of cap */
+#define CAP_DUTY_HOLD_MAX_PCT            86  /* hard duty ceiling in the cap band (BEMF-match @24V; tune) */
 /* Plausibility gate on capValue. Reject any capture more than this fraction
  * BELOW setValue — at lock, real capValue ≈ setValue (within a few %); a
  * capture <50% of setValue is almost certainly a phantom or accel transient.
@@ -1808,12 +1846,17 @@ extern "C" {
 /* CMP3 settings */
 #define OC_CMP_HYSTERESIS       0b11  /* 45mV hysteresis (max, for noise immunity) */
 #define OC_CMP_FILTER_EN        1     /* 1=enable CMP3 digital filter, 0=disable */
-#define OC_LEB_BLANKING_NS      200   /* Leading-edge blanking (ns). 2026-06-13: cut 1000->200.
-                                       * At 45kHz the 5%-duty CL-idle ON-pulse is only ~1.1us, so a
-                                       * 1000ns LEB blanked ~90% of it and CMP3 never saw the current
-                                       * -> the chop never engaged at low duty. 200ns clears the FET
-                                       * switching edge while leaving the comparator a real window.
-                                       * 200ns = 80 clocks @ 400MHz. Watch for false trips on noise. */
+#define OC_LEB_BLANKING_NS      1000  /* Leading-edge blanking (ns). 2026-06-18 REVERTED 200->1000
+                                       * to the 260k-clean (8565783) value. The 200ns experiment
+                                       * (2026-06-13, to let the low-duty CL-idle chop engage) left the
+                                       * OC comparator only 200ns of blanking -> at high speed/high duty
+                                       * it can false-trip on the FET switching edge, chopping the cycle
+                                       * and pinning Ia at the ~22A chop ceiling (the 2810 top-end 22A
+                                       * regression; profile 6 stayed at 4A, below the chop, so never
+                                       * exposed it). 1000ns fully clears the edge. TRADEOFF: the
+                                       * low-duty idle chop won't engage (the 5% ON-pulse is ~1.1us, ~90%
+                                       * blanked) — that's the known-good 260k behavior. Re-add a
+                                       * duty-scaled LEB if the idle chop is needed later. */
 
 #endif /* FEATURE_HW_OVERCURRENT */
 

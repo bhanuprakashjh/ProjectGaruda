@@ -54,6 +54,11 @@ typedef enum {
     GSP_CMD_GET_PARAM_LIST  = 0x16,
     /* Phase 1.5: profiles */
     GSP_CMD_LOAD_PROFILE    = 0x17,
+    /* HWZC per-sector diagnostics (rising/falling cap position + per-sector
+     * cap/miss tallies). Read-only; for the per-sector-bias measurement
+     * session. Separate frame because the snapshot is at its TX-ring ceiling
+     * and the by-sector arrays are uint32_t[6]. */
+    GSP_CMD_GET_HWZC_DIAG   = 0x18,
     /* Auto-commissioning: measure Rs, Ls, λ_pm */
     GSP_CMD_AUTO_DETECT     = 0x20,
     /* Phase H: RX status + test injection */
