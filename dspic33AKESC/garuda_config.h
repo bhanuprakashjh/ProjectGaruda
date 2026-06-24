@@ -66,7 +66,7 @@ extern "C" {
                                      * it decays by >>SHIFT/tick (6 ≈ 1.5%/tick, holds the
                                      * peak ~2-3ms across the inter-commutation gap so the
                                      * back-off doesn't chatter). Smaller = holds longer. */
-#define FEATURE_HANDOFF_CHOP     1  /* 2026-06-16 ENABLED for 2810: current-limits the CL-entry
+#define FEATURE_HANDOFF_CHOP     0  /* DISABLED 2026-06-24 (cycle-by-cycle chop off). Was: current-limits the CL-entry
                                      * speed-gap pulse (rotor 2-3k vs ~10.4k idle equilib at MIN_DUTY)
                                      * that duty/soft-start can't touch (idle already at the floor).
                                      * Sub-MIN_DUTY OL->CL current bound via the CMP3 HARDWARE
@@ -138,7 +138,9 @@ extern "C" {
  * motor JUMPS to the ~10.5k CL idle when the pot crosses the threshold, then
  * tracks the pot up — not proportional from 0. Smooth-from-standstill is the
  * follow-on soft-start current-control phase. Set 0 to revert to idle-floor. */
-#define FEATURE_POT_START_STOP   1
+#define FEATURE_POT_START_STOP   0   /* DISABLED 2026-06-24: pot does not start/stop the motor
+                                      * (and FEATURE_THROTTLE_ZERO_AUTO_DISARM follows it → off).
+                                      * Arm/start via GSP/switch; pot is throttle only. */
 #define THROTTLE_START_ADC      400   /* armed motor launches when pot ADC rises above this (hysteresis vs ARM_THROTTLE_ZERO_ADC=200) */
 #define FEATURE_THROTTLE_ZERO_AUTO_DISARM FEATURE_POT_START_STOP  /* stop-at-zero half (was standalone; now driven by POT_START_STOP) */
 #define FEATURE_TIMING_ADVANCE   1  /* Phase B3: Linear timing advance by RPM — RE-ENABLED 2026-05-26 to compensate detection-chain latency at high RPM. Original baseline schedule: 0° below 3k eRPM, linear ramp to 22° at MAX_CLOSED_LOOP_ERPM (70k for 2810), clamped 22° above. */
@@ -188,6 +190,14 @@ extern "C" {
 #define PLL_START_ACCEL_ERPM_PER_S 32000   /* blind schedule acceleration */
 #define PLL_START_CAPTURE_FLOOR_ERPM 2500  /* ignore captures below (BEMF noise floor) */
 #define PLL_START_SYNC_CAPS            6   /* consecutive plausible captures = synced */
+
+/* MOTOR_PROFILE selects the motor model + tuning. It MUST be #defined HERE,
+ * BEFORE the per-profile AM32-startup #if below. (Bug fixed 2026-06-24: it was
+ * #defined ~240 lines later, so the preprocessor saw it as 0 → the #if was
+ * always false → AM32 forced ON for ALL profiles, silently defeating the
+ * 6/7/8 sine carve-out.) Per-profile motor params are in the section further down.
+ * 0=Hurst 1=A2212@12V 2=2810@24V 3=5055 4=Cobra 5=XRotor 6=VEX 7=1407@2S 8=1407@3S */
+#define MOTOR_PROFILE  2
 
 /* 2026-06-17 PER-PROFILE: high-KV micro motors (VEX prof 6, 1407 prof 7/8 @10V)
  * can't use the AM32 kick — BEMF is below the detection floor at the kick instant
@@ -433,7 +443,7 @@ extern "C" {
                                       * current (Ia 0.5, Ibus 0) and could not spin -> CMP3->CLPCI chop
                                       * chain CONFIRMED LIVE. Now 0 = chop at the real DAC threshold. */
 
-#define MOTOR_PROFILE  2   /* 2026-06-18: 2810 @24V bench. Profile 2 carries the correct 2810
+/* MOTOR_PROFILE is now #defined ABOVE (before the AM32-startup #if). 2810 @24V bench. Profile 2 carries the correct 2810
                               * motor model (λ=583, 7PP, 24V, Rs=22mΩ, Ls=10µH, OC=20A) — the
                               * VEX profile 6 (λ=230, 6PP, 11.1V) was the 40k decel-floor phantom.
                               * Profile 6 still holds the dialed-in VEX 4000KV tuning; switch back
@@ -594,10 +604,11 @@ extern "C" {
 #define OC_SW_LIMIT_MA           18000     /* production SW soft limit (below CMP3 operational) */
 #define RAMP_CURRENT_GATE_MA     10000     /* production: hold ramp accel when ibus > 10A */
 #define FEATURE_PRESYNC_RAMP       0       /* Standard forced OL_RAMP */
-#define OC_CLPCI_ENABLE            1       /* 2026-06-16 ENABLED: arms CMP3->CLPCI so the handoff
-                                            * entry-chop (FEATURE_HANDOFF_CHOP) can current-limit the
-                                            * 2810 CL-entry speed-gap pulse. Restores to operational
-                                            * (OC_LIMIT_MA) after HANDOFF_CHOP_MS; top-end untouched. */
+#define OC_CLPCI_ENABLE            0       /* DISABLED 2026-06-24: cycle-by-cycle CMP3->CLPCI chop OFF.
+                                            * Overcurrent now relies on the software ADC OC path
+                                            * (OC_PROTECT_MODE=2) — no cycle-by-cycle current limiting.
+                                            * (Was: armed CLPCI so the handoff chop could current-limit
+                                            * the 2810 CL-entry speed-gap pulse.) */
 
 #elif MOTOR_PROFILE == 3
 /* === 5055 ~580KV (colleague's motor — ADJUST KV AS NEEDED) ===
