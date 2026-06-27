@@ -59,7 +59,8 @@ FAULT_NAMES = {
 # ── Motor profiles (gsp/gsp_params.h) ───────────────────────────────────
 PROFILE_NAMES = {
     0: "Hurst", 1: "A2212", 2: "2810(5010)", 3: "5055",
-    4: "Cobra-2814", 5: "XRotor-3110", 6: "Custom",
+    4: "Cobra-2814", 5: "XRotor-3110", 6: "VEX-4000KV",
+    9: "U3-KV700",   # dspic33AKESC-Simplified default (motors.h PROFILE_U3)
 }
 
 # ── Parameter IDs → names (gsp/gsp_params.h, descriptor table, 31 params) ─

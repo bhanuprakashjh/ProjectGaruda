@@ -61,13 +61,77 @@ def decode_scope_sample(b: bytes) -> dict:
     }
 
 
+def decode_snapshot_simplified(p: bytes, t: float = 0.0) -> dict:
+    """dspic33AKESC-Simplified 68-byte snapshot. UNLIKE the production layout, this
+    firmware computes the REAL units on-chip and ships them in the tail (eRPM u32
+    @50, Vbus mV @54, currents centi-amps signed @56..65) - the host just displays.
+    Tail offsets overlap production fields (sys_tick/uptime @60), so this layout is
+    ONLY valid when the snapshot is exactly 68B (production sends 242B+). See gsp.c
+    sendSnapshot() for the byte map of record."""
+    state, fault, _step, _dir, throttle, duty = struct.unpack_from("<BBBBHBx", p, 0)
+    vbus_raw, ibus_raw, ibus_avg_raw = struct.unpack_from("<HHH", p, 8)
+    zc_thresh, step_period, good_zc = struct.unpack_from("<HHH", p, 16)
+    synced = p[24]
+    zc_phase_pct = struct.unpack_from("<H", p, 28)[0]
+    rising_zc, falling_zc = struct.unpack_from("<HH", p, 32)
+    ia_raw, ib_raw, ibusi_raw, ibusa_raw = struct.unpack_from("<HHHH", p, 36)
+    bias_a, bias_b, bias_bus = struct.unpack_from("<HHH", p, 44)
+    # Firmware-scaled real units (the point of this format).
+    erpm = struct.unpack_from("<I", p, 50)[0]
+    vbus_mv = struct.unpack_from("<H", p, 54)[0]
+    ia_ca, ib_ca, ic_ca, ibus_ca, ibus_avg_ca = struct.unpack_from("<hhhhh", p, 56)
+
+    return {
+        "t": t,
+        "state": state, "state_name": P.STATE_NAMES.get(state, f"?{state}"),
+        "fault": fault, "fault_name": P.FAULT_NAMES.get(fault, f"?{fault}"),
+        "throttle": throttle, "duty": duty,
+        "vbus_V": vbus_mv / 1000.0,
+        # Real, firmware-scaled bus current (signed; computed off the measured bias
+        # so there is no idle phantom). ibus_win_A = the smoothed EMA, which the gauge
+        # treats as the trustworthy reading.
+        "ibus_A": ibus_ca / 100.0,
+        "ibus_win_A": ibus_avg_ca / 100.0,
+        "eRPM": erpm,
+        "zc_thresh": zc_thresh, "step_period": step_period,
+        "good_zc": good_zc, "synced": synced,
+        "zc_phase_pct": zc_phase_pct,
+        "rising_zc": rising_zc, "falling_zc": falling_zc,
+        "ia_A": ia_ca / 100.0, "ib_A": ib_ca / 100.0, "ic_A": ic_ca / 100.0,
+        "ia_pk_mag": abs(ia_ca) / 100.0, "ib_pk_mag": abs(ib_ca) / 100.0,
+        "ibus_pk_mag": abs(ibus_ca) / 100.0,
+        "ia_raw": ia_raw, "ib_raw": ib_raw,
+        "ibus_raw": ibusi_raw, "ibus_avg_raw": ibusa_raw,
+        "bias_a": bias_a, "bias_b": bias_b, "bias_bus": bias_bus,
+        "hwzc_en": 1, "simplified": True,
+        # Superset of the production keys (filled with this firmware's analogues or
+        # 0/None) so every decode_snapshot() consumer works unchanged. hwzc_hr is the
+        # exact HR step period (firmware HR_ERPM_CONST = 1e9), hwzc_zc = accepted ZCs.
+        "bemf_raw": 0,
+        "zc_confirmed": good_zc, "zc_timeout": 0,
+        "hwzc_hr": (1_000_000_000 // erpm) if erpm > 0 else 0,
+        "hwzc_zc": good_zc, "hwzc_miss": 0, "hwzc_reject": 0,
+        "uptime": 0,
+        "spi_en": 0, "spi_zcs": 0, "spi_target": 0,
+        "spi_error": 0, "spi_output": 0, "spi_integ": 0.0,
+        "cpu_load_pct": 0.0, "miss_by_sector": [0, 0, 0, 0, 0, 0],
+        "fall_off_min": None, "fall_off_max": None,
+        "snapBytes": len(p),
+    }
+
+
 def decode_snapshot(p: bytes, t: float = 0.0) -> dict:
     """GSP_SNAPSHOT_T, length-tolerant. Base 68B; optional extensions decoded
     only when present: hwzc_reject@170, phase peaks@174, ibus window@198,
-    speed-PI@208. Mirrors tools/step6_session.py (proven on the bench)."""
+    speed-PI@208. Mirrors tools/step6_session.py (proven on the bench).
+
+    A snapshot of exactly 68B is the dspic33AKESC-Simplified firmware (it ships
+    real units in the tail, a different layout); route it to its own decoder."""
     n = len(p)
     if n < 68:
         return {"error": f"snapshot too short ({n}B)"}
+    if n == 68:
+        return decode_snapshot_simplified(p, t)
 
     state, fault, _step, _dir, throttle, duty = struct.unpack_from("<BBBBHBx", p, 0)
     vbus_raw, ibus_raw, _ibus_max = struct.unpack_from("<HHH", p, 8)
