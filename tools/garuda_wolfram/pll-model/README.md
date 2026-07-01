@@ -18,3 +18,11 @@ Analytic layer of the sensing→commutation model. See the spec:
 The decisive output is `oneTauExplains`: if one τ fits the bench walls, the wall is
 front-end-latency-limited (answer = lower τ / virtual neutral / more voltage), not
 PLL-specific.
+
+**Caveat:** with the current anchors ({150k, 214k}), `oneTauExplains` is
+degenerate-by-construction — both anchors sit above the advance-saturation knee
+with zero comp gain, so the fit equation has exactly one arctan root and a
+single τ always "explains" both points. The current `False` result is a
+geometric artifact of this anchor set, not a physical rejection of the
+single-tau hypothesis. A non-degenerate test requires including the 80k
+pre-comp anchor (planned follow-up).

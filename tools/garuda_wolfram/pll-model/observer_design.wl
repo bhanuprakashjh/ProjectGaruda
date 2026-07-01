@@ -1,4 +1,4 @@
-Needs["ControlSystems`"];
+Quiet[Needs["ControlSystems`"], {Get::noopen, Needs::nocont}];
 (* Assumes motor_params.wl loaded. *)
 
 bemfObserverGains[motor_String, erpmOp_, poles_List] :=
