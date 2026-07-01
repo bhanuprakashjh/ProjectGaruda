@@ -1,0 +1,93 @@
+(* Content-type: application/vnd.wolfram.mathematica *)
+
+(*** Wolfram Notebook File ***)
+(* http://www.wolfram.com/nb *)
+
+(* CreatedBy='WolframEngine 14.3' *)
+
+(*CacheID: 234*)
+(* Internal cache information:
+NotebookFileLineBreakTest
+NotebookFileLineBreakTest
+NotebookDataPosition[       160,          7]
+NotebookDataLength[      2938,         84]
+NotebookOptionsPosition[      2284,         67]
+NotebookOutlinePosition[      2625,         82]
+CellTagsIndexPosition[      2582,         79]
+WindowTitle->driver.nb
+WindowFrame->Normal*)
+
+(* Beginning of Notebook Content *)
+Notebook[{
+Cell["Driver notebook \[LongDash] wall verdict, lever table, plots", "Title",ExpressionUUID->"18101706-cc14-42e9-8f02-629a9a3f67fc"],
+
+Cell["Loads driver.wl (Tasks 1-4 dependencies + runAnalysis[]).", "Text",ExpressionUUID->"1a2690d4-c603-4e3a-b3c9-29ce09d25300"],
+
+Cell[BoxData[
+ RowBox[{"<<", "\"\<driver.wl\>\""}]], "Input",ExpressionUUID->"ccea84ac-f280-4266-9696-728230fcca9c"],
+
+Cell["\<\
+Interactive exploration: vary sense-lag tau and max advance to see where the \
+phase budget wall moves.\
+\>", "Text",ExpressionUUID->"c8c4f256-95ab-48ee-859e-ceba850d4d18"],
+
+Cell[BoxData[
+ RowBox[{"Manipulate", "[", 
+  RowBox[{
+   RowBox[{"Plot", "[", 
+    RowBox[{
+     RowBox[{"{", 
+      RowBox[{
+       RowBox[{"phiLagDeg", "[", 
+        RowBox[{"e", ",", 
+         FractionBox["tau", 
+          SuperscriptBox["10", "6"]]}], "]"}], ",", 
+       RowBox[{"advDeg", "[", 
+        RowBox[{"e", ",", "adv", ",", "45000", ",", "85000"}], "]"}]}], "}"}],
+      ",", 
+     RowBox[{"{", 
+      RowBox[{"e", ",", "20000", ",", "260000"}], "}"}], ",", 
+     RowBox[{"PlotLegends", "\[Rule]", 
+      RowBox[{"{", 
+       RowBox[{"\"\<lag\>\"", ",", "\"\<advance\>\""}], "}"}]}], ",", 
+     RowBox[{"AxesLabel", "\[Rule]", 
+      RowBox[{"{", 
+       RowBox[{"\"\<eRPM\>\"", ",", "\"\<deg\>\""}], "}"}]}]}], "]"}], ",", 
+   RowBox[{"{", 
+    RowBox[{
+     RowBox[{"{", 
+      RowBox[{"tau", ",", "30", ",", "\"\<tau (us)\>\""}], "}"}], ",", "5", ",",
+      "60"}], "}"}], ",", 
+   RowBox[{"{", 
+    RowBox[{
+     RowBox[{"{", 
+      RowBox[{"adv", ",", "22", ",", "\"\<adv max (deg)\>\""}], "}"}], ",", 
+     "0", ",", "40"}], "}"}]}], "]"}]], "Input",ExpressionUUID->"9506b85a-\
+c8d8-4e8b-9d31-03bf68cb82ee"]
+},
+WindowTitle->"driver.nb",
+FrontEndVersion->"14.3 for Linux x86 (64-bit) (July 31, 2025)",
+StyleDefinitions->"Default.nb",
+ExpressionUUID->"eb5439eb-ebf5-4e80-a6af-b5c103cdc0c9"
+]
+(* End of Notebook Content *)
+
+(* Internal cache information *)
+(*CellTagsOutline
+CellTagsIndex->{}
+*)
+(*CellTagsIndex
+CellTagsIndex->{}
+*)
+(*NotebookFileOutline
+Notebook[{
+Cell[583, 21, 132, 0, 70, "Title",ExpressionUUID->"18101706-cc14-42e9-8f02-629a9a3f67fc"],
+Cell[718, 23, 128, 0, 70, "Text",ExpressionUUID->"1a2690d4-c603-4e3a-b3c9-29ce09d25300"],
+Cell[849, 25, 116, 1, 70, "Input",ExpressionUUID->"ccea84ac-f280-4266-9696-728230fcca9c"],
+Cell[968, 28, 182, 3, 70, "Text",ExpressionUUID->"c8c4f256-95ab-48ee-859e-ceba850d4d18"],
+Cell[1153, 33, 1127, 32, 70, "Input",ExpressionUUID->"9506b85a-c8d8-4e8b-9d31-03bf68cb82ee"]
+}
+]
+*)
+
+(* End of internal cache information *)
