@@ -11,10 +11,11 @@ runAnalysis[] := Module[{p, anchors, fit, levers, plot, plotPath},
      modelled-comp regime using the two comp'd points, margin free. *)
   (* CAVEAT: both anchors ({150k, 214k}) sit above the advance-saturation knee
      (advMax reached) with comp gain 0, so residualLagDeg - advDeg - margin is a
-     pure arctan(w*t) shifted by a constant -> exactly one root exists for any
-     tau, meaning a single tau always "explains" both points. oneTauExplains =
-     False here is therefore a geometric artifact of this anchor set, not a
-     physical rejection of the single-tau hypothesis. *)
+     pure arctan(w*t) shifted by a constant -> exactly ONE root for any tau. One
+     tau therefore predicts a SINGLE wall and cannot match two distinct anchors,
+     so oneTauExplains is forced False by the geometry of this anchor set, NOT a
+     physical rejection of the single-tau hypothesis. A non-degenerate test needs
+     the 80k pre-comp anchor (below saturation, where the wall is tau-sensitive). *)
   anchors = {{"150k", 150000}, {"214k", 214000}};
   fit = fitTauMargin[anchors, "modelled", 0, p["advMax"],
           p["advStartErpm"], p["advFullErpm"]];
