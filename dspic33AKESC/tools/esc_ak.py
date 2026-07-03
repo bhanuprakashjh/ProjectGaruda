@@ -132,10 +132,8 @@ def fmt_diag(p: bytes) -> str:
     caps = struct.unpack_from("<6I", p, 12)
     miss = struct.unpack_from("<6I", p, 36)
     erpm = 1_000_000_000 // hr if hr else 0
-    return (f"  DIAG capPm={cap} crossPm={xsec} bias={xsec-cap:+d}pm "
-            f"HR={hr} ({erpm} eRPM) good={good}\n"
-            f"       caps/sector {list(caps)}\n"
-            f"       miss/sector {list(miss)}")
+    return (f"  DIAG bias={xsec-cap:+4d}pm (cap={cap} cross={xsec}) {erpm:6d} eRPM good={good:5d} "
+            f"caps={list(caps)} miss={list(miss)}")
 
 def main():
     link = Link(PORT)
@@ -159,6 +157,7 @@ def main():
     gsp_src = False
     n = 0
     last = 0.0
+    last_diag = 0.0
     last_st = None
     manual_tel = watch is not None
     oneshot = True          # print the first snapshot as the connect status
@@ -171,6 +170,12 @@ def main():
                 last = now
                 link.send(CMD["SNAP"])
                 link.send(CMD["HB"])
+            # Auto-diag: one HWZC diag per second while in CLOSED_LOOP so
+            # every loaded run captures per-sector cap/miss + bias evidence
+            # (nine bench runs went by with zero manual diag under load).
+            if last_st == 6 and now - last_diag >= 1.0:
+                last_diag = now
+                link.send(CMD["DIAG"])
 
             for cmd, pl in link.poll():
                 if cmd == CMD["SNAP"] and len(pl) >= 68:
