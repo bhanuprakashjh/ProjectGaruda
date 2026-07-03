@@ -173,6 +173,9 @@ def main():
     print("settings:")
     for pid in PARAMS.values():
         link.send(CMD["GETP"], struct.pack("<H", pid))
+    # Recover a capture frozen by a previous session (scope stays READY in
+    # firmware RAM until re-armed or power-cycled).
+    link.send(CMD["SSTAT"])
 
     # Telemetry is quiet while IDLE (state 0): snapshots are still polled so
     # state changes are seen, but lines only print once the motor leaves IDLE
@@ -239,13 +242,17 @@ def main():
                         scope_total = cnt
                         print(f"  == SCOPE TRIGGERED == reading {cnt} samples "
                               f"(trigger at index {scope_trig})")
-                        for off in range(0, cnt, SCOPE_CHUNK):
-                            link.send(CMD["SREAD"],
-                                      bytes([off, min(SCOPE_CHUNK, cnt - off)]))
+                        # One chunk in flight at a time - a 15-request burst
+                        # overflows the firmware TX ring and drops responses.
+                        link.send(CMD["SREAD"], bytes([0, min(SCOPE_CHUNK, cnt)]))
                 elif cmd == CMD["SREAD"] and len(pl) >= 2:
                     off, cnt2 = pl[0], pl[1]
                     for k in range(cnt2):
                         scope_samples[off + k] = pl[2 + k*26 : 2 + (k+1)*26]
+                    nxt = off + cnt2
+                    if scope_total and nxt < scope_total:
+                        link.send(CMD["SREAD"],
+                                  bytes([nxt, min(SCOPE_CHUNK, scope_total - nxt)]))
                     if scope_total and len(scope_samples) >= scope_total:
                         print(f"  -- scope capture ({scope_total} samples @24kHz, "
                               f"'>' = trigger, S<n> = sector) --")

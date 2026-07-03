@@ -1781,11 +1781,20 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
             if (iMag > s_iMagPeak)      s_iMagPeak = iMag;
             else if (s_iMagPeak > 0)    s_iMagPeak--;
 
+            /* DUTY GATE (bench 2026-07-03): two false stalls at 12%/4% duty -
+             * hard accel at low duty draws >12A phase legitimately, and the
+             * low-duty sampling artifact (see WS1 gate) inflates the read.
+             * Phantom locks hold high COMMANDED duty (52%), so only ACCUMULATE
+             * debounce above the same duty floor as WS1. Below it the debounce
+             * FREEZES (not resets): the phantom's duty flaps 52<->5%, and a
+             * reset would let it re-zero the count every flap. */
+            bool dutyHigh = ((uint32_t)garudaData.duty * 100u
+                          >= (uint32_t)RT_ZC_DEMAG_DUTY_THRESH * (uint32_t)LOOPTIME_TCY);
             if (s_stallArmed && s_iMagPeak > RT_STALL_IPHASE_ADC)
             {
                 uint16_t stallTicks = (uint16_t)RT_STALL_DEBOUNCE_MS
                                     * (uint16_t)(PWMFREQUENCY_HZ / 1000u);
-                if (s_stallDebounce < 0xFFFFu) s_stallDebounce++;
+                if (dutyHigh && s_stallDebounce < 0xFFFFu) s_stallDebounce++;
                 if (s_stallDebounce >= stallTicks)
                 {
 #if FEATURE_ADC_CMP_ZC
