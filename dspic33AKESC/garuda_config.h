@@ -299,7 +299,19 @@ extern "C" {
 #ifndef BEMF_TRIG_SHIFT_Q
 #define BEMF_TRIG_SHIFT_Q         0  /* shift gain: triga += (LOOPTIME_TCY/256)*shiftQ*(dutyPct-thresh)/100. 0 = no shift */
 #endif
-#define FEATURE_VBUS_SAG_LIMIT   1  /* Phase C2: Bus voltage sag power limiting (reduce duty on Vbus dip) */
+#define FEATURE_VBUS_SAG_LIMIT   0  /* OFF (2026-07-03 U3 campaign): CAUGHT IN THE ACT strangling
+                                     * the loaded U3 at a 13.6V bench. Threshold 900 (~13V) with
+                                     * recovery 1000 (~14.4V) means a 13.6V bench sits permanently
+                                     * inside the engage band and can never release. Under ~2-3A
+                                     * load the PSU dips 13.3-13.5V -> limiter cuts duty -> friction
+                                     * load doesn't shrink -> speed falls, current stays -> more sag
+                                     * -> POSITIVE FEEDBACK duty spiral 62%%->5%% -> near-stall -> UV
+                                     * FAULT (flt=2). Telemetry: thr pinned ~2062 while duty walked
+                                     * down alone; sync=1 throughout - detection never blinked. This
+                                     * is very likely the original '2A load desync'. Re-enable only
+                                     * with thresholds derived from the ACTUAL bus voltage (they are
+                                     * hardcoded ADC counts below, not profile params). Phase C2:
+                                     * Bus voltage sag power limiting (reduce duty on Vbus dip) */
 #define FEATURE_BEMF_INTEGRATION 1  /* Phase E: Shadow integration estimator (shadow-only, no control) */
 #define FEATURE_SINE_STARTUP     1  /* RESTORED 2026-06-10: back to the proven sine startup (I-f parked).
                                      * NOTE: profile 9 (U3) overrides this to 0 via #undef AFTER
