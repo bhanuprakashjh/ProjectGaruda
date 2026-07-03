@@ -235,7 +235,14 @@ extern "C" {
 #define CASCADE_DUTY_SLEW_PER_ISR 1   /* max duty change per ISR (ticks) — the
                                        * hard guarantee against a one-ISR slam */
 #endif
-#define FEATURE_SPEED_CASCADE    1  /* WS4: nested speed→current→duty cascade (the "hold speed under load
+#define FEATURE_SPEED_CASCADE    0  /* OFF for the load-desync campaign (2026-07-03):
+                                     * the conservative WS4 gains made the pot need a crawl
+                                     * (fast ramps let go), limit-cycled mid-speed, and gave
+                                     * near-freewheel ramp-down. Direct duty (this=0, SPEED_PI=0)
+                                     * = pot->duty, detection-under-load observable without loop
+                                     * dynamics. Re-enable + bench-tune WS4 AFTER detection
+                                     * survives load - it is the hold-speed-under-load feature.
+                                     * WS4: nested speed→current→duty cascade (the "hold speed under load
                                      * by pushing current to a ceiling" feature). FRESH implementation —
                                      * NOT motor/speed_pi.c (which outputs duty directly and had high-RPM
                                      * OV issues). Outer speed PI (per-ZC) outputs a CURRENT reference
