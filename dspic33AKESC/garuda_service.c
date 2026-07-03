@@ -3928,6 +3928,73 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                     }
                 }
 
+#if FEATURE_HWZC_CAPRATE_WATCHDOG
+                /* Capture-RATE watchdog — catches the SELF-DEFENDING phantom
+                 * the zero-capture check above cannot: a stray accepted noise
+                 * fire every few hundred ms resets noCapCount forever while
+                 * the PI stays blind (bench 16V pot-0: 1.7s at eRPM frozen
+                 * 6.9k, -5.5A bus, rej=100%). Healthy lock = ~1 accept per
+                 * commutation; judge the RATIO over windows instead. */
+                {
+                    static uint32_t rateWinTick = 0;
+                    static uint32_t rateWinComm = 0;
+                    static uint32_t rateWinCap  = 0;
+                    static uint8_t  rateStrikes = 0;
+                    if (prevAdcState != ESC_CLOSED_LOOP)
+                    {
+                        rateWinTick = garudaData.systemTick;
+                        rateWinComm = garudaData.hwzc.totalCommCount;
+                        rateWinCap  = garudaData.hwzc.totalZcCount;
+                        rateStrikes = 0;
+                    }
+                    if (garudaData.hwzc.enabled && garudaData.timing.zcSynced)
+                    {
+                        if ((garudaData.systemTick - rateWinTick)
+                            >= HWZC_CAPRATE_WINDOW_MS)
+                        {
+                            uint32_t dComm = garudaData.hwzc.totalCommCount
+                                           - rateWinComm;
+                            uint32_t dCap  = garudaData.hwzc.totalZcCount
+                                           - rateWinCap;
+                            rateWinTick = garudaData.systemTick;
+                            rateWinComm = garudaData.hwzc.totalCommCount;
+                            rateWinCap  = garudaData.hwzc.totalZcCount;
+                            if (dComm >= HWZC_CAPRATE_MIN_COMMS
+                                && dCap * 100u < dComm * HWZC_CAPRATE_MIN_PCT)
+                                rateStrikes++;
+                            else
+                                rateStrikes = 0;
+                            if (rateStrikes >= HWZC_CAPRATE_STRIKES)
+                            {
+                                /* Mirror the desync-handler path (same as the
+                                 * zero-capture watchdog above). */
+                                garudaData.zcDiag.zcDesyncCount++;
+#if FEATURE_HW_OVERCURRENT
+                                HAL_CMP3_SetThreshold(RT_OC_CMP3_STARTUP_DAC);
+#endif
+                                HAL_MC1PWMDisableOutputs();
+#if !FEATURE_THROTTLE_ZERO_AUTO_DISARM
+                                garudaData.runCommandActive = true;
+#endif
+                                garudaData.state = ESC_RECOVERY;
+                                garudaData.recoveryCounter = RT_DESYNC_COAST_COUNTS;
+                                LED2 = 0;
+                                rateStrikes = 0;
+                            }
+                        }
+                    }
+                    else
+                    {
+                        /* not judging — keep baselines fresh so a sync regain
+                         * doesn't evaluate a window spanning the gap */
+                        rateWinTick = garudaData.systemTick;
+                        rateWinComm = garudaData.hwzc.totalCommCount;
+                        rateWinCap  = garudaData.hwzc.totalZcCount;
+                        rateStrikes = 0;
+                    }
+                }
+#endif /* FEATURE_HWZC_CAPRATE_WATCHDOG */
+
 #if FEATURE_BEMF_INTEGRATION
                 /* Read-only observer: keep shadow integration warm (Rule 11) */
                 {

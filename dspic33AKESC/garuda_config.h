@@ -1497,6 +1497,27 @@ extern "C" {
                                       * stalled). At 14k eRPM idle, a sector is ~12 ms so this
                                       * tolerates ~12 missed sectors before forcing recovery. */
 
+/* Capture-RATE watchdog (2026-07-03, U3 pot-0 phantom). A phantom lock is
+ * SELF-DEFENDING: every few hundred ms one noise fire lands in an ON window
+ * with a plausible interval and gets ACCEPTED, resetting the zero-capture
+ * watchdog above forever while being far too sparse to re-lock the PI
+ * (bench 16V: 1.7s+ at eRPM frozen 6.9k, -5.5A bus, 9.6A phase, rej=100%,
+ * below every fault threshold). A healthy sector-PI lock accepts ~1 capture
+ * per commutation; the towel-drag worst case (60% single-polarity misses)
+ * still gave ~40%. So compare RATES: accepted captures vs commutations over
+ * a window; sustained ratio below the floor = the PLL is blind → RECOVERY. */
+#define FEATURE_HWZC_CAPRATE_WATCHDOG  1
+#define HWZC_CAPRATE_WINDOW_MS   50  /* rate-evaluation window */
+#define HWZC_CAPRATE_MIN_PCT     25  /* accepts must be >= this % of comms
+                                      * (healthy ~100%, towel-drag ~40%,
+                                      * phantom ~1%) */
+#define HWZC_CAPRATE_MIN_COMMS   20  /* min commutations per window to judge
+                                      * (below this the motor is too slow for
+                                      * a meaningful ratio — stay silent) */
+#define HWZC_CAPRATE_STRIKES      3  /* consecutive bad windows before firing
+                                      * (150 ms total — rides through chop
+                                      * storms and accel transients) */
+
 /* Filter phase-lag compensation (Path 1: CMPLO pre-distortion).
  *
  * The PCB BEMF RC filter (R=3kΩ × C=10nF on MCLV-48V-300W) has τ=30µs and a
