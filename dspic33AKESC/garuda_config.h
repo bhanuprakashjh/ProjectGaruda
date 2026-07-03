@@ -30,7 +30,7 @@ extern "C" {
 #define FEATURE_VBUS_FAULT       1  /* Phase A4: Bus voltage OV/UV fault enforcement */
 #define FEATURE_DESYNC_RECOVERY  1  /* Phase B2: Controlled restart-on-desync (ESC_RECOVERY) */
 #define FEATURE_DUTY_SLEW        1  /* Phase B1: Asymmetric duty slew rate limiter */
-#define FEATURE_CL_SOFT_ENTRY    0  /* Smooth OL->CL hand-off: gentle duty ramp at CL entry.
+#define FEATURE_CL_SOFT_ENTRY    1  /* ENABLED 2026-07-03 (U3 startup smoothing): gentle duty ramp at CL entry.
                                      * Default OFF (232k path untouched). When 1, for the
                                      * first CL_SOFT_ENTRY_MS after hand-off the duty slews up
                                      * far more gently so the motor accelerates from the
@@ -1235,10 +1235,10 @@ extern "C" {
 #define SINE_TRAP_DUTY_DEN           5  /* Sine->trap duty scale factor denominator. */
 
 /* Waveform Morph: sine-to-trap transition (replaces coast gap) */
-#define MORPH_CONVERGE_SECTORS   12   /* Sectors for duty convergence (was 6 = 1 e-cycle,
-                                       * raised 2026-05-28 to 12 = 2 e-cycles for smoother
-                                       * sine→trap blend. At 3000 eRPM: 12 sectors × 3.3ms
-                                       * = ~40ms blend, halves dV/dt on the float phase). */
+#define MORPH_CONVERGE_SECTORS   24   /* Sectors for duty convergence. 6 -> 12 (2026-05-28)
+                                       * -> 24 (2026-07-03, U3 startup smoothing): 4 e-cycles,
+                                       * ~96ms blend at 2500 eRPM. Halves float-phase dV/dt
+                                       * again; still far inside MORPH_TIMEOUT_MS 2000. */
 #define MORPH_HIZ_MAX_SECTORS    36   /* Max sectors in Hi-Z before fault (6 e-cycles). */
 #define MORPH_TIMEOUT_MS       2000   /* Absolute morph timeout (ms). */
 #define MORPH_ZC_THRESHOLD        4   /* goodZcCount to exit morph → CL. Lowered from 6

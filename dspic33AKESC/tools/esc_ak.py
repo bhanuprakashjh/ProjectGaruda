@@ -65,6 +65,9 @@ PARAMS = dict(
     blankextra=0x57,# zcDemagBlankExtraPct base demag extra %
     stalladc=0x5D,  # stallIphaseAdc      WS2: raw counts over bias (1300 ~ 14A real)
     stallarm=0x5F,  # stallArmErpm        WS2: eRPM crossed once before stall can fire
+    ramptarget=0x15,# rampTargetErpm      OL ramp handoff speed (raise toward CL idle ~4700
+                    #                     to shrink the post-handoff surge; profile default 2500)
+    rampaccel=0x16, # rampAccelErpmPerS   OL ramp acceleration
 )
 
 STATES = ["IDLE","ARMED","DETECT","ALIGN","OL_RAMP","MORPH",
