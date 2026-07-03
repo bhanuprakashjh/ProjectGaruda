@@ -1695,7 +1695,21 @@ extern "C" {
  * ON-window neutral path (bench-proven to 98% duty / 96k eRPM). RISING
  * sectors are untouched everywhere (driven-phase coupling assists them in
  * the ON window at any duty). Set 0 to restore the ON-only baseline. */
-#define FEATURE_HWZC_FALLING_OFFWIN  (MOTOR_PROFILE == 9)
+#define FEATURE_HWZC_FALLING_OFFWIN  0
+                                    /* BENCH-FALSIFIED 2026-07-03 (prop-less U3, 16V): DIAG
+                                     * showed falling sectors 100% MISSING below 75% duty and
+                                     * green above (= exactly where the release band returns
+                                     * them to the ON path). Root cause: the epsilon-vs-ground
+                                     * reference assumes CONTINUOUS freewheel conduction; at
+                                     * ~1A prop-less phase current the freewheel decays early
+                                     * in each OFF window (DCM), all three terminals float,
+                                     * and the floating phase reads BEMF + undefined common
+                                     * mode - it never descends through epsilon. The correct
+                                     * window-independent, DCM-proof falling detector is the
+                                     * Atomberg-style SOFTWARE NEUTRAL (same-instant 3-phase
+                                     * sampling, compare floating phase to (va+vb+vc)/3 -
+                                     * common-mode rejecting in ON, OFF, and DCM alike). Keep
+                                     * this code for a future CCM/under-load A/B only. */
 #define HWZC_OFFWIN_EPSILON_ADC     10  /* OFF-window falling threshold, ADC counts above
                                          * ground (~0.19V at the phase with the 23.2 divider).
                                          * Must clear the noise floor but stay small vs BEMF
