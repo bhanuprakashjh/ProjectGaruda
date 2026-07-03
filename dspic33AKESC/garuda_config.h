@@ -363,7 +363,7 @@ extern "C" {
  * always false → AM32 forced ON for ALL profiles, silently defeating the
  * 6/7/8 sine carve-out.) Per-profile motor params are in the section further down.
  * 0=Hurst 1=A2212@12V 2=2810@24V 3=5055 4=Cobra 5=XRotor 6=VEX 7=1407@2S 8=1407@3S 9=U3 KV700@~16V */
-#define MOTOR_PROFILE  8
+#define MOTOR_PROFILE  9   /* U3 KV700 @24V bench - load-desync campaign 2026-07-03 */
 
 /* 2026-06-17 PER-PROFILE: high-KV micro motors (VEX prof 6, 1407 prof 7/8 @10V)
  * can't use the AM32 kick — BEMF is below the detection floor at the kick instant
