@@ -1680,6 +1680,32 @@ extern "C" {
  * "HW comparator ZC, no PWM gate" behaviour, for A/B comparison on the bench. */
 #define FEATURE_HWZC_FREEWHEEL_GATE     0   /* CHECK: gate OFF (ungated HW-comparator ZC) */
 
+/* FEATURE_HWZC_FALLING_OFFWIN — detection-window schedule step 1 (2026-07-03).
+ * Below the engage duty, FALLING sectors detect their ZC in the PWM-OFF
+ * (freewheel) window against a small near-ground threshold instead of hunting
+ * the buried ON-window crossing. Physics: during low-side freewheel both
+ * driven terminals are at ground, so the floating terminal IS the raw BEMF —
+ * a falling crossing is a clean descent through ~0. The OFF window is wide
+ * exactly where the ON window is a keyhole (6% duty = ~1.3us ON at 45kHz =
+ * ~1 ADC sample), which is where falling sectors starve today (odd-sector
+ * miss asymmetry, idle rej ~100%, spin-down phantom). The epsilon threshold
+ * self-gates: during ON the floating terminal sits at neutral+BEMF, volts
+ * above epsilon, so the comparator is physically silent there. Above the
+ * release duty the OFF window itself becomes the keyhole — fall back to the
+ * ON-window neutral path (bench-proven to 98% duty / 96k eRPM). RISING
+ * sectors are untouched everywhere (driven-phase coupling assists them in
+ * the ON window at any duty). Set 0 to restore the ON-only baseline. */
+#define FEATURE_HWZC_FALLING_OFFWIN  (MOTOR_PROFILE == 9)
+#define HWZC_OFFWIN_EPSILON_ADC     10  /* OFF-window falling threshold, ADC counts above
+                                         * ground (~0.19V at the phase with the 23.2 divider).
+                                         * Must clear the noise floor but stay small vs BEMF
+                                         * amplitude (idle ~1V = ~53 counts): the capture fires
+                                         * when BEMF descends to epsilon, i.e. slightly EARLY
+                                         * by epsilon/slope — keep small. Bench-tune. */
+#define HWZC_OFFWIN_ENGAGE_DUTY_PCT  70 /* falling->OFF window when duty below this */
+#define HWZC_OFFWIN_RELEASE_DUTY_PCT 75 /* falling->ON window (legacy path) above this;
+                                         * 70-75 band holds previous state (hysteresis) */
+
 #if FEATURE_HWZC_FALLING_HW
 #define FEATURE_HWZC_FALLING_SW        0   /* superseded by FALLING_HW (HW comparator both polarities) */
 #else

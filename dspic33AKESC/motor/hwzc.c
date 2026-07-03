@@ -60,6 +60,10 @@ void HWZC_Init(volatile GARUDA_DATA_T *pData)
     pData->hwzc.totalMissCount = 0;
     pData->hwzc.totalCommCount = 0;
     pData->hwzc.rejectsThisStep = 0;
+#if FEATURE_HWZC_FALLING_OFFWIN
+    pData->hwzc.offWinBand = 1;      /* runs start at low duty — OFF window armed */
+    pData->hwzc.offWinFalling = 0;
+#endif
     pData->hwzc.dbgTimeoutAdcVal = 0;
     pData->hwzc.dbgTimeoutThresh = 0;
     pData->hwzc.dbgTimeoutCmpmod = 0;
@@ -321,17 +325,46 @@ void HWZC_OnCommutation(volatile GARUDA_DATA_T *pData)
     uint8_t core = HAL_ADC_SelectBemfPhase(floatPhase);
     pData->hwzc.activeCore = core;
 
+#if FEATURE_HWZC_FALLING_OFFWIN
+    /* Detection-window schedule (step 1): duty-band hysteresis decides whether
+     * falling sectors use the OFF-window epsilon path this commutation.
+     * Compare in duty*100 space to avoid a division in the ISR. */
+    {
+        uint32_t d100 = (uint32_t)pData->duty * 100u;
+        if (d100 >= (uint32_t)HWZC_OFFWIN_RELEASE_DUTY_PCT * (uint32_t)LOOPTIME_TCY)
+            pData->hwzc.offWinBand = 0;
+        else if (d100 < (uint32_t)HWZC_OFFWIN_ENGAGE_DUTY_PCT * (uint32_t)LOOPTIME_TCY)
+            pData->hwzc.offWinBand = 1;
+        /* between engage and release: hold previous band state */
+        pData->hwzc.offWinFalling = (!risingZc && pData->hwzc.offWinBand) ? 1u : 0u;
+    }
+#endif
+
     /* Compute threshold with deadband (Rule 4).
      * Filter compensation (if enabled) shifts the threshold AWAY from neutral
      * in the direction OPPOSITE the deadband, so the comparator fires earlier
      * by an amount equal to the PCB RC filter's phase lag at this stepPeriodHR.
      * No-op when FEATURE_HWZC_FILTER_COMP=0. */
-    uint16_t thresh = pData->bemf.zcThreshold;
-    thresh = HWZC_ApplyFilterComp(pData, thresh, risingZc);
-    if (risingZc)
-        thresh = (thresh + HWZC_CMP_DEADBAND < 4095) ? thresh + HWZC_CMP_DEADBAND : 4095;
+    uint16_t thresh;
+#if FEATURE_HWZC_FALLING_OFFWIN
+    if (pData->hwzc.offWinFalling)
+    {
+        /* OFF window: floating terminal is the RAW BEMF against ground during
+         * freewheel. Catch the descent through a small epsilon. The neutral
+         * deadband and filter comp are ON-window concepts (different reference
+         * and different signal path) — not applied here. */
+        thresh = HWZC_OFFWIN_EPSILON_ADC;
+    }
     else
-        thresh = (thresh > HWZC_CMP_DEADBAND) ? thresh - HWZC_CMP_DEADBAND : 0;
+#endif
+    {
+        thresh = pData->bemf.zcThreshold;
+        thresh = HWZC_ApplyFilterComp(pData, thresh, risingZc);
+        if (risingZc)
+            thresh = (thresh + HWZC_CMP_DEADBAND < 4095) ? thresh + HWZC_CMP_DEADBAND : 4095;
+        else
+            thresh = (thresh > HWZC_CMP_DEADBAND) ? thresh - HWZC_CMP_DEADBAND : 0;
+    }
 
     HAL_ADC_ConfigComparator(core, thresh, risingZc);
 
@@ -576,7 +609,15 @@ void HWZC_OnZcDetected(volatile GARUDA_DATA_T *pData)
         if      (cs->phaseA == PHASE_PWM_ACTIVE) pwmOn = (PORTD & (1u << 2)) != 0; /* RD2 = PWM1H */
         else if (cs->phaseB == PHASE_PWM_ACTIVE) pwmOn = (PORTD & (1u << 0)) != 0; /* RD0 = PWM2H */
         else                                     pwmOn = (PORTC & (1u << 3)) != 0; /* RC3 = PWM3H */
-        if (!pwmOn) {
+        bool wantOn = true;
+#if FEATURE_HWZC_FALLING_OFFWIN
+        /* OFF-window falling sector: the epsilon threshold is referenced to
+         * ground, which only exists during freewheel — accept OFF, reject ON
+         * (during ON the terminal reads neutral+BEMF; a fire there is noise). */
+        if (pData->hwzc.offWinFalling)
+            wantOn = false;
+#endif
+        if (pwmOn != wantOn) {
             pData->hwzc.noiseRejectCount++;
             pData->hwzc.rejectsThisStep++;
             uint8_t core = pData->hwzc.activeCore;
@@ -643,13 +684,29 @@ void HWZC_OnZcDetected(volatile GARUDA_DATA_T *pData)
         uint8_t v_core = pData->hwzc.activeCore;
         int8_t  v_pol  = commutationTable[pData->currentStep].zcPolarity;
         bool    v_rising = (v_pol > 0);
-        uint16_t v_thresh = pData->bemf.zcThreshold;
-        if (v_rising)
-            v_thresh = (v_thresh + HWZC_CMP_DEADBAND < 4095)
-                       ? v_thresh + HWZC_CMP_DEADBAND : 4095;
+        uint16_t v_thresh;
+#if FEATURE_HWZC_FALLING_OFFWIN
+        if (pData->hwzc.offWinFalling)
+        {
+            /* OFF-window sector: verify against the same epsilon reference
+             * the comparator fired on. A real descent stays below epsilon on
+             * the next 1MHz sample; a coupling spike flips back. (If a PWM
+             * ON edge lands inside the 1us verify wait, the terminal jumps to
+             * neutral+BEMF and a REAL crossing gets rejected — rare (~1us of
+             * a 22us cycle) and benign: the next OFF window re-fires.) */
+            v_thresh = HWZC_OFFWIN_EPSILON_ADC;
+        }
         else
-            v_thresh = (v_thresh > HWZC_CMP_DEADBAND)
-                       ? v_thresh - HWZC_CMP_DEADBAND : 0;
+#endif
+        {
+            v_thresh = pData->bemf.zcThreshold;
+            if (v_rising)
+                v_thresh = (v_thresh + HWZC_CMP_DEADBAND < 4095)
+                           ? v_thresh + HWZC_CMP_DEADBAND : 4095;
+            else
+                v_thresh = (v_thresh > HWZC_CMP_DEADBAND)
+                           ? v_thresh - HWZC_CMP_DEADBAND : 0;
+        }
 
         for (uint8_t i = 0; i < HWZC_VERIFY_READS; i++) {
             /* Wait one ADC conversion period FIRST so the read sees a fresh

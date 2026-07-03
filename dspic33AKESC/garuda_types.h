@@ -283,6 +283,13 @@ typedef struct {
                                    * rejected (a missed capture degrades via period fallback;
                                    * a false one causes a 60-degree slip). Set 2 on chop,
                                    * decremented once per CL ADC ISR tick. */
+    uint8_t      offWinBand;      /* duty-band hysteresis state for OFF-window falling
+                                   * detection: 1 = below engage duty (OFF window in use
+                                   * for falling sectors), 0 = above release duty */
+    uint8_t      offWinFalling;   /* THIS sector detects its falling ZC in the PWM-OFF
+                                   * (freewheel) window against the near-ground epsilon
+                                   * threshold, not the ON-window duty*Vbus neutral.
+                                   * Set per commutation; read by the capture ISR gates. */
 
     /* Diagnostics (debugger reads only — tearing acceptable) */
     uint32_t     totalZcCount;    /* Total hardware ZC detections */
