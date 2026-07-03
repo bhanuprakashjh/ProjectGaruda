@@ -31,8 +31,10 @@ except ImportError:
 PORT = sys.argv[1] if len(sys.argv) > 1 else "/dev/ttyACM0"
 BAUD = 115200
 
-# Scaling (matches the React GUI's AK decode)
-VBUS_V   = 3.3 * 19.8 / 4096          # volts per count
+# Scaling. Vbus divider on THIS board is 23.2:1 (bench-verified 2026-07-03:
+# PSU at 16.0V read 13.6 with the React GUI's 19.8 assumption -> 19.8*16/13.6
+# = 23.3). The GUI under-reads Vbus by ~15% until its scale is fixed too.
+VBUS_V   = 3.3 * 23.2 / 4096          # volts per count
 IBUS_CPA = 93.0                        # counts per amp, 2048-centered
 
 CMD = dict(PING=0x00, INFO=0x01, SNAP=0x02, START=0x03, STOP=0x04,
