@@ -42,12 +42,13 @@ CMD = dict(PING=0x00, INFO=0x01, SNAP=0x02, START=0x03, STOP=0x04,
            GETP=0x10, SETP=0x11, DIAG=0x18)
 
 # Handy param-name shortcuts for set/get (full IDs in gsp/gsp_params.h).
+# Keys must be lowercase — the console lowercases all typed input.
 # SET_PARAM is IDLE-only in fw (except AN1078/OC live IDs): stop, set, start.
 PARAMS = dict(
-    perA   =0x5B,   # zcDemagBlankPerA    WS1: % sector per 256 cts phase excess
-    perAdb =0x5C,   # zcDemagBlankIbusDb  WS1: deadband, raw counts
-    blankMax=0x9E,  # zcDemagBlankMaxPct  WS1: total blank cap % (25 legacy, 33 = +headroom)
-    blankExtra=0x57,# zcDemagBlankExtraPct base demag extra %
+    pera   =0x5B,   # zcDemagBlankPerA    WS1: % sector per 256 cts phase excess
+    peradb =0x5C,   # zcDemagBlankIbusDb  WS1: deadband, raw counts
+    blankmax=0x9E,  # zcDemagBlankMaxPct  WS1: total blank cap % (25 legacy, 33 = +headroom)
+    blankextra=0x57,# zcDemagBlankExtraPct base demag extra %
 )
 
 STATES = ["IDLE","ARMED","DETECT","ALIGN","OL_RAMP","MORPH",
