@@ -167,7 +167,11 @@ extern "C" {
 #ifndef ZC_DEMAG_BLANK_MAX_PCT
 #define ZC_DEMAG_BLANK_MAX_PCT   25  /* total HW-ZC blank cap, % of period (25 = legacy period/4) */
 #endif
-#define FEATURE_PHASE_STALL_FAULT 0 /* WS2: phase-current stall/desync backstop. The bus-current OC is
+#define FEATURE_PHASE_STALL_FAULT (MOTOR_PROFILE == 9) /* WS2: ENABLED for U3 2026-07-03:
+                                     * bench-captured phantom lock circulated 21A for 0.8s
+                                     * (bus OC blind to it) until the PSU collapsed into UV.
+                                     * stallIphaseAdc=360 (~12A) + 50ms debounce -> FAULT_STALL.
+                                     * Original note: */ /* phase-current stall/desync backstop. The bus-current OC is
                                      * blind to a freewheeling phantom lock (current circulates in the
                                      * phase, bus reads ~0). This watches PHASE current (iaRaw/ibRaw,
                                      * already sampled every ISR): if |ia|/|ib| stays above a high

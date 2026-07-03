@@ -39,7 +39,16 @@ IBUS_CPA = 93.0                        # counts per amp, 2048-centered
 
 CMD = dict(PING=0x00, INFO=0x01, SNAP=0x02, START=0x03, STOP=0x04,
            CLR=0x05, THR=0x06, SRC=0x07, HB=0x08,
-           GETP=0x10, SETP=0x11, DIAG=0x18)
+           GETP=0x10, SETP=0x11, DIAG=0x18,
+           SARM=0x30, SSTAT=0x31, SREAD=0x32)
+
+# Burst scope (24 kHz, 128 x 26B ring). Auto-armed on CLOSED_LOOP entry:
+# threshold trigger, bus current (CH_ID=2) rising through SCOPE_TRIG_A,
+# 75% pre-trigger -> ~16 sectors of history before a current slam.
+SCOPE_TRIG_A   = 15.0    # amps, bus; normal 4A-load ripple never crosses
+SCOPE_PRE_PCT  = 75
+SCOPE_CHUNK    = 9
+SCOPE_STATES   = ["IDLE", "ARMED", "FILLING", "READY"]
 
 # Handy param-name shortcuts for set/get (full IDs in gsp/gsp_params.h).
 # Keys must be lowercase — the console lowercases all typed input.
@@ -124,6 +133,21 @@ def fmt_snapshot(p: bytes, n: int) -> str:
             f"Ibus={ibus:+5.1f}/{ibmax:+5.1f}A zcTh={zcth:4d} "
             f"good={good:5d} conf={zconf:5d} tmo={ztmo:4d} sync={sync} up={up}s")
 
+def scope_arm_payload(amps: float) -> bytes:
+    """trigMode=3 THRESHOLD, prePct, trigCh=2 CH_ID(bus mA), edge=0 RISING, thresh mA."""
+    return struct.pack("<4BhH", 3, SCOPE_PRE_PCT, 2, 0, int(amps * 1000), 0)
+
+def fmt_scope_sample(i: int, trig: int, raw: bytes) -> str:
+    (ia, ib, ibus, _iq, vd, vq, step, bemf, _x2,
+     omega, mod) = struct.unpack_from("<11h", raw, 0)
+    flags, st = raw[22], raw[23]
+    tick = struct.unpack_from("<H", raw, 24)[0]
+    vbus = vd * 3.3 * 23.2 / 4096
+    mark = ">" if i == trig else " "
+    return (f"  {mark}{i:3d} t={tick:5d} st={st} S{step} duty={mod/100:5.1f}% "
+            f"eRPM={omega*10:6d} ia={ia/1000:+6.2f} ibus={ibus/1000:+6.2f} "
+            f"vbus={vbus:5.1f} zcTh={vq:4d} bemf={bemf:4d}")
+
 def fmt_diag(p: bytes) -> str:
     cap  = struct.unpack_from("<H", p, 0)[0]
     xsec = struct.unpack_from("<H", p, 2)[0]
@@ -158,9 +182,14 @@ def main():
     n = 0
     last = 0.0
     last_diag = 0.0
+    last_sstat = 0.0
     last_st = None
     manual_tel = watch is not None
     oneshot = True          # print the first snapshot as the connect status
+    scope_armed = False     # armed this spin (re-arms next CL entry after dump)
+    scope_trig = 0          # trigger index from last status
+    scope_total = 0         # sample count to read
+    scope_samples = {}      # offset -> raw bytes, collected via SREAD
     try:
         while True:
             if watch and time.time() > watch:
@@ -176,6 +205,17 @@ def main():
             if last_st == 6 and now - last_diag >= 1.0:
                 last_diag = now
                 link.send(CMD["DIAG"])
+            # Poll scope status while armed - INCLUDING after a fault, which
+            # is exactly when the frozen capture is waiting to be read.
+            if scope_armed and now - last_sstat >= 1.0:
+                last_sstat = now
+                link.send(CMD["SSTAT"])
+            # Auto-arm the burst scope on CLOSED_LOOP entry
+            if last_st == 6 and not scope_armed and not scope_samples:
+                scope_armed = True
+                link.send(CMD["SARM"], scope_arm_payload(SCOPE_TRIG_A))
+                print(f"  (scope auto-armed: bus current rising {SCOPE_TRIG_A:.0f}A, "
+                      f"{SCOPE_PRE_PCT}% pre-trigger)")
 
             for cmd, pl in link.poll():
                 if cmd == CMD["SNAP"] and len(pl) >= 68:
@@ -193,6 +233,29 @@ def main():
                         oneshot = False
                 elif cmd == CMD["DIAG"] and len(pl) >= 60:
                     print(fmt_diag(pl))
+                elif cmd == CMD["SSTAT"] and len(pl) >= 6:
+                    sst, _tm, _pp, scope_trig, cnt, _sz = pl[0], pl[1], pl[2], pl[3], pl[4], pl[5]
+                    if sst == 3 and not scope_samples and not scope_total:
+                        scope_total = cnt
+                        print(f"  == SCOPE TRIGGERED == reading {cnt} samples "
+                              f"(trigger at index {scope_trig})")
+                        for off in range(0, cnt, SCOPE_CHUNK):
+                            link.send(CMD["SREAD"],
+                                      bytes([off, min(SCOPE_CHUNK, cnt - off)]))
+                elif cmd == CMD["SREAD"] and len(pl) >= 2:
+                    off, cnt2 = pl[0], pl[1]
+                    for k in range(cnt2):
+                        scope_samples[off + k] = pl[2 + k*26 : 2 + (k+1)*26]
+                    if scope_total and len(scope_samples) >= scope_total:
+                        print(f"  -- scope capture ({scope_total} samples @24kHz, "
+                              f"'>' = trigger, S<n> = sector) --")
+                        for i in sorted(scope_samples):
+                            print(fmt_scope_sample(i, scope_trig, scope_samples[i]))
+                        scope_samples = {}
+                        scope_total = 0
+                        scope_armed = False   # re-arms on next CL entry
+                elif cmd == CMD["SARM"]:
+                    pass  # arm ack, already announced
                 elif cmd in (CMD["GETP"], CMD["SETP"]) and len(pl) >= 6:
                     pid = struct.unpack_from("<H", pl, 0)[0]
                     val = struct.unpack_from("<I", pl, 2)[0]
