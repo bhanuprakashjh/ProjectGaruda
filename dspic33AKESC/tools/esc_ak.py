@@ -38,7 +38,17 @@ VBUS_V   = 3.3 * 23.2 / 4096          # volts per count
 IBUS_CPA = 93.0                        # counts per amp, 2048-centered
 
 CMD = dict(PING=0x00, INFO=0x01, SNAP=0x02, START=0x03, STOP=0x04,
-           CLR=0x05, THR=0x06, SRC=0x07, HB=0x08, DIAG=0x18)
+           CLR=0x05, THR=0x06, SRC=0x07, HB=0x08,
+           GETP=0x10, SETP=0x11, DIAG=0x18)
+
+# Handy param-name shortcuts for set/get (full IDs in gsp/gsp_params.h).
+# SET_PARAM is IDLE-only in fw (except AN1078/OC live IDs): stop, set, start.
+PARAMS = dict(
+    perA   =0x5B,   # zcDemagBlankPerA    WS1: % sector per 256 cts phase excess
+    perAdb =0x5C,   # zcDemagBlankIbusDb  WS1: deadband, raw counts
+    blankMax=0x9E,  # zcDemagBlankMaxPct  WS1: total blank cap % (25 legacy, 33 = +headroom)
+    blankExtra=0x57,# zcDemagBlankExtraPct base demag extra %
+)
 
 STATES = ["IDLE","ARMED","DETECT","ALIGN","OL_RAMP","MORPH",
           "CLOSED_LOOP","BRAKING","RECOVERY","FAULT"]
@@ -128,7 +138,8 @@ def fmt_diag(p: bytes) -> str:
 
 def main():
     link = Link(PORT)
-    print(f"Connected {PORT} @ {BAUD}. commands: start | stop | t <0..2000> | pot | clr | diag | q")
+    print(f"Connected {PORT} @ {BAUD}. commands: start | stop | t <0..2000> | pot | clr | diag | "
+          f"get/set <{'|'.join(PARAMS)}> | q")
 
     watch = None
     if len(sys.argv) > 3 and sys.argv[2] == "watch":
@@ -153,8 +164,16 @@ def main():
                     print(fmt_snapshot(pl, n))
                 elif cmd == CMD["DIAG"] and len(pl) >= 60:
                     print(fmt_diag(pl))
+                elif cmd in (CMD["GETP"], CMD["SETP"]) and len(pl) >= 6:
+                    pid = struct.unpack_from("<H", pl, 0)[0]
+                    val = struct.unpack_from("<I", pl, 2)[0]
+                    name = next((k for k, v in PARAMS.items() if v == pid), f"0x{pid:02x}")
+                    verb = "SET" if cmd == CMD["SETP"] else "GET"
+                    print(f"  {verb} {name} = {val}")
                 elif cmd == 0xFF and pl:
-                    print(f"  !! firmware error 0x{pl[0]:02x}")
+                    errs = {0x04: "WRONG_STATE (motor must be stopped to set)",
+                            0x05: "OUT_OF_RANGE", 0x06: "UNKNOWN_PARAM"}
+                    print(f"  !! firmware error 0x{pl[0]:02x} {errs.get(pl[0], '')}")
 
             if not watch and select.select([sys.stdin], [], [], 0)[0]:
                 line = sys.stdin.readline().strip().lower()
@@ -170,6 +189,22 @@ def main():
                     link.send(CMD["SRC"], bytes([0])); gsp_src = False
                 elif line == "diag":
                     link.send(CMD["DIAG"])
+                elif line.startswith(("set ", "get ")):
+                    parts = line.split()
+                    pid = PARAMS.get(parts[1]) if len(parts) > 1 else None
+                    if pid is None:
+                        try: pid = int(parts[1], 0)
+                        except (ValueError, IndexError):
+                            print(f"  params: {' '.join(PARAMS)} (or numeric id)"); continue
+                    if parts[0] == "get":
+                        link.send(CMD["GETP"], struct.pack("<H", pid))
+                    elif len(parts) > 2:
+                        try: val = int(parts[2], 0)
+                        except ValueError:
+                            print("  usage: set <name|id> <value>"); continue
+                        link.send(CMD["SETP"], struct.pack("<HI", pid, val))
+                    else:
+                        print("  usage: set <name|id> <value>")
                 elif line.startswith("t "):
                     try:
                         v = max(0, min(2000, int(line.split()[1])))
