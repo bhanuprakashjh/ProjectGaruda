@@ -587,6 +587,21 @@ void HWZC_OnZcDetected(volatile GARUDA_DATA_T *pData)
     }
 #endif
 
+    /* Chop gate: the SW OC limiter cut duty within the last 2 PWM cycles -
+     * the applied-voltage step corrupts the BEMF crossing in this window
+     * exactly like a PWM-OFF capture. Reject; the period fallback carries
+     * missed captures (bench: 60% single-polarity misses survivable), a
+     * false capture here is a 60-degree slip (scope run 18 @18A). */
+    if (pData->hwzc.chopBlank)
+    {
+        pData->hwzc.noiseRejectCount++;
+        pData->hwzc.rejectsThisStep++;
+        uint8_t core = pData->hwzc.activeCore;
+        HAL_ADC_ClearComparatorFlag(core);
+        HAL_ADC_EnableComparatorIE(core);
+        return;
+    }
+
     /* INTERVAL CHECK FIRST (cheap, ~500 ns) — reorder C: kills early-arriving
      * noise before spending 3 µs on verify reads. Most PWM-ripple-driven
      * comparator re-fires happen within microseconds of the last accept,

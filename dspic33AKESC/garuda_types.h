@@ -278,6 +278,11 @@ typedef struct {
     bool         dbgLatchDisable;  /* Debug: after first HW ZC failure, block re-enable permanently */
     uint32_t     noiseRejectCount; /* ZC events rejected by interval filter (diagnostic) */
     uint8_t      rejectsThisStep; /* Noise rejects since last commutation (diagnostic) */
+    uint8_t      chopBlank;       /* >0: SW OC limiter chopped duty recently - ZC captures
+                                   * in these PWM cycles see corrupted BEMF windows and are
+                                   * rejected (a missed capture degrades via period fallback;
+                                   * a false one causes a 60-degree slip). Set 2 on chop,
+                                   * decremented once per CL ADC ISR tick. */
 
     /* Diagnostics (debugger reads only — tearing acceptable) */
     uint32_t     totalZcCount;    /* Total hardware ZC detections */

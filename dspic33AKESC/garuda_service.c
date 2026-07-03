@@ -4260,7 +4260,14 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                         mappedDuty = MIN_DUTY;
                     else
                         mappedDuty -= reduction;
+                    /* Chopped cycles corrupt the BEMF window - blank HW-ZC
+                     * captures for this + next cycle (scope run 18: the chop
+                     * at the correctly-scaled 18A caused the same chop->
+                     * BEMF-dead->slip->phantom chain as the mis-scaled 6A). */
+                    garudaData.hwzc.chopBlank = 2;
                 }
+                else if (garudaData.hwzc.chopBlank)
+                    garudaData.hwzc.chopBlank--;
 #endif
 
 #if FEATURE_CL_SOFT_ENTRY
