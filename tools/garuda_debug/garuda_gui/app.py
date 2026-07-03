@@ -513,7 +513,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scope_frozen = False
         self.map_pts = deque(maxlen=2000)        # (eRPM, Ia_pk) operating-point scatter
         self.live = deque(maxlen=4000)           # rolling samples for on-demand diagnosis
-        self._prev_rej = None                    # (zc, reject) for windowed reject-rate
+        self._prev_rej = None                    # (zc, reject, t_mono) for windowed reject- and capture-rate
         self._console_paused = False
         self._was_running = False                 # gate console mirror to run-only
 
@@ -1648,15 +1648,24 @@ class MainWindow(QtWidgets.QMainWindow):
             self.fault.setStyleSheet("")
 
         rej_tot = s["hwzc_zc"] + s["hwzc_reject"]
+        now_mono = time.monotonic()
+        caprate = None   # accepts per expected sector — LOCK QUALITY (rej% is only noise exposure)
         if self._prev_rej is not None:
             d_acc = max(0, s["hwzc_zc"] - self._prev_rej[0])
             d_rej = max(0, s["hwzc_reject"] - self._prev_rej[1])
             denom = d_acc + d_rej
             rejrate = (100.0 * d_rej / denom) if denom > 0 else 0.0
+            # capture ratio: accepted captures / commutations expected from eRPM
+            # (sectors/s = eRPM/10). ~100% locked, ~40% towel-drag worst case,
+            # ~1% phantom lock — separates the states rej% cannot.
+            dt = now_mono - self._prev_rej[2]
+            exp_sectors = (s["eRPM"] / 10.0) * dt
+            if exp_sectors >= 5:
+                caprate = max(0.0, min(100.0, 100.0 * d_acc / exp_sectors))
         else:
             rejrate = (100.0 * s["hwzc_reject"] / rej_tot) if rej_tot else 0.0
         rejrate = max(0.0, min(100.0, rejrate))   # can't exceed 100%
-        self._prev_rej = (s["hwzc_zc"], s["hwzc_reject"])
+        self._prev_rej = (s["hwzc_zc"], s["hwzc_reject"], now_mono)
 
         ia = s.get("ia_pk_mag", 0.0)
         ibus = s.get("ibus_win_A", s["ibus_A"])   # windowed = trustworthy (not valley artifact)
@@ -1739,9 +1748,10 @@ class MainWindow(QtWidgets.QMainWindow):
             if running:
                 mark = " ◀" if (self.live and len(self.live) >= 2 and
                                 self.live[-2]["state_name"] != s["state_name"]) else ""
+                cap_str = f"cap={caprate:3.0f}%" if caprate is not None else "cap=  -"
                 self._log(f"{t:6.2f} {s['state_name']:<8} thr={s['throttle']:>4} "
                           f"duty={s['duty']:>3}% eRPM={s['eRPM']:>7,} Vbus={s['vbus_V']:4.1f} "
-                          f"Ibus={ibus:+5.1f} Ia={ia:4.1f} rej={rejrate:3.0f}% "
+                          f"Ibus={ibus:+5.1f} Ia={ia:4.1f} {cap_str} rej={rejrate:3.0f}% "
                           f"{s['fault_name']}{mark}")
             elif self._was_running:
                 self._log(f"■──────── STOPPED @ {t:6.2f}s ────────")
