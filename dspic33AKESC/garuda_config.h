@@ -142,7 +142,12 @@ extern "C" {
                                       * (and FEATURE_THROTTLE_ZERO_AUTO_DISARM follows it → off).
                                       * Arm/start via GSP/switch; pot is throttle only. */
 #define THROTTLE_START_ADC      400   /* armed motor launches when pot ADC rises above this (hysteresis vs ARM_THROTTLE_ZERO_ADC=200) */
-#define FEATURE_THROTTLE_ZERO_AUTO_DISARM FEATURE_POT_START_STOP  /* stop-at-zero half (was standalone; now driven by POT_START_STOP) */
+#define FEATURE_THROTTLE_ZERO_AUTO_DISARM 1  /* RE-STANDALONE 2026-07-03: stop half ON even with
+                                      * POT_START_STOP off - bench showed pot-0 left the motor
+                                      * cruising at the 6% CL idle floor (~7k eRPM) forever.
+                                      * Pot to zero (<200 ADC, 50ms) now coasts to IDLE; start
+                                      * remains button/GSP. hasSeenThrottle latch prevents
+                                      * false disarm at CL entry (pot starts at zero). */
 #define FEATURE_TIMING_ADVANCE   1  /* Phase B3: Linear timing advance by RPM — RE-ENABLED 2026-05-26 to compensate detection-chain latency at high RPM. Original baseline schedule: 0° below 3k eRPM, linear ramp to 22° at MAX_CLOSED_LOOP_ERPM (70k for 2810), clamped 22° above. */
 #define FEATURE_DYNAMIC_BLANKING 1  /* Phase C1: Speed+duty-aware blanking (extra blank at high duty/demag) */
 #define FEATURE_ZC_CURRENT_BLANK 1  /* WS1: LOAD-adaptive demag blanking on the HW-ZC path. Adds extra
