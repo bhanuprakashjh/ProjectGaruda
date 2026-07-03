@@ -140,15 +140,28 @@ def fmt_diag(p: bytes) -> str:
 def main():
     link = Link(PORT)
     print(f"Connected {PORT} @ {BAUD}. commands: start | stop | t <0..2000> | pot | clr | diag | "
-          f"get/set <{'|'.join(PARAMS)}> | q")
+          f"status | tel | get/set <{'|'.join(PARAMS)}> | q")
 
     watch = None
     if len(sys.argv) > 3 and sys.argv[2] == "watch":
-        watch = time.time() + float(sys.argv[3])
+        watch = time.time() + float(sys.argv[3])   # watch mode streams everything
 
+    # Startup settings dump: read the tuning params once (responses print
+    # as "  GET <name> = <val>" when they arrive).
+    print("settings:")
+    for pid in PARAMS.values():
+        link.send(CMD["GETP"], struct.pack("<H", pid))
+
+    # Telemetry is quiet while IDLE (state 0): snapshots are still polled so
+    # state changes are seen, but lines only print once the motor leaves IDLE
+    # (board button or 'start').  'status' prints one line on demand; 'tel'
+    # toggles the full stream regardless of state.
     gsp_src = False
     n = 0
     last = 0.0
+    last_st = None
+    manual_tel = watch is not None
+    oneshot = True          # print the first snapshot as the connect status
     try:
         while True:
             if watch and time.time() > watch:
@@ -162,7 +175,17 @@ def main():
             for cmd, pl in link.poll():
                 if cmd == CMD["SNAP"] and len(pl) >= 68:
                     n += 1
-                    print(fmt_snapshot(pl, n))
+                    st = pl[0]
+                    if st != last_st and last_st is not None:
+                        a = STATES[last_st] if last_st < len(STATES) else last_st
+                        b = STATES[st] if st < len(STATES) else st
+                        print(f"  -- {a} -> {b}")
+                        if st == 0:
+                            print("  (idle - telemetry paused; 'status' for one line, 'tel' to stream)")
+                    last_st = st
+                    if st != 0 or manual_tel or oneshot:
+                        print(fmt_snapshot(pl, n))
+                        oneshot = False
                 elif cmd == CMD["DIAG"] and len(pl) >= 60:
                     print(fmt_diag(pl))
                 elif cmd in (CMD["GETP"], CMD["SETP"]) and len(pl) >= 6:
@@ -190,6 +213,11 @@ def main():
                     link.send(CMD["SRC"], bytes([0])); gsp_src = False
                 elif line == "diag":
                     link.send(CMD["DIAG"])
+                elif line in ("status", "s"):
+                    oneshot = True
+                elif line == "tel":
+                    manual_tel = not manual_tel
+                    print(f"  (stream {'ON' if manual_tel else 'auto: only when running'})")
                 elif line.startswith(("set ", "get ")):
                     parts = line.split()
                     pid = PARAMS.get(parts[1]) if len(parts) > 1 else None
