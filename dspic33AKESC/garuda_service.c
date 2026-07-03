@@ -4259,12 +4259,22 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                     uint32_t erpm = 1000000000UL / garudaData.hwzc.stepPeriodHR;
                     uint32_t vraw = garudaData.vbusRaw;
                     if (vraw < 100u) vraw = 100u;   /* div guard (UV faults first) */
-                    uint32_t equivPctX100 = erpm * (uint32_t)SPINDOWN_FLOOR_KV_NUM / vraw;
+                    /* Timing-advance droop: the flat KV_NUM overestimates equiv
+                     * duty at speed (field weakening) — enough to LATCH full
+                     * duty at pot 0 (bench 2026-07-03, 81k@98%). See config. */
+                    uint32_t kvNum = (uint32_t)SPINDOWN_FLOOR_KV_NUM;
+                    uint32_t kvDroop = erpm / (uint32_t)SPINDOWN_FLOOR_KV_DROOP_ERPM;
+                    kvNum = (kvDroop + (uint32_t)SPINDOWN_FLOOR_KV_MIN >= kvNum)
+                            ? (uint32_t)SPINDOWN_FLOOR_KV_MIN : (kvNum - kvDroop);
+                    uint32_t equivPctX100 = erpm * kvNum / vraw;
                     uint32_t marginPctX100 = (uint32_t)SPINDOWN_FLOOR_MARGIN_PCT_X10 * 10u;
                     if (equivPctX100 > marginPctX100)
                     {
                         uint32_t floorPctX100 = equivPctX100 - marginPctX100;
-                        if (floorPctX100 > 9800u) floorPctX100 = 9800u;
+                        /* hard cap: the floor must never reach the sustaining-
+                         * duty region — the pot must ALWAYS retain authority */
+                        if (floorPctX100 > (uint32_t)SPINDOWN_FLOOR_MAX_PCT_X100)
+                            floorPctX100 = (uint32_t)SPINDOWN_FLOOR_MAX_PCT_X100;
                         uint32_t floorDuty = (uint32_t)LOOPTIME_TCY * floorPctX100 / 10000u;
                         if (mappedDuty < floorDuty)
                             mappedDuty = floorDuty;

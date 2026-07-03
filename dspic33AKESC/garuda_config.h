@@ -69,6 +69,28 @@ extern "C" {
                                      * regen current and a longer diode-clamp fraction of the
                                      * PWM cycle; smaller = gentler. 3% of 20V ≈ the ~1-2A
                                      * brake the proven manual pot-downs showed. Bench-tune. */
+#define SPINDOWN_FLOOR_KV_DROOP_ERPM 14000
+                                    /* LATCH FIX (bench 2026-07-03): at 81k/98% the flat
+                                     * KV_NUM=107 model read equiv ~102% — above the real
+                                     * sustaining duty (98%) — so floor = equiv-3% >= 98%
+                                     * HELD full duty at pot 0 indefinitely (self-sustaining:
+                                     * the floor maintains the speed that justifies the
+                                     * floor; only STOP recovered). Cause: timing advance
+                                     * (0->25 deg with speed) field-weakens — more eRPM per
+                                     * volt — so the low-speed-fitted constant overestimates
+                                     * at the top by ~5%. Model the droop linearly:
+                                     * kvNum = KV_NUM - erpm/THIS (81k -> 107-5.8 = 101,
+                                     * matching the measured top-end c). */
+#define SPINDOWN_FLOOR_KV_MIN    90 /* droop clamp (sanity for erpm beyond the fit range) */
+#define SPINDOWN_FLOOR_MAX_PCT_X100 9400
+                                    /* Hard cap, %*100: the floor may NEVER command more
+                                     * than 94% duty regardless of model output. Guarantees
+                                     * the pot can always pull duty below the sustaining
+                                     * point at the top end even if the model drifts (worst
+                                     * case: pot-0 from full speed starts with a ~4% brake
+                                     * gap until eRPM falls under the cap region, then the
+                                     * normal 3% glide takes over). Belt-and-braces vs the
+                                     * droop term above — either alone breaks the latch. */
 #define FEATURE_IF_BRIDGE        0  /* Option D: I-f current-limited OL->CL hand-off bridge.
                                      * MOTOR-AGNOSTIC smoothing. At CL entry, ramp duty up
                                      * from MIN_DUTY but BACK OFF whenever bus current
