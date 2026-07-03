@@ -41,6 +41,34 @@ extern "C" {
                                      * time the motor needs to accelerate hand-off->idle. */
 #define CL_SOFT_ENTRY_DIVISOR   64  /* Entry up-rate = DUTY_SLEW_UP_RATE / this. Bigger =
                                      * gentler (lower current, slower spin-up). Bench-tune. */
+#define FEATURE_SPINDOWN_FLOOR (MOTOR_PROFILE == 9)
+                                    /* Spin-down BEMF duty floor (2026-07-03, 20V pot-0 desync).
+                                     * A pot-0 from cruise drops duty full-scale in ~4ms
+                                     * (DUTY_SLEW_DOWN 5%/ms; the HIGH_RPM penalty only bites
+                                     * >150k eRPM) while the rotor needs ~1s. With duty far
+                                     * below BEMF the freewheel diodes clamp the floating
+                                     * phase: NO valid ZC exists, rej=100%, the tracker coasts,
+                                     * the rotor decelerates through the coasted rate and the
+                                     * drive phantom-locks (bench 20V: eRPM frozen 8.7k, -6.8A
+                                     * bus / 11A phase sustained; hides below stall 14A and
+                                     * the 40% stall duty gate). Fix: never command duty more
+                                     * than a margin below the BEMF-equivalent duty of the
+                                     * MEASURED eRPM. The floor descends exactly as fast as
+                                     * the rotor actually slows, so captures stay alive all
+                                     * the way down (mirrors the manual slow-pot-down that
+                                     * always worked). Protections (sag, SW OC limiter) run
+                                     * AFTER this clamp and can still cut below it. */
+#define SPINDOWN_FLOOR_KV_NUM  107  /* dutyPct*100 = KV_NUM * eRPM / vbusRaw. Bench-fit on U3
+                                     * KV700/7pp, 5 steady points 4.7k..82k eRPM, 16-20V:
+                                     * duty%*Vbus/eRPM = 0.0202..0.0210 (=1/Kv_e with the
+                                     * 23.2 Vbus divider; theory 100/(700*7)/0.018694V-per-
+                                     * count = 109). Per-motor constant. */
+#define SPINDOWN_FLOOR_MARGIN_PCT_X10 30
+                                    /* Brake margin below BEMF-equivalent duty, %*10 (30 =
+                                     * 3.0%). Bigger = faster spin-down but more circulating
+                                     * regen current and a longer diode-clamp fraction of the
+                                     * PWM cycle; smaller = gentler. 3% of 20V ≈ the ~1-2A
+                                     * brake the proven manual pot-downs showed. Bench-tune. */
 #define FEATURE_IF_BRIDGE        0  /* Option D: I-f current-limited OL->CL hand-off bridge.
                                      * MOTOR-AGNOSTIC smoothing. At CL entry, ramp duty up
                                      * from MIN_DUTY but BACK OFF whenever bus current

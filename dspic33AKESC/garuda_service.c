@@ -4174,6 +4174,36 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                     prevDuty = mappedDuty;
                 }
 #endif
+
+#if FEATURE_SPINDOWN_FLOOR
+                /* Spin-down BEMF floor — clamp the commanded duty to no more
+                 * than SPINDOWN_FLOOR_MARGIN below the BEMF-equivalent duty of
+                 * the MEASURED speed, so a pot-0 from cruise glides down with
+                 * captures alive instead of diode-clamping the floating phase
+                 * (rej=100%, tracker coasts, phantom-locks — bench 20V run
+                 * 2026-07-03). Floor falls as the rotor slows, reaching the
+                 * idle floor naturally; inactive once equiv duty - margin
+                 * drops below the throttle command. Placed BEFORE sag/OC
+                 * limiters so protections still cut below it. */
+                if (garudaData.hwzc.enabled && garudaData.timing.zcSynced
+                    && garudaData.hwzc.stepPeriodHR > 0)
+                {
+                    /* eRPM = 1e9 / stepPeriodHR (60° step, 10ns HR ticks) */
+                    uint32_t erpm = 1000000000UL / garudaData.hwzc.stepPeriodHR;
+                    uint32_t vraw = garudaData.vbusRaw;
+                    if (vraw < 100u) vraw = 100u;   /* div guard (UV faults first) */
+                    uint32_t equivPctX100 = erpm * (uint32_t)SPINDOWN_FLOOR_KV_NUM / vraw;
+                    uint32_t marginPctX100 = (uint32_t)SPINDOWN_FLOOR_MARGIN_PCT_X10 * 10u;
+                    if (equivPctX100 > marginPctX100)
+                    {
+                        uint32_t floorPctX100 = equivPctX100 - marginPctX100;
+                        if (floorPctX100 > 9800u) floorPctX100 = 9800u;
+                        uint32_t floorDuty = (uint32_t)LOOPTIME_TCY * floorPctX100 / 10000u;
+                        if (mappedDuty < floorDuty)
+                            mappedDuty = floorDuty;
+                    }
+                }
+#endif
                 if (garudaData.timing.stepPeriod <= RT_MIN_CL_ADC_STEP_PERIOD
                     && mappedDuty > garudaData.duty)
                 {
