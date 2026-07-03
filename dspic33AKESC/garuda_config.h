@@ -1321,7 +1321,18 @@ extern "C" {
  *
  * N=3 is conservative (~3µs ISR overhead). N=5 is more robust. */
 #if MOTOR_PROFILE == 9
-#define FEATURE_HWZC_PWM_GATE      0   /* U3 (2026-06-26): back to continuous comparator. Re-enabling the
+#define FEATURE_HWZC_PWM_GATE      1   /* RE-ENABLED 2026-07-03 (load-desync campaign A/B): the clean
+                                        * load run (sag limiter off, direct duty) reproduced the 2810's
+                                        * MODE-A signature verbatim - healthy detection to the last
+                                        * sample (sync=1, zcTh steady, smooth droop 41k->36k at 5A),
+                                        * then a ONE-SAMPLE current-rail slam (+21.4A) -> UV. Mode A =
+                                        * single 60deg slip from one bad capture; on the 2810 the PWM
+                                        * gate was THE fix. The June refutation below was measured
+                                        * against a regressed ~33k-ceiling baseline that no longer
+                                        * exists (today: 83k no-load clean). A/B: if no-load regresses
+                                        * or the slam persists, flip back to 0.
+                                        * --- prior U3 (2026-06-26) rationale (kept): back to continuous
+                                        * comparator. Re-enabling the
                                         * gate did NOT help (same ~33k ceiling, same OC->UV) and made the
                                         * rej% telemetry go UP, not down — because the gate's own PWM-OFF
                                         * rejection path increments noiseRejectCount (hwzc.c:487), so every
