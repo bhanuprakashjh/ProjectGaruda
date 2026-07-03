@@ -42,10 +42,18 @@ CMD = dict(PING=0x00, INFO=0x01, SNAP=0x02, START=0x03, STOP=0x04,
            GETP=0x10, SETP=0x11, DIAG=0x18,
            SARM=0x30, SSTAT=0x31, SREAD=0x32)
 
-# Burst scope (24 kHz, 128 x 26B ring). Auto-armed on CLOSED_LOOP entry:
+# Burst scope (128 x 26B ring at ISR rate). Auto-armed on CLOSED_LOOP entry:
 # threshold trigger, bus current (CH_ID=2) rising through SCOPE_TRIG_A,
-# 75% pre-trigger -> ~16 sectors of history before a current slam.
-SCOPE_TRIG_A   = 15.0    # amps, bus; normal 4A-load ripple never crosses
+# 75% pre-trigger -> ~2 revs of history before a current slam.
+#
+# SCALE (bench-resolved 2026-07-03): fw scope mA uses COUNTS_PER_AMP ~30.9
+# (the 8.3 "WS5-corrected" gain) but the TRUE board scale is 93 counts/A -
+# a PSU CC-limited at 10A ran a load the 30.9 scale called "10.5A" without
+# limiting. Convert scope mA -> real A by /3009 (30.9/93*1000... = mA per
+# real amp). The int16 channel clips at 32.767 scope-A = ~10.9A real, so
+# the trigger cannot sit above ~10.5A real.
+SCOPE_MA_PER_A = 3009.0  # scope-mA per real amp
+SCOPE_TRIG_A   = 9.0     # REAL amps, bus; loaded ripple peaks ~5A real
 SCOPE_PRE_PCT  = 75
 SCOPE_CHUNK    = 9
 SCOPE_STATES   = ["IDLE", "ARMED", "FILLING", "READY"]
@@ -58,6 +66,8 @@ PARAMS = dict(
     peradb =0x5C,   # zcDemagBlankIbusDb  WS1: deadband, raw counts
     blankmax=0x9E,  # zcDemagBlankMaxPct  WS1: total blank cap % (25 legacy, 33 = +headroom)
     blankextra=0x57,# zcDemagBlankExtraPct base demag extra %
+    stalladc=0x5D,  # stallIphaseAdc      WS2: raw counts over bias (1300 ~ 14A real)
+    stallarm=0x5F,  # stallArmErpm        WS2: eRPM crossed once before stall can fire
 )
 
 STATES = ["IDLE","ARMED","DETECT","ALIGN","OL_RAMP","MORPH",
@@ -133,9 +143,11 @@ def fmt_snapshot(p: bytes, n: int) -> str:
             f"Ibus={ibus:+5.1f}/{ibmax:+5.1f}A zcTh={zcth:4d} "
             f"good={good:5d} conf={zconf:5d} tmo={ztmo:4d} sync={sync} up={up}s")
 
-def scope_arm_payload(amps: float) -> bytes:
-    """trigMode=3 THRESHOLD, prePct, trigCh=2 CH_ID(bus mA), edge=0 RISING, thresh mA."""
-    return struct.pack("<4BhH", 3, SCOPE_PRE_PCT, 2, 0, int(amps * 1000), 0)
+def scope_arm_payload(real_amps: float) -> bytes:
+    """trigMode=3 THRESHOLD, prePct, trigCh=2 CH_ID(bus), edge=0 RISING.
+    Threshold converts REAL amps -> firmware scope-mA units."""
+    thresh = min(32000, int(real_amps * SCOPE_MA_PER_A))
+    return struct.pack("<4BhH", 3, SCOPE_PRE_PCT, 2, 0, thresh, 0)
 
 def fmt_scope_sample(i: int, trig: int, raw: bytes) -> str:
     (ia, ib, ibus, _iq, vd, vq, step, bemf, _x2,
@@ -145,7 +157,8 @@ def fmt_scope_sample(i: int, trig: int, raw: bytes) -> str:
     vbus = vd * 3.3 * 23.2 / 4096
     mark = ">" if i == trig else " "
     return (f"  {mark}{i:3d} t={tick:5d} st={st} S{step} duty={mod/100:5.1f}% "
-            f"eRPM={omega*10:6d} ia={ia/1000:+6.2f} ibus={ibus/1000:+6.2f} "
+            f"eRPM={omega*10:6d} ia={ia/SCOPE_MA_PER_A:+6.2f} "
+            f"ibus={ibus/SCOPE_MA_PER_A:+6.2f} "
             f"vbus={vbus:5.1f} zcTh={vq:4d} bemf={bemf:4d}")
 
 def fmt_diag(p: bytes) -> str:
@@ -217,7 +230,7 @@ def main():
             if last_st == 6 and not scope_armed and not scope_samples:
                 scope_armed = True
                 link.send(CMD["SARM"], scope_arm_payload(SCOPE_TRIG_A))
-                print(f"  (scope auto-armed: bus current rising {SCOPE_TRIG_A:.0f}A, "
+                print(f"  (scope auto-armed: bus current rising {SCOPE_TRIG_A:.0f}A real, "
                       f"{SCOPE_PRE_PCT}% pre-trigger)")
 
             for cmd, pl in link.poll():

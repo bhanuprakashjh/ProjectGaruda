@@ -645,9 +645,13 @@ static const GSP_PARAMS_T profileDefaults[10] = {
         .zcDemagBlankMaxPct = 25,      /* WS1 blank cap = period/4 (legacy). Raise to 33 (period/3) live on
                                         * bench for more high-current headroom when zcDemagBlankPerA
                                         * saturates above the ~5.7A knee. 0 also means legacy 25. */
-        .stallIphaseAdc     = 360,     /* WS2: PHASE-current stall threshold, raw counts over 2048 bias
-                                        * (~12A at 30.9 cts/A). ABOVE the WS4 ceiling (240), BELOW the
-                                        * observed 14–18A phantom-lock current. Bench-tune. */
+        .stallIphaseAdc     = 1300,   /* WS2: PHASE-current stall threshold, raw counts over 2048 bias.
+                                        * RAISED 360->1300 (2026-07-03): scope capture proved 360 counts
+                                        * is ~3.9A REAL (93 cts/A verified: PSU 10A CC ran the load the
+                                        * 30.9-scale called "10.5A" without limiting) -> WS2 executed a
+                                        * healthy motor on normal ripple; runs 13-14 "slams" were false
+                                        * trips at full speed (hwHR ~27k frozen, no current event).
+                                        * 1300 counts ~ 14A real; phantom rail pins ~1990 (ADC clip). */
         .stallDebounceMs    = 50,      /* WS2: sustained 50ms above the threshold in CL → FAULT_STALL.
                                         * Rides over the brief CL-entry phase spike (~18A, <2ms). */
         .stallArmErpm       = 5000,    /* WS2 arm gate: don't evaluate stall until the rotor has spun up
