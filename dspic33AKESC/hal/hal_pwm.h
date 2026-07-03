@@ -102,6 +102,9 @@ void ChargeBootstrapCapacitors(void);
 /* 6-step commutation interface */
 void HAL_PWM_SetCommutationStep(uint8_t step);
 void HAL_PWM_SetDutyCycle(uint32_t duty);
+#if FEATURE_VARIABLE_BEMF_TRIGGER
+void HAL_PWM_SetBemfTrigger(uint32_t triga);   /* WS3: runtime BEMF sample-point (PG1TRIGA) */
+#endif
 
 #if FEATURE_IBUS_PROBE
 /* Move the PG1TRIGA ADC sample from freewheel-center to mid-ON (period center)

@@ -46,6 +46,25 @@ extern "C" {
 #define PARAM_ID_OC_LIMIT_MA            0x58
 #define PARAM_ID_OC_STARTUP_MA          0x59
 #define PARAM_ID_RAMP_CURRENT_GATE_MA   0x5A
+#define PARAM_ID_ZC_DEMAG_BLANK_PER_A   0x5B   /* WS1: load-adaptive demag blank, % sector per 256 cts ibus */
+#define PARAM_ID_ZC_DEMAG_BLANK_IBUS_DB 0x5C   /* WS1: ibus deadband (raw counts) before current-blank engages */
+#define PARAM_ID_STALL_IPHASE_ADC       0x5D   /* WS2: |phase current| (raw counts over bias) to call stall */
+#define PARAM_ID_STALL_DEBOUNCE_MS      0x5E   /* WS2: sustained-ms above threshold before FAULT_STALL */
+#define PARAM_ID_STALL_ARM_ERPM         0x5F   /* WS2: eRPM the motor must reach once before WS2 can fire */
+/* WS4: nested speed→current→duty cascade (FEATURE_SPEED_CASCADE) */
+#define PARAM_ID_CASCADE_SPEED_KP_MILLI 0x94   /* outer speed PI Kp ×1000 */
+#define PARAM_ID_CASCADE_SPEED_KI_MICRO 0x95   /* outer speed PI Ki ×1e6 */
+#define PARAM_ID_CASCADE_CURR_KP_MILLI  0x96   /* inner current PI Kp ×1000 */
+#define PARAM_ID_CASCADE_CURR_KI_MICRO  0x97   /* inner current PI Ki ×1e6 */
+#define PARAM_ID_CASCADE_IREF_CEILING   0x98   /* current ceiling (raw counts over bias) = the safety clamp */
+#define PARAM_ID_CASCADE_TGT_ERPM_IDLE  0x99   /* throttle=0 target eRPM */
+#define PARAM_ID_CASCADE_TGT_ERPM_MAX   0x9A   /* throttle=full target eRPM */
+/* WS3: duty-adaptive BEMF trigger (FEATURE_VARIABLE_BEMF_TRIGGER) */
+#define PARAM_ID_BEMF_TRIG_BASE_PCT     0x9B   /* base sample point as % of LOOPTIME_TCY */
+#define PARAM_ID_BEMF_TRIG_DUTY_THRESH  0x9C   /* duty% above which the shift engages */
+#define PARAM_ID_BEMF_TRIG_SHIFT_Q      0x9D   /* duty-proportional shift gain (0 = fixed) */
+/* WS1 (extended): cap on total HW-ZC blanking, % of commutation period (FEATURE_ZC_CURRENT_BLANK) */
+#define PARAM_ID_ZC_DEMAG_BLANK_MAX_PCT 0x9E   /* total blank cap as % of period (25 = legacy period/4) */
 
 /* Tuning params (12 new) */
 #define PARAM_ID_DUTY_SLEW_UP           0x60
@@ -181,6 +200,31 @@ typedef struct {
     /* I-f spin-up (FEATURE_IF_STARTUP) — appended at end (no layout shift above) */
     uint16_t ifCurrentCa;            /* I-f forced current × 100 (cA) — the spin-up cap */
     uint16_t ifRampErpmPerS;         /* I-f open-loop accel (eRPM/s) — rotor-follow knob */
+    /* WS1: load-adaptive demag blanking (FEATURE_ZC_CURRENT_BLANK) — appended at
+     * end, no layout shift above. RAM-only (not in V3 EEPROM/snapshot packed
+     * structs); reset to profile default on reboot, live-settable for tuning. */
+    uint8_t  zcDemagBlankPerA;       /* extra HW-ZC blank: % of sector per 256 cts ibus over deadband */
+    uint8_t  zcDemagBlankIbusDb;     /* ibus deadband (raw counts) before the current term engages */
+    /* WS2: phase-current stall fault (FEATURE_PHASE_STALL_FAULT) — RAM-only, appended at end. */
+    uint16_t stallIphaseAdc;         /* |phase current| magnitude (raw counts over 2048) to call stall */
+    uint8_t  stallDebounceMs;        /* sustained-ms above threshold before latching FAULT_STALL */
+    uint16_t stallArmErpm;           /* WS2 arm gate: eRPM the motor must cross once (latched) before stall can fire */
+    /* WS4: nested speed→current→duty cascade (FEATURE_SPEED_CASCADE) — RAM-only, appended at end. */
+    uint16_t cascadeSpeedKpMilli;    /* outer speed PI Kp ×1000 */
+    uint16_t cascadeSpeedKiMicro;    /* outer speed PI Ki ×1e6 */
+    uint16_t cascadeCurrKpMilli;     /* inner current PI Kp ×1000 */
+    uint16_t cascadeCurrKiMicro;     /* inner current PI Ki ×1e6 */
+    uint16_t cascadeIrefCeilingAdc;  /* current ceiling (raw counts over bias) — the safety clamp */
+    uint16_t cascadeTgtErpmIdle;     /* throttle=0 target eRPM */
+    uint32_t cascadeTgtErpmMax;      /* throttle=full target eRPM */
+    /* WS3: duty-adaptive BEMF trigger (FEATURE_VARIABLE_BEMF_TRIGGER) — RAM-only, appended at end. */
+    uint8_t  bemfTrigBasePct;        /* base sample point as % of LOOPTIME_TCY (50 = MPER/2) */
+    uint8_t  bemfTrigDutyThreshPct;  /* duty% above which the duty-proportional shift engages */
+    uint8_t  bemfTrigShiftQ;         /* shift gain (0 = fixed at basePct) */
+    /* WS1 (extended): cap on total HW-ZC blanking as % of period — RAM-only, appended at end.
+     * 25 reproduces the legacy period/4 cap; raise (33 = period/3) for more high-current
+     * demag-blank headroom when zcDemagBlankPerA saturates above the ~5.7A knee. */
+    uint8_t  zcDemagBlankMaxPct;
 } GSP_PARAMS_T;
 
 /* ── Derived values (precomputed from params, ISR reads these) ───────── */
@@ -243,8 +287,9 @@ typedef enum {
 #define GSP_PROFILE_VEX     6  /* VEX 14mm 4000KV (12N?, 6PP, 7.4V rated / 10V max, micro) */
 #define GSP_PROFILE_1407_2S 7  /* 1407 4000KV 9N12P (6PP) @ 2S (8.4V) — FPV 3" */
 #define GSP_PROFILE_1407_3S 8  /* 1407 4000KV 9N12P (6PP) @ 3S (12.6V) — FPV 3" */
-#define GSP_PROFILE_CUSTOM  9
-#define GSP_PROFILE_COUNT   9  /* built-in profiles (excl. Custom) */
+#define GSP_PROFILE_U3      9  /* T-Motor U3 KV700 12N14P (7PP) @ 3-4S (~16V) — heavy 97g, propped bench */
+#define GSP_PROFILE_CUSTOM  10
+#define GSP_PROFILE_COUNT   10 /* built-in profiles (excl. Custom) */
 
 /* Global instances (defined in gsp_params.c) */
 extern GSP_PARAMS_T  gspParams;

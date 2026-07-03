@@ -89,626 +89,626 @@ MP_LINKER_FILE_OPTION=,--script=p33AK128MC106.gld
 # ------------------------------------------------------------------------------------
 # Rules for buildStep: compile
 ifeq ($(TYPE_IMAGE), DEBUG_RUN)
-${OBJECTDIR}/_ext/1360924651/clarke.o: ../foc/clarke.c  .generated_files/flags/default/fe6ed72d2a02f0266ca54df8c5bc4538527acc3a .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360924651/clarke.o: ../foc/clarke.c  .generated_files/flags/default/63de865751d3af4b289dd2daea4a8a89d46613de .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360924651" 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/clarke.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/clarke.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../foc/clarke.c  -o ${OBJECTDIR}/_ext/1360924651/clarke.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360924651/clarke.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360924651/park.o: ../foc/park.c  .generated_files/flags/default/51cdaff6d0403f629b92bf9c00541ab627a91941 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360924651/park.o: ../foc/park.c  .generated_files/flags/default/8d6a5b7596fa773d9fc24a66c84af478d12aa9fc .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360924651" 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/park.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/park.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../foc/park.c  -o ${OBJECTDIR}/_ext/1360924651/park.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360924651/park.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360924651/svpwm.o: ../foc/svpwm.c  .generated_files/flags/default/d1cb2c899139b266dfca8e9e9c736e21d6114944 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360924651/svpwm.o: ../foc/svpwm.c  .generated_files/flags/default/4746ae2d32579cc4a15eba32887cf05aeacc76f7 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360924651" 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/svpwm.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/svpwm.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../foc/svpwm.c  -o ${OBJECTDIR}/_ext/1360924651/svpwm.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360924651/svpwm.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360924651/pi_controller.o: ../foc/pi_controller.c  .generated_files/flags/default/5e8e8695207ae42abe515205871aa3cf3878d5d9 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360924651/pi_controller.o: ../foc/pi_controller.c  .generated_files/flags/default/d4810f521e41ca51d9821e3216ad6c6f9a12280c .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360924651" 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/pi_controller.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/pi_controller.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../foc/pi_controller.c  -o ${OBJECTDIR}/_ext/1360924651/pi_controller.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360924651/pi_controller.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360924651/back_emf_obs.o: ../foc/back_emf_obs.c  .generated_files/flags/default/c3e1ce8a4bb6dfb84b1190f3001759415156e8fa .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360924651/back_emf_obs.o: ../foc/back_emf_obs.c  .generated_files/flags/default/a0d4bf58d00d431d72360a257247b62235bd6e5c .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360924651" 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/back_emf_obs.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/back_emf_obs.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../foc/back_emf_obs.c  -o ${OBJECTDIR}/_ext/1360924651/back_emf_obs.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360924651/back_emf_obs.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360924651/pll_estimator.o: ../foc/pll_estimator.c  .generated_files/flags/default/8f8335c5679e09ad36608e488da18ca145f11bea .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360924651/pll_estimator.o: ../foc/pll_estimator.c  .generated_files/flags/default/1692a47d11373de7f8ec3cbb709bb839fb9fe45b .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360924651" 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/pll_estimator.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/pll_estimator.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../foc/pll_estimator.c  -o ${OBJECTDIR}/_ext/1360924651/pll_estimator.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360924651/pll_estimator.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360924651/flux_estimator.o: ../foc/flux_estimator.c  .generated_files/flags/default/b274432c06b0cc818a73bae7c28dd75f7fd0d4f4 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360924651/flux_estimator.o: ../foc/flux_estimator.c  .generated_files/flags/default/c129113168939e4dc7259e003bf2548d8fb613df .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360924651" 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/flux_estimator.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/flux_estimator.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../foc/flux_estimator.c  -o ${OBJECTDIR}/_ext/1360924651/flux_estimator.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360924651/flux_estimator.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360924651/smo_observer.o: ../foc/smo_observer.c  .generated_files/flags/default/1bb919067ec03dfc231c42397eedc810e03f576c .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360924651/smo_observer.o: ../foc/smo_observer.c  .generated_files/flags/default/963cf22de02d0f9dbc2ba107410028e2310c271 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360924651" 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/smo_observer.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/smo_observer.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../foc/smo_observer.c  -o ${OBJECTDIR}/_ext/1360924651/smo_observer.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360924651/smo_observer.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360924651/mxlemming_obs.o: ../foc/mxlemming_obs.c  .generated_files/flags/default/43df280c08529fd9b534b0515aca9a4a3ae290d8 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360924651/mxlemming_obs.o: ../foc/mxlemming_obs.c  .generated_files/flags/default/e40fcd2aaf3d0c49c9d62ba56aedb62efd686a17 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360924651" 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/mxlemming_obs.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/mxlemming_obs.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../foc/mxlemming_obs.c  -o ${OBJECTDIR}/_ext/1360924651/mxlemming_obs.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360924651/mxlemming_obs.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360924651/foc_v2_pi.o: ../foc/foc_v2_pi.c  .generated_files/flags/default/c35be7c595397d74e7c099236ef1c5caf692676 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360924651/foc_v2_pi.o: ../foc/foc_v2_pi.c  .generated_files/flags/default/6850857509db4c623144fee01fe06334c04b936d .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360924651" 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/foc_v2_pi.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/foc_v2_pi.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../foc/foc_v2_pi.c  -o ${OBJECTDIR}/_ext/1360924651/foc_v2_pi.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360924651/foc_v2_pi.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360924651/foc_v2_observer.o: ../foc/foc_v2_observer.c  .generated_files/flags/default/65dabe6a569efca870a94fcbc73b4345a9de8e6e .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360924651/foc_v2_observer.o: ../foc/foc_v2_observer.c  .generated_files/flags/default/17d7d02cc02310daf107891e6893539c34a100d .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360924651" 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/foc_v2_observer.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/foc_v2_observer.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../foc/foc_v2_observer.c  -o ${OBJECTDIR}/_ext/1360924651/foc_v2_observer.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360924651/foc_v2_observer.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360924651/foc_v2_control.o: ../foc/foc_v2_control.c  .generated_files/flags/default/b00307aadd77e62b55ea302dd8faf91e7320e303 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360924651/foc_v2_control.o: ../foc/foc_v2_control.c  .generated_files/flags/default/4003501db3ac9d324886fd2d6f69fa56f437da58 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360924651" 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/foc_v2_control.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/foc_v2_control.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../foc/foc_v2_control.c  -o ${OBJECTDIR}/_ext/1360924651/foc_v2_control.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360924651/foc_v2_control.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360924651/foc_v2_detect.o: ../foc/foc_v2_detect.c  .generated_files/flags/default/741ef490b1f9a3e2407adae109c1dc84c666787 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360924651/foc_v2_detect.o: ../foc/foc_v2_detect.c  .generated_files/flags/default/1d3eb11e443ec1fa66dfc10668b885021844c1f4 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360924651" 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/foc_v2_detect.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/foc_v2_detect.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../foc/foc_v2_detect.c  -o ${OBJECTDIR}/_ext/1360924651/foc_v2_detect.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360924651/foc_v2_detect.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360924651/foc_v3_smo.o: ../foc/foc_v3_smo.c  .generated_files/flags/default/4afd07066f958a86418d8015fe53e62b3202b033 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360924651/foc_v3_smo.o: ../foc/foc_v3_smo.c  .generated_files/flags/default/327818bf33c084d32bd4a21ff403bdf5d9124a44 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360924651" 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/foc_v3_smo.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/foc_v3_smo.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../foc/foc_v3_smo.c  -o ${OBJECTDIR}/_ext/1360924651/foc_v3_smo.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360924651/foc_v3_smo.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360924651/foc_v3_control.o: ../foc/foc_v3_control.c  .generated_files/flags/default/9d9eab89b94e4bff15ef2f1925364d096999a5fc .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360924651/foc_v3_control.o: ../foc/foc_v3_control.c  .generated_files/flags/default/3d6b22c7543f7e386d69a55b96054b74056e785f .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360924651" 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/foc_v3_control.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/foc_v3_control.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../foc/foc_v3_control.c  -o ${OBJECTDIR}/_ext/1360924651/foc_v3_control.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360924651/foc_v3_control.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360924651/an1078_smc.o: ../foc/an1078_smc.c  .generated_files/flags/default/a8776495632dd37aba29aa2fcbd0f07f2b226cd4 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360924651/an1078_smc.o: ../foc/an1078_smc.c  .generated_files/flags/default/c80aa9245b0982b96e3b4417177264d000d5042a .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360924651" 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/an1078_smc.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/an1078_smc.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../foc/an1078_smc.c  -o ${OBJECTDIR}/_ext/1360924651/an1078_smc.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360924651/an1078_smc.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360924651/an1078_motor.o: ../foc/an1078_motor.c  .generated_files/flags/default/ee246178d3f6c36c1ac20c5de22b99b5cb99912e .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360924651/an1078_motor.o: ../foc/an1078_motor.c  .generated_files/flags/default/6b1aac61b51943e803afb14677eb7fd902eb45fb .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360924651" 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/an1078_motor.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/an1078_motor.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../foc/an1078_motor.c  -o ${OBJECTDIR}/_ext/1360924651/an1078_motor.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360924651/an1078_motor.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360925749/gsp.o: ../gsp/gsp.c  .generated_files/flags/default/f07ce920cfde97b4ff5b2fcbd08e3011fe9729a5 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360925749/gsp.o: ../gsp/gsp.c  .generated_files/flags/default/59a97a724ac75764c5d961300dd6244d7d0cee0 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360925749" 
 	@${RM} ${OBJECTDIR}/_ext/1360925749/gsp.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360925749/gsp.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../gsp/gsp.c  -o ${OBJECTDIR}/_ext/1360925749/gsp.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360925749/gsp.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360925749/gsp_commands.o: ../gsp/gsp_commands.c  .generated_files/flags/default/6ba4b19f27be04fdefd58859f55df131e3ec3308 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360925749/gsp_commands.o: ../gsp/gsp_commands.c  .generated_files/flags/default/3ab3c533de4b92bb1c8c3410757dd7e131876a3e .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360925749" 
 	@${RM} ${OBJECTDIR}/_ext/1360925749/gsp_commands.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360925749/gsp_commands.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../gsp/gsp_commands.c  -o ${OBJECTDIR}/_ext/1360925749/gsp_commands.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360925749/gsp_commands.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360925749/gsp_params.o: ../gsp/gsp_params.c  .generated_files/flags/default/2368b752e5b0bc3f2d558abc096321417101e15d .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360925749/gsp_params.o: ../gsp/gsp_params.c  .generated_files/flags/default/22eac22e5b003b64ab01e3db255b8503f9bf78d5 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360925749" 
 	@${RM} ${OBJECTDIR}/_ext/1360925749/gsp_params.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360925749/gsp_params.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../gsp/gsp_params.c  -o ${OBJECTDIR}/_ext/1360925749/gsp_params.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360925749/gsp_params.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360925749/gsp_snapshot.o: ../gsp/gsp_snapshot.c  .generated_files/flags/default/4939eedba3bb07e7413bd57907b9a68e54f8ad96 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360925749/gsp_snapshot.o: ../gsp/gsp_snapshot.c  .generated_files/flags/default/7c79842e9fa3b5ddae144f1c1a1742b5449b86e6 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360925749" 
 	@${RM} ${OBJECTDIR}/_ext/1360925749/gsp_snapshot.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360925749/gsp_snapshot.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../gsp/gsp_snapshot.c  -o ${OBJECTDIR}/_ext/1360925749/gsp_snapshot.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360925749/gsp_snapshot.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360926148/board_service.o: ../hal/board_service.c  .generated_files/flags/default/c37c25ec43518c92aa93a7ee584a320800bc0283 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360926148/board_service.o: ../hal/board_service.c  .generated_files/flags/default/74218346283762cc1cd2f088d09542fcce29b785 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360926148" 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/board_service.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/board_service.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../hal/board_service.c  -o ${OBJECTDIR}/_ext/1360926148/board_service.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360926148/board_service.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360926148/clock.o: ../hal/clock.c  .generated_files/flags/default/616805819ccf1c1a3d8c51147be4bf7e83eec91a .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360926148/clock.o: ../hal/clock.c  .generated_files/flags/default/25765097336335b766652ef478f333beab904ff .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360926148" 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/clock.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/clock.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../hal/clock.c  -o ${OBJECTDIR}/_ext/1360926148/clock.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360926148/clock.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360926148/device_config.o: ../hal/device_config.c  .generated_files/flags/default/698be70c2baf32df8cec313048d19672231b9fc9 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360926148/device_config.o: ../hal/device_config.c  .generated_files/flags/default/8dea14c59d294061b2a0a1e2f3ebfa8492210e37 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360926148" 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/device_config.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/device_config.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../hal/device_config.c  -o ${OBJECTDIR}/_ext/1360926148/device_config.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360926148/device_config.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360926148/hal_adc.o: ../hal/hal_adc.c  .generated_files/flags/default/167902f2d751f05f30b1e597e2474d525e1853f4 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360926148/hal_adc.o: ../hal/hal_adc.c  .generated_files/flags/default/44b390864e956f2e2ea2c78131933e64439c570e .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360926148" 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/hal_adc.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/hal_adc.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../hal/hal_adc.c  -o ${OBJECTDIR}/_ext/1360926148/hal_adc.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360926148/hal_adc.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360926148/hal_ata6847.o: ../hal/hal_ata6847.c  .generated_files/flags/default/6d6374dd92470b859d85d62f31d72946eb33dbde .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360926148/hal_ata6847.o: ../hal/hal_ata6847.c  .generated_files/flags/default/831cebfc7ab1241c518bc5a017a31511e449c8fe .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360926148" 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/hal_ata6847.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/hal_ata6847.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../hal/hal_ata6847.c  -o ${OBJECTDIR}/_ext/1360926148/hal_ata6847.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360926148/hal_ata6847.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360926148/hal_comparator.o: ../hal/hal_comparator.c  .generated_files/flags/default/fd1c285006434815642139a936a5fde4ea51e50d .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360926148/hal_comparator.o: ../hal/hal_comparator.c  .generated_files/flags/default/ff80e5170af00d29f56ad4705cfe121e23f8277f .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360926148" 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/hal_comparator.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/hal_comparator.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../hal/hal_comparator.c  -o ${OBJECTDIR}/_ext/1360926148/hal_comparator.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360926148/hal_comparator.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360926148/hal_pwm.o: ../hal/hal_pwm.c  .generated_files/flags/default/d58f12d912398e191079d4e0fea4cb63a54143fe .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360926148/hal_pwm.o: ../hal/hal_pwm.c  .generated_files/flags/default/1aac7910050962292d0bc65e9847cf6fcc71d6cd .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360926148" 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/hal_pwm.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/hal_pwm.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../hal/hal_pwm.c  -o ${OBJECTDIR}/_ext/1360926148/hal_pwm.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360926148/hal_pwm.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360926148/hal_zcd.o: ../hal/hal_zcd.c  .generated_files/flags/default/203f4d310a47de51883a87600727c1634196af8e .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360926148/hal_zcd.o: ../hal/hal_zcd.c  .generated_files/flags/default/9aaea0b2a2d2ee094150966bffa45218a2d63df9 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360926148" 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/hal_zcd.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/hal_zcd.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../hal/hal_zcd.c  -o ${OBJECTDIR}/_ext/1360926148/hal_zcd.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360926148/hal_zcd.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360926148/port_config.o: ../hal/port_config.c  .generated_files/flags/default/735f5aa60f2e79bf3bfa3939499804469a1f4396 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360926148/port_config.o: ../hal/port_config.c  .generated_files/flags/default/914d1b21c82c2e9d5570c7aebdaa5aa2aecc2553 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360926148" 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/port_config.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/port_config.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../hal/port_config.c  -o ${OBJECTDIR}/_ext/1360926148/port_config.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360926148/port_config.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360926148/timer1.o: ../hal/timer1.c  .generated_files/flags/default/121fe558923d0f33c28b3f29e2a16e18ae1cac0e .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360926148/timer1.o: ../hal/timer1.c  .generated_files/flags/default/f5b62d1ba204ae53629891440dea15b469d48287 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360926148" 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/timer1.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/timer1.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../hal/timer1.c  -o ${OBJECTDIR}/_ext/1360926148/timer1.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360926148/timer1.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360926148/uart1.o: ../hal/uart1.c  .generated_files/flags/default/46bd2cbdf6fee82831b669fdfac4aac3de8f26e9 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360926148/uart1.o: ../hal/uart1.c  .generated_files/flags/default/d8f14fd5a4e7aba31f5982d9d8ee87fae7b54c89 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360926148" 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/uart1.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/uart1.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../hal/uart1.c  -o ${OBJECTDIR}/_ext/1360926148/uart1.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360926148/uart1.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360926148/hal_timer.o: ../hal/hal_timer.c  .generated_files/flags/default/b3e0ae37ac611de7a75b86ba6dfa434bc30aaa9a .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360926148/hal_timer.o: ../hal/hal_timer.c  .generated_files/flags/default/6f76d303683880bc638df5c0470e089542f06cef .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360926148" 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/hal_timer.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/hal_timer.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../hal/hal_timer.c  -o ${OBJECTDIR}/_ext/1360926148/hal_timer.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360926148/hal_timer.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360926148/hal_input_capture.o: ../hal/hal_input_capture.c  .generated_files/flags/default/756af54fffa1af0c6d31345c6c3804a0ec7484a4 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360926148/hal_input_capture.o: ../hal/hal_input_capture.c  .generated_files/flags/default/9fd339e5499dac928bd96c97d7a390e7412c5b2a .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360926148" 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/hal_input_capture.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/hal_input_capture.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../hal/hal_input_capture.c  -o ${OBJECTDIR}/_ext/1360926148/hal_input_capture.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360926148/hal_input_capture.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/2113678661/rx_decode.o: ../input/rx_decode.c  .generated_files/flags/default/9a879ce3fd88f35131115b0519e8d23019929883 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/2113678661/rx_decode.o: ../input/rx_decode.c  .generated_files/flags/default/c29ec6e7294fce531cf658e1e919553f48bd3a82 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/2113678661" 
 	@${RM} ${OBJECTDIR}/_ext/2113678661/rx_decode.o.d 
 	@${RM} ${OBJECTDIR}/_ext/2113678661/rx_decode.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../input/rx_decode.c  -o ${OBJECTDIR}/_ext/2113678661/rx_decode.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/2113678661/rx_decode.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/2111190731/ring_buffer.o: ../learn/ring_buffer.c  .generated_files/flags/default/1478e45fd3a0fb5cec9a223726db619a1c0e2f51 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/2111190731/ring_buffer.o: ../learn/ring_buffer.c  .generated_files/flags/default/932cbce698d47b21539de46585ae8d4799646746 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/2111190731" 
 	@${RM} ${OBJECTDIR}/_ext/2111190731/ring_buffer.o.d 
 	@${RM} ${OBJECTDIR}/_ext/2111190731/ring_buffer.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../learn/ring_buffer.c  -o ${OBJECTDIR}/_ext/2111190731/ring_buffer.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/2111190731/ring_buffer.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/2111190731/quality.o: ../learn/quality.c  .generated_files/flags/default/befd30530ebb4813cb323cd08cb04500a6b67d7e .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/2111190731/quality.o: ../learn/quality.c  .generated_files/flags/default/9d6138306e450529c49b6ad61f2016ef5f0819b3 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/2111190731" 
 	@${RM} ${OBJECTDIR}/_ext/2111190731/quality.o.d 
 	@${RM} ${OBJECTDIR}/_ext/2111190731/quality.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../learn/quality.c  -o ${OBJECTDIR}/_ext/2111190731/quality.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/2111190731/quality.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/2111190731/health.o: ../learn/health.c  .generated_files/flags/default/957222ae0eeafee4e950960601b1056c6a8c5199 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/2111190731/health.o: ../learn/health.c  .generated_files/flags/default/91220786d6c6d5f5080c835c85690c5132e9e90d .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/2111190731" 
 	@${RM} ${OBJECTDIR}/_ext/2111190731/health.o.d 
 	@${RM} ${OBJECTDIR}/_ext/2111190731/health.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../learn/health.c  -o ${OBJECTDIR}/_ext/2111190731/health.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/2111190731/health.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/2111190731/adaptation.o: ../learn/adaptation.c  .generated_files/flags/default/7d1ce535af2c276d015046dea43d7363dc7bcf07 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/2111190731/adaptation.o: ../learn/adaptation.c  .generated_files/flags/default/801714df71eaa99569680c797507653195e930ba .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/2111190731" 
 	@${RM} ${OBJECTDIR}/_ext/2111190731/adaptation.o.d 
 	@${RM} ${OBJECTDIR}/_ext/2111190731/adaptation.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../learn/adaptation.c  -o ${OBJECTDIR}/_ext/2111190731/adaptation.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/2111190731/adaptation.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/2111190731/commission.o: ../learn/commission.c  .generated_files/flags/default/88283af70414b19778a2971d186961d8d4faa39 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/2111190731/commission.o: ../learn/commission.c  .generated_files/flags/default/5c463ab5f238649db4fcf704daed23dfa793043c .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/2111190731" 
 	@${RM} ${OBJECTDIR}/_ext/2111190731/commission.o.d 
 	@${RM} ${OBJECTDIR}/_ext/2111190731/commission.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../learn/commission.c  -o ${OBJECTDIR}/_ext/2111190731/commission.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/2111190731/commission.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/2111190731/learn_service.o: ../learn/learn_service.c  .generated_files/flags/default/42da19796b3f445dfd22da0da28c90054f4722a2 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/2111190731/learn_service.o: ../learn/learn_service.c  .generated_files/flags/default/7cfcdd908116162342bcde7cfbb5ec3c0f1bf027 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/2111190731" 
 	@${RM} ${OBJECTDIR}/_ext/2111190731/learn_service.o.d 
 	@${RM} ${OBJECTDIR}/_ext/2111190731/learn_service.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../learn/learn_service.c  -o ${OBJECTDIR}/_ext/2111190731/learn_service.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/2111190731/learn_service.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/2109951130/commutation.o: ../motor/commutation.c  .generated_files/flags/default/70c7c8e4ab0a474c1e05a03df93984b5e1db7575 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/2109951130/commutation.o: ../motor/commutation.c  .generated_files/flags/default/211c7f354f78be51106c14f167781dc197516608 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/2109951130" 
 	@${RM} ${OBJECTDIR}/_ext/2109951130/commutation.o.d 
 	@${RM} ${OBJECTDIR}/_ext/2109951130/commutation.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../motor/commutation.c  -o ${OBJECTDIR}/_ext/2109951130/commutation.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/2109951130/commutation.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/2109951130/pi.o: ../motor/pi.c  .generated_files/flags/default/c2c94401b8816db047436c72d741d399a059fd24 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/2109951130/pi.o: ../motor/pi.c  .generated_files/flags/default/61d3120b425ef26c2d22088299b824efd55403a .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/2109951130" 
 	@${RM} ${OBJECTDIR}/_ext/2109951130/pi.o.d 
 	@${RM} ${OBJECTDIR}/_ext/2109951130/pi.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../motor/pi.c  -o ${OBJECTDIR}/_ext/2109951130/pi.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/2109951130/pi.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/2109951130/startup.o: ../motor/startup.c  .generated_files/flags/default/6f7786aceef419d9fcbe61a73e864bad0a359d22 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/2109951130/startup.o: ../motor/startup.c  .generated_files/flags/default/fe3e8245bde948b70cdece662c7ce7142c811f5e .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/2109951130" 
 	@${RM} ${OBJECTDIR}/_ext/2109951130/startup.o.d 
 	@${RM} ${OBJECTDIR}/_ext/2109951130/startup.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../motor/startup.c  -o ${OBJECTDIR}/_ext/2109951130/startup.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/2109951130/startup.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/2109951130/bemf_zc.o: ../motor/bemf_zc.c  .generated_files/flags/default/cad1b6cac31d0fda604575958ed01481a8fb96df .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/2109951130/bemf_zc.o: ../motor/bemf_zc.c  .generated_files/flags/default/d3ea5639c5df0ff331f0040b2ec73dc64791e9f2 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/2109951130" 
 	@${RM} ${OBJECTDIR}/_ext/2109951130/bemf_zc.o.d 
 	@${RM} ${OBJECTDIR}/_ext/2109951130/bemf_zc.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../motor/bemf_zc.c  -o ${OBJECTDIR}/_ext/2109951130/bemf_zc.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/2109951130/bemf_zc.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/2109951130/hwzc.o: ../motor/hwzc.c  .generated_files/flags/default/5aa1c56b84896c9b26769075e5bd2875ba702a3e .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
-	@${MKDIR} "${OBJECTDIR}/_ext/2109951130"
-	@${RM} ${OBJECTDIR}/_ext/2109951130/hwzc.o.d
-	@${RM} ${OBJECTDIR}/_ext/2109951130/hwzc.o
+${OBJECTDIR}/_ext/2109951130/hwzc.o: ../motor/hwzc.c  .generated_files/flags/default/618c880e70694efc11fb79b1d167bcdfbba3e199 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+	@${MKDIR} "${OBJECTDIR}/_ext/2109951130" 
+	@${RM} ${OBJECTDIR}/_ext/2109951130/hwzc.o.d 
+	@${RM} ${OBJECTDIR}/_ext/2109951130/hwzc.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../motor/hwzc.c  -o ${OBJECTDIR}/_ext/2109951130/hwzc.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/2109951130/hwzc.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
-
-${OBJECTDIR}/_ext/2109951130/speed_pi.o: ../motor/speed_pi.c  .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
-	@${MKDIR} "${OBJECTDIR}/_ext/2109951130"
-	@${RM} ${OBJECTDIR}/_ext/2109951130/speed_pi.o.d
-	@${RM} ${OBJECTDIR}/_ext/2109951130/speed_pi.o
+	
+${OBJECTDIR}/_ext/2109951130/speed_pi.o: ../motor/speed_pi.c  .generated_files/flags/default/4db2bec6b46b25772b1e18ee7e7b69bc9c64c4b6 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+	@${MKDIR} "${OBJECTDIR}/_ext/2109951130" 
+	@${RM} ${OBJECTDIR}/_ext/2109951130/speed_pi.o.d 
+	@${RM} ${OBJECTDIR}/_ext/2109951130/speed_pi.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../motor/speed_pi.c  -o ${OBJECTDIR}/_ext/2109951130/speed_pi.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/2109951130/speed_pi.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
-
-${OBJECTDIR}/_ext/2104772283/scope_burst.o: ../scope/scope_burst.c  .generated_files/flags/default/6a009879c34a3b402b988b8c373b91d1de29806f .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+	
+${OBJECTDIR}/_ext/2104772283/scope_burst.o: ../scope/scope_burst.c  .generated_files/flags/default/3f97385489c0f5f444d064f0812e6e6ef55d387 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/2104772283" 
 	@${RM} ${OBJECTDIR}/_ext/2104772283/scope_burst.o.d 
 	@${RM} ${OBJECTDIR}/_ext/2104772283/scope_burst.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../scope/scope_burst.c  -o ${OBJECTDIR}/_ext/2104772283/scope_burst.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/2104772283/scope_burst.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1798147462/diagnostics.o: ../x2cscope/diagnostics.c  .generated_files/flags/default/24b59011a9b3d83fe59c3870ef67137591f4cb7b .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1798147462/diagnostics.o: ../x2cscope/diagnostics.c  .generated_files/flags/default/8a4c49973c47579ed5af88f6fadc3a95fbc490b9 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1798147462" 
 	@${RM} ${OBJECTDIR}/_ext/1798147462/diagnostics.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1798147462/diagnostics.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../x2cscope/diagnostics.c  -o ${OBJECTDIR}/_ext/1798147462/diagnostics.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1798147462/diagnostics.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360926148/eeprom.o: ../hal/eeprom.c  .generated_files/flags/default/a11311272bb3e6940e7aea930fbbe8ce03ad8e3e .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360926148/eeprom.o: ../hal/eeprom.c  .generated_files/flags/default/5898c449c6178d6fd1d57cf2d5b8296258af474b .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360926148" 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/eeprom.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/eeprom.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../hal/eeprom.c  -o ${OBJECTDIR}/_ext/1360926148/eeprom.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360926148/eeprom.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1472/garuda_service.o: ../garuda_service.c  .generated_files/flags/default/b26427e5979e8a20b9b575ed3c1a13ef99bed49c .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1472/garuda_service.o: ../garuda_service.c  .generated_files/flags/default/2015cf4d1e393626eb453257fb4a3a4cef4a5d83 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1472" 
 	@${RM} ${OBJECTDIR}/_ext/1472/garuda_service.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1472/garuda_service.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../garuda_service.c  -o ${OBJECTDIR}/_ext/1472/garuda_service.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1472/garuda_service.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1472/main.o: ../main.c  .generated_files/flags/default/8be9e385f65b1ce2ca2c4cb354f5380286ba2cd3 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1472/main.o: ../main.c  .generated_files/flags/default/7adc92acb99eba088470b624151a7014ff75e394 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1472" 
 	@${RM} ${OBJECTDIR}/_ext/1472/main.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1472/main.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../main.c  -o ${OBJECTDIR}/_ext/1472/main.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1472/main.o.d"      -g -D__DEBUG -D__MPLAB_DEBUGGER_PKOB4=1    -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
 else
-${OBJECTDIR}/_ext/1360924651/clarke.o: ../foc/clarke.c  .generated_files/flags/default/e619b03af68c41ea04573f7bb18609a351c90342 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360924651/clarke.o: ../foc/clarke.c  .generated_files/flags/default/f6e8cdee7b8f4e4611545e5396e1754e24483265 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360924651" 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/clarke.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/clarke.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../foc/clarke.c  -o ${OBJECTDIR}/_ext/1360924651/clarke.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360924651/clarke.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360924651/park.o: ../foc/park.c  .generated_files/flags/default/113b73f105cafa88ea3c764318726cdb729e9131 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360924651/park.o: ../foc/park.c  .generated_files/flags/default/1a6e3a440fc5f6960cf3781526e0dbe4dfe72b73 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360924651" 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/park.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/park.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../foc/park.c  -o ${OBJECTDIR}/_ext/1360924651/park.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360924651/park.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360924651/svpwm.o: ../foc/svpwm.c  .generated_files/flags/default/6ec77c0809af12bab532014c56c22142d18a4113 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360924651/svpwm.o: ../foc/svpwm.c  .generated_files/flags/default/46a5aeb315693ff6665c66a18ee6123b688f936a .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360924651" 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/svpwm.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/svpwm.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../foc/svpwm.c  -o ${OBJECTDIR}/_ext/1360924651/svpwm.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360924651/svpwm.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360924651/pi_controller.o: ../foc/pi_controller.c  .generated_files/flags/default/9099915e49a2783f1c3fdd9ba7685d83e9fd47f2 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360924651/pi_controller.o: ../foc/pi_controller.c  .generated_files/flags/default/bd003706efd63c3656c45d37f839b775a08004f7 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360924651" 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/pi_controller.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/pi_controller.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../foc/pi_controller.c  -o ${OBJECTDIR}/_ext/1360924651/pi_controller.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360924651/pi_controller.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360924651/back_emf_obs.o: ../foc/back_emf_obs.c  .generated_files/flags/default/ee4e6b8a4af8c59a4d7798a834a490918ed4cfc .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360924651/back_emf_obs.o: ../foc/back_emf_obs.c  .generated_files/flags/default/b9e40c36bac9d2af7430869d4de2035b3fd76b47 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360924651" 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/back_emf_obs.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/back_emf_obs.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../foc/back_emf_obs.c  -o ${OBJECTDIR}/_ext/1360924651/back_emf_obs.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360924651/back_emf_obs.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360924651/pll_estimator.o: ../foc/pll_estimator.c  .generated_files/flags/default/b17051d5d063cbe8e17a722cca466cb470e48857 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360924651/pll_estimator.o: ../foc/pll_estimator.c  .generated_files/flags/default/cec839806d3b2a88b7c9f0309beae6c1b0906cc1 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360924651" 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/pll_estimator.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/pll_estimator.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../foc/pll_estimator.c  -o ${OBJECTDIR}/_ext/1360924651/pll_estimator.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360924651/pll_estimator.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360924651/flux_estimator.o: ../foc/flux_estimator.c  .generated_files/flags/default/1ff3e3172c0bf1c2e6a48b2136a1204f7de5604b .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360924651/flux_estimator.o: ../foc/flux_estimator.c  .generated_files/flags/default/de4fa58b54053049e66c2184a8b6f1f5b57bdac3 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360924651" 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/flux_estimator.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/flux_estimator.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../foc/flux_estimator.c  -o ${OBJECTDIR}/_ext/1360924651/flux_estimator.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360924651/flux_estimator.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360924651/smo_observer.o: ../foc/smo_observer.c  .generated_files/flags/default/461b03c27e500a80aa73039170fec603a389ff4a .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360924651/smo_observer.o: ../foc/smo_observer.c  .generated_files/flags/default/dd241267c6796dcdf26df214463dabaa6f0f8092 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360924651" 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/smo_observer.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/smo_observer.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../foc/smo_observer.c  -o ${OBJECTDIR}/_ext/1360924651/smo_observer.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360924651/smo_observer.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360924651/mxlemming_obs.o: ../foc/mxlemming_obs.c  .generated_files/flags/default/4b4f439e9d999f25790198db33897fb423ee82ef .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360924651/mxlemming_obs.o: ../foc/mxlemming_obs.c  .generated_files/flags/default/10caf8cf7b1f14e5e0e1a027c2096549384cc470 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360924651" 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/mxlemming_obs.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/mxlemming_obs.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../foc/mxlemming_obs.c  -o ${OBJECTDIR}/_ext/1360924651/mxlemming_obs.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360924651/mxlemming_obs.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360924651/foc_v2_pi.o: ../foc/foc_v2_pi.c  .generated_files/flags/default/8e7d2e13326688bfbb876672f8222b5cc7e94487 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360924651/foc_v2_pi.o: ../foc/foc_v2_pi.c  .generated_files/flags/default/7fd645dc190db24d9fd4ba0934d3d5948a9b7f77 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360924651" 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/foc_v2_pi.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/foc_v2_pi.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../foc/foc_v2_pi.c  -o ${OBJECTDIR}/_ext/1360924651/foc_v2_pi.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360924651/foc_v2_pi.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360924651/foc_v2_observer.o: ../foc/foc_v2_observer.c  .generated_files/flags/default/725139a4fb67a99ba6e7b859df5b55a65c13b12 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360924651/foc_v2_observer.o: ../foc/foc_v2_observer.c  .generated_files/flags/default/396f533b48b35a1fc02963737aac9798b44ec61d .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360924651" 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/foc_v2_observer.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/foc_v2_observer.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../foc/foc_v2_observer.c  -o ${OBJECTDIR}/_ext/1360924651/foc_v2_observer.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360924651/foc_v2_observer.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360924651/foc_v2_control.o: ../foc/foc_v2_control.c  .generated_files/flags/default/1358f52ab7e7d14137f961a9ccd261de652c9e85 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360924651/foc_v2_control.o: ../foc/foc_v2_control.c  .generated_files/flags/default/f9c0edead102724f8bf48791e0cf0d9288267651 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360924651" 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/foc_v2_control.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/foc_v2_control.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../foc/foc_v2_control.c  -o ${OBJECTDIR}/_ext/1360924651/foc_v2_control.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360924651/foc_v2_control.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360924651/foc_v2_detect.o: ../foc/foc_v2_detect.c  .generated_files/flags/default/bab8c8c35a86b28ccede519a0c477d899309472e .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360924651/foc_v2_detect.o: ../foc/foc_v2_detect.c  .generated_files/flags/default/5508e58c1616a8ee47dd1bd31bc6e39b85727292 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360924651" 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/foc_v2_detect.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/foc_v2_detect.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../foc/foc_v2_detect.c  -o ${OBJECTDIR}/_ext/1360924651/foc_v2_detect.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360924651/foc_v2_detect.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360924651/foc_v3_smo.o: ../foc/foc_v3_smo.c  .generated_files/flags/default/7e4fcdf7cea450fa9c177c9ba4e8c0e6d16b96b .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360924651/foc_v3_smo.o: ../foc/foc_v3_smo.c  .generated_files/flags/default/b9061a1d7b8aa3383d3c6aafe84091f83cf5a1e8 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360924651" 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/foc_v3_smo.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/foc_v3_smo.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../foc/foc_v3_smo.c  -o ${OBJECTDIR}/_ext/1360924651/foc_v3_smo.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360924651/foc_v3_smo.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360924651/foc_v3_control.o: ../foc/foc_v3_control.c  .generated_files/flags/default/716584435a2dc889edc84f9580a9369f926aa567 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360924651/foc_v3_control.o: ../foc/foc_v3_control.c  .generated_files/flags/default/91ce7a8403b2bab627ff4649ff475926d85cc0a1 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360924651" 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/foc_v3_control.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/foc_v3_control.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../foc/foc_v3_control.c  -o ${OBJECTDIR}/_ext/1360924651/foc_v3_control.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360924651/foc_v3_control.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360924651/an1078_smc.o: ../foc/an1078_smc.c  .generated_files/flags/default/7e65bc11a263edef7771a8dbcb4e9ec5fa1de9b3 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360924651/an1078_smc.o: ../foc/an1078_smc.c  .generated_files/flags/default/2b7aa2cc523d532cabfe2471e3690e0e3183fa4 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360924651" 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/an1078_smc.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/an1078_smc.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../foc/an1078_smc.c  -o ${OBJECTDIR}/_ext/1360924651/an1078_smc.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360924651/an1078_smc.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360924651/an1078_motor.o: ../foc/an1078_motor.c  .generated_files/flags/default/46dcdc6d409f48b9e0808c02fbf69beae9aff51c .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360924651/an1078_motor.o: ../foc/an1078_motor.c  .generated_files/flags/default/d193d5c1850c66b471ba12858467d03891573351 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360924651" 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/an1078_motor.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360924651/an1078_motor.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../foc/an1078_motor.c  -o ${OBJECTDIR}/_ext/1360924651/an1078_motor.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360924651/an1078_motor.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360925749/gsp.o: ../gsp/gsp.c  .generated_files/flags/default/ecdfa950fc6b2615660074be87d521e408e07328 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360925749/gsp.o: ../gsp/gsp.c  .generated_files/flags/default/1198feef29ce3ac6982e454c0871b9f7bd51a2ab .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360925749" 
 	@${RM} ${OBJECTDIR}/_ext/1360925749/gsp.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360925749/gsp.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../gsp/gsp.c  -o ${OBJECTDIR}/_ext/1360925749/gsp.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360925749/gsp.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360925749/gsp_commands.o: ../gsp/gsp_commands.c  .generated_files/flags/default/a556066cf90e44e9a5b7e8d463c0e659d0f5ded .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360925749/gsp_commands.o: ../gsp/gsp_commands.c  .generated_files/flags/default/c0108bc7b80cdd1d4589f7861b2cfd3899f26b20 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360925749" 
 	@${RM} ${OBJECTDIR}/_ext/1360925749/gsp_commands.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360925749/gsp_commands.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../gsp/gsp_commands.c  -o ${OBJECTDIR}/_ext/1360925749/gsp_commands.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360925749/gsp_commands.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360925749/gsp_params.o: ../gsp/gsp_params.c  .generated_files/flags/default/a9381d4d4bc5456ecbd8721f36698a7dd007a99c .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360925749/gsp_params.o: ../gsp/gsp_params.c  .generated_files/flags/default/d49637c11a7c3f0e537d222da198205fd58afa8c .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360925749" 
 	@${RM} ${OBJECTDIR}/_ext/1360925749/gsp_params.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360925749/gsp_params.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../gsp/gsp_params.c  -o ${OBJECTDIR}/_ext/1360925749/gsp_params.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360925749/gsp_params.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360925749/gsp_snapshot.o: ../gsp/gsp_snapshot.c  .generated_files/flags/default/af73cfd34ebca1c8dd3dae68622bee9dbc26c17b .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360925749/gsp_snapshot.o: ../gsp/gsp_snapshot.c  .generated_files/flags/default/a0926547a0c4f6c503d58d0bf3c88effffa22db5 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360925749" 
 	@${RM} ${OBJECTDIR}/_ext/1360925749/gsp_snapshot.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360925749/gsp_snapshot.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../gsp/gsp_snapshot.c  -o ${OBJECTDIR}/_ext/1360925749/gsp_snapshot.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360925749/gsp_snapshot.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360926148/board_service.o: ../hal/board_service.c  .generated_files/flags/default/e5d3db6c61fc76a3a0efa8ada7c54073869ebc9 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360926148/board_service.o: ../hal/board_service.c  .generated_files/flags/default/f9bc7db3875a2cc7ce517ab2c3f6be42c6ae69fc .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360926148" 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/board_service.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/board_service.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../hal/board_service.c  -o ${OBJECTDIR}/_ext/1360926148/board_service.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360926148/board_service.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360926148/clock.o: ../hal/clock.c  .generated_files/flags/default/dee1feb8a5600de5099e209c1cbaaf981ea0cccc .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360926148/clock.o: ../hal/clock.c  .generated_files/flags/default/c216f3fd4b9864b90f56091faac573887f7fcbcd .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360926148" 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/clock.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/clock.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../hal/clock.c  -o ${OBJECTDIR}/_ext/1360926148/clock.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360926148/clock.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360926148/device_config.o: ../hal/device_config.c  .generated_files/flags/default/30d51d1a70c29d005095a67c6cef329515574beb .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360926148/device_config.o: ../hal/device_config.c  .generated_files/flags/default/a68f15e3e39b695d752d997c40df3cf84a148cb4 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360926148" 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/device_config.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/device_config.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../hal/device_config.c  -o ${OBJECTDIR}/_ext/1360926148/device_config.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360926148/device_config.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360926148/hal_adc.o: ../hal/hal_adc.c  .generated_files/flags/default/178b9c7d6f0dcb926b8bfd3eefed7d656966b7c .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360926148/hal_adc.o: ../hal/hal_adc.c  .generated_files/flags/default/f185df509ff7b52c7ed3f3396ac43ce8b079f205 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360926148" 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/hal_adc.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/hal_adc.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../hal/hal_adc.c  -o ${OBJECTDIR}/_ext/1360926148/hal_adc.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360926148/hal_adc.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360926148/hal_ata6847.o: ../hal/hal_ata6847.c  .generated_files/flags/default/a802f3f33ba53c9f0db1208b25f1762d01c78d79 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360926148/hal_ata6847.o: ../hal/hal_ata6847.c  .generated_files/flags/default/7091a7595b5bc43b878fac2b34ba1c925c8f4aca .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360926148" 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/hal_ata6847.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/hal_ata6847.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../hal/hal_ata6847.c  -o ${OBJECTDIR}/_ext/1360926148/hal_ata6847.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360926148/hal_ata6847.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360926148/hal_comparator.o: ../hal/hal_comparator.c  .generated_files/flags/default/e9fcae730aab1583f57578f0da37374576b6170f .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360926148/hal_comparator.o: ../hal/hal_comparator.c  .generated_files/flags/default/a0bf1680def741eb2d16fa9e892492edd27d612c .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360926148" 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/hal_comparator.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/hal_comparator.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../hal/hal_comparator.c  -o ${OBJECTDIR}/_ext/1360926148/hal_comparator.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360926148/hal_comparator.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360926148/hal_pwm.o: ../hal/hal_pwm.c  .generated_files/flags/default/f2f5c2c50ddbef1d5ab9931c1ac44693dbd780c7 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360926148/hal_pwm.o: ../hal/hal_pwm.c  .generated_files/flags/default/23b7d2de4f887c8970f8057258f58ee0805028b2 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360926148" 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/hal_pwm.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/hal_pwm.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../hal/hal_pwm.c  -o ${OBJECTDIR}/_ext/1360926148/hal_pwm.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360926148/hal_pwm.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360926148/hal_zcd.o: ../hal/hal_zcd.c  .generated_files/flags/default/629bb269c37f273600bae1955abe107b4d1af628 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360926148/hal_zcd.o: ../hal/hal_zcd.c  .generated_files/flags/default/15e10848346d7f602393ac6c063fd6d1c32a898f .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360926148" 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/hal_zcd.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/hal_zcd.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../hal/hal_zcd.c  -o ${OBJECTDIR}/_ext/1360926148/hal_zcd.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360926148/hal_zcd.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360926148/port_config.o: ../hal/port_config.c  .generated_files/flags/default/68d73e9796f53e5d55fbea023856945c6c78e97a .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360926148/port_config.o: ../hal/port_config.c  .generated_files/flags/default/9e179385cb9ef59aa852fe90c2712b9bfc9cfa2c .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360926148" 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/port_config.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/port_config.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../hal/port_config.c  -o ${OBJECTDIR}/_ext/1360926148/port_config.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360926148/port_config.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360926148/timer1.o: ../hal/timer1.c  .generated_files/flags/default/b3f96cd1140201f86ebf1b95af262f23d3e8426c .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360926148/timer1.o: ../hal/timer1.c  .generated_files/flags/default/6e86354ee016d17da4cae5c3d3a3ea9e5616e3aa .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360926148" 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/timer1.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/timer1.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../hal/timer1.c  -o ${OBJECTDIR}/_ext/1360926148/timer1.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360926148/timer1.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360926148/uart1.o: ../hal/uart1.c  .generated_files/flags/default/679684d1e9deb7c3fe211dba3fc71217b14cd353 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360926148/uart1.o: ../hal/uart1.c  .generated_files/flags/default/939f49859800e43e074998ed22e8dcb0ebdda9a1 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360926148" 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/uart1.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/uart1.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../hal/uart1.c  -o ${OBJECTDIR}/_ext/1360926148/uart1.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360926148/uart1.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360926148/hal_timer.o: ../hal/hal_timer.c  .generated_files/flags/default/7fe3d184db33a4172374c7c85b21734ca5de1bfe .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360926148/hal_timer.o: ../hal/hal_timer.c  .generated_files/flags/default/576bbc05013a6d21cf121e1d7d0d2a86a769444b .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360926148" 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/hal_timer.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/hal_timer.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../hal/hal_timer.c  -o ${OBJECTDIR}/_ext/1360926148/hal_timer.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360926148/hal_timer.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360926148/hal_input_capture.o: ../hal/hal_input_capture.c  .generated_files/flags/default/dec4fb6717553496c1f7da24c5d3b15d5d98779c .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360926148/hal_input_capture.o: ../hal/hal_input_capture.c  .generated_files/flags/default/90ab5c97215b9e3aba70a8a8bba325f5cf93d7d6 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360926148" 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/hal_input_capture.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/hal_input_capture.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../hal/hal_input_capture.c  -o ${OBJECTDIR}/_ext/1360926148/hal_input_capture.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360926148/hal_input_capture.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/2113678661/rx_decode.o: ../input/rx_decode.c  .generated_files/flags/default/d9d95b831045ce24d7a9381c1abf1356611c7341 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/2113678661/rx_decode.o: ../input/rx_decode.c  .generated_files/flags/default/123a8dcadf413004eeb9bc3bed81651da57c1f83 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/2113678661" 
 	@${RM} ${OBJECTDIR}/_ext/2113678661/rx_decode.o.d 
 	@${RM} ${OBJECTDIR}/_ext/2113678661/rx_decode.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../input/rx_decode.c  -o ${OBJECTDIR}/_ext/2113678661/rx_decode.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/2113678661/rx_decode.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/2111190731/ring_buffer.o: ../learn/ring_buffer.c  .generated_files/flags/default/381f5f5ec1f028f2ad1967b9cf3ff8fbf5d716da .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/2111190731/ring_buffer.o: ../learn/ring_buffer.c  .generated_files/flags/default/91c26376cd524810aa312f573611d8792fb4fdc8 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/2111190731" 
 	@${RM} ${OBJECTDIR}/_ext/2111190731/ring_buffer.o.d 
 	@${RM} ${OBJECTDIR}/_ext/2111190731/ring_buffer.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../learn/ring_buffer.c  -o ${OBJECTDIR}/_ext/2111190731/ring_buffer.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/2111190731/ring_buffer.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/2111190731/quality.o: ../learn/quality.c  .generated_files/flags/default/4f3e8fde0327c3aec8a75e661cab2d3725c3f52c .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/2111190731/quality.o: ../learn/quality.c  .generated_files/flags/default/f43d15c7747ce0a879fa39931b4888fd61f06669 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/2111190731" 
 	@${RM} ${OBJECTDIR}/_ext/2111190731/quality.o.d 
 	@${RM} ${OBJECTDIR}/_ext/2111190731/quality.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../learn/quality.c  -o ${OBJECTDIR}/_ext/2111190731/quality.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/2111190731/quality.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/2111190731/health.o: ../learn/health.c  .generated_files/flags/default/ff20d3eea5a19aa21542c36ce3f481d77a6a200c .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/2111190731/health.o: ../learn/health.c  .generated_files/flags/default/1cecb16127d13a09871e49a804ea62d03e17cf8d .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/2111190731" 
 	@${RM} ${OBJECTDIR}/_ext/2111190731/health.o.d 
 	@${RM} ${OBJECTDIR}/_ext/2111190731/health.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../learn/health.c  -o ${OBJECTDIR}/_ext/2111190731/health.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/2111190731/health.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/2111190731/adaptation.o: ../learn/adaptation.c  .generated_files/flags/default/a6a3f707a3fa153406345aa09cb1dee963236e12 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/2111190731/adaptation.o: ../learn/adaptation.c  .generated_files/flags/default/f076fc3226ebb726406302c3ff4afefd67cecbc2 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/2111190731" 
 	@${RM} ${OBJECTDIR}/_ext/2111190731/adaptation.o.d 
 	@${RM} ${OBJECTDIR}/_ext/2111190731/adaptation.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../learn/adaptation.c  -o ${OBJECTDIR}/_ext/2111190731/adaptation.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/2111190731/adaptation.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/2111190731/commission.o: ../learn/commission.c  .generated_files/flags/default/f1224dc184e8daea48d12e5ee97b66717837d465 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/2111190731/commission.o: ../learn/commission.c  .generated_files/flags/default/d96fc8423430631030d34b15daaab0d565f8775 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/2111190731" 
 	@${RM} ${OBJECTDIR}/_ext/2111190731/commission.o.d 
 	@${RM} ${OBJECTDIR}/_ext/2111190731/commission.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../learn/commission.c  -o ${OBJECTDIR}/_ext/2111190731/commission.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/2111190731/commission.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/2111190731/learn_service.o: ../learn/learn_service.c  .generated_files/flags/default/13b2a0214c38c43403f0ee29cc309e086f9bef22 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/2111190731/learn_service.o: ../learn/learn_service.c  .generated_files/flags/default/8c9b9e4325bbbf953439cb465d05503d0c68aeef .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/2111190731" 
 	@${RM} ${OBJECTDIR}/_ext/2111190731/learn_service.o.d 
 	@${RM} ${OBJECTDIR}/_ext/2111190731/learn_service.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../learn/learn_service.c  -o ${OBJECTDIR}/_ext/2111190731/learn_service.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/2111190731/learn_service.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/2109951130/commutation.o: ../motor/commutation.c  .generated_files/flags/default/ea130cafeeb6f3cd099452e55834d5e5694c824a .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/2109951130/commutation.o: ../motor/commutation.c  .generated_files/flags/default/3b3dc980a1ab34dda5fca4c6f3f587924d148b4f .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/2109951130" 
 	@${RM} ${OBJECTDIR}/_ext/2109951130/commutation.o.d 
 	@${RM} ${OBJECTDIR}/_ext/2109951130/commutation.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../motor/commutation.c  -o ${OBJECTDIR}/_ext/2109951130/commutation.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/2109951130/commutation.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/2109951130/pi.o: ../motor/pi.c  .generated_files/flags/default/284c53dbb74600bfd554eb9952b625a2eb4e671 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/2109951130/pi.o: ../motor/pi.c  .generated_files/flags/default/e87e8875362ab1a3028842f6e4011d9b268739ff .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/2109951130" 
 	@${RM} ${OBJECTDIR}/_ext/2109951130/pi.o.d 
 	@${RM} ${OBJECTDIR}/_ext/2109951130/pi.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../motor/pi.c  -o ${OBJECTDIR}/_ext/2109951130/pi.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/2109951130/pi.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/2109951130/startup.o: ../motor/startup.c  .generated_files/flags/default/f1a94821c403b98e3a39662e342bd304175c3078 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/2109951130/startup.o: ../motor/startup.c  .generated_files/flags/default/e0c4de2264689c4108858df264a58102009c0a28 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/2109951130" 
 	@${RM} ${OBJECTDIR}/_ext/2109951130/startup.o.d 
 	@${RM} ${OBJECTDIR}/_ext/2109951130/startup.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../motor/startup.c  -o ${OBJECTDIR}/_ext/2109951130/startup.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/2109951130/startup.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/2109951130/bemf_zc.o: ../motor/bemf_zc.c  .generated_files/flags/default/75177d6b6b21bfcbb3923baca6572c29a6c85a22 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/2109951130/bemf_zc.o: ../motor/bemf_zc.c  .generated_files/flags/default/52b5a14ee5d508e3a99d723dcae22167c4b55012 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/2109951130" 
 	@${RM} ${OBJECTDIR}/_ext/2109951130/bemf_zc.o.d 
 	@${RM} ${OBJECTDIR}/_ext/2109951130/bemf_zc.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../motor/bemf_zc.c  -o ${OBJECTDIR}/_ext/2109951130/bemf_zc.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/2109951130/bemf_zc.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/2109951130/hwzc.o: ../motor/hwzc.c  .generated_files/flags/default/db8b732d93bcf46af22d3e72806a64ca4e49fb48 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
-	@${MKDIR} "${OBJECTDIR}/_ext/2109951130"
-	@${RM} ${OBJECTDIR}/_ext/2109951130/hwzc.o.d
-	@${RM} ${OBJECTDIR}/_ext/2109951130/hwzc.o
+${OBJECTDIR}/_ext/2109951130/hwzc.o: ../motor/hwzc.c  .generated_files/flags/default/30e146ffae661161a92e2f852bc558e0da7bd437 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+	@${MKDIR} "${OBJECTDIR}/_ext/2109951130" 
+	@${RM} ${OBJECTDIR}/_ext/2109951130/hwzc.o.d 
+	@${RM} ${OBJECTDIR}/_ext/2109951130/hwzc.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../motor/hwzc.c  -o ${OBJECTDIR}/_ext/2109951130/hwzc.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/2109951130/hwzc.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
-
-${OBJECTDIR}/_ext/2109951130/speed_pi.o: ../motor/speed_pi.c  .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
-	@${MKDIR} "${OBJECTDIR}/_ext/2109951130"
-	@${RM} ${OBJECTDIR}/_ext/2109951130/speed_pi.o.d
-	@${RM} ${OBJECTDIR}/_ext/2109951130/speed_pi.o
+	
+${OBJECTDIR}/_ext/2109951130/speed_pi.o: ../motor/speed_pi.c  .generated_files/flags/default/abbba052359ef92512914ed065d6a35e3a086531 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+	@${MKDIR} "${OBJECTDIR}/_ext/2109951130" 
+	@${RM} ${OBJECTDIR}/_ext/2109951130/speed_pi.o.d 
+	@${RM} ${OBJECTDIR}/_ext/2109951130/speed_pi.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../motor/speed_pi.c  -o ${OBJECTDIR}/_ext/2109951130/speed_pi.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/2109951130/speed_pi.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
-
-${OBJECTDIR}/_ext/2104772283/scope_burst.o: ../scope/scope_burst.c  .generated_files/flags/default/4272348b2d4635e59a931c59735aee07284c8707 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+	
+${OBJECTDIR}/_ext/2104772283/scope_burst.o: ../scope/scope_burst.c  .generated_files/flags/default/4fcc09f809aca0ba5dfb31478d1ea3a361fb001d .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/2104772283" 
 	@${RM} ${OBJECTDIR}/_ext/2104772283/scope_burst.o.d 
 	@${RM} ${OBJECTDIR}/_ext/2104772283/scope_burst.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../scope/scope_burst.c  -o ${OBJECTDIR}/_ext/2104772283/scope_burst.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/2104772283/scope_burst.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1798147462/diagnostics.o: ../x2cscope/diagnostics.c  .generated_files/flags/default/2f04cd76d415ef0b27867b322c3cd3b6f1b08bec .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1798147462/diagnostics.o: ../x2cscope/diagnostics.c  .generated_files/flags/default/5554106c4035dfce652f2de8c4e1d7953830aa50 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1798147462" 
 	@${RM} ${OBJECTDIR}/_ext/1798147462/diagnostics.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1798147462/diagnostics.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../x2cscope/diagnostics.c  -o ${OBJECTDIR}/_ext/1798147462/diagnostics.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1798147462/diagnostics.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1360926148/eeprom.o: ../hal/eeprom.c  .generated_files/flags/default/74355e752713f8067bf0da14d703136b062eb2be .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1360926148/eeprom.o: ../hal/eeprom.c  .generated_files/flags/default/8138ac7527d6731089953d9871746a6007009f38 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1360926148" 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/eeprom.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1360926148/eeprom.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../hal/eeprom.c  -o ${OBJECTDIR}/_ext/1360926148/eeprom.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1360926148/eeprom.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1472/garuda_service.o: ../garuda_service.c  .generated_files/flags/default/ddfd6caca32e160dc149d0b2cc1e955bd4eb2666 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1472/garuda_service.o: ../garuda_service.c  .generated_files/flags/default/600fe3779fda234de1623d40ada7debd5bb8574e .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1472" 
 	@${RM} ${OBJECTDIR}/_ext/1472/garuda_service.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1472/garuda_service.o 
 	${MP_CC} $(MP_EXTRA_CC_PRE)  ../garuda_service.c  -o ${OBJECTDIR}/_ext/1472/garuda_service.o  -c -mcpu=$(MP_PROCESSOR_OPTION)  -MP -MMD -MF "${OBJECTDIR}/_ext/1472/garuda_service.o.d"        -g -omf=elf -DXPRJ_default=$(CND_CONF)    $(COMPARISON_BUILD)  -O1 -I"../hal" -I"../motor" -I"../learn" -I"../gsp" -I"../input" -I"../foc" -I"../scope" -I".." -msmart-io=1 -Wall -msfr-warn=off    -mdfp="${DFP_DIR}/xc16"
 	
-${OBJECTDIR}/_ext/1472/main.o: ../main.c  .generated_files/flags/default/56b9776abcbe6e967aaae15932a8b992b0bc4d3a .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
+${OBJECTDIR}/_ext/1472/main.o: ../main.c  .generated_files/flags/default/a885a40d5120491d267089111aa817f0052666c8 .generated_files/flags/default/da39a3ee5e6b4b0d3255bfef95601890afd80709
 	@${MKDIR} "${OBJECTDIR}/_ext/1472" 
 	@${RM} ${OBJECTDIR}/_ext/1472/main.o.d 
 	@${RM} ${OBJECTDIR}/_ext/1472/main.o 
@@ -755,11 +755,3 @@ endif
 .clean-conf: ${CLEAN_SUBPROJECTS}
 	${RM} -r ${OBJECTDIR}
 	${RM} -r ${DISTDIR}
-
-# Enable dependency checking
-.dep.inc: .depcheck-impl
-
-DEPFILES=$(wildcard ${POSSIBLE_DEPFILES})
-ifneq (${DEPFILES},)
-include ${DEPFILES}
-endif

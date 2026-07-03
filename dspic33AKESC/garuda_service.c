@@ -335,11 +335,12 @@ static uint16_t s_if_calCtr;
 /* Self-contained ADC conversions: the FEATURE_FOC counts_to_* helpers, the
  * calibrated current offset, AND garuda_foc_params.h itself are all compiled
  * out in the pure 6-step build, so define the scales here from the documented
- * shunt/divider values (shunt 3mΩ × OA gain 24.95, Vref 3.3, FS 4095, Vbus
- * divider 23.2). Fixed 2048 bias matches the 6-step convention; negation
- * matches the FOC sign convention the reused gains were tuned with. */
+ * shunt/divider values (shunt 3mΩ × OA gain 8.3 [WS5: stock AK512 DIM, was
+ * 24.95], Vref 3.3, FS 4095, Vbus divider 23.2). Fixed 2048 bias matches the
+ * 6-step convention; negation matches the FOC sign convention the reused gains
+ * were tuned with. */
 #define IF_ADC_MIDPOINT   2048.0f
-#define IF_CURRENT_SCALE  (3.3f / (4095.0f * 0.003f * 24.95f))   /* A per count */
+#define IF_CURRENT_SCALE  (3.3f / (4095.0f * 0.003f * 8.3f))   /* A per count (WS5: gain 8.3) */
 #define IF_VBUS_SCALE     (3.3f * 23.2f / 4095.0f)               /* V per count */
 /* Sign for the MON phase-current channels. The 6-step path reads them as
  * (raw-2048) POSITIVE (no negation, unlike the FOC MAIN channels). Wrong sign
@@ -931,6 +932,7 @@ void GARUDA_ServiceInit(void)
 #if FEATURE_ADC_CMP_ZC
     HWZC_Init(&garudaData);
     SPEED_PI_Init(&garudaData);
+    SPEED_CASCADE_Init();   /* WS4 cascade — no-op stub when FEATURE_SPEED_CASCADE=0 */
     HAL_ADC_InitHighSpeedBEMF();
     HAL_SCCP1_Init();
     HAL_SCCP2_Init();
@@ -995,14 +997,15 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
      * any state changes (morph→CL etc.) so the NEXT tick sees the transition. */
     ESC_STATE_T entryState = garudaData.state;
 
-    /* P1 DISABLED: Phase B rail-based measuredNeutral gives correct Phase B
-     * midpoint (24 at low duty) but is 30% lower than the duty-proportional
-     * value (34). Since HWZC uses zcThreshold directly (hwzc.c:169) for its
-     * ADC comparator, the lower threshold pushes the comparator near the noise
-     * floor → massive noise rejections (NW6: 75k rejects vs NW4: 20k) →
-     * HWZC miss rate 26.7% → latch-off → software ZC fallback → failure.
-     *
-     * Phase B tracking still runs for diagnostic visibility in watch data. */
+    /* P1: Phase B rail-based measuredNeutral = (phaseBHigh+phaseBLow)/2, the
+     * measured star-point in bemfRaw ADC scale. Historically DISABLED as the
+     * threshold source: it read ~30% lower than the duty model (24 vs 34 at low
+     * duty) and pushed the OLD HW-comparator ON-time path near the noise floor
+     * → mass rejects → miss/latch-off. RE-ENABLED as the threshold source for
+     * profile 9 via FEATURE_HWZC_MEASURED_NEUTRAL (consumed in the rawThresh
+     * block below) — current regime is PWM-gate OFF + OFF-center SW detect, so
+     * the old noise-floor failure mode is being re-evaluated on the bench.
+     * Always computed here for diagnostic visibility regardless of the flag. */
     if (garudaData.state == ESC_CLOSED_LOOP
 #if FEATURE_SINE_STARTUP
         || (garudaData.state == ESC_MORPH
@@ -1060,6 +1063,21 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
 #else
         uint16_t rawThresh = (uint16_t)(
             ((uint32_t)garudaData.vbusRaw * garudaData.duty) / ZC_DUTY_DIVISOR);
+#endif
+#if FEATURE_HWZC_MEASURED_NEUTRAL
+        /* Profile 9: use the MEASURED star-point neutral instead of the duty
+         * model, in CL only and only once both phase-B rails have been seen
+         * (neutralValid). Same bemfRaw ADC scale, duty-independent — the true
+         * Vbus/2 the user asked for. CL entry resets neutralValid (below), so
+         * the first ~2 sectors fall back to the duty model until the rails are
+         * captured; OL_RAMP/align always keep the duty model (no real neutral
+         * while force-commutating). The duty-model rawThresh above stays as the
+         * fallback value if neutralValid is false. */
+        if (garudaData.state == ESC_CLOSED_LOOP
+            && garudaData.bemf.neutralValid)
+        {
+            rawThresh = garudaData.bemf.measuredNeutral;
+        }
 #endif
 #if FEATURE_VIRTUAL_NEUTRAL
         /* Measured virtual neutral overrides the duty-model threshold while
@@ -1453,25 +1471,26 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
          *   flags:  bit0=HWZC enabled, bit1=fault
          *   state:  garudaData.state
          *
-         * Scale (shared with phase-current monitor): ~93 ADC counts/A, bias 2048.
-         * mA = (raw - 2048) × 1000 / 93. Clamped to int16 range.
+         * Scale (shared with phase-current monitor): COUNTS_PER_AMP ADC counts/A
+         * (derived from OC_GAIN_X100; ~30 at the corrected 8.3 gain), bias 2048.
+         * mA = (raw - 2048) × 1000 / COUNTS_PER_AMP. Clamped to int16 range.
          */
         {
             SCOPE_SAMPLE_T ss;
             int32_t ma;
 
-            ma = ((int32_t)garudaData.phaseCurrent.iaRaw - 2048) * 1000 / 93;
+            ma = ((int32_t)garudaData.phaseCurrent.iaRaw - 2048) * 1000 / COUNTS_PER_AMP;
             if (ma > 32767)  ma = 32767;
             if (ma < -32768) ma = -32768;
             ss.ia = (int16_t)ma;
 
-            ma = ((int32_t)garudaData.phaseCurrent.ibRaw - 2048) * 1000 / 93;
+            ma = ((int32_t)garudaData.phaseCurrent.ibRaw - 2048) * 1000 / COUNTS_PER_AMP;
             if (ma > 32767)  ma = 32767;
             if (ma < -32768) ma = -32768;
             ss.ib = (int16_t)ma;
 
 #if FEATURE_HW_OVERCURRENT
-            ma = ((int32_t)garudaData.ibusRaw - 2048) * 1000 / 93;
+            ma = ((int32_t)garudaData.ibusRaw - 2048) * 1000 / COUNTS_PER_AMP;
             if (ma > 32767)  ma = 32767;
             if (ma < -32768) ma = -32768;
             ss.id = (int16_t)ma;
@@ -1517,11 +1536,29 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
 #if FEATURE_VBUS_FAULT
     {
         static uint8_t vbusOvCount = 0, vbusUvCount = 0;
+        static uint16_t vbusFilt = 0;
+        static bool     vbusFiltInit = false;
 
         if ((garudaData.state >= ESC_ALIGN && garudaData.state <= ESC_CLOSED_LOOP)
             || garudaData.state == ESC_IF_RAMP)   /* I-f spin-up: keep OV/UV active */
         {
-            if (garudaData.vbusRaw > RT_VBUS_OVERVOLTAGE_ADC)
+            /* Low-pass the single per-ISR bus sample before the OV/UV compare.
+             * vbusRaw is one unfiltered ADC reading at the PWM-relative trigger;
+             * at high duty it carries brief switching-coupled dips (>=3 samples)
+             * that false-trip UV even though the DC bus is steady (bench: 15.9V,
+             * Ia~1.3A, yet UV fired with threshold creeping toward ~840-849).
+             * A real brownout or regen rise evolves over ms and passes the
+             * filter unattenuated, so genuine protection is preserved. Re-seeded
+             * each run (init cleared in the else branch) to avoid a stale start. */
+#if VBUS_FILT_SHIFT > 0
+            if (!vbusFiltInit) { vbusFilt = garudaData.vbusRaw; vbusFiltInit = true; }
+            else vbusFilt = (uint16_t)((int16_t)vbusFilt
+                          + (((int16_t)garudaData.vbusRaw - (int16_t)vbusFilt) >> VBUS_FILT_SHIFT));
+#else
+            vbusFilt = garudaData.vbusRaw;
+#endif
+
+            if (vbusFilt > RT_VBUS_OVERVOLTAGE_ADC)
             {
                 if (++vbusOvCount >= VBUS_FAULT_FILTER)
                 {
@@ -1554,7 +1591,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                     uvThreshold = RT_VBUS_UV_STARTUP_ADC;
 #endif
 
-            if (garudaData.vbusRaw < uvThreshold)
+            if (vbusFilt < uvThreshold)
             {
                 if (++vbusUvCount >= VBUS_FAULT_FILTER)
                 {
@@ -1580,6 +1617,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
         {
             vbusOvCount = 0;
             vbusUvCount = 0;
+            vbusFiltInit = false;   /* re-seed filter on next run */
         }
     }
 #endif
@@ -1697,6 +1735,102 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
     }  /* debounce scope */
 #endif
 #endif /* FEATURE_HW_OVERCURRENT */
+
+#if FEATURE_PHASE_STALL_FAULT
+    /* WS2: phase-current stall/desync backstop. The bus-current OC above is
+     * blind to a freewheeling phantom lock (current circulates in the phase,
+     * bus reads ~0). Watch PHASE current instead: if |ia| or |ib| stays above a
+     * high threshold for stallDebounceMs while in closed loop, the rotor is
+     * almost certainly desynced/stalled with the bridge pumping current into it
+     * — latch FAULT_STALL and kill the bridge. iaRaw/ibRaw are sampled earlier
+     * in this ISR (bias 2048); threshold is RAW counts (gain-independent), set
+     * near the op-amp rail so normal load does not trip. */
+    {
+        static uint16_t s_stallDebounce = 0;
+        static uint16_t s_iMagPeak      = 0;   /* leaky peak-hold of |Iphase| */
+        static bool     s_stallArmed    = false; /* WS2 arm latch (see below) */
+        int16_t iaDev = (int16_t)garudaData.phaseCurrent.iaRaw - 2048;
+        int16_t ibDev = (int16_t)garudaData.phaseCurrent.ibRaw - 2048;
+        uint16_t iaMag = (uint16_t)(iaDev < 0 ? -iaDev : iaDev);
+        uint16_t ibMag = (uint16_t)(ibDev < 0 ? -ibDev : ibDev);
+        uint16_t iMag  = (iaMag > ibMag) ? iaMag : ibMag;
+
+        if (garudaData.state == ESC_CLOSED_LOOP)
+        {
+            /* ARM GATE: a heavy-rotor startup accelerating away from the 2500
+             * eRPM OL→CL handoff and a stuck phantom both sit at ~18A, so
+             * current magnitude alone cannot tell them apart. The discriminator
+             * is speed: a real startup CLIMBS, a phantom stays stuck. Don't
+             * evaluate stall until the rotor has crossed stallArmErpm once;
+             * after that it stays armed for the rest of the run, so a later
+             * running desync (eRPM collapses + current rails) is still caught.
+             * arm=0 ⇒ arm immediately (legacy behavior). */
+            uint32_t erpmNow = garudaData.hwzc.stepPeriodHR
+                ? HWZC_TICKS_TO_ERPM(garudaData.hwzc.stepPeriodHR) : 0;
+            if (!s_stallArmed && erpmNow >= (uint32_t)RT_STALL_ARM_ERPM)
+                s_stallArmed = true;
+
+            /* Leaky peak-hold: the per-ISR sample drops into freewheel/
+             * floating-phase notches each commutation, so a hard threshold on
+             * the raw value would let a sustained phantom (steady high PEAK,
+             * notchy instantaneous) slip through — the notches kept resetting
+             * the debounce. Track a peak that rises instantly and decays ~1
+             * count/ISR (~45k/s): a real phantom refreshes it every commutation
+             * so it stays pinned; a brief inrush/re-sync spike decays out well
+             * inside the debounce window. */
+            if (iMag > s_iMagPeak)      s_iMagPeak = iMag;
+            else if (s_iMagPeak > 0)    s_iMagPeak--;
+
+            if (s_stallArmed && s_iMagPeak > RT_STALL_IPHASE_ADC)
+            {
+                uint16_t stallTicks = (uint16_t)RT_STALL_DEBOUNCE_MS
+                                    * (uint16_t)(PWMFREQUENCY_HZ / 1000u);
+                if (s_stallDebounce < 0xFFFFu) s_stallDebounce++;
+                if (s_stallDebounce >= stallTicks)
+                {
+#if FEATURE_ADC_CMP_ZC
+                    if (garudaData.hwzc.enabled) HWZC_Disable(&garudaData);
+                    garudaData.hwzc.fallbackPending = false;
+#endif
+                    HAL_MC1PWMDisableOutputs();
+                    garudaData.state = ESC_FAULT;
+                    garudaData.faultCode = FAULT_STALL;
+                    garudaData.runCommandActive = false;
+                    LED2 = 0;
+                }
+            }
+            else
+            {
+                s_stallDebounce = 0;
+            }
+        }
+        else
+        {
+            /* Not in closed loop — clear everything so OL_RAMP/ALIGN inrush
+             * (legit 17-18A) never seeds the CL peak/debounce, and so the arm
+             * latch re-evaluates from scratch on the next CL entry. */
+            s_stallDebounce = 0;
+            s_iMagPeak      = 0;
+            s_stallArmed    = false;
+        }
+    }
+#endif /* FEATURE_PHASE_STALL_FAULT */
+
+#if FEATURE_VARIABLE_BEMF_TRIGGER
+    /* WS3: recompute the BEMF ADC sample point (PG1TRIGA) from the applied
+     * duty, once per ISR (takes effect next PWM cycle). Defaults reproduce
+     * the fixed LOOPTIME_TCY/2 point (basePct=50, shiftQ=0). */
+    {
+        uint32_t triga = (uint32_t)LOOPTIME_TCY * RT_BEMF_TRIG_BASE_PCT / 100u;
+        uint8_t  dutyPct = (uint8_t)((uint32_t)garudaData.duty * 100u / LOOPTIME_TCY);
+        if (RT_BEMF_TRIG_SHIFT_Q > 0 && dutyPct > RT_BEMF_TRIG_DUTY_THRESH_PCT)
+        {
+            triga += (uint32_t)(LOOPTIME_TCY / 256u) * RT_BEMF_TRIG_SHIFT_Q
+                   * (uint32_t)(dutyPct - RT_BEMF_TRIG_DUTY_THRESH_PCT) / 100u;
+        }
+        HAL_PWM_SetBemfTrigger(triga);   /* clamps to MPER-1 internally */
+    }
+#endif /* FEATURE_VARIABLE_BEMF_TRIGGER */
 
 #if FEATURE_FOC
     /* ── FOC control path — replaces ENTIRE 6-step state machine ──
@@ -3845,7 +3979,23 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                     if (postSyncCounter < RT_POST_SYNC_SETTLE_TICKS)
                         postSyncCounter++;
 #endif
-#if FEATURE_SPEED_PI
+#if FEATURE_SPEED_CASCADE
+                    /* WS4 cascade (gate+seed+slew): the loop ENGAGES only above
+                     * the engage gate; below it the normal throttle→duty map
+                     * (fallbackDuty) drives startup + the sync-fragile accel
+                     * untouched. Force disengaged on CL entry; the loop re-engages
+                     * itself, bumpless, once eRPM climbs into the stable band.
+                     * Downstream OC soft-limit / VBUS-sag clamps remain below. */
+                    {
+                        uint32_t fallbackDuty = RT_CL_IDLE_DUTY +
+                            ((uint32_t)garudaData.throttle * (cap - RT_CL_IDLE_DUTY)) / 4096;
+                        if (fallbackDuty < MIN_DUTY) fallbackDuty = MIN_DUTY;
+                        if (fallbackDuty > cap)      fallbackDuty = cap;
+                        if (prevAdcState != ESC_CLOSED_LOOP)
+                            SPEED_CASCADE_Reset();
+                        mappedDuty = SPEED_CASCADE_InnerStep(&garudaData, cap, fallbackDuty);
+                    }
+#elif FEATURE_SPEED_PI
                     /* Speed PI: throttle controls TARGET SPEED via target
                      * stepPeriodHR; PI regulates duty to track. Replaces
                      * the direct throttle→duty scaling below. The output

@@ -220,6 +220,62 @@ void HWZC_Disable(volatile GARUDA_DATA_T *pData)
 }
 
 /**
+ * @brief HW-ZC blanking ticks = base % of the commutation period, plus an
+ * optional load-adaptive demag term (FEATURE_ZC_CURRENT_BLANK).
+ *
+ * Base = HWZC_BLANKING_PERCENT of @p period (HR ticks). Under load the
+ * post-commutation freewheel/demag interval lengthens with PHASE current and
+ * masks the BEMF at sector start → the ZC window collapses → desync. The extra
+ * term grows the blank with measured PHASE current above a deadband, in RAW ADC
+ * counts (gain-independent), capped so total blanking never exceeds period/4.
+ * Shared by HWZC_OnCommutation and HWZC_OnBlankingExpired so both stay in sync.
+ *
+ * NOTE: keyed off PHASE current (max|iaRaw|,|ibRaw| about bias), NOT bus
+ * current. The freewheel diode conducts the PHASE current (that's what sets the
+ * demag interval), and bench data shows ibusRaw reads BELOW bias under load
+ * (freewheel valley-sampling artifact) → a bus-keyed term never engaged during
+ * the actual desync. Phase current is the clean, positive, load-tracking signal.
+ */
+static inline uint32_t HWZC_BlankTicks(volatile GARUDA_DATA_T *pData, uint32_t period)
+{
+    uint32_t blankTicks = period * HWZC_BLANKING_PERCENT / 100;
+#if FEATURE_ZC_CURRENT_BLANK
+    if (RT_ZC_DEMAG_BLANK_PER_A > 0)
+    {
+        /* iaRaw/ibRaw are in the 2048 bias frame (OC autozero). Use the larger
+         * of the two phase magnitudes as the demag driver. */
+        int32_t iaDev = (int32_t)pData->phaseCurrent.iaRaw - 2048;
+        int32_t ibDev = (int32_t)pData->phaseCurrent.ibRaw - 2048;
+        uint32_t iaMag = (uint32_t)(iaDev < 0 ? -iaDev : iaDev);
+        uint32_t ibMag = (uint32_t)(ibDev < 0 ? -ibDev : ibDev);
+        uint32_t iMag  = (iaMag > ibMag) ? iaMag : ibMag;
+        int32_t iExcess = (int32_t)iMag - (int32_t)RT_ZC_DEMAG_BLANK_IBUS_DB;
+        if (iExcess > 0)
+        {
+            /* perA = extra blank (% of sector) per 256 counts of phase excess.
+             * Compute the percentage first (clamped) THEN scale by period — at
+             * low speed `period` is large (100 MHz HR ticks), so
+             * period*perA*excess would overflow uint32. */
+            uint32_t pct = (uint32_t)RT_ZC_DEMAG_BLANK_PER_A
+                         * (uint32_t)iExcess / 256u;
+            if (pct > 100u) pct = 100u;   /* total still capped at period/4 below */
+            uint32_t extra = period * pct / 100u;
+            blankTicks += extra;
+            /* Total blank cap = blankMaxPct% of period. 25 = legacy period/4;
+             * raise (33 = period/3) for more headroom when perA saturates above
+             * the ~5.7A knee. 0 (unseeded profile) falls back to legacy 25. */
+            uint32_t blankMaxPct = RT_ZC_DEMAG_BLANK_MAX_PCT;
+            if (blankMaxPct == 0u) blankMaxPct = 25u;
+            uint32_t blankMax = period * blankMaxPct / 100u;
+            if (blankTicks > blankMax) blankTicks = blankMax;
+        }
+    }
+#endif
+    if (blankTicks < 100) blankTicks = 100;  /* Minimum 1us blanking */
+    return blankTicks;
+}
+
+/**
  * @brief Set up ZC detection for the current commutation step.
  * Configures comparator channel, PINSEL, threshold, and starts blanking timer.
  * Called from SCCP1 ISR after commutation fires, and from HWZC_Enable().
@@ -283,8 +339,7 @@ void HWZC_OnCommutation(volatile GARUDA_DATA_T *pData)
 #else
     uint32_t periodForBlank = pData->hwzc.stepPeriodHR;
 #endif
-    uint32_t blankTicks = periodForBlank * HWZC_BLANKING_PERCENT / 100;
-    if (blankTicks < 100) blankTicks = 100;  /* Minimum 1us blanking */
+    uint32_t blankTicks = HWZC_BlankTicks(pData, periodForBlank);
 
     /* Set state BEFORE starting timer (Rule 3) */
     pData->hwzc.phase = HWZC_BLANKING;
@@ -365,8 +420,7 @@ void HWZC_OnBlankingExpired(volatile GARUDA_DATA_T *pData)
      * in HWZC_OnPiPeriodExpired (dispatched from _CCT1Interrupt at phase
      * WATCHING when in PI mode). No separate timeout — a missed ZC is
      * absorbed by the PI as a non-update (timerPeriod unchanged). */
-    uint32_t blankTicks = pData->hwzc.timerPeriod * HWZC_BLANKING_PERCENT / 100;
-    if (blankTicks < 100) blankTicks = 100;
+    uint32_t blankTicks = HWZC_BlankTicks(pData, pData->hwzc.timerPeriod);
     uint32_t remaining = (pData->hwzc.timerPeriod > blankTicks)
                          ? (pData->hwzc.timerPeriod - blankTicks)
                          : 100;
@@ -465,6 +519,38 @@ void HWZC_OnZcDetected(volatile GARUDA_DATA_T *pData)
         return;
 #endif
     }
+
+#if FEATURE_HWZC_FALLING_HW && FEATURE_HWZC_FREEWHEEL_GATE
+    /* Per-polarity FREEWHEEL gate (U3 falling-via-HW-comparator, 2026-06-26).
+     * A RISING ZC is detectable during PWM-ON (driven-phase coupling assists the
+     * upward crossing); a FALLING ZC is only clean during PWM-OFF (freewheel) —
+     * during PWM-ON the driven phases couple the floating phase UP and bury the
+     * downward crossing (bench 2026-06-07). So accept the comparator capture
+     * ONLY in the correct window for this sector's polarity:
+     *   rising  -> accept while PWM ON
+     *   falling -> accept while PWM OFF (freewheel)
+     * The freewheel window always exists around the trough at ANY duty <100%,
+     * and the 1 MHz free-running ADC gets several conversions inside it, so the
+     * comparator finds the true falling crossing at any duty — without the fixed
+     * MPER/2 sample's 50%-duty wall. Read the H-side GPIO of the PWMing phase
+     * (complementary mode: H HIGH = PWM ON). */
+    {
+        const COMMUTATION_STEP_T *fcs = &commutationTable[pData->currentStep];
+        bool pwmOn;
+        if      (fcs->phaseA == PHASE_PWM_ACTIVE) pwmOn = (PORTD & (1u << 2)) != 0; /* RD2 = PWM1H */
+        else if (fcs->phaseB == PHASE_PWM_ACTIVE) pwmOn = (PORTD & (1u << 0)) != 0; /* RD0 = PWM2H */
+        else                                      pwmOn = (PORTC & (1u << 3)) != 0; /* RC3 = PWM3H */
+        bool wantOn = (fcs->zcPolarity > 0);   /* rising->PWM-ON, falling->PWM-OFF */
+        if (pwmOn != wantOn) {
+            pData->hwzc.noiseRejectCount++;
+            pData->hwzc.rejectsThisStep++;
+            uint8_t fc = pData->hwzc.activeCore;
+            HAL_ADC_ClearComparatorFlag(fc);
+            HAL_ADC_EnableComparatorIE(fc);
+            return;
+        }
+    }
+#endif
 
 #if FEATURE_HWZC_PWM_GATE
     /* PWM-state gate: reject captures during PWM OFF time. At BEMF crossover
@@ -1066,6 +1152,12 @@ pi_commutate:
      * scaling with rotor speed). No-op until SPEED_PI_Enable() called
      * by CL state entry. */
     SPEED_PI_OnZcEvent(pData);
+#endif
+#if FEATURE_SPEED_CASCADE
+    /* WS4: outer speed PI of the cascade — runs after the timing PI has
+     * updated stepPeriodHR; produces the inner loop's current reference.
+     * No-op until SPEED_CASCADE_Enable() on CL entry. */
+    SPEED_CASCADE_OnZcEvent(pData);
 #endif
 }
 #endif /* FEATURE_HWZC_SECTOR_PI */

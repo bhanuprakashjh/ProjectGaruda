@@ -52,7 +52,7 @@ static uint8_t activeProfile;
     .ifCurrentCa          = 600, \
     .ifRampErpmPerS       = 12000
 
-static const GSP_PARAMS_T profileDefaults[9] = {
+static const GSP_PARAMS_T profileDefaults[10] = {
     [GSP_PROFILE_HURST] = {
         .rampTargetErpm     = 2000,
         .rampAccelErpmPerS  = 1000,
@@ -599,12 +599,117 @@ static const GSP_PARAMS_T profileDefaults[9] = {
         .an1078KslideMv        = 2500,
         .an1078IdFwMaxDecia    = 120,
     },
+
+    [GSP_PROFILE_U3] = {
+        /* === T-Motor U-Power U3 KV700 (12N14P, 7PP) — ~16V bench PSU, PROPPED ===
+         * Cloned from GSP_PROFILE_5010 (2810). The U3 shares the two hardest-to-
+         * change things with the 2810 — 7 pole pairs and ~50 mΩ Rs — so this is a
+         * KV + voltage rescale, not a ground-up profile (see docs/u3_kv700_profile_port.md).
+         *   KV 700 (~½ of 2810's 1350)  ->  ~2× the flux λ (focKeUvSRad, CRITICAL).
+         *   Bench ~16V (treat as 4S 16.8V): duty values ×1.43 vs the 2810's 24V.
+         *   Heavier 97 g rotor + PROP load: conservative startup accel + extra demag blank.
+         * No-load eRPM ceiling @16V = 700*16*7 = 78.4k (prop load lands well below). */
+        .rampTargetErpm     = 2500,    /* lower KV -> usable ZC appears earlier than the 2810's 3000 */
+        .rampAccelErpmPerS  = 1800,    /* heavy 97 g rotor + prop can't follow the 2810's 3000/s accel */
+        .rampDutyPct        = 11,      /* 8 ×(24/16.8)=11.4 -> 11 to hold the same ramp current at 16V */
+        .clIdleDutyPct      = 6,       /* lower KV gives more low-speed BEMF; 4 ×1.43=5.7 -> 6 */
+        .timingAdvMaxDeg    = 15,      /* START low: lower speed + stronger BEMF need less advance.
+                                        * Tune up toward 20 if the mid-band feels rough (no-prop only). */
+        .hwzcCrossoverErpm  = 1500,    /* enable HWZC immediately after morph (same as 2810) */
+        .ocSwLimitMa        = 18000,   /* board shunt saturates ~22A regardless; U3 25A cont. lands here */
+        .ocFaultMa          = 21000,
+        .motorPolePairs     = 7,       /* SAME as 2810 */
+        .alignDutyPct       = 5,       /* 3 ×1.43=4.3 -> 5 for the heavier rotor lock */
+        .initialErpm        = 120,     /* gentler first step than the 2810's 150 (heavy rotor) */
+        .maxClosedLoopErpm  = 98000,   /* timing-ADVANCE ANCHOR (not a limiter): U3 no-load ceiling
+                                        * at the actual bench Vbus ~20V = 700*20*7 = 98k (bench telemetry
+                                        * showed 20V, not the 16V first assumed). Anchors advance to the
+                                        * real ceiling; leaving 260k makes advance ~5° at real speed. */
+        .sineAlignModPct    = 4,       /* 3 ×1.43 -> 4 */
+        .sineRampModPct     = 7,       /* 5 ×1.43 -> 7 */
+        .zcDemagDutyThresh  = 40,      /* same as 2810 */
+        .zcDemagBlankExtraPct = 24,    /* RAISED 20->24: bigger U3 stator -> longer demag tail; this is
+                                        * the direct lever on prop-induced load-desync (memory: prop load
+                                        * stretches the demag interval and collapses the ZC window).
+                                        * Watch for EARLY ZC misses; back toward 20 if it over-blanks. */
+        .zcDemagBlankPerA   = 0,       /* WS1 load-adaptive demag blank: START OFF (0). With
+                                        * FEATURE_ZC_CURRENT_BLANK on, raise on bench to add HW-ZC
+                                        * blanking ∝ bus current (the prop-load demag lever). */
+        .zcDemagBlankIbusDb = 30,      /* ibus deadband (raw counts) before the current term engages */
+        .zcDemagBlankMaxPct = 25,      /* WS1 blank cap = period/4 (legacy). Raise to 33 (period/3) live on
+                                        * bench for more high-current headroom when zcDemagBlankPerA
+                                        * saturates above the ~5.7A knee. 0 also means legacy 25. */
+        .stallIphaseAdc     = 360,     /* WS2: PHASE-current stall threshold, raw counts over 2048 bias
+                                        * (~12A at 30.9 cts/A). ABOVE the WS4 ceiling (240), BELOW the
+                                        * observed 14–18A phantom-lock current. Bench-tune. */
+        .stallDebounceMs    = 50,      /* WS2: sustained 50ms above the threshold in CL → FAULT_STALL.
+                                        * Rides over the brief CL-entry phase spike (~18A, <2ms). */
+        .stallArmErpm       = 5000,    /* WS2 arm gate: don't evaluate stall until the rotor has spun up
+                                        * past ~5k eRPM once (well above the 2500 OL→CL handoff and the
+                                        * heavy-rotor startup-current transient). After it arms it STAYS
+                                        * armed for the run, so a later running desync (eRPM collapses,
+                                        * current rails) is still caught. Lower if a propped U3 locks &
+                                        * runs below 5k; raise if startup ever false-arms. Bench-tune. */
+        /* WS4 cascade — CONSERVATIVE starting gains; MUST bench-tune. Ceiling/stall are
+         * PHASE current (inner loop regulates phase mag, not the artifact-corrupted ibus). */
+        .cascadeSpeedKpMilli   = 20,
+        .cascadeSpeedKiMicro   = 2000,
+        .cascadeCurrKpMilli    = 20,    /* inner Kp=0.02 — was 1.0 = ~50× too hot: a 210-count current
+                                         * error became a 210-tick duty step → one-ISR slam to the rail.
+                                         * 0.02 → ~4-tick step. Live-tune UP from here once it's stable. */
+        .cascadeCurrKiMicro    = 2000,  /* inner Ki=0.002/ISR — gentle wind-in (was 0.02 = 10× hotter) */
+        .cascadeIrefCeilingAdc = 240,  /* WS4 PHASE-current ceiling ≈ 8A (30.9 cts/A) — pushes current to
+                                        * hold speed but stays under the WS1 ride-through→desync onset
+                                        * (~10A obs. at perA=20) and below the WS2 stall (360). Bench-tune. */
+        .cascadeTgtErpmIdle    = 3500,   /* AT the natural CL idle — so at zero throttle the outer loop sees
+                                          * ~zero error and doesn't command current up (5000 was above idle →
+                                          * forced accel → current ramp → rail). Floor clamp = 3000. */
+        .cascadeTgtErpmMax     = 90000,
+        /* WS3 variable BEMF trigger — defaults reproduce today's fixed MPER/2 point. */
+        .bemfTrigBasePct       = 50,
+        .bemfTrigDutyThreshPct = 50,
+        .bemfTrigShiftQ        = 0,
+        .ocLimitMa          = 20000,   /* CMP3 chop parked just below sensor saturation (same as 2810) */
+        .ocStartupMa        = 22000,
+        .rampCurrentGateMa  = 10000,   /* gate ramp accel if bus >10A during OL */
+        TUNING_DEFAULTS,
+        /* vbus protection: NOT overridden. On this board OV scales ~53 counts/V and the
+         * VBUS_OV_ADC param min is 2000 (~37.5V), so OV can't be set protectively for a
+         * 16V bus — it stays the high sentinel (3600 ~= 67V), same as the 2810. UV stays
+         * the relaxed default (500 ~= 9.4V) which is fine for a bench PSU. The PSU's own
+         * current/voltage limit is the real bench protection. */
+        /* FOC motor model — INERT in the 6-step build, but focKeUvSRad IS read by the
+         * 6-step ABS_FLOOR clamp, so it is the one critical FOC field here. */
+        .focRsMilliOhm       = 25,     /* ~25 mΩ phase-to-neutral (same class as 2810) */
+        .focLsMicroH          = 12,     /* bigger stator than 2810; estimate, bench-confirm if running FOC */
+        .focKeUvSRad          = 1125,   /* CRITICAL: λ = 60/(√3×2π×700×7) = 0.001125. ~2× the 2810's 583.
+                                         * Get this wrong and the U3 pins at part-speed / high current
+                                         * exactly like the VEX half-speed bug. */
+        .focVbusNomCentiV     = 1600,   /* 16V bench nominal */
+        .focMaxCurrentCentiA  = 2500,   /* U3 rated 25A continuous */
+        .focMaxElecRadS       = 8500,   /* ~82k eRPM at 7PP */
+        .focKpDqMilli         = 75,     /* 2π×1000×12µH */
+        .focKiDq              = 157,    /* 2π×1000×0.025Ω */
+        .focObsLpfAlphaMilli  = 350,
+        .focAlignIqCentiA     = 600,
+        .focRampIqCentiA      = 800,
+        .focAlignTimeMs       = 1000,
+        .focIqRampTimeMs      = 500,
+        .focRampRateRps2      = 80,
+        .focHandoffRadS       = 400,
+        .focFaultOcCentiA     = 2600,
+        .focFaultStallDeciRadS = 500,
+        .an1078ThetaBaseDegX10 = 200,
+        .an1078ThetaKE7        = 800,
+        .an1078KslideMv        = 2500,
+        .an1078IdFwMaxDecia    = 120,
+    },
 };
 
 /* Max safe mA for OC params: DAC ceiling 4095 counts = 3299 mV */
 #define OC_MAX_SAFE_MA  22000
 
-/* ── Descriptor table (31 entries) ───────────────────────────────────── */
+/* ── Descriptor table (count via PARAM_COUNT) ────────────────────────── */
 
 static const PARAM_DESCRIPTOR_T paramDescriptors[] = {
     /* Stage 1: Startup & Ramp (group 0) */
@@ -622,12 +727,30 @@ static const PARAM_DESCRIPTOR_T paramDescriptors[] = {
     { PARAM_ID_MAX_CL_ERPM,           PARAM_TYPE_U32, PARAM_GROUP_CLOSED_LOOP, 5000, 350000, offsetof(GSP_PARAMS_T, maxClosedLoopErpm),  4 },  /* was 260000; raised so high-KV micros (e.g. VEX profile 6) can live-tune past the old cap and find their true field-weakened ceiling. This is the PI period-floor clamp + advance anchor; sensorless detection still works ~256k on the VEX (rej>0), so the wall was this descriptor, not the BEMF/sampling limit. */
     { PARAM_ID_ZC_DEMAG_DUTY_THRESH,  PARAM_TYPE_U8,  PARAM_GROUP_CLOSED_LOOP,  20,      90, offsetof(GSP_PARAMS_T, zcDemagDutyThresh),  1 },
     { PARAM_ID_ZC_DEMAG_BLANK_EXTRA,  PARAM_TYPE_U8,  PARAM_GROUP_CLOSED_LOOP,   0,      30, offsetof(GSP_PARAMS_T, zcDemagBlankExtraPct), 1 },
+    { PARAM_ID_ZC_DEMAG_BLANK_PER_A,  PARAM_TYPE_U8,  PARAM_GROUP_CLOSED_LOOP,   0,      60, offsetof(GSP_PARAMS_T, zcDemagBlankPerA),   1 },  /* WS1: extra HW-ZC blank % of sector per 256 cts ibus over deadband (0 = off) */
+    { PARAM_ID_ZC_DEMAG_BLANK_IBUS_DB,PARAM_TYPE_U8,  PARAM_GROUP_CLOSED_LOOP,   0,     200, offsetof(GSP_PARAMS_T, zcDemagBlankIbusDb), 1 },  /* WS1: ibus deadband (raw counts) before current-blank engages */
+    { PARAM_ID_ZC_DEMAG_BLANK_MAX_PCT,PARAM_TYPE_U8,  PARAM_GROUP_CLOSED_LOOP,  25,      50, offsetof(GSP_PARAMS_T, zcDemagBlankMaxPct), 1 },  /* WS1: total HW-ZC blank cap, % of period (25=legacy period/4, 33=period/3) */
     /* Current Protection (group 2) */
     { PARAM_ID_OC_SW_LIMIT_MA,        PARAM_TYPE_U16, PARAM_GROUP_OVERCURRENT,  500, OC_MAX_SAFE_MA, offsetof(GSP_PARAMS_T, ocSwLimitMa),      2 },
     { PARAM_ID_OC_FAULT_MA,           PARAM_TYPE_U16, PARAM_GROUP_OVERCURRENT, 1000, OC_MAX_SAFE_MA, offsetof(GSP_PARAMS_T, ocFaultMa),        2 },
     { PARAM_ID_OC_LIMIT_MA,           PARAM_TYPE_U16, PARAM_GROUP_OVERCURRENT,  501, OC_MAX_SAFE_MA, offsetof(GSP_PARAMS_T, ocLimitMa),        2 },
     { PARAM_ID_OC_STARTUP_MA,         PARAM_TYPE_U16, PARAM_GROUP_OVERCURRENT, 5000, OC_MAX_SAFE_MA, offsetof(GSP_PARAMS_T, ocStartupMa),      2 },
     { PARAM_ID_RAMP_CURRENT_GATE_MA,  PARAM_TYPE_U16, PARAM_GROUP_OVERCURRENT,    0, OC_MAX_SAFE_MA, offsetof(GSP_PARAMS_T, rampCurrentGateMa), 2 },
+    { PARAM_ID_STALL_IPHASE_ADC,      PARAM_TYPE_U16, PARAM_GROUP_OVERCURRENT,    0,   2047, offsetof(GSP_PARAMS_T, stallIphaseAdc),  2 },  /* WS2: phase-current stall threshold (raw counts over bias) */
+    { PARAM_ID_STALL_DEBOUNCE_MS,     PARAM_TYPE_U8,  PARAM_GROUP_OVERCURRENT,    5,    250, offsetof(GSP_PARAMS_T, stallDebounceMs), 1 },  /* WS2: sustained-ms before FAULT_STALL */
+    { PARAM_ID_STALL_ARM_ERPM,        PARAM_TYPE_U16, PARAM_GROUP_OVERCURRENT,    0,  60000, offsetof(GSP_PARAMS_T, stallArmErpm),    1 },  /* WS2: eRPM motor must reach once before stall can fire (0=arm immediately) */
+    /* WS4: nested speed→current→duty cascade (FEATURE_SPEED_CASCADE) */
+    { PARAM_ID_CASCADE_SPEED_KP_MILLI,PARAM_TYPE_U16, PARAM_GROUP_CLOSED_LOOP,    0,  65000, offsetof(GSP_PARAMS_T, cascadeSpeedKpMilli),   2 },  /* outer Kp ×1000 */
+    { PARAM_ID_CASCADE_SPEED_KI_MICRO,PARAM_TYPE_U16, PARAM_GROUP_CLOSED_LOOP,    0,  65000, offsetof(GSP_PARAMS_T, cascadeSpeedKiMicro),   2 },  /* outer Ki ×1e6 */
+    { PARAM_ID_CASCADE_CURR_KP_MILLI, PARAM_TYPE_U16, PARAM_GROUP_CLOSED_LOOP,    0,  65000, offsetof(GSP_PARAMS_T, cascadeCurrKpMilli),    2 },  /* inner Kp ×1000 */
+    { PARAM_ID_CASCADE_CURR_KI_MICRO, PARAM_TYPE_U16, PARAM_GROUP_CLOSED_LOOP,    0,  65000, offsetof(GSP_PARAMS_T, cascadeCurrKiMicro),    2 },  /* inner Ki ×1e6 */
+    { PARAM_ID_CASCADE_IREF_CEILING,  PARAM_TYPE_U16, PARAM_GROUP_CLOSED_LOOP,    0,   2047, offsetof(GSP_PARAMS_T, cascadeIrefCeilingAdc), 2 },  /* current ceiling (raw counts) */
+    { PARAM_ID_CASCADE_TGT_ERPM_IDLE, PARAM_TYPE_U16, PARAM_GROUP_CLOSED_LOOP,  500,  20000, offsetof(GSP_PARAMS_T, cascadeTgtErpmIdle),    2 },  /* throttle=0 target eRPM */
+    { PARAM_ID_CASCADE_TGT_ERPM_MAX,  PARAM_TYPE_U32, PARAM_GROUP_CLOSED_LOOP, 5000, 350000, offsetof(GSP_PARAMS_T, cascadeTgtErpmMax),     4 },  /* throttle=full target eRPM */
+    /* WS3: duty-adaptive BEMF trigger (FEATURE_VARIABLE_BEMF_TRIGGER) */
+    { PARAM_ID_BEMF_TRIG_BASE_PCT,    PARAM_TYPE_U8,  PARAM_GROUP_ZC_DETECT,    10,     90, offsetof(GSP_PARAMS_T, bemfTrigBasePct),       1 },  /* base sample % of period */
+    { PARAM_ID_BEMF_TRIG_DUTY_THRESH, PARAM_TYPE_U8,  PARAM_GROUP_ZC_DETECT,    20,     95, offsetof(GSP_PARAMS_T, bemfTrigDutyThreshPct), 1 },  /* duty% shift threshold */
+    { PARAM_ID_BEMF_TRIG_SHIFT_Q,     PARAM_TYPE_U8,  PARAM_GROUP_ZC_DETECT,     0,    200, offsetof(GSP_PARAMS_T, bemfTrigShiftQ),        1 },  /* shift gain (0=fixed) */
     /* ZC Detection (group 3) */
     { PARAM_ID_ZC_BLANKING_PCT,       PARAM_TYPE_U8,  PARAM_GROUP_ZC_DETECT,    1,    15, offsetof(GSP_PARAMS_T, zcBlankingPercent),   1 },
     { PARAM_ID_ZC_ADC_DEADBAND,       PARAM_TYPE_U8,  PARAM_GROUP_ZC_DETECT,    0,    20, offsetof(GSP_PARAMS_T, zcAdcDeadband),       1 },
@@ -876,7 +999,16 @@ void GSP_RecomputeDerived(void)
     d->ocCmp3DacVal = OcMaToAdcCounts(p->ocLimitMa);
     if (d->ocCmp3DacVal >= 4096) d->ocCmp3DacVal = 4095;
 
+#if FEATURE_SOFTSTART_CHOP
+    /* Soft-start: the open-loop spin-up (ALIGN/OL) chops at a LOW current so the
+     * hardware cycle-by-cycle limit bounds the inrush (smooth start). Derived from
+     * OC_CMP3_SOFTSTART_MA, independent of ocStartupMa (which stays >= ocLimitMa
+     * for validation + the morph-onward operational chop). Restored to operational
+     * at morph (garuda_service.c). */
+    d->ocCmp3StartupDac = OcMaToAdcCounts(OC_CMP3_SOFTSTART_MA);
+#else
     d->ocCmp3StartupDac = OcMaToAdcCounts(p->ocStartupMa);
+#endif
     if (d->ocCmp3StartupDac >= 4096) d->ocCmp3StartupDac = 4095;
 
     if (p->rampCurrentGateMa > 0)

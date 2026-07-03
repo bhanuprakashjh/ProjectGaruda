@@ -1085,6 +1085,22 @@ void HAL_PWM_SetDutyCycle(uint32_t duty)
     PWM_PDC1 = duty;
 }
 
+#if FEATURE_VARIABLE_BEMF_TRIGGER
+/**
+ * @brief WS3: set the BEMF ADC sample point (PG1TRIGA) at runtime.
+ * Lets the duty-adaptive "variable trigger" schedule move the floating-phase
+ * sample as duty/speed rises (the fixed LOOPTIME_TCY/2 freewheel-center point
+ * degrades above ~50% duty). CAHALF stays 0 (cycle-1 half), as in static init.
+ * @param triga TRIGA compare value (PWM clock counts), clamped to [0, MPER-1).
+ *        uint32_t — the high-res period (LOOPTIME_TCY≈71095) exceeds 16 bits.
+ */
+void HAL_PWM_SetBemfTrigger(uint32_t triga)
+{
+    if (triga >= (LOOPTIME_TCY - 1u)) triga = (LOOPTIME_TCY - 1u);
+    PG1TRIGAbits.TRIGA = triga;
+}
+#endif
+
 #if FEATURE_IBUS_PROBE
 void HAL_PWM_IbusProbeOnCenter(void)
 {

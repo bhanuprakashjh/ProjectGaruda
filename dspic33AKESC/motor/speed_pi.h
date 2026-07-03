@@ -49,4 +49,21 @@ void SPEED_PI_Disable(volatile GARUDA_DATA_T *pData);
  */
 void SPEED_PI_OnZcEvent(volatile GARUDA_DATA_T *pData);
 
+/* ── WS4: nested speed→current→duty cascade (FEATURE_SPEED_CASCADE) ──────
+ * A fresh implementation, independent of SPEED_PI above (it outputs a
+ * current reference → inner current PI → duty, not duty directly).
+ * Co-located in speed_pi.c only to avoid adding a new MPLAB translation
+ * unit. No-op stubs when the feature is off. */
+void     SPEED_CASCADE_Init(void);
+void     SPEED_CASCADE_Reset(void);                            /* clear engage state on CL entry */
+void     SPEED_CASCADE_Disable(void);
+bool     SPEED_CASCADE_Enabled(void);
+void     SPEED_CASCADE_OnZcEvent(volatile GARUDA_DATA_T *pData);            /* outer, per-ZC */
+/* Inner step. Runs the loop only once the motor is ENGAGED (measured eRPM
+ * above the engage gate); below the gate it passes `fallbackDuty` (the normal
+ * throttle→duty map) straight through so the proven startup/accel is untouched
+ * and the loop only takes over to HOLD/trim speed once established. */
+uint32_t SPEED_CASCADE_InnerStep(volatile GARUDA_DATA_T *pData,
+                                 uint32_t cap, uint32_t fallbackDuty);
+
 #endif /* SPEED_PI_H */

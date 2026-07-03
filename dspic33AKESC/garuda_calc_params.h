@@ -486,6 +486,13 @@ _Static_assert(HWZC_BLANKING_PERCENT >= 1 && HWZC_BLANKING_PERCENT <= 20,
 #define OC_MV_TO_COUNTS(mv) ((uint16_t)((uint32_t)(mv) * 4096 / OC_VADC_MV))
 #define OC_BIAS_COUNTS       OC_MV_TO_COUNTS(OC_VREF_MV)
 
+/* ADC counts per amp of (phase or bus) current, derived from the board amp
+ * chain so it tracks OC_GAIN_X100 (WS5). counts/A = gain*shunt*4096/Vadc.
+ * gain 8.3, 3mΩ, 3.3V → ~30 counts/A (was the hardcoded 93 at the wrong
+ * 24.95 gain). Used by the mA telemetry conversions. */
+#define COUNTS_PER_AMP \
+    ((uint16_t)(((uint32_t)OC_GAIN_X100 * OC_SHUNT_MOHM * 4096UL) / (100UL * OC_VADC_MV)))
+
 /* Leading-edge blanking register value for PGxLEBbits.LEB bitfield.
  * Unlike DTH (full 16-bit register, bits 3:0 unused → formula has *16),
  * LEB is a 12-bit bitfield (bits 15:4) — compiler positions it, so the
@@ -616,6 +623,22 @@ _Static_assert(RAMP_CURRENT_GATE_ADC < OC_CMP3_DAC_VAL,
   #define RT_ZC_SYNC_THRESHOLD            gspParams.zcSyncThreshold
   #define RT_ZC_DEMAG_DUTY_THRESH         gspParams.zcDemagDutyThresh
   #define RT_ZC_DEMAG_BLANK_EXTRA_PERCENT gspParams.zcDemagBlankExtraPct
+  #define RT_ZC_DEMAG_BLANK_PER_A         gspParams.zcDemagBlankPerA
+  #define RT_ZC_DEMAG_BLANK_IBUS_DB       gspParams.zcDemagBlankIbusDb
+  #define RT_ZC_DEMAG_BLANK_MAX_PCT       gspParams.zcDemagBlankMaxPct
+  #define RT_STALL_IPHASE_ADC             gspParams.stallIphaseAdc
+  #define RT_STALL_DEBOUNCE_MS            gspParams.stallDebounceMs
+  #define RT_STALL_ARM_ERPM               gspParams.stallArmErpm
+  #define RT_CASCADE_SPEED_KP_MILLI       gspParams.cascadeSpeedKpMilli
+  #define RT_CASCADE_SPEED_KI_MICRO       gspParams.cascadeSpeedKiMicro
+  #define RT_CASCADE_CURR_KP_MILLI        gspParams.cascadeCurrKpMilli
+  #define RT_CASCADE_CURR_KI_MICRO        gspParams.cascadeCurrKiMicro
+  #define RT_CASCADE_IREF_CEILING_ADC     gspParams.cascadeIrefCeilingAdc
+  #define RT_CASCADE_TGT_ERPM_IDLE        gspParams.cascadeTgtErpmIdle
+  #define RT_CASCADE_TGT_ERPM_MAX         gspParams.cascadeTgtErpmMax
+  #define RT_BEMF_TRIG_BASE_PCT           gspParams.bemfTrigBasePct
+  #define RT_BEMF_TRIG_DUTY_THRESH_PCT    gspParams.bemfTrigDutyThreshPct
+  #define RT_BEMF_TRIG_SHIFT_Q            gspParams.bemfTrigShiftQ
   #define RT_POST_SYNC_SLEW_DIVISOR       gspParams.postSyncSlewDivisor
   #define RT_DESYNC_MAX_RESTARTS          gspParams.desyncMaxRestarts
   #define RT_MORPH_LOCK_ZC_COUNT          gspParams.morphLockZcCount
@@ -662,6 +685,22 @@ _Static_assert(RAMP_CURRENT_GATE_ADC < OC_CMP3_DAC_VAL,
   #define RT_ZC_SYNC_THRESHOLD            ZC_SYNC_THRESHOLD
   #define RT_ZC_DEMAG_DUTY_THRESH         ZC_DEMAG_DUTY_THRESH
   #define RT_ZC_DEMAG_BLANK_EXTRA_PERCENT ZC_DEMAG_BLANK_EXTRA_PERCENT
+  #define RT_ZC_DEMAG_BLANK_PER_A         ZC_DEMAG_BLANK_PER_A
+  #define RT_ZC_DEMAG_BLANK_IBUS_DB       ZC_DEMAG_BLANK_IBUS_DB
+  #define RT_ZC_DEMAG_BLANK_MAX_PCT       ZC_DEMAG_BLANK_MAX_PCT
+  #define RT_STALL_IPHASE_ADC             STALL_IPHASE_ADC
+  #define RT_STALL_DEBOUNCE_MS            STALL_DEBOUNCE_MS
+  #define RT_STALL_ARM_ERPM               STALL_ARM_ERPM
+  #define RT_CASCADE_SPEED_KP_MILLI       CASCADE_SPEED_KP_MILLI
+  #define RT_CASCADE_SPEED_KI_MICRO       CASCADE_SPEED_KI_MICRO
+  #define RT_CASCADE_CURR_KP_MILLI        CASCADE_CURR_KP_MILLI
+  #define RT_CASCADE_CURR_KI_MICRO        CASCADE_CURR_KI_MICRO
+  #define RT_CASCADE_IREF_CEILING_ADC     CASCADE_IREF_CEILING_ADC
+  #define RT_CASCADE_TGT_ERPM_IDLE        CASCADE_TGT_ERPM_IDLE
+  #define RT_CASCADE_TGT_ERPM_MAX         CASCADE_TGT_ERPM_MAX
+  #define RT_BEMF_TRIG_BASE_PCT           BEMF_TRIG_BASE_PCT
+  #define RT_BEMF_TRIG_DUTY_THRESH_PCT    BEMF_TRIG_DUTY_THRESH_PCT
+  #define RT_BEMF_TRIG_SHIFT_Q            BEMF_TRIG_SHIFT_Q
   #define RT_POST_SYNC_SLEW_DIVISOR       POST_SYNC_SLEW_DIVISOR
   #define RT_DESYNC_MAX_RESTARTS          DESYNC_MAX_RESTARTS
   #define RT_MORPH_LOCK_ZC_COUNT          MORPH_LOCK_ZC_COUNT

@@ -145,9 +145,159 @@ extern "C" {
 #define FEATURE_THROTTLE_ZERO_AUTO_DISARM FEATURE_POT_START_STOP  /* stop-at-zero half (was standalone; now driven by POT_START_STOP) */
 #define FEATURE_TIMING_ADVANCE   1  /* Phase B3: Linear timing advance by RPM — RE-ENABLED 2026-05-26 to compensate detection-chain latency at high RPM. Original baseline schedule: 0° below 3k eRPM, linear ramp to 22° at MAX_CLOSED_LOOP_ERPM (70k for 2810), clamped 22° above. */
 #define FEATURE_DYNAMIC_BLANKING 1  /* Phase C1: Speed+duty-aware blanking (extra blank at high duty/demag) */
+#define FEATURE_ZC_CURRENT_BLANK 1  /* WS1: LOAD-adaptive demag blanking on the HW-ZC path. Adds extra
+                                     * blanking proportional to bus current above a deadband — the
+                                     * freewheel demag (diode-conduction) interval grows with load
+                                     * current and masks BEMF at sector start → ZC window collapses →
+                                     * desync (the U3 prop-load failure). The existing
+                                     * zcDemagBlankExtraPct only touches the SW/integration paths;
+                                     * U3 runs the HW comparator path (hwzc.c), so the current term is
+                                     * applied there. Expressed in RAW ADC counts → gain-independent
+                                     * (works regardless of the 24.95-vs-8.3 op-amp gain question).
+                                     * Default 0 = baseline HWZC_BLANKING_PERCENT only. Tunables:
+                                     * zcDemagBlankPerA, zcDemagBlankIbusDb (live, profile 9). */
+/* Compile-time fallbacks for the WS1 current-blank tunables (used only when
+ * FEATURE_GSP=0; with GSP on, the live gspParams fields win). */
+#ifndef ZC_DEMAG_BLANK_PER_A
+#define ZC_DEMAG_BLANK_PER_A     0   /* % of sector added per 256 ADC counts of ibus over deadband */
+#endif
+#ifndef ZC_DEMAG_BLANK_IBUS_DB
+#define ZC_DEMAG_BLANK_IBUS_DB   30  /* ibus deadband (raw counts) before the current term engages */
+#endif
+#ifndef ZC_DEMAG_BLANK_MAX_PCT
+#define ZC_DEMAG_BLANK_MAX_PCT   25  /* total HW-ZC blank cap, % of period (25 = legacy period/4) */
+#endif
+#define FEATURE_PHASE_STALL_FAULT 0 /* WS2: phase-current stall/desync backstop. The bus-current OC is
+                                     * blind to a freewheeling phantom lock (current circulates in the
+                                     * phase, bus reads ~0). This watches PHASE current (iaRaw/ibRaw,
+                                     * already sampled every ISR): if |ia|/|ib| stays above a high
+                                     * threshold for stallDebounceMs while in closed loop → latch
+                                     * FAULT_STALL and kill the bridge. Catches the silent phantom that
+                                     * NEITHER firmware detects. Threshold in RAW counts (gain-
+                                     * independent). Default 0. Tunables: stallIphaseAdc, stallDebounceMs. */
+#ifndef STALL_IPHASE_ADC
+#define STALL_IPHASE_ADC       1600  /* |phase current| magnitude (raw counts over 2048 bias) to call stall */
+#endif
+#ifndef STALL_DEBOUNCE_MS
+#define STALL_DEBOUNCE_MS        50  /* sustained-ms above threshold before latching FAULT_STALL */
+#endif
+#ifndef STALL_ARM_ERPM
+#define STALL_ARM_ERPM         5000  /* WS2 arm gate: eRPM the rotor must reach once before stall can fire */
+#endif
+/* WS4 redesign safety constants (2026-06-26): the three fixes that stop the
+ * cascade railing the board (prior bench: Ia pinned 22A, Vbus 16→8V for 8s).
+ *   (1) ERPM_FLOOR  — outer target never commands below the CL sync floor, so
+ *       a low/zero throttle can't order a decel that drops the loaded rotor
+ *       out of sync.
+ *   (2) IFILT_ALPHA — IIR on the inner-loop phase current (raw per-ISR sample
+ *       is commutation-dominated/saturating; the PI was chasing garbage and
+ *       bouncing duty MIN↔MAX). ~1/16 → ~0.36ms TC at 45kHz, faster than the
+ *       per-ZC outer loop, slow enough to smooth commutation ripple.
+ *   (3) IHARD_MARGIN + FOLDBACK — a hard duty foldback INDEPENDENT of the PI:
+ *       if filtered phase current exceeds (ceiling + margin) the duty is
+ *       collapsed and the integrator pulled with it, regardless of the loop.
+ *       This is the clamp the reference-only ceiling lacked. UV stays the
+ *       last-resort hardware backstop below all of this. */
+#ifndef CASCADE_ERPM_FLOOR
+#define CASCADE_ERPM_FLOOR     3000  /* outer target eRPM hard floor — BELOW natural CL idle (~3500)
+                                      * so at zero throttle the loop doesn't fight to accelerate the
+                                      * motor (4500 was ABOVE idle → forced current ramp at idle → rail) */
+#endif
+#ifndef CASCADE_IFILT_ALPHA
+#define CASCADE_IFILT_ALPHA  0.25f   /* inner current IIR coeff (1/4) — light. A heavy filter (1/16)
+                                      * lagged so far it hid a current rail from the PI and foldback */
+#endif
+#ifndef CASCADE_IHARD_MARGIN_ADC
+#define CASCADE_IHARD_MARGIN_ADC 150 /* hard-foldback trips at ceiling + this (raw counts ≈5A) */
+#endif
+#ifndef CASCADE_FOLDBACK_NUM
+#define CASCADE_FOLDBACK_NUM      9  /* over-limit duty ×(NUM/DEN) per ISR → fast collapse */
+#endif
+#ifndef CASCADE_FOLDBACK_DEN
+#define CASCADE_FOLDBACK_DEN     10
+#endif
+/* ── Engage gate + slew limits (the gate+seed+slew redesign) ────────────
+ * The loop ENGAGES (takes over duty) only once measured eRPM climbs past
+ * CASCADE_ENGAGE_ERPM — well clear of the 2.5–4k sync-fragile zone where
+ * forcing current desyncs the motor. Below CASCADE_DISENGAGE_ERPM it hands
+ * back to the normal map (hysteresis). The proven startup/accel is never
+ * touched; the loop only HOLDS/trims speed once the motor is established. */
+#ifndef CASCADE_ENGAGE_ERPM
+#define CASCADE_ENGAGE_ERPM    8000   /* take over above this (stable) speed */
+#endif
+#ifndef CASCADE_DISENGAGE_ERPM
+#define CASCADE_DISENGAGE_ERPM 6000   /* fall back to normal map below this  */
+#endif
+#ifndef CASCADE_IREF_SLEW_PER_ZC
+#define CASCADE_IREF_SLEW_PER_ZC  8   /* max current-ref change per ZC (counts) */
+#endif
+#ifndef CASCADE_DUTY_SLEW_PER_ISR
+#define CASCADE_DUTY_SLEW_PER_ISR 1   /* max duty change per ISR (ticks) — the
+                                       * hard guarantee against a one-ISR slam */
+#endif
+#define FEATURE_SPEED_CASCADE    1  /* WS4: nested speed→current→duty cascade (the "hold speed under load
+                                     * by pushing current to a ceiling" feature). FRESH implementation —
+                                     * NOT motor/speed_pi.c (which outputs duty directly and had high-RPM
+                                     * OV issues). Outer speed PI (per-ZC) outputs a CURRENT reference
+                                     * clamped to cascadeIrefCeilingAdc; inner current PI (per ADC ISR)
+                                     * regulates ibus to that ref by setting duty, replacing the direct
+                                     * throttle→duty map in the CL state. The ceiling is THE safety —
+                                     * keep it BELOW the WS1 demag desync current and the WS2 stall
+                                     * threshold. Current quantities are RAW counts (gain-independent).
+                                     * Mutually exclusive with FEATURE_SPEED_PI. Default 0 = baseline
+                                     * throttle→duty. Gains MUST be bench-tuned from the conservative
+                                     * defaults below. Caveat: with this on, FEATURE_DUTY_SLEW may fight
+                                     * the inner PI — disable it if the loop feels sluggish/hunts. */
+#if FEATURE_SPEED_CASCADE && FEATURE_SPEED_PI
+#error "FEATURE_SPEED_CASCADE and FEATURE_SPEED_PI are mutually exclusive — enable only one"
+#endif
+/* Compile-time fallbacks for the WS4 cascade tunables (FEATURE_GSP=0 only). */
+#ifndef CASCADE_SPEED_KP_MILLI
+#define CASCADE_SPEED_KP_MILLI    20  /* outer Kp ×1000  (eRPM err → current-ref counts) */
+#endif
+#ifndef CASCADE_SPEED_KI_MICRO
+#define CASCADE_SPEED_KI_MICRO  2000  /* outer Ki ×1e6   (per-ZC integral) */
+#endif
+#ifndef CASCADE_CURR_KP_MILLI
+#define CASCADE_CURR_KP_MILLI   1000  /* inner Kp ×1000  (current-err counts → duty ticks) */
+#endif
+#ifndef CASCADE_CURR_KI_MICRO
+#define CASCADE_CURR_KI_MICRO  20000  /* inner Ki ×1e6   (per-ADC-ISR integral) */
+#endif
+#ifndef CASCADE_IREF_CEILING_ADC
+#define CASCADE_IREF_CEILING_ADC 750  /* current ceiling (raw counts over bias) — the safety clamp.
+                                       * ~24A at the corrected 8.3 gain (~30.9 cts/A). */
+#endif
+#ifndef CASCADE_TGT_ERPM_IDLE
+#define CASCADE_TGT_ERPM_IDLE   2000  /* throttle=0 target eRPM */
+#endif
+#ifndef CASCADE_TGT_ERPM_MAX
+#define CASCADE_TGT_ERPM_MAX   90000  /* throttle=full target eRPM */
+#endif
+#define FEATURE_VARIABLE_BEMF_TRIGGER 1 /* WS3: duty-adaptive BEMF ADC sample point. Today the floating-
+                                     * phase sample is FIXED at LOOPTIME_TCY/2 (freewheel-center), which
+                                     * degrades above ~50% duty as the ON pulse swallows that instant.
+                                     * This recomputes PG1TRIGA each ISR from duty: triga = basePct% of
+                                     * period, plus a duty-proportional shift above a threshold. NOTE our
+                                     * sampling is freewheel-center (not the reference's in-ON-pulse
+                                     * 0.6/0.8/0.9×duty), so the schedule must be BENCH-MAPPED (map max
+                                     * clean-lock eRPM vs fire-time). Default 0; even on, the defaults
+                                     * (basePct=50, shiftQ=0) reproduce today's fixed point exactly. */
+#ifndef BEMF_TRIG_BASE_PCT
+#define BEMF_TRIG_BASE_PCT       50  /* base sample point as % of LOOPTIME_TCY (50 = today's MPER/2) */
+#endif
+#ifndef BEMF_TRIG_DUTY_THRESH_PCT
+#define BEMF_TRIG_DUTY_THRESH_PCT 50 /* duty% above which the duty-proportional shift engages */
+#endif
+#ifndef BEMF_TRIG_SHIFT_Q
+#define BEMF_TRIG_SHIFT_Q         0  /* shift gain: triga += (LOOPTIME_TCY/256)*shiftQ*(dutyPct-thresh)/100. 0 = no shift */
+#endif
 #define FEATURE_VBUS_SAG_LIMIT   1  /* Phase C2: Bus voltage sag power limiting (reduce duty on Vbus dip) */
 #define FEATURE_BEMF_INTEGRATION 1  /* Phase E: Shadow integration estimator (shadow-only, no control) */
 #define FEATURE_SINE_STARTUP     1  /* RESTORED 2026-06-10: back to the proven sine startup (I-f parked).
+                                     * NOTE: profile 9 (U3) overrides this to 0 via #undef AFTER
+                                     * MOTOR_PROFILE is #defined (the override can't live here — it would
+                                     * read MOTOR_PROFILE as 0, the AM32 used-before-define trap).
                                      * With 0, STARTUP_Init does NOT call SineInit → no bridge
                                      * drive at ARMED→IF_RAMP → I-f owns a clean bring-up.
                                      * Original: Re-enabled (2026-05-28) — try sine startup with
@@ -160,6 +310,22 @@ extern "C" {
                                      * windowed Hi-Z ZC search) → CL (HWZC + sector PI). */
 #define FEATURE_ADC_CMP_ZC       1  /* Phase F: ADC comparator-based high-speed ZC — required for 6-step (2026-05-25). */
 #define FEATURE_HW_OVERCURRENT  1  /* Phase G: Hardware overcurrent protection via CMP3+OA3 */
+
+/* ── Soft-start via CMP3 chop (2026-06-18) ────────────────────────────────
+ * FEATURE_SOFTSTART_CHOP=1: hold the CMP3 cycle-by-cycle chop LOW during the
+ * open-loop spin-up (ALIGN + OL_RAMP), so the hardware current limit caps the
+ * startup inrush (~14-22A today) at OC_CMP3_SOFTSTART_MA. The motor then
+ * accelerates at a bounded current = a smooth soft-start, instead of slamming
+ * full startup torque. Morph onward restores the operational chop. This just
+ * re-derives the startup chop DAC; it does NOT touch ocStartupMa (so the
+ * ocStartupMa>=ocLimitMa validation is unaffected) or any state transition.
+ * TUNE: lower = gentler but may not break away from standstill; if the motor
+ * won't spin or slips during OL, raise this and/or lower rampAccelErpmPerS.
+ * Bench-proven window on the 2810 was ~4-6A; 7A leaves break-away margin. */
+#define FEATURE_SOFTSTART_CHOP   0   /* DISABLED 2026-06-24: on the live AM32 path there is no
+                                      * ALIGN/OL spin-up phase, so this chop never applied (see
+                                      * startup review). Re-enable only with a sine/regular startup. */
+#define OC_CMP3_SOFTSTART_MA  7000   /* CMP3 chop current during ALIGN/OL spin-up */
 #define FEATURE_OC_AUTOZERO     1  /* 2026-06-10: the OC math assumes a 1.65V/2048-count bus-ADC
                                     * bias, but the chain MEASURABLY rests at ~78 counts — so every
                                     * OC trip (SW + CMP3 DAC) fired ~22A above the configured mA
@@ -196,15 +362,17 @@ extern "C" {
  * #defined ~240 lines later, so the preprocessor saw it as 0 → the #if was
  * always false → AM32 forced ON for ALL profiles, silently defeating the
  * 6/7/8 sine carve-out.) Per-profile motor params are in the section further down.
- * 0=Hurst 1=A2212@12V 2=2810@24V 3=5055 4=Cobra 5=XRotor 6=VEX 7=1407@2S 8=1407@3S */
-#define MOTOR_PROFILE  2
+ * 0=Hurst 1=A2212@12V 2=2810@24V 3=5055 4=Cobra 5=XRotor 6=VEX 7=1407@2S 8=1407@3S 9=U3 KV700@~16V */
+#define MOTOR_PROFILE  8
 
 /* 2026-06-17 PER-PROFILE: high-KV micro motors (VEX prof 6, 1407 prof 7/8 @10V)
  * can't use the AM32 kick — BEMF is below the detection floor at the kick instant
  * so it phantom-locks instantly. They force the SINE OL ramp (drags the rotor to
  * rampTargetErpm where BEMF is real before any ZC). Everything else (2810 etc.)
- * keeps the AM32 kick+listen default. */
-#if MOTOR_PROFILE == 6 || MOTOR_PROFILE == 7 || MOTOR_PROFILE == 8
+ * keeps the AM32 kick+listen default. 2026-06-25: U3 (profile 9) joins the sine
+ * carve-out — a heavy 97 g PROPPED rotor must NOT take the AM32 blind kick (it
+ * phantom-locks / slams). It uses the classic 6-step align->ramp->morph->CL. */
+#if MOTOR_PROFILE == 6 || MOTOR_PROFILE == 7 || MOTOR_PROFILE == 8 || MOTOR_PROFILE == 9
 #define FEATURE_AM32_STARTUP    0
 #else
 #define FEATURE_AM32_STARTUP    1  /* 2026-06-12 bench experiment: AM32-style "kick + listen".
@@ -222,6 +390,19 @@ extern "C" {
                                             * gives the bench-proven 2000 on profile 2
                                             * (rampTarget 3000) and scales for high-BEMF-
                                             * floor motors (VEX: 8000). Nonzero = use as-is. */
+
+/* U3 (profile 9, 2026-06-25): REGULAR trapezoidal 6-step startup, NOT sine. Done as
+ * an #undef HERE (not at the FEATURE_SINE_STARTUP definition ~line 150) because
+ * MOTOR_PROFILE is only #defined just above — referencing it earlier reads 0 (the
+ * AM32 used-before-define trap). Path with sine OFF: STARTUP_Align (trap) ->
+ * ESC_OL_RAMP (STARTUP_OpenLoopRamp, forced trap commutation) -> ESC_CLOSED_LOOP
+ * DIRECTLY, no MORPH. The sine MORPH seeded the CL period + trusted sync at handoff,
+ * letting CL run PHANTOM (good_zc=0, even sectors 0/2/4 masked 100%, Ia ~14A). Regular
+ * startup enters CL from the forced ramp and must detect REAL floating-phase ZC. */
+#if MOTOR_PROFILE == 8
+#undef  FEATURE_SINE_STARTUP
+#define FEATURE_SINE_STARTUP     0
+#endif
 
 #if FEATURE_AM32_STARTUP && FEATURE_PLL_STARTUP
 #error "FEATURE_AM32_STARTUP and FEATURE_PLL_STARTUP both own CL entry - pick one"
@@ -797,6 +978,38 @@ extern "C" {
 #define FEATURE_PRESYNC_RAMP       0
 #define OC_CLPCI_ENABLE            1
 
+#elif MOTOR_PROFILE == 9
+/* === T-Motor U3 KV700 12N14P (7PP) @ ~16V bench PSU, PROPPED ===
+ * Cloned from profile 2 (2810): SAME board, SAME 7PP / ~50 mΩ Rs. KV is ~½ and the
+ * bus is ~16V, so this is a flux + duty rescale (see docs/u3_kv700_profile_port.md).
+ * With FEATURE_GSP=1 these #defines are INERT — the runtime reads
+ * profileDefaults[GSP_PROFILE_U3] in gsp/gsp_params.c. Kept here mirrored for the
+ * non-GSP build and the #error guard. The HARDWARE-active ones (deadtime, pole
+ * pairs, phase offset, presync, CLPCI) match the 2810 baseline. */
+#define MOTOR_POLE_PAIRS             7      /* SAME as 2810 */
+#define DEADTIME_NS                300      /* same board/gate timing as 2810 */
+#define ALIGN_DUTY_PERCENT           5      /* 3 ×(24/16.8) -> heavier propped rotor lock */
+#define RAMP_DUTY_PERCENT           11      /* 8 ×1.43 to hold ramp current at 16V */
+#define INITIAL_ERPM               120      /* gentler first step (heavy 97 g rotor) */
+#define RAMP_TARGET_ERPM          2500      /* lower KV -> ZC appears earlier than 2810's 3000 */
+#define MAX_CLOSED_LOOP_ERPM     98000      /* advance ANCHOR = U3 no-load ceiling @ bench ~20V (700*20*7) */
+#define RAMP_ACCEL_ERPM_PER_S     1800      /* heavy rotor + prop can't follow 2810's 3000/s */
+#define SINE_ALIGN_MODULATION_PCT    4      /* 3 ×1.43 */
+#define SINE_RAMP_MODULATION_PCT     7      /* 5 ×1.43 */
+#define ZC_DEMAG_DUTY_THRESH        40
+#define ZC_DEMAG_BLANK_EXTRA_PERCENT 24     /* bigger stator -> longer demag tail; prop-desync lever */
+#define HWZC_CROSSOVER_ERPM       1500
+#define CL_IDLE_DUTY_PERCENT         6      /* lower KV -> more low-speed BEMF; 4 ×1.43 */
+#define SINE_PHASE_OFFSET_DEG       60
+#define OC_LIMIT_MA              20000      /* board shunt saturates ~22A; U3 25A cont. lands here */
+#define OC_STARTUP_MA            22000
+#define OC_FAULT_MA              21000
+#define OC_SW_LIMIT_MA           18000
+#define RAMP_CURRENT_GATE_MA     10000
+#define FEATURE_PRESYNC_RAMP       0
+#define OC_CLPCI_ENABLE            0        /* cycle-by-cycle CMP3 chop OFF (matches 2810 committed baseline;
+                                            * SW ADC OC path handles overcurrent) */
+
 #else
 #error "Unknown MOTOR_PROFILE — see garuda_config.h"
 #endif
@@ -815,7 +1028,12 @@ extern "C" {
 #define VBUS_OVERVOLTAGE_ADC       3600        /* ~67V at ratio 23.0 (tunable) */
 #define VBUS_UNDERVOLTAGE_ADC      500         /* ~9.3V at ratio 23.0 (tunable) */
 #define VBUS_FAULT_FILTER          3           /* Consecutive ADC samples to confirm fault (3 = ~125us) */
-#define VBUS_UV_STARTUP_ADC        400         /* ~7.4V: relaxed UV during pre-sync startup.
+#define VBUS_FILT_SHIFT            4           /* IIR shift for the OV/UV bus filter (~16 samples / ~355us).
+                                                * vbusRaw is a single unfiltered per-ISR sample; at high duty
+                                                * it shows brief switching-coupled dips that false-trip UV even
+                                                * though the DC bus is steady. Filtering rejects those; a real
+                                                * brownout / regen rise (ms-scale) passes through. 0 disables. */
+#define VBUS_UV_STARTUP_ADC        200         /* ~7.4V: relaxed UV during pre-sync startup.
                                                 * Below ~4.5V, bootstrap caps can't charge and
                                                 * gate drive fails. 400 ADC (~5.6V) gives margin
                                                 * above brownout while staying well below the
@@ -1083,6 +1301,27 @@ extern "C" {
  * consecutive-read idea via filterCount; AM32 calls it `filter_level`.
  *
  * N=3 is conservative (~3µs ISR overhead). N=5 is more robust. */
+#if MOTOR_PROFILE == 9
+#define FEATURE_HWZC_PWM_GATE      0   /* U3 (2026-06-26): back to continuous comparator. Re-enabling the
+                                        * gate did NOT help (same ~33k ceiling, same OC->UV) and made the
+                                        * rej% telemetry go UP, not down — because the gate's own PWM-OFF
+                                        * rejection path increments noiseRejectCount (hwzc.c:487), so every
+                                        * PWM-OFF comparator fire is counted as a "reject". The metric was
+                                        * conflated, not the detection improved. Continuous = better no-load
+                                        * baseline (35k). See the measured-neutral notes above.
+                                        * --- prior RE-ENABLE rationale (kept for history) ---
+                                        * The continuous-comparator test
+                                        * (=0) reached ~35k no-load but the PROPPED ceiling is set by
+                                        * BEMF-vs-PWM-ripple SNR, not demag: bench proof — dropping Vbus
+                                        * 24->16V (ripple ∝ Vbus, BEMF=Ke·ω fixed) moved the desync 32k->34k
+                                        * with rej pinned 70-78% (= the continuous comparator eating ripple
+                                        * at every PWM phase). This is the ORIGINAL board (RC τ=30µs,
+                                        * K_Q15=102943706, ~8× ripple atten — NOT the 200pF board), so the
+                                        * hardware ripple can't be improved here; the gate is the only ripple
+                                        * lever. Phase-consistent sampling (accept only PWM-ON) now sits on
+                                        * top of the measured-neutral threshold it never had at the old 31k
+                                        * point. Revert to 0 for the continuous-comparator behaviour. */
+#else
 #define FEATURE_HWZC_PWM_GATE      1   /* Reject ZC captures during PWM OFF time.
                                         * At BEMF crossover (Vapp ≈ Vbemf at ~79%
                                         * duty / 188k eRPM on 2810@24V), the
@@ -1103,6 +1342,7 @@ extern "C" {
                                         * budget. Reads HS GPIO of currently
                                         * PWMing phase (PWM1H=RD2 / PWM2H=RD0 /
                                         * PWM3H=RC3) and rejects if LOW. */
+#endif
 /* 2026-06-17 PER-PROFILE: high-KV micros (6/7/8) run the coherence check OFF —
  * it rejects marginal-but-real crossings on their weak 10V BEMF. 2810 etc. keep it ON. */
 #if MOTOR_PROFILE == 6 || MOTOR_PROFILE == 7 || MOTOR_PROFILE == 8 || MOTOR_PROFILE == 2
@@ -1257,6 +1497,25 @@ extern "C" {
                                          * filter lag at high RPM. Keep enabled. */
 #endif
 #define HWZC_FILTER_K_Q15           102943706UL  /* For τ=30µs; recompute if filter changes */
+
+/* ZC threshold source — measured electrical neutral vs duty model.
+ * Profile 9 (U3 KV700, 2026-06-25): the duty model (vbusRaw*duty/divisor)
+ * rides increasingly ABOVE the BEMF center as duty climbs (measured on the
+ * "zc plotn1" capture), and that per-polarity bias drives the 32k↔34k
+ * alternation → ~35k desync. This replaces it (in CL only) with the MEASURED
+ * neutral = (phaseBHigh + phaseBLow)/2 — the real star-point voltage in the
+ * SAME bemfRaw ADC scale, duty-independent. The FILTER_COMP RC-lag term stays
+ * on top ("vdc/2 + filter corrections"). Computation already runs at
+ * garuda_service.c ~1021/1033; this flag makes it the threshold SOURCE.
+ * NOTE the historical disable reason (it read ~30% lower → noise-floor
+ * rejects on the OLD HW-comparator ON-time path); current regime is PWM-gate
+ * OFF + OFF-center SW detect, so re-evaluating on the bench. MOTOR_PROFILE is
+ * #defined at line ~216, so this direct compare is safe. */
+#if MOTOR_PROFILE == 9
+#define FEATURE_HWZC_MEASURED_NEUTRAL  1
+#else
+#define FEATURE_HWZC_MEASURED_NEUTRAL  0
+#endif
 /* Sector PI synchronizer (Phase A — break the 204k reactive ceiling).
  *
  * Architecture inspired by AK ATA6847L's sector_pi.c (the 225k milestone).
@@ -1307,7 +1566,34 @@ extern "C" {
  * timestamps are coarse — if that jitters the PI vs the precise rising captures,
  * gate falling-SW to engage only below HWZC_FALLING_SW_MAX_ERPM (0 = no gate).
  * Set 0 to revert to rising-only/coast (the proven 232k baseline). */
+/* FEATURE_HWZC_FALLING_HW — detect FALLING ZC with the hardware digital
+ * comparator (same as rising), GATED to the PWM-OFF (freewheel) window so the
+ * PWM-ON driven-phase coupling — which biases the floating phase UP and buries
+ * the downward crossing — cannot false-trigger. This removes the falling
+ * MPER/2-sample 50%-duty wall: the SW OFF-center sample is taken once per
+ * period at a FIXED point (MPER/2) and is swallowed by the ON pulse above 50%
+ * duty (U3 prop-desync, 2026-06-26 bench); the freewheel-gated comparator
+ * watches continuously and is duty-independent. Mutually exclusive with
+ * FALLING_SW. ConfigComparator already sets CMPMOD for falling each
+ * commutation; this only arms the IE for falling + adds the freewheel gate. */
+#if MOTOR_PROFILE == 9
+#define FEATURE_HWZC_FALLING_HW        1   /* U3: falling ZC via HW comparator, freewheel-gated */
+#else
+#define FEATURE_HWZC_FALLING_HW        0
+#endif
+
+/* FEATURE_HWZC_FREEWHEEL_GATE — when 1 (default) the FALLING_HW path only
+ * accepts a comparator capture in the correct PWM window for the sector's
+ * polarity (rising during PWM-ON, falling during PWM-OFF/freewheel). Set 0 to
+ * accept EVERY comparator capture regardless of PWM state — i.e. the plain
+ * "HW comparator ZC, no PWM gate" behaviour, for A/B comparison on the bench. */
+#define FEATURE_HWZC_FREEWHEEL_GATE     0   /* CHECK: gate OFF (ungated HW-comparator ZC) */
+
+#if FEATURE_HWZC_FALLING_HW
+#define FEATURE_HWZC_FALLING_SW        0   /* superseded by FALLING_HW (HW comparator both polarities) */
+#else
 #define FEATURE_HWZC_FALLING_SW        1   /* falling ZC via SW OFF-center sample */
+#endif
 #if GARUDA_TARGET_AK512
 /* AK512 bench 2026-06-12 (polarity-split cap diag, stepped GSP ramp): rising
  * comparator captures sit ~500 permille of T at every speed 30k-92k; falling
@@ -1410,7 +1696,11 @@ extern "C" {
  * captureValid), so enabling it cannot remove existing detection, only add a
  * PWM-OFF rising path. Gate: bench at idle, confirm lock holds + rising
  * OFF-center captures appear, before Phase 2 lowers the duty. */
+#if FEATURE_HWZC_FALLING_HW
+#define FEATURE_HWZC_LOWSPD_OFFCTR     0   /* U3: rising HW comparator covers all speeds; no SW OFF-center */
+#else
 #define FEATURE_HWZC_LOWSPD_OFFCTR     1   /* rising ZC via SW OFF-center at low speed */
+#endif
 #define HWZC_LOWSPD_OFFCTR_MAX_ERPM 40000  /* rising OFF-center engages below this eRPM */
 
 /* Hand-off period-collapse damp (OL->CL smooth plan, 2026-06-07). For the first
@@ -1633,7 +1923,15 @@ extern "C" {
  * Below LOW_DUTYFRAC use a TIGHT ceiling so that phantom is clamped down to ~no-
  * load. 100% = the physical idle ceiling; drop to ~95/92 if it still settles a
  * touch high (true idle ≈ 92% of the formula no-load on this 2810). */
+#if MOTOR_PROFILE == 9
+#define HWZC_ABS_FLOOR_OVERSPEED_PCT_LOW  130  /* U3 (2026-06-25): raised 100->130. The propped
+                                                * low-KV U3 idles at 6% duty where the tight 100%
+                                                * ceiling pinned it at exactly no-load (~6.7k, 12A
+                                                * half-blind). 130% lets the rotor climb off the
+                                                * idle floor. Tune down if a decel phantom appears. */
+#else
 #define HWZC_ABS_FLOOR_OVERSPEED_PCT_LOW  100  /* idle/low-duty ceiling (no advance) */
+#endif
 #define HWZC_ABS_FLOOR_LOW_DUTYFRAC      0.12f /* below this duty, use the LOW ceiling */
 
 /* ── Anti cap-slam: hold duty at the maxClosedLoopErpm clamp ──────────────
@@ -1850,7 +2148,14 @@ extern "C" {
 /* Board-specific amplifier parameters (MCLV-48V-300W).
  * Integer representation — no float in compile-time constants. */
 #define OC_SHUNT_MOHM            3       /* 0.003 ohm = 3 milliohms */
-#define OC_GAIN_X100          2495       /* 24.95 x 100 */
+#define OC_GAIN_X100           830       /* WS5 (2026-06-26): 8.30 x 100. CORRECTED from 2495 (24.95).
+                                          * The 24.95 was inherited from the dsPIC33CK MCLV DIM; this is
+                                          * the STOCK/UNMODIFIED dsPIC33AK512MC510 DIM, whose current-amp
+                                          * gain is 8.3 (peak ±66.265A = 1.65/(8.3*0.003)) — per the
+                                          * Microchip reference project for this exact DIM. All OC mA
+                                          * thresholds + the COUNTS_PER_AMP telemetry now read in REAL
+                                          * amps; OC trips ~3x earlier in real-current terms than before
+                                          * (it previously needed ~3x the labeled amps to bite). */
 #define OC_VREF_MV            1650       /* 1.65V bias in millivolts */
 #define OC_VADC_MV            3300       /* 3.3V ADC reference in millivolts */
 

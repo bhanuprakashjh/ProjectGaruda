@@ -260,9 +260,9 @@ void InitializeADCs(void)
      * will register. Purpose: empirically confirm whether peak phase
      * current crosses the U25B 22 A trip threshold at high eRPM.
      *
-     * Shunt = 3 mΩ, op-amp gain = 24.95 default, VREF = 1.65 V bias.
-     * Scale: ~93 ADC counts / amp, bias ~2048. 22 A → ~4094 / 2.
-     */
+     * Shunt = 3 mΩ, op-amp gain = 8.3 (WS5: stock AK512 DIM; was 24.95),
+     * VREF = 1.65 V bias. Scale: ~30 ADC counts/amp, bias ~2048; full
+     * ±2047 swing = ±66 A (op-amp rail). */
     /* Trigger on PG1TRIGA (24 kHz, mid-ON valley) instead of SCCP3 (1 MHz).
      * Reason: AD2CH1 (HWZC Phase A/C high-speed) runs 4-sample oversample
      * bursts at 1 MHz which fully occupy the AD2 core. A second 1 MHz

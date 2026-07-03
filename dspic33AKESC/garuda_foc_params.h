@@ -531,6 +531,37 @@
 #define OBS_LPF_ALPHA           0.35f
 #define SMO_LPF_ALPHA           0.15f
 
+#elif MOTOR_PROFILE == 9
+/* ----------------------------------------------------------------
+ * T-Motor U3 KV700 — 12N14P = 7PP, ~16V bench (3-4S). FOC UNUSED in
+ * the 6-step build; values here so the build closes. Cloned from
+ * profile 2 (2810) with KV/voltage rescaled (see garuda_config.h). */
+#define MOTOR_RS_OHM            0.025f         /* ~25 mΩ phase-to-neutral */
+#define MOTOR_LS_H              12.0e-6f        /* bigger stator estimate; bench-confirm for FOC */
+#define MOTOR_KE_VPEAK          0.001125f      /* λ = 60/(√3×2π×700×7) — ~2× the 2810 */
+#define MOTOR_POLE_PAIRS_FOC    7
+#define MOTOR_VBUS_NOM_V        16.0f
+#define MOTOR_MAX_CURRENT_A     25.0f          /* U3 rated 25A continuous */
+#define MOTOR_MAX_ELEC_RAD_S    8500.0f        /* ~82k eRPM at 7PP */
+#define MOTOR_FLUX_LINKAGE      0.001125f
+#define KP_DQ                   0.075f         /* 2π×1000×12µH */
+#define KI_DQ                   157.0f         /* 2π×1000×0.025Ω */
+#define KP_SPD                  0.00010f
+#define KI_SPD                  0.004f
+#define STARTUP_ALIGN_IQ_A      6.0f
+#define STARTUP_RAMP_IQ_A       8.0f
+#define STARTUP_IQ_RAMP_TICKS   4800U
+#define STARTUP_ALIGN_TICKS     4800U
+#define STARTUP_RAMP_RATE_RPS2  80.0f
+#define STARTUP_HANDOFF_RAD_S   400.0f
+#define STARTUP_MIN_OL_RAD_S    600.0f
+#define STARTUP_MAX_OL_RAD_S    MOTOR_MAX_ELEC_RAD_S
+#define STARTUP_USE_VF          0
+#define FAULT_OC_A              26.0f
+#define FAULT_STALL_RAD_S       50.0f
+#define OBS_LPF_ALPHA           0.35f
+#define SMO_LPF_ALPHA           0.15f
+
 #else
 #error "Unknown MOTOR_PROFILE for FOC params -- see garuda_config.h"
 #endif
@@ -769,14 +800,14 @@
  *   ADC: 3.3V reference, 12-bit (0-4095), mid-point ~2048
  * ---------------------------------------------------------------- */
 #define SHUNT_RESISTANCE_OHM    0.003f
-#define OPAMP_GAIN              24.95f
+#define OPAMP_GAIN              8.3f     /* WS5 (2026-06-26): stock AK512 DIM gain (was 24.95) */
 #define ADC_VREF_V              3.3f
 #define ADC_FULL_SCALE_F        4095.0f
 #define ADC_MIDPOINT            2048
 
 /** Amps per ADC count (signed, centred at zero-current offset).
- *  I_peak = Vref_half/(Gain*Shunt) = 1.65/(24.95*0.003) = 22.04 A
- *  Scale = Vref/(FS*Gain*Shunt) = 3.3/(4095*24.95*0.003) = 0.01077 A/count */
+ *  I_peak = Vref_half/(Gain*Shunt) = 1.65/(8.3*0.003) = 66.27 A  (WS5: stock DIM gain 8.3)
+ *  Scale = Vref/(FS*Gain*Shunt) = 3.3/(4095*8.3*0.003) = 0.03236 A/count */
 #define CURRENT_SCALE_A_PER_COUNT \
     (ADC_VREF_V / (ADC_FULL_SCALE_F * OPAMP_GAIN * SHUNT_RESISTANCE_OHM))
 

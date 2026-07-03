@@ -365,7 +365,7 @@ void HAL_OA12_Init(void)
 #if FEATURE_HW_OVERCURRENT
 /**
  * @brief Initialize OA3 internal op-amp for bus current sensing.
- * External gain resistors on MCLV-48V-300W provide gain = 24.95.
+ * External gain resistors on the stock AK512 DIM provide gain = 8.3 (WS5; was 24.95).
  * OA3OUT (RA5) feeds CMP3A for hardware overcurrent and AD1AN3 for readback.
  * Adapted from reference OpampConfig() lines 285-322.
  */
