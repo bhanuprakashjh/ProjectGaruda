@@ -632,9 +632,15 @@ static const GSP_PARAMS_T profileDefaults[10] = {
                                         * the direct lever on prop-induced load-desync (memory: prop load
                                         * stretches the demag interval and collapses the ZC window).
                                         * Watch for EARLY ZC misses; back toward 20 if it over-blanks. */
-        .zcDemagBlankPerA   = 0,       /* WS1 load-adaptive demag blank: START OFF (0). With
-                                        * FEATURE_ZC_CURRENT_BLANK on, raise on bench to add HW-ZC
-                                        * blanking ∝ bus current (the prop-load demag lever). */
+        .zcDemagBlankPerA   = 8,       /* WS1 load-adaptive demag blank: 8%/256cts (was 0). Bench
+                                        * 2026-07-03: PWM gate moved the load slam 4.6->6.5A but a
+                                        * 21A phantom-lock slip persists at ~5.5-6.5A bus (telemetry
+                                        * caught it in-flight: slip -> false slow lock -> 21A rail ->
+                                        * PSU collapse). Mechanism: late demag edge inside the PWM-ON
+                                        * window (gate can't reject). At the slam point phase ~11-12A
+                                        * = ~350 raw over the 30-ct deadband -> 8 adds ~11% blank,
+                                        * riding the 25% blankMaxPct cap. Still slams? blankMax 33 +
+                                        * perA 12 (live: esc_ak.py set pera/blankmax). */
         .zcDemagBlankIbusDb = 30,      /* ibus deadband (raw counts) before the current term engages */
         .zcDemagBlankMaxPct = 25,      /* WS1 blank cap = period/4 (legacy). Raise to 33 (period/3) live on
                                         * bench for more high-current headroom when zcDemagBlankPerA
