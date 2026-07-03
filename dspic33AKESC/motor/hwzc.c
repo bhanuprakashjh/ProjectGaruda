@@ -240,7 +240,14 @@ static inline uint32_t HWZC_BlankTicks(volatile GARUDA_DATA_T *pData, uint32_t p
 {
     uint32_t blankTicks = period * HWZC_BLANKING_PERCENT / 100;
 #if FEATURE_ZC_CURRENT_BLANK
-    if (RT_ZC_DEMAG_BLANK_PER_A > 0)
+    /* Duty gate (bench 2026-07-03): at low duty the phase-current raw samples
+     * read >120 counts off bias with no real load (valley-sampling artifact),
+     * so a current deadband alone cannot keep this term quiet - perA=8 made
+     * 6%-duty CL thrash 3k<->7k eRPM until gated. The slam this term targets
+     * lives at >=52% duty; reuse zcDemagDutyThresh (%) as the engage floor. */
+    uint32_t dutyPct100 = (uint32_t)pData->duty * 100u;
+    if (RT_ZC_DEMAG_BLANK_PER_A > 0 &&
+        dutyPct100 >= (uint32_t)RT_ZC_DEMAG_DUTY_THRESH * (uint32_t)LOOPTIME_TCY)
     {
         /* iaRaw/ibRaw are in the 2048 bias frame (OC autozero). Use the larger
          * of the two phase magnitudes as the demag driver. */
