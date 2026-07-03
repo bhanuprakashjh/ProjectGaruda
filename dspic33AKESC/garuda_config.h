@@ -2182,14 +2182,19 @@ extern "C" {
 /* Board-specific amplifier parameters (MCLV-48V-300W).
  * Integer representation — no float in compile-time constants. */
 #define OC_SHUNT_MOHM            3       /* 0.003 ohm = 3 milliohms */
-#define OC_GAIN_X100           830       /* WS5 (2026-06-26): 8.30 x 100. CORRECTED from 2495 (24.95).
-                                          * The 24.95 was inherited from the dsPIC33CK MCLV DIM; this is
-                                          * the STOCK/UNMODIFIED dsPIC33AK512MC510 DIM, whose current-amp
-                                          * gain is 8.3 (peak ±66.265A = 1.65/(8.3*0.003)) — per the
-                                          * Microchip reference project for this exact DIM. All OC mA
-                                          * thresholds + the COUNTS_PER_AMP telemetry now read in REAL
-                                          * amps; OC trips ~3x earlier in real-current terms than before
-                                          * (it previously needed ~3x the labeled amps to bite). */
+#define OC_GAIN_X100          2495       /* 24.95 x 100. REVERTED from 830 (2026-07-03, bench-proven):
+                                          * the June-26 "8.3 correction" (from the Microchip reference
+                                          * project's datasheet value) does NOT match this board. Proof:
+                                          * (1) a PSU CC-limited at 10A ran for 30+s a load the 8.3
+                                          * scale read as 10.5A bus - impossible; at 24.95 (93 cts/A)
+                                          * the same raw reads 3.5A = PSU actual = GSP telemetry.
+                                          * (2) phantom-lock rail latches at 21.4A on the 93 scale =
+                                          * ADC clip, physically consistent (66A FS would mean dead
+                                          * FETs). CONSEQUENCE OF THE 830 ERA: every OC mA label meant
+                                          * ~1/3 of face value - OC_SW_LIMIT_MA 18000 chopped duty at
+                                          * ~6A REAL, which the burst scope caught mid-slam corrupting
+                                          * BEMF/ZC -> 60-degree slip -> 21A phantom = THE U3 "load
+                                          * desync". With 2495 the limiter engages at its labeled 18A. */
 #define OC_VREF_MV            1650       /* 1.65V bias in millivolts */
 #define OC_VADC_MV            3300       /* 3.3V ADC reference in millivolts */
 

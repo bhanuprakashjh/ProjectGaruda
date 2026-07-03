@@ -46,14 +46,11 @@ CMD = dict(PING=0x00, INFO=0x01, SNAP=0x02, START=0x03, STOP=0x04,
 # threshold trigger, bus current (CH_ID=2) rising through SCOPE_TRIG_A,
 # 75% pre-trigger -> ~2 revs of history before a current slam.
 #
-# SCALE (bench-resolved 2026-07-03): fw scope mA uses COUNTS_PER_AMP ~30.9
-# (the 8.3 "WS5-corrected" gain) but the TRUE board scale is 93 counts/A -
-# a PSU CC-limited at 10A ran a load the 30.9 scale called "10.5A" without
-# limiting. Convert scope mA -> real A by /3009 (30.9/93*1000... = mA per
-# real amp). The int16 channel clips at 32.767 scope-A = ~10.9A real, so
-# the trigger cannot sit above ~10.5A real.
-SCOPE_MA_PER_A = 3009.0  # scope-mA per real amp
-SCOPE_TRIG_A   = 9.0     # REAL amps, bus; loaded ripple peaks ~5A real
+# SCALE: matches firmware with OC_GAIN_X100=2495 (24.95 gain reverted
+# 2026-07-03) -> COUNTS_PER_AMP=93 -> scope mA IS real mA. If running the
+# old 830-gain build, set SCOPE_MA_PER_A back to 3009.
+SCOPE_MA_PER_A = 1000.0  # scope-mA per real amp (gain-2495 build)
+SCOPE_TRIG_A   = 15.0    # REAL amps, bus; channel spans the full 22A rail now
 SCOPE_PRE_PCT  = 75
 SCOPE_CHUNK    = 9
 SCOPE_STATES   = ["IDLE", "ARMED", "FILLING", "READY"]
