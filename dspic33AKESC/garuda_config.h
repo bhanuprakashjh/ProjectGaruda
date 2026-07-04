@@ -1496,7 +1496,17 @@ extern "C" {
 #define HWZC_PI_DEFENSIVE_EXIT         2    /* good streak (consecutive captures) to exit */
 #define HWZC_PI_DEFENSIVE_GROW_PCT     1    /* walk T by this % per event when defensive */
 
+#if MOTOR_PROFILE == 2
+#define HWZC_PI_KP_SHIFT               3   /* TEST 2026-07-04 (bench-review before keeping!): Kp = 1/8.
+                                            * 2810 top band shows a +/-5% PI limit cycle (116<->125k
+                                            * alternation, 68%) that grows with duty until a slip at
+                                            * ~124-136k. Excitation = settle-tail capture jitter (physics);
+                                            * halving Kp lets the integrator flywheel average over it.
+                                            * Risk: slower accel tracking. Revert to 2 if OL->CL handoff
+                                            * or pot transients degrade. */
+#else
 #define HWZC_PI_KP_SHIFT               2   /* Kp = 1/4  — proportional gain  */
+#endif
 #define HWZC_PI_KI_SHIFT               4   /* Ki = 1/16 — integral gain      */
 #define HWZC_PI_DELTA_CLAMP_SHIFT      3   /* ±T/8 per-sample clamp (default).
                                             * At low/mid RPM this gives responsive
