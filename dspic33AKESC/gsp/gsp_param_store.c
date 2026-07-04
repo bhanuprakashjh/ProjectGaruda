@@ -1,4 +1,5 @@
 #include "gsp_param_store.h"
+#include "../garuda_config.h"
 #include "../hal/hal_nvm.h"
 #include "../hal/eeprom.h"      /* EEPROM_ComputeCRC16 */
 #include <string.h>
@@ -45,18 +46,25 @@ static bool UserImageValid(const GSP_PARAM_IMAGE_T *img)
 
 PARAM_SOURCE_T GSP_ParamStore_Load(GSP_PARAMS_T *table, uint8_t *activeProfileOut)
 {
-    /* Boot-time-only reads: this runs before any runtime write to
-     * s_userArea, so plain (non-volatile) reads are safe here — no
-     * optimizer can have stale-cached a flash region nothing has
-     * written to yet in this execution. */
-    const GSP_PARAM_IMAGE_T *img = (const GSP_PARAM_IMAGE_T *)s_userArea;
+    /* s_userArea is const WITH A VISIBLE 0xFF INITIALIZER in this TU — the
+     * optimizer may constant-fold plain reads of it. All runtime reads of
+     * the user area must go through a volatile view (Save's readback
+     * already does). Copy the image out byte-by-byte, then validate the
+     * RAM copy. */
+    static GSP_PARAM_IMAGE_T s_loadImg;   /* static: too large for the stack */
+    {
+        const volatile uint8_t *src = (const volatile uint8_t *)s_userArea;
+        uint8_t *dst = (uint8_t *)&s_loadImg;
+        for (uint16_t i = 0; i < (uint16_t)sizeof(s_loadImg); i++)
+            dst[i] = src[i];
+    }
 
-    if (UserImageValid(img)) {
-        memcpy(table, img->table, sizeof(img->table));
+    if (UserImageValid(&s_loadImg)) {
+        memcpy(table, s_loadImg.table, sizeof(s_loadImg.table));
         /* CUSTOM has no table slot: load the table but keep the caller's
          * compile-time default as the active selection. */
-        if (img->activeProfile < GSP_PROFILE_COUNT)
-            *activeProfileOut = img->activeProfile;
+        if (s_loadImg.activeProfile < GSP_PROFILE_COUNT)
+            *activeProfileOut = s_loadImg.activeProfile;
         s_source = PARAM_SOURCE_USER;
     } else {
         memcpy(table, profileDefaults,
