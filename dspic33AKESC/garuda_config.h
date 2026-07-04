@@ -1218,19 +1218,20 @@ extern "C" {
  * 0 = falling heard at all speeds. Per-profile: only the 2810 for now
  * (one-flip discipline; U3 tops ~83k on its own campaign baseline).
  *
- * 70000 -> 20000 (2026-07-04 evening, classic-startup bench): the GUI
- * per-sector export showed S3 (C-falling) walking -3 -> +30 deg to the
- * detection rail (sd 15) while every rising sector held +/-3 deg, and two
- * runs snapped 62k->98k / 68k->96k at CONSTANT duty (1.5x harmonic lock)
- * before the desync kill — falling captures below the old 70k mute were
- * feeding the PI progressively-later poison, the same RC-lag walk the
- * 2026-06-12 sweep measured from 30k up (547->955 permille). 20000 is the
- * ON-window falling detector's own measured reliability ceiling (see the
- * FALLING_SW block: "silent on FALLING above ~20k"). Below 20k falling
- * still arms — startup/handoff keeps all 6 captures where they are clean
- * and needed. */
+ * 20000 A/B FALSIFIED, reverted to 70000 same night (2026-07-04): with the
+ * mute at 20k the 1.5x harmonic snap moved DOWN — real tracking that held
+ * to 62-68k at mute=70k snapped at 46-49k rising-only (43k->72k @24%,
+ * 49k->79k @26%, both constant duty). Verdict: falling captures in the
+ * 20k-70k band are net STABILIZERS against the harmonic alias (6 spokes
+ * beat 3) even though S3 (C-falling) walks -3->+30 deg to the rail with
+ * speed (GUI per-sector export, sd 15) — the PI's cross-sector reject +
+ * asymmetric clamp contain the late captures well enough that having them
+ * beats muting them. The harmonic-lock disease itself (gear-slip to 1.5x
+ * under capture starvation, also 2x at 5%-duty idle) is a PLL dynamics
+ * problem — per the campaign law, fix goes through the Wolfram/Modelica
+ * simulation first, not another bench config flip. */
 #if MOTOR_PROFILE == 2
-#define HWZC_FALLING_MUTE_ERPM     20000
+#define HWZC_FALLING_MUTE_ERPM     70000
 #else
 #define HWZC_FALLING_MUTE_ERPM         0
 #endif
