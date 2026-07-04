@@ -3965,33 +3965,53 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                  * idle floor naturally; inactive once equiv duty - margin
                  * drops below the throttle command. Placed BEFORE sag/OC
                  * limiters so protections still cut below it. */
-                if (garudaData.hwzc.enabled && garudaData.timing.zcSynced
-                    && garudaData.hwzc.stepPeriodHR > 0)
                 {
-                    /* eRPM = 1e9 / stepPeriodHR (60° step, 10ns HR ticks) */
-                    uint32_t erpm = 1000000000UL / garudaData.hwzc.stepPeriodHR;
-                    uint32_t vraw = garudaData.vbusRaw;
-                    if (vraw < 100u) vraw = 100u;   /* div guard (UV faults first) */
-                    /* Timing-advance droop: the flat KV_NUM overestimates equiv
-                     * duty at speed (field weakening) — enough to LATCH full
-                     * duty at pot 0 (bench 2026-07-03, 81k@98%). See config. */
-                    uint32_t kvNum = (uint32_t)SPINDOWN_FLOOR_KV_NUM;
-                    uint32_t kvDroop = erpm / (uint32_t)SPINDOWN_FLOOR_KV_DROOP_ERPM;
-                    kvNum = (kvDroop + (uint32_t)SPINDOWN_FLOOR_KV_MIN >= kvNum)
-                            ? (uint32_t)SPINDOWN_FLOOR_KV_MIN : (kvNum - kvDroop);
-                    uint32_t equivPctX100 = erpm * kvNum / vraw;
-                    uint32_t marginPctX100 = (uint32_t)SPINDOWN_FLOOR_MARGIN_PCT_X10 * 10u;
-                    if (equivPctX100 > marginPctX100)
+                    /* Perf (2026-07-04 audit): the model math costs 3-4 u32
+                     * divisions; floor dynamics are mechanical (ms-scale), so
+                     * recompute every 8th tick (~178us) and apply the CACHED
+                     * floor every tick. Clamp behavior identical. */
+                    static uint32_t floorDutyCache = 0;
+                    static uint8_t  floorPhase = 0;
+                    if (prevAdcState != ESC_CLOSED_LOOP)
                     {
-                        uint32_t floorPctX100 = equivPctX100 - marginPctX100;
-                        /* hard cap: the floor must never reach the sustaining-
-                         * duty region — the pot must ALWAYS retain authority */
-                        if (floorPctX100 > (uint32_t)SPINDOWN_FLOOR_MAX_PCT_X100)
-                            floorPctX100 = (uint32_t)SPINDOWN_FLOOR_MAX_PCT_X100;
-                        uint32_t floorDuty = (uint32_t)LOOPTIME_TCY * floorPctX100 / 10000u;
-                        if (mappedDuty < floorDuty)
-                            mappedDuty = floorDuty;
+                        floorDutyCache = 0;
+                        floorPhase = 0;
                     }
+                    if (garudaData.hwzc.enabled && garudaData.timing.zcSynced
+                        && garudaData.hwzc.stepPeriodHR > 0)
+                    {
+                        if ((++floorPhase & 7u) == 0u)
+                        {
+                            /* eRPM = 1e9 / stepPeriodHR (60deg step, 10ns HR ticks) */
+                            uint32_t erpm = 1000000000UL / garudaData.hwzc.stepPeriodHR;
+                            uint32_t vraw = garudaData.vbusRaw;
+                            if (vraw < 100u) vraw = 100u;   /* div guard (UV faults first) */
+                            /* Timing-advance droop: the flat KV_NUM overestimates equiv
+                             * duty at speed (field weakening) - enough to LATCH full
+                             * duty at pot 0 (bench 2026-07-03, 81k@98%). See config. */
+                            uint32_t kvNum = (uint32_t)SPINDOWN_FLOOR_KV_NUM;
+                            uint32_t kvDroop = erpm / (uint32_t)SPINDOWN_FLOOR_KV_DROOP_ERPM;
+                            kvNum = (kvDroop + (uint32_t)SPINDOWN_FLOOR_KV_MIN >= kvNum)
+                                    ? (uint32_t)SPINDOWN_FLOOR_KV_MIN : (kvNum - kvDroop);
+                            uint32_t equivPctX100 = erpm * kvNum / vraw;
+                            uint32_t marginPctX100 = (uint32_t)SPINDOWN_FLOOR_MARGIN_PCT_X10 * 10u;
+                            if (equivPctX100 > marginPctX100)
+                            {
+                                uint32_t floorPctX100 = equivPctX100 - marginPctX100;
+                                /* hard cap: the floor must never reach the sustaining-
+                                 * duty region - the pot must ALWAYS retain authority */
+                                if (floorPctX100 > (uint32_t)SPINDOWN_FLOOR_MAX_PCT_X100)
+                                    floorPctX100 = (uint32_t)SPINDOWN_FLOOR_MAX_PCT_X100;
+                                floorDutyCache = (uint32_t)LOOPTIME_TCY * floorPctX100 / 10000u;
+                            }
+                            else
+                                floorDutyCache = 0;
+                        }
+                        if (mappedDuty < floorDutyCache)
+                            mappedDuty = floorDutyCache;
+                    }
+                    else
+                        floorDutyCache = 0;
                 }
 #endif
                 if (garudaData.timing.stepPeriod <= RT_MIN_CL_ADC_STEP_PERIOD

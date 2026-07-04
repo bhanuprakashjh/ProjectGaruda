@@ -292,7 +292,9 @@ extern "C" {
                                      * with thresholds derived from the ACTUAL bus voltage (they are
                                      * hardcoded ADC counts below, not profile params). Phase C2:
                                      * Bus voltage sag power limiting (reduce duty on Vbus dip) */
-#define FEATURE_BEMF_INTEGRATION 1  /* Phase E: Shadow integration estimator (shadow-only, no control) */
+#define FEATURE_BEMF_INTEGRATION 0  /* Phase E shadow estimator OFF (2026-07-04 audit): write-only
+                                     * diagnostics at 45kHz, nothing reads them. Re-enable only when
+                                     * actively A/B-ing the integration observer. */
 #define FEATURE_SINE_STARTUP     1  /* RESTORED 2026-06-10: back to the proven sine startup (I-f parked).
                                      * NOTE: profile 9 (U3) overrides this to 0 via #undef AFTER
                                      * MOTOR_PROFILE is #defined (the override can't live here — it would
