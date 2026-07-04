@@ -64,7 +64,7 @@ static uint8_t activeProfile;
     .bemfTrigDutyThreshPct = 50, \
     .bemfTrigShiftQ        = 0
 
-static const GSP_PARAMS_T profileDefaults[10] = {
+const GSP_PARAMS_T profileDefaults[10] = {
     [GSP_PROFILE_HURST] = {
         .rampTargetErpm     = 2000,
         .rampAccelErpmPerS  = 1000,

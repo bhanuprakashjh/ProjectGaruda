@@ -32,6 +32,7 @@
         <itemPath>../gsp/gsp.h</itemPath>
         <itemPath>../gsp/gsp_commands.h</itemPath>
         <itemPath>../gsp/gsp_params.h</itemPath>
+        <itemPath>../gsp/gsp_param_store.h</itemPath>
         <itemPath>../gsp/gsp_snapshot.h</itemPath>
       </logicalFolder>
       <logicalFolder name="hal" displayName="hal" projectFiles="true">
@@ -118,6 +119,7 @@
         <itemPath>../gsp/gsp.c</itemPath>
         <itemPath>../gsp/gsp_commands.c</itemPath>
         <itemPath>../gsp/gsp_params.c</itemPath>
+        <itemPath>../gsp/gsp_param_store.c</itemPath>
         <itemPath>../gsp/gsp_snapshot.c</itemPath>
       </logicalFolder>
       <logicalFolder name="hal" displayName="hal" projectFiles="true">

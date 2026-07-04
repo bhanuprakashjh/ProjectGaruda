@@ -302,6 +302,7 @@ typedef enum {
 /* Global instances (defined in gsp_params.c) */
 extern GSP_PARAMS_T  gspParams;
 extern GSP_DERIVED_T gspDerived;
+extern const GSP_PARAMS_T profileDefaults[10];  /* factory image (const, in .hex) */
 
 /**
  * Initialize all params to compile-time defaults from motor profile.
