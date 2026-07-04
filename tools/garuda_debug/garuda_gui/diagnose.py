@@ -26,8 +26,12 @@ def summarize(session) -> dict:
     # commutation-health: reject rate over the run
     zc0, zc1 = s[0], s[-1]
     span = max(zc1.get("t", 0) - zc0.get("t", 0), 1e-3)
-    acc = max(0, zc1.get("hwzc_zc", 0) - zc0.get("hwzc_zc", 0))
-    rej = max(0, zc1.get("hwzc_reject", 0) - zc0.get("hwzc_reject", 0))
+    # pairwise positive deltas: endpoint subtraction reads 0 whenever the
+    # firmware re-inits a counter mid-run (stop/restart) -> false rej=0%
+    acc = sum(max(0, (b.get("hwzc_zc", 0) or 0) - (a.get("hwzc_zc", 0) or 0))
+              for a, b in zip(s, s[1:]))
+    rej = sum(max(0, (b.get("hwzc_reject", 0) or 0) - (a.get("hwzc_reject", 0) or 0))
+              for a, b in zip(s, s[1:]))
     rej_pct = min(100.0, 100.0 * rej / max(acc + rej, 1))   # can't exceed 100%
 
     per_state = {}
@@ -159,10 +163,17 @@ def local_diagnose(session) -> dict:
     # in-CL behaviour: regen, oscillation, intermittent lock (from raw samples)
     import statistics
     cl = [x for x in session.samples if x.get("state_name") == "CL"]
+    # steady CL = skip the first 1.5s after CL entry: the handoff transient is
+    # all same-direction eRPM slope and pollutes sigma/mu + alternation stats
+    cl_steady = cl
+    if cl:
+        t_entry = cl[0].get("t", 0)
+        cl_steady = [x for x in cl if x.get("t", 0) - t_entry > 1.5]
     if len(cl) >= 10:
         # windowed bus current — NOT the valley-sampled ibus_A (phantom -20A artifact)
         ibus_mean = sum(x.get("ibus_win_A", x.get("ibus_A", 0)) for x in cl) / len(cl)
-        erpms = [x.get("eRPM", 0) for x in cl]
+        src = cl_steady if len(cl_steady) >= 20 else cl
+        erpms = [x.get("eRPM", 0) for x in src]
         emean = sum(erpms) / len(erpms)
         estd = statistics.pstdev(erpms) if len(erpms) > 1 else 0
         if ibus_mean < -10:
@@ -179,15 +190,17 @@ def local_diagnose(session) -> dict:
             flips = sum(1 for a, b in zip(diffs, diffs[1:]) if (a < 0) != (b < 0))
             alt_frac = flips / max(1, len(diffs) - 1)
             capp = d.get("cap_pct", 100.0)
-            if alt_frac > 0.7 and capp > 80:
+            if alt_frac > 0.6 and capp > 90:
                 add("eRPM reading alternates between two values — period quantization "
                     "dither in the 10Hz telemetry, NOT a lock problem",
                     "low", f"eRPM σ/μ = {100*estd/emean:.0f}% but {100*alt_frac:.0f}% "
                     f"sign-flips (pure alternation) and cap={capp:.0f}% (locked)",
                     [])
             else:
-                add("eRPM oscillation — lock hunting (slow same-direction excursions)",
-                    "medium", f"eRPM σ/μ = {100*estd/emean:.0f}% (μ={emean:,.0f}), "
+                add("eRPM oscillation — lock hunting (slow same-direction excursions)"
+                    + (" — captures healthy, likely benign estimator jitter"
+                       if capp >= 95 else ""),
+                    "low" if capp >= 95 else "medium", f"eRPM σ/μ = {100*estd/emean:.0f}% (μ={emean:,.0f}), "
                     f"alternation {100*alt_frac:.0f}%, cap={capp:.0f}%",
                     [{"param": "zcBlankingPercent", "current": str(p.get("zcBlankingPercent")),
                       "suggested": "review (too-long blank eats late captures at this speed)",
