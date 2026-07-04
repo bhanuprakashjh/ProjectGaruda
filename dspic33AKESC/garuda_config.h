@@ -370,7 +370,10 @@ extern "C" {
  * DIRECTLY, no MORPH. The sine MORPH seeded the CL period + trusted sync at handoff,
  * letting CL run PHANTOM (good_zc=0, even sectors 0/2/4 masked 100%, Ia ~14A). Regular
  * startup enters CL from the forced ramp and must detect REAL floating-phase ZC. */
-#if MOTOR_PROFILE == 8
+#if MOTOR_PROFILE == 8 || MOTOR_PROFILE == 9
+/* Profile 9 (2026-07-04): classic 6-step startup selected on the bench -
+ * align -> forced OL ramp -> direct CL handoff, no sine/morph. Flip back
+ * to sine by removing profile 9 from this override. */
 #undef  FEATURE_SINE_STARTUP
 #define FEATURE_SINE_STARTUP     0
 #endif
