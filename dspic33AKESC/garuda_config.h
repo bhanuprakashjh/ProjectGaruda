@@ -441,10 +441,14 @@ extern "C" {
 #define FEATURE_COMMISSION       0  /* requires FEATURE_LEARN_MODULES */
 #define FEATURE_EEPROM_V2        1  /* NVM persistent storage DRIVER for GSP params */
 
-#define FEATURE_NVM_SELFTEST  1  /* boot-time destructive user-area flash test;
-                                  * result in GET_INFO. Flip to 0 once the
-                                  * param store is bench-proven (it erases any
-                                  * saved user params every boot while on).
+#define FEATURE_NVM_SELFTEST  0  /* boot-time destructive user-area flash test;
+                                  * result in GET_INFO. OFF (2026-07-04 bench):
+                                  * first boot with it ON hung before the
+                                  * heartbeat — suspected ECC trap reading
+                                  * just-erased flash in the blank check, or a
+                                  * WR-wait hang. Re-enable only after the
+                                  * self-test is restructured to never read
+                                  * unprogrammed flash.
                                   * While ON, this wipes any saved user params
                                   * at every boot (writes a test pattern then
                                   * does a final erase over PARAM_STORE_ADDR),
