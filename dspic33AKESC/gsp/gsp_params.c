@@ -739,7 +739,9 @@ static const PARAM_DESCRIPTOR_T paramDescriptors[] = {
     { PARAM_ID_ZC_DEMAG_BLANK_EXTRA,  PARAM_TYPE_U8,  PARAM_GROUP_CLOSED_LOOP,   0,      30, offsetof(GSP_PARAMS_T, zcDemagBlankExtraPct), 1 },
     { PARAM_ID_ZC_DEMAG_BLANK_PER_A,  PARAM_TYPE_U8,  PARAM_GROUP_CLOSED_LOOP,   0,      60, offsetof(GSP_PARAMS_T, zcDemagBlankPerA),   1 },  /* WS1: extra HW-ZC blank % of sector per 256 cts ibus over deadband (0 = off) */
     { PARAM_ID_ZC_DEMAG_BLANK_IBUS_DB,PARAM_TYPE_U8,  PARAM_GROUP_CLOSED_LOOP,   0,     200, offsetof(GSP_PARAMS_T, zcDemagBlankIbusDb), 1 },  /* WS1: ibus deadband (raw counts) before current-blank engages */
-    { PARAM_ID_ZC_DEMAG_BLANK_MAX_PCT,PARAM_TYPE_U8,  PARAM_GROUP_CLOSED_LOOP,  25,      50, offsetof(GSP_PARAMS_T, zcDemagBlankMaxPct), 1 },  /* WS1: total HW-ZC blank cap, % of period (25=legacy period/4, 33=period/3) */
+    { PARAM_ID_ZC_DEMAG_BLANK_MAX_PCT,PARAM_TYPE_U8,  PARAM_GROUP_CLOSED_LOOP,  25,      50, offsetof(GSP_PARAMS_T, zcDemagBlankMaxPct), 1 },
+    { PARAM_ID_DBG_MIN_STEP_PERIOD,   PARAM_TYPE_U16, PARAM_GROUP_CLOSED_LOOP,   0,   65535, offsetof(GSP_PARAMS_T, dbgMinStepPeriod), 2 },   /* debug: derived ramp-exit period */
+    { PARAM_ID_DBG_MISTIME_EVENTS,    PARAM_TYPE_U16, PARAM_GROUP_CLOSED_LOOP,   0,   65535, offsetof(GSP_PARAMS_T, dbgMistimeEvents), 2 },   /* debug: mistime watchdog activity */  /* WS1: total HW-ZC blank cap, % of period (25=legacy period/4, 33=period/3) */
     /* Current Protection (group 2) */
     { PARAM_ID_OC_SW_LIMIT_MA,        PARAM_TYPE_U16, PARAM_GROUP_OVERCURRENT,  500, OC_MAX_SAFE_MA, offsetof(GSP_PARAMS_T, ocSwLimitMa),      2 },
     { PARAM_ID_OC_FAULT_MA,           PARAM_TYPE_U16, PARAM_GROUP_OVERCURRENT, 1000, OC_MAX_SAFE_MA, offsetof(GSP_PARAMS_T, ocFaultMa),        2 },
@@ -927,6 +929,7 @@ void GSP_RecomputeDerived(void)
     if (p->rampTargetErpm > 0) {
         d->minStepPeriod = (uint16_t)(100000UL / p->rampTargetErpm);
         if (d->minStepPeriod < 1) d->minStepPeriod = 1;
+        gspParams.dbgMinStepPeriod = d->minStepPeriod;  /* bench observability */
     } else {
         d->minStepPeriod = 1;
     }

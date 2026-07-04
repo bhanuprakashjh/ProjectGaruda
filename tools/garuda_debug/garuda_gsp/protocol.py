@@ -93,6 +93,8 @@ PARAM_NAMES = {
     0x9B: "bemfTrigBasePct", 0x9C: "bemfTrigDutyThreshPct", 0x9D: "bemfTrigShiftQ",
     # WS1 (extended): demag blank cap
     0x9E: "zcDemagBlankMaxPct",
+    0xA0: "dbgMinStepPeriod",
+    0xA1: "dbgMistimeEvents",
     # morph lock quality + I-f startup (present when those features compile in)
     0x6C: "morphLockZcCount", 0x6D: "morphLockTolPct",
     0x6E: "ifCurrentCa", 0x6F: "ifRampErpmPerS",

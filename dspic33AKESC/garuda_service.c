@@ -3781,7 +3781,8 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                                 strike = 1;
                         }
                         mtPrevErpm = erpm;
-                        if (strike) mtStrikes++; else mtStrikes = 0;
+                        if (strike) { mtStrikes++; gspParams.dbgMistimeEvents++; }
+                        else mtStrikes = 0;
                         if (mtStrikes >= HWZC_MISTIME_STRIKES)
                         {
                             garudaData.zcDiag.zcDesyncCount++;
@@ -3794,6 +3795,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                             garudaData.recoveryCounter = RT_DESYNC_COAST_COUNTS;
                             LED2 = 0;
                             mtStrikes = 0;
+                            gspParams.dbgMistimeEvents += 100; /* trip marker */
                         }
                     }
                 }

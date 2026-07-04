@@ -65,6 +65,8 @@ extern "C" {
 #define PARAM_ID_BEMF_TRIG_SHIFT_Q      0x9D   /* duty-proportional shift gain (0 = fixed) */
 /* WS1 (extended): cap on total HW-ZC blanking, % of commutation period (FEATURE_ZC_CURRENT_BLANK) */
 #define PARAM_ID_ZC_DEMAG_BLANK_MAX_PCT 0x9E   /* total blank cap as % of period (25 = legacy period/4) */
+#define PARAM_ID_DBG_MIN_STEP_PERIOD    0xA0   /* RO mirror of gspDerived.minStepPeriod */
+#define PARAM_ID_DBG_MISTIME_EVENTS     0xA1   /* mistime watchdog: +1 strike, +100 trip */
 
 /* Tuning params (12 new) */
 #define PARAM_ID_DUTY_SLEW_UP           0x60
@@ -225,6 +227,12 @@ typedef struct {
      * 25 reproduces the legacy period/4 cap; raise (33 = period/3) for more high-current
      * demag-blank headroom when zcDemagBlankPerA saturates above the ~5.7A knee. */
     uint8_t  zcDemagBlankMaxPct;
+    /* Debug observability (RAM-only, appended): dbgMinStepPeriod mirrors
+     * gspDerived.minStepPeriod after every recompute (proves live param
+     * plumbing on the bench); dbgMistimeEvents = mistimed-lock watchdog
+     * strikes (+1 each) and trips (+100 each). */
+    uint16_t dbgMinStepPeriod;
+    uint16_t dbgMistimeEvents;
 } GSP_PARAMS_T;
 
 /* ── Derived values (precomputed from params, ISR reads these) ───────── */
