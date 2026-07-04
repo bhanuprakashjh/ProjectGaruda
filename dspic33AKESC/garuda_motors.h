@@ -18,7 +18,7 @@
  * always false → AM32 forced ON for ALL profiles, silently defeating the
  * 6/7/8 sine carve-out.) Per-profile motor params are in the section further down.
  * 0=Hurst 1=A2212@12V 2=2810@24V 3=5055 4=Cobra 5=XRotor 6=VEX 7=1407@2S 8=1407@3S 9=U3 KV700@~16V */
-#define MOTOR_PROFILE  1   /* A2212 1400KV @12V - multi-motor validation campaign 2026-07-04 */
+#define MOTOR_PROFILE  2   /* 2810 1350KV @24V - multi-motor validation campaign 2026-07-04 */
 
 /* ── Per-profile motor data ── */
 /* MOTOR_PROFILE is now #defined ABOVE (before the AM32-startup #if). 2810 @24V bench. Profile 2 carries the correct 2810
