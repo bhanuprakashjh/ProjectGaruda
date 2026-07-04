@@ -2565,6 +2565,11 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                 garudaData.hwzc.writeSeq++;
                 garudaData.hwzc.stepPeriodHR = hr;
                 garudaData.hwzc.writeSeq++;
+                /* Host uses the HR period only when hwzcEnabled is set
+                 * (decode.py: `if hwzc_en and hwzc_hr > 0`). HWZC never
+                 * runs in the FOC build (no comparator IE, no 6-step
+                 * machine), so the flag is pure telemetry here. */
+                garudaData.hwzc.enabled = (hr > 0u);
                 float iqCounts = s_foc_an.iq_meas * 93.0f;
                 if (iqCounts >  2000.0f) iqCounts =  2000.0f;
                 if (iqCounts < -2000.0f) iqCounts = -2000.0f;
