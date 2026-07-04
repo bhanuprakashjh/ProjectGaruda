@@ -951,8 +951,11 @@ void GSP_ParamsInit(void)
 bool GSP_ParamsSaveAll(void)
 {
     /* Keep the active profile's latest live values in the table (WriteField
-     * mirrors them, but belt-and-braces before a flash write). */
-    memcpy(&gspParamTable[activeProfile], &gspParams, sizeof(gspParams));
+     * mirrors them, but belt-and-braces before a flash write).
+     * CUSTOM (no table slot): the active copy lives only in gspParams; the
+     * table itself is still saved as-is. */
+    if (activeProfile < GSP_PROFILE_COUNT)
+        memcpy(&gspParamTable[activeProfile], &gspParams, sizeof(gspParams));
     return GSP_ParamStore_Save(gspParamTable, activeProfile);
 }
 
@@ -962,7 +965,11 @@ bool GSP_ParamsFactoryReset(void)
         return false;
     memcpy(gspParamTable, profileDefaults,
            sizeof(GSP_PARAMS_T) * GSP_PROFILE_COUNT);
-    memcpy(&gspParams, &gspParamTable[activeProfile], sizeof(gspParams));
+    /* CUSTOM has no table slot to reload gspParams from — fall back to the
+     * compile-time MOTOR_PROFILE (or A2212 if that's also out of range). */
+    uint8_t idx = (activeProfile < GSP_PROFILE_COUNT) ? activeProfile
+                : (MOTOR_PROFILE < GSP_PROFILE_COUNT ? MOTOR_PROFILE : GSP_PROFILE_A2212);
+    memcpy(&gspParams, &gspParamTable[idx], sizeof(gspParams));
     ApplyCompileTimeOverrides();
     GSP_RecomputeDerived();
     return true;

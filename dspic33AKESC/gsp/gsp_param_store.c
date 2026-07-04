@@ -3,6 +3,12 @@
 #include "../hal/eeprom.h"      /* EEPROM_ComputeCRC16 */
 #include <string.h>
 
+#if FEATURE_GSP
+
+#if !FEATURE_EEPROM_V2
+#error "param store reuses EEPROM_ComputeCRC16"
+#endif
+
 _Static_assert(PARAM_STORE_ADDR >= NVMFLASH_WRITE_FLOOR,
                "user area must sit inside the NVM write window");
 
@@ -39,6 +45,10 @@ static bool UserImageValid(const GSP_PARAM_IMAGE_T *img)
 
 PARAM_SOURCE_T GSP_ParamStore_Load(GSP_PARAMS_T *table, uint8_t *activeProfileOut)
 {
+    /* Boot-time-only reads: this runs before any runtime write to
+     * s_userArea, so plain (non-volatile) reads are safe here — no
+     * optimizer can have stale-cached a flash region nothing has
+     * written to yet in this execution. */
     const GSP_PARAM_IMAGE_T *img = (const GSP_PARAM_IMAGE_T *)s_userArea;
 
     if (UserImageValid(img)) {
@@ -75,9 +85,15 @@ bool GSP_ParamStore_Save(const GSP_PARAMS_T *table, uint8_t activeProfileNow)
                              (uint16_t)sizeof(img)))
         return false;
 
-    /* Readback verify via the memory-mapped area itself. */
-    if (memcmp(s_userArea, &img, sizeof(img)) != 0)
-        return false;
+    /* Readback through a volatile view: s_userArea is const to C but its
+     * flash content just changed via the NVM registers — force real reads. */
+    {
+        const volatile uint8_t *rb = (const volatile uint8_t *)s_userArea;
+        const uint8_t *src = (const uint8_t *)&img;
+        for (uint16_t i = 0; i < (uint16_t)sizeof(img); i++)
+            if (rb[i] != src[i])
+                return false;
+    }
     return true;
 }
 
@@ -90,3 +106,5 @@ PARAM_SOURCE_T GSP_ParamStore_GetSource(void)
 {
     return s_source;
 }
+
+#endif /* FEATURE_GSP */

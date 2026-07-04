@@ -24,6 +24,7 @@ static bool NvmOp(uint32_t addr, const uint8_t *src, uint32_t opcode)
     NVMCON = opcode;
     NVMCONbits.WR = 1;
     while (NVMCONbits.WR);
+    NVMCONbits.WREN = 0;   /* defense-in-depth: don't leave WE latched */
     return !NVMCONbits.WRERR;
 }
 
