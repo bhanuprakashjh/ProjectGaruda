@@ -208,6 +208,13 @@ static const GSP_PARAMS_T profileDefaults[10] = {
                                         * amplitude is not the limit, the iron is. Was 5. */
         .zcDemagDutyThresh  = 40,      /* Same as A2212 — low L → more demag */
         .zcDemagBlankExtraPct = 20,    /* Aggressive demag blanking (low L = long tail) */
+        .zcDemagBlankPerA   = 8,       /* WS1 load-adaptive blank — bench 2026-07-04: with MaxPct 33
+                                        * the desync wall moved ~90k -> ~114k eRPM at 24V. */
+        .zcDemagBlankIbusDb = 30,
+        .zcDemagBlankMaxPct = 33,
+        .stallIphaseAdc     = 1300,    /* WS2 (ported from U3): ~14A phase sustained = circulating/stall */
+        .stallDebounceMs    = 50,
+        .stallArmErpm       = 5000,
         .ocLimitMa          = 20000,   /* 2026-06-17 reverted 600->20000 to the committed 2810
                                         * baseline (CMP3 chop parked just below sensor saturation;
                                         * the 600 value was the bring-up chop experiment). */

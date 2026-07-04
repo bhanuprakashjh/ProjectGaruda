@@ -55,7 +55,7 @@ extern "C" {
                                      * time the motor needs to accelerate hand-off->idle. */
 #define CL_SOFT_ENTRY_DIVISOR   64  /* Entry up-rate = DUTY_SLEW_UP_RATE / this. Bigger =
                                      * gentler (lower current, slower spin-up). Bench-tune. */
-#define FEATURE_SPINDOWN_FLOOR (MOTOR_PROFILE == 9)
+#define FEATURE_SPINDOWN_FLOOR (MOTOR_PROFILE == 9 || MOTOR_PROFILE == 2)
                                     /* Spin-down BEMF duty floor (2026-07-03, 20V pot-0 desync).
                                      * A pot-0 from cruise drops duty full-scale in ~4ms
                                      * (DUTY_SLEW_DOWN 5%/ms; the HIGH_RPM penalty only bites
@@ -157,7 +157,7 @@ extern "C" {
 #ifndef ZC_DEMAG_BLANK_MAX_PCT
 #define ZC_DEMAG_BLANK_MAX_PCT   25  /* total HW-ZC blank cap, % of period (25 = legacy period/4) */
 #endif
-#define FEATURE_PHASE_STALL_FAULT (MOTOR_PROFILE == 9) /* WS2: ENABLED for U3 2026-07-03:
+#define FEATURE_PHASE_STALL_FAULT (MOTOR_PROFILE == 9 || MOTOR_PROFILE == 2) /* WS2: ENABLED for U3 2026-07-03:
                                      * bench-captured phantom lock circulated 21A for 0.8s
                                      * (bus OC blind to it) until the PSU collapsed into UV.
                                      * stallIphaseAdc=360 (~12A) + 50ms debounce -> FAULT_STALL.
@@ -870,7 +870,7 @@ extern "C" {
  * consecutive-read idea via filterCount; AM32 calls it `filter_level`.
  *
  * N=3 is conservative (~3µs ISR overhead). N=5 is more robust. */
-#if MOTOR_PROFILE == 9
+#if MOTOR_PROFILE == 9 || MOTOR_PROFILE == 2  /* U3-proven stack ported to 2810 2026-07-04 */
 #define FEATURE_HWZC_PWM_GATE      1   /* RE-ENABLED 2026-07-03 (load-desync campaign A/B): the clean
                                         * load run (sag limiter off, direct duty) reproduced the 2810's
                                         * MODE-A signature verbatim - healthy detection to the last
@@ -1112,7 +1112,7 @@ extern "C" {
  * rejects on the OLD HW-comparator ON-time path); current regime is PWM-gate
  * OFF + OFF-center SW detect, so re-evaluating on the bench. MOTOR_PROFILE is
  * #defined at line ~216, so this direct compare is safe. */
-#if MOTOR_PROFILE == 9
+#if MOTOR_PROFILE == 9 || MOTOR_PROFILE == 2  /* U3-proven stack ported to 2810 2026-07-04 */
 #define FEATURE_HWZC_MEASURED_NEUTRAL  1
 #else
 #define FEATURE_HWZC_MEASURED_NEUTRAL  0
@@ -1177,7 +1177,7 @@ extern "C" {
  * watches continuously and is duty-independent. Mutually exclusive with
  * FALLING_SW. ConfigComparator already sets CMPMOD for falling each
  * commutation; this only arms the IE for falling + adds the freewheel gate. */
-#if MOTOR_PROFILE == 9
+#if MOTOR_PROFILE == 9 || MOTOR_PROFILE == 2  /* U3-proven stack ported to 2810 2026-07-04 */
 #define FEATURE_HWZC_FALLING_HW        1   /* U3: falling ZC via HW comparator, freewheel-gated */
 #else
 #define FEATURE_HWZC_FALLING_HW        0
