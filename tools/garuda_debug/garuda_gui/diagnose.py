@@ -322,6 +322,37 @@ def local_diagnose(session) -> dict:
                     "medium", f"{len(pre)} frames Vbus<12V with Ibus>3A before/at fault",
                     [])
 
+    # sustained circulating current in a WINDOW (run-wide means dilute these:
+    # A2212 bench 2026-07-04 ran 5s at Ia~10.5A after handoff and 14s at
+    # Ia~8.5A full throttle - the old mean-based rule saw neither)
+    if len(cl) >= 20:
+        win, best = [], None
+        for x in cl:
+            win.append(x)
+            while win and x.get("t", 0) - win[0].get("t", 0) > 1.0:
+                win.pop(0)
+            if len(win) >= 8:
+                ia_m = sum(w.get("ia_pk_mag", 0) for w in win) / len(win)
+                th_m = sum(w.get("throttle", 0) for w in win) / len(win)
+                if best is None or ia_m > best[0]:
+                    best = (ia_m, th_m, win[0].get("t", 0), x.get("t", 0),
+                            sum(w.get("eRPM", 0) for w in win) / len(win))
+        if best and best[0] > 4.0:
+            ia_m, th_m, t0, t1, e_m = best
+            if th_m < 200:
+                add("HIGH CURRENT AT CLOSED-LOOP IDLE — stable but MISTIMED lock "
+                    "after handoff (offset commutation holds speed by brute current; "
+                    "typically snaps back on a throttle disturbance). Capture a burst "
+                    "scope in this state to see the BEMF-vs-threshold offset.",
+                    "high", f"~{ia_m:.1f}A phase for >=1s around t={t0:.1f}s at idle "
+                    f"throttle, eRPM~{e_m:,.0f}", [])
+            else:
+                add("Sustained circulating phase current — mistimed commutation or "
+                    "advance-induced field weakening at this operating point. A burst "
+                    "scope capture (BEMF vs threshold) distinguishes the two.",
+                    "medium", f"~{ia_m:.1f}A phase for >=1s around t={t0:.1f}s, "
+                    f"eRPM~{e_m:,.0f}, thr~{th_m:.0f}", [])
+
     # regen OV
     if "OV" in faults:
         add("Regen overvoltage on throttle-down",
