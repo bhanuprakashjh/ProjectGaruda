@@ -175,7 +175,68 @@ def local_diagnose(session) -> dict:
         src = cl_steady if len(cl_steady) >= 20 else cl
         erpms = [x.get("eRPM", 0) for x in src]
         emean = sum(erpms) / len(erpms)
-        estd = statistics.pstdev(erpms) if len(erpms) > 1 else 0
+        # Two-band lock-stability analysis:
+        #  FAST band = residual vs 5-frame moving median -> quantization dither
+        #  SLOW band = smoothed eRPM variation WITHIN steady-throttle segments
+        #    -> genuine hunting. Throttle steadiness (not frequency) is what
+        #    separates hunting from the pilot sweeping the pot: raw sigma/mu
+        #    read 38% on a pot-exercise run that was perfectly locked.
+        if len(erpms) >= 7:
+            med5 = [statistics.median(erpms[max(0, i-2):i+3]) for i in range(len(erpms))]
+            resid = [e - m for e, m in zip(erpms, med5)]
+            estd = statistics.pstdev(resid)
+        else:
+            med5 = erpms
+            resid = erpms
+            estd = statistics.pstdev(erpms) if len(erpms) > 1 else 0
+        # steady-throttle segments (>=80 frames ~3s): throttle within +/-5% (or
+        # 20 counts) of its 21-frame moving median
+        hunt_metric, hunt_seg = 0.0, None
+        thr = [x.get("throttle", 0) for x in src]
+        if len(thr) >= 100:
+            # steadiness = small RANGE over the 21-frame window. (A window
+            # MEDIAN test fails on clean steps: the current sample is always
+            # in the majority half, so |thr-median| stays ~0 through the step.)
+            def _rng(i):
+                w = thr[max(0, i-10):i+11]
+                return max(w) - min(w)
+            steady = [_rng(i) <= max(40, 0.07 * max(thr[i], 1))
+                      for i in range(len(thr))]
+            i = 0
+            while i < len(steady):
+                if steady[i]:
+                    j = i
+                    while j < len(steady) and steady[j]:
+                        j += 1
+                    if j - i >= 80:
+                        # 5-frame MEAN removes alternating dither (the median of
+                        # a perfect alternation alternates too); mean of a zero-
+                        # mean fast component -> ~0, slow hunting passes through
+                        raw = erpms[i:j]
+                        seg = [sum(raw[max(0, k-2):k+3]) / len(raw[max(0, k-2):k+3])
+                               for k in range(len(raw))]
+                        smean = sum(seg) / len(seg)
+                        if smean > 500:
+                            sm = statistics.pstdev(seg) / smean
+                            if sm > hunt_metric:
+                                hunt_metric, hunt_seg = sm, (i, j)
+                    i = j
+                else:
+                    i += 1
+        if hunt_metric > 0.04:
+            capp0 = d.get("cap_pct", 100.0)
+            add("eRPM oscillation at STEADY throttle — genuine lock hunting"
+                + (" (captures healthy — estimator-level, not detection-level)"
+                   if capp0 >= 95 else ""),
+                "low" if capp0 >= 95 else "medium",
+                f"smoothed eRPM varies {100*hunt_metric:.1f}% within a steady-throttle "
+                f"segment of {hunt_seg[1]-hunt_seg[0]} frames, cap={capp0:.0f}%",
+                [{"param": "zcBlankingPercent", "current": str(p.get("zcBlankingPercent")),
+                  "suggested": "review (too-long blank eats late captures at this speed)",
+                  "why": "hunting usually means asymmetric/late captures feeding the sector PI"},
+                 {"param": "zcAdcDeadband", "current": str(p.get("zcAdcDeadband")),
+                  "suggested": "review vs BEMF amplitude at this eRPM",
+                  "why": "deadband comparable to BEMF swing delays crossings unevenly"}])
         if ibus_mean < -10:
             add("Sustained regen in CL — commutation mistimed at this speed/duty (BEMF≈applied balance zone)",
                 "high", f"mean Ibus in CL = {ibus_mean:.1f}A (heavy regen / shunt near rail)",
@@ -186,21 +247,22 @@ def local_diagnose(session) -> dict:
             # Distinguish QUANTIZATION DITHER (telemetry alternates between two
             # period readings every frame — benign, cap%≈100) from a real slow
             # oscillation (runs of same-sign eRPM slope — lock actually hunting).
-            diffs = [b - a for a, b in zip(erpms, erpms[1:]) if b != a]
+            seq = resid if len(erpms) >= 7 else erpms
+            diffs = [b - a for a, b in zip(seq, seq[1:]) if b != a]
             flips = sum(1 for a, b in zip(diffs, diffs[1:]) if (a < 0) != (b < 0))
             alt_frac = flips / max(1, len(diffs) - 1)
             capp = d.get("cap_pct", 100.0)
             if alt_frac > 0.6 and capp > 90:
                 add("eRPM reading alternates between two values — period quantization "
                     "dither in the 10Hz telemetry, NOT a lock problem",
-                    "low", f"eRPM σ/μ = {100*estd/emean:.0f}% but {100*alt_frac:.0f}% "
+                    "low", f"eRPM jitter (vs moving median) = {100*estd/emean:.1f}% with {100*alt_frac:.0f}% "
                     f"sign-flips (pure alternation) and cap={capp:.0f}% (locked)",
                     [])
             else:
                 add("eRPM oscillation — lock hunting (slow same-direction excursions)"
                     + (" — captures healthy, likely benign estimator jitter"
                        if capp >= 95 else ""),
-                    "low" if capp >= 95 else "medium", f"eRPM σ/μ = {100*estd/emean:.0f}% (μ={emean:,.0f}), "
+                    "low" if capp >= 95 else "medium", f"eRPM jitter (vs moving median) = {100*estd/emean:.1f}% (μ={emean:,.0f}), "
                     f"alternation {100*alt_frac:.0f}%, cap={capp:.0f}%",
                     [{"param": "zcBlankingPercent", "current": str(p.get("zcBlankingPercent")),
                       "suggested": "review (too-long blank eats late captures at this speed)",
