@@ -77,6 +77,7 @@
       <itemPath>../hal/eeprom.h</itemPath>
       <itemPath>../garuda_types.h</itemPath>
       <itemPath>../garuda_config.h</itemPath>
+      <itemPath>../garuda_motors.h</itemPath>
       <itemPath>../garuda_calc_params.h</itemPath>
       <itemPath>../garuda_foc_params.h</itemPath>
       <itemPath>../garuda_service.h</itemPath>
