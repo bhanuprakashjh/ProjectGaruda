@@ -13,13 +13,27 @@
 _Static_assert(PARAM_STORE_ADDR >= NVMFLASH_WRITE_FLOOR,
                "user area must sit inside the NVM write window");
 
-/* Reserve + hex-emit the user area: 0xFF filler pinned at PARAM_STORE_ADDR.
- * This (a) keeps the linker from placing code there and (b) guarantees
- * programming rewrites the area to the erased pattern → reflash = factory
- * reset regardless of IDE erase settings. */
+/* Reserve + hex-emit the user area pinned at PARAM_STORE_ADDR. This
+ * (a) keeps the linker from placing code there and (b) guarantees
+ * programming rewrites the area → reflash = factory reset regardless of
+ * IDE erase settings.
+ *
+ * The filler value is LOAD-BEARING (2026-07-04 bench brick, twice over):
+ *   - 0xFF: section has CONTENTS, but bin2hex drops all-0xFF records as
+ *     "already erased" → pages never programmed → raw-erased after the
+ *     programmer's erase → boot header read of unprogrammed ECC flash
+ *     hangs the CPU (undocumented on dsPIC33A; no trap handler).
+ *   - 0x00: the COMPILER demotes the all-zero const to a no-contents
+ *     (bss-style) section → same zero hex records, same brick.
+ * 0xA5 survives both tools: real contents, real hex records, programmed
+ * ECC-valid cells. Magic reads 0xA5A5 != 'GP' → factory fallback.
+ * PLACEMENT is equally load-bearing: a plain section()+address() attribute
+ * pair produces a NEVER_LOAD section on xc-dsc (contents present in the
+ * ELF, still zero hex records — brick #3). space(prog) is the toolchain's
+ * blessed flash-placement idiom and yields CONTENTS+ALLOC+LOAD. */
 static const uint8_t s_userArea[PARAM_STORE_PAGES * 0x400UL]
-    __attribute__((section("gsp_param_store_userarea"), address(PARAM_STORE_ADDR), keep))
-    = { [0 ... (PARAM_STORE_PAGES * 0x400UL) - 1] = 0xFF };
+    __attribute__((space(prog), address(PARAM_STORE_ADDR), keep))
+    = { [0 ... (PARAM_STORE_PAGES * 0x400UL) - 1] = 0xA5 };
 
 _Static_assert(sizeof(GSP_PARAM_IMAGE_T) <= sizeof(s_userArea),
                "param image must fit the reserved user area");
