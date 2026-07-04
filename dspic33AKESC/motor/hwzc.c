@@ -41,6 +41,15 @@
 #endif
 #include <xc.h>
 
+/* Current step-period estimate for the speed-compare gates (falling mute,
+ * chop-gate speed gate). PI mode owns timerPeriod; reactive mode tracks
+ * stepPeriodHR. Same units (HR ticks), same meaning: 1e9/eRPM. */
+#if FEATURE_HWZC_SECTOR_PI
+#define HWZC_GATE_PERIOD(pData)  ((pData)->hwzc.timerPeriod)
+#else
+#define HWZC_GATE_PERIOD(pData)  ((pData)->hwzc.stepPeriodHR)
+#endif
+
 /**
  * @brief Initialize HWZC state to idle defaults.
  * Called from GARUDA_ServiceInit().
@@ -445,7 +454,7 @@ void HWZC_OnBlankingExpired(volatile GARUDA_DATA_T *pData)
      * fires from timerPeriod and the PI treats the sector as a non-update.
      * Period compare avoids a division: eRPM > MUTE <=> period < 1e9/MUTE. */
     if (commutationTable[pData->currentStep].zcPolarity < 0
-        && pData->hwzc.timerPeriod
+        && HWZC_GATE_PERIOD(pData)
                < (1000000000UL / (uint32_t)HWZC_FALLING_MUTE_ERPM))
     {
         /* falling muted — no capture this sector */
@@ -617,7 +626,7 @@ void HWZC_OnZcDetected(volatile GARUDA_DATA_T *pData)
          * exactly in the top band. Below the mute speed sectors are long and
          * a chop-phantom is a real 60-degree slip risk (scope run 18), so
          * the gate stays. Above it, interval check + verify reads carry. */
-        && pData->hwzc.timerPeriod >= (1000000000UL / (uint32_t)HWZC_FALLING_MUTE_ERPM)
+        && HWZC_GATE_PERIOD(pData) >= (1000000000UL / (uint32_t)HWZC_FALLING_MUTE_ERPM)
 #endif
        )
     {

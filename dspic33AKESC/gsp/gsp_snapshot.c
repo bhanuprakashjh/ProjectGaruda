@@ -206,8 +206,12 @@ void GSP_CaptureSnapshot(GSP_SNAPSHOT_T *dst)
     {
         int i;
         for (i = 0; i < 6; i++)
+#if FEATURE_HWZC_SECTOR_PI
             dst->hwzcMissBySector[i] =
                 (uint16_t)ReadU32Consistent(&src->hwzc.dbgPiMissBySector[i]);
+#else
+            dst->hwzcMissBySector[i] = 0;   /* PI-only tally (reactive A/B) */
+#endif
     }
 #endif
 
@@ -265,9 +269,15 @@ void GSP_CaptureSnapshot(GSP_SNAPSHOT_T *dst)
      *   spiInteg   = AD3CH2DATA  (VBUS raw)
      * Remove before merge. */
     dst->speedPiEnabled        = 0xDDu;   /* marker: diagnostics active */
+#if FEATURE_HWZC_SECTOR_PI
     dst->speedPiZcsSinceEnable = src->hwzc.dbgPiNoCap;        /* silent PI events */
     dst->speedPiTarget         = (int32_t)src->hwzc.dbgLastCapPm; /* cap pos ‰ of T */
     dst->speedPiLastError      = (int32_t)src->hwzc.dbgPiCrossSector;
+#else
+    dst->speedPiZcsSinceEnable = 0;       /* PI-only diag (reactive A/B) */
+    dst->speedPiTarget         = 0;
+    dst->speedPiLastError      = 0;
+#endif
     dst->speedPiOutputDuty     = (uint16_t)(
                                  ((uint16_t)PG1STATbits.SEVT    << 12)
                                | ((uint16_t)PG1STATbits.FFEVT   << 11)

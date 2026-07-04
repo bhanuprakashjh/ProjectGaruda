@@ -3234,9 +3234,10 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
             /* Detect first entry into CLOSED_LOOP (state transition) */
             if (prevAdcState != ESC_CLOSED_LOOP)
             {
-#if FEATURE_ADC_CMP_ZC && FEATURE_HWZC_HANDOFF_DAMP
+#if FEATURE_ADC_CMP_ZC && FEATURE_HWZC_HANDOFF_DAMP && FEATURE_HWZC_SECTOR_PI
                 /* Arm the hand-off period-collapse damp for the first N
-                 * commutations (prevents the half-period phantom at entry). */
+                 * commutations (prevents the half-period phantom at entry).
+                 * PI-only state (reactive mode has no damp). */
                 garudaData.hwzc.handoffDamp = HWZC_HANDOFF_DAMP_EVENTS;
 #endif
 #if FEATURE_SINE_STARTUP

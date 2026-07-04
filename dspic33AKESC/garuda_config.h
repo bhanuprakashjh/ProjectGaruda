@@ -974,7 +974,7 @@ extern "C" {
                                       * ZC midpoint at ~26 µs — plenty of margin. */
 #define HWZC_HYSTERESIS_ERPM   500   /* Hysteresis band for crossover (prevents oscillation) */
 #define HWZC_SYNC_THRESHOLD      6   /* Consecutive HW ZCs to declare sync */
-#define HWZC_MISS_LIMIT          3   /* Missed HW ZCs before fallback to software ZC (low for debug) */
+#define HWZC_MISS_LIMIT          8   /* Missed HW ZCs before fallback to software ZC (3 was debug-tight; raised for the 2026-07-05 reactive A/B so the fallback latch cannot contaminate it) */
 /* 2026-06-17 PER-PROFILE: high-KV micros (6/7/8) use a smaller deadband so their
  * ~6-count 10V BEMF can cross; 2810 etc. keep the default 4. */
 #if MOTOR_PROFILE == 6 || MOTOR_PROFILE == 7 || MOTOR_PROFILE == 8
@@ -1162,8 +1162,20 @@ extern "C" {
  *   integrator += delta >> KI_SHIFT     (slow drift)
  *   timerPeriod = integrator + (delta >> KP_SHIFT)   (fast dynamics)
  *
- * Disabled by default. Flip to 1 for the breakthrough run. */
-#define FEATURE_HWZC_SECTOR_PI         1
+ * Disabled by default. Flip to 1 for the breakthrough run.
+ *
+ * 1 -> 0 (2026-07-05 morning A/B, overnight-review verdict): the stochastic
+ * 1.5-2x accel snap and 2x idle alias are a stable false fixed point of the
+ * phase-only PI + autonomous grid (frequency never measured; late captures
+ * cap>T-rejected; every clamp bounds the integrator, none re-anchors it).
+ * Reactive mode IS an interval tracker (IIR (3T+interval)/4 + reschedule-on-
+ * ZC) — the architecture the Simplified tree used to CURE the identical
+ * disease on 2026-07-01. Prediction: snaps vanish at any throttle rate.
+ * Paired flip: HWZC_MISS_LIMIT 3->8 (debug-tight fallback latch would
+ * contaminate the A/B). See docs/reviews/2026-07-05-morning-synthesis.md.
+ * If confirmed, the keeper is the ~30-line interval-anchor port into the
+ * sector-PI (reviews/2026-07-04-overnight-C §3), then flip this back to 1. */
+#define FEATURE_HWZC_SECTOR_PI         0
 
 /* Hybrid per-polarity ZC detection (2026-06-07). Bench-proven root cause: the
  * ON-time HW comparator detects RISING sectors (even 0/2/4) perfectly at all
