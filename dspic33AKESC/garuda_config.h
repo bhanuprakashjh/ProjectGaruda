@@ -1185,9 +1185,31 @@ extern "C" {
  * FALLING_SW. ConfigComparator already sets CMPMOD for falling each
  * commutation; this only arms the IE for falling + adds the freewheel gate. */
 #if MOTOR_PROFILE == 9 || MOTOR_PROFILE == 2  /* U3-proven stack ported to 2810 2026-07-04 */
-#define FEATURE_HWZC_FALLING_HW        1   /* U3: falling ZC via HW comparator, freewheel-gated */
+#define FEATURE_HWZC_FALLING_HW        1   /* NOTE: dead flag (2026-07-04 audit) — falling via the
+                                            * HW comparator is UNCONDITIONAL in hwzc.c since the
+                                            * FALLING_SW purge. Kept for config history only. */
 #else
 #define FEATURE_HWZC_FALLING_HW        0
+#endif
+
+/* ── Rising-only top end (restores the 260k-era behavior) ─────────────────
+ * AK512 bench 2026-06-12 (archived at the old FALLING_SW block, verbatim):
+ * rising comparator captures sit ~500 permille of T at every speed 30k-92k;
+ * falling captures walk 547 -> 733 -> 901 permille (max 955) as the sector
+ * shrinks toward the sample floor + RC lag (tau~30us is FIXED time = a
+ * GROWING fraction of a shrinking sector). Above ~70k the late falling
+ * captures destabilize the sector PI during accel transients (Ia to the 22A
+ * region). The 260k/234k tops ran RISING-ONLY above the cap; the cap was
+ * LOST when FALLING_SW was purged (falling-HW arms at all speeds), and the
+ * 2810 reproduced the archived failure verbatim on 2026-07-04 (clip trip at
+ * ~118k). Above this eRPM, falling sectors leave the comparator IE off and
+ * the PI dead-reckons them (a missed ZC is a non-update by design).
+ * 0 = falling heard at all speeds. Per-profile: only the 2810 for now
+ * (one-flip discipline; U3 tops ~83k on its own campaign baseline). */
+#if MOTOR_PROFILE == 2
+#define HWZC_FALLING_MUTE_ERPM     70000
+#else
+#define HWZC_FALLING_MUTE_ERPM         0
 #endif
 
 

@@ -432,6 +432,20 @@ void HWZC_OnBlankingExpired(volatile GARUDA_DATA_T *pData)
 
     /* Clear any stale comparator events, then enable interrupt */
     HAL_ADC_ClearComparatorFlag(core);
+#if HWZC_FALLING_MUTE_ERPM > 0
+    /* Rising-only top end: above the mute speed, falling sectors are heard
+     * ~0.7-0.95T late (fixed RC lag on a shrinking sector — see config) and
+     * poison the PI. Leave the IE off; the autonomous SCCP1 commutation
+     * fires from timerPeriod and the PI treats the sector as a non-update.
+     * Period compare avoids a division: eRPM > MUTE <=> period < 1e9/MUTE. */
+    if (commutationTable[pData->currentStep].zcPolarity < 0
+        && pData->hwzc.timerPeriod
+               < (1000000000UL / (uint32_t)HWZC_FALLING_MUTE_ERPM))
+    {
+        /* falling muted — no capture this sector */
+    }
+    else
+#endif
     HAL_ADC_EnableComparatorIE(core);
 #else
     /* SW compare mode: leave the HW digital comparator IE disabled.
