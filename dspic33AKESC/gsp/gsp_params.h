@@ -306,16 +306,9 @@ extern const GSP_PARAMS_T profileDefaults[10];  /* factory image (const, in .hex
 extern GSP_PARAMS_T gspParamTable[GSP_PROFILE_COUNT];  /* live RAM table, all profiles */
 
 /**
- * Initialize all params to compile-time defaults from motor profile.
- * Call once at boot before GARUDA_ServiceInit().
- */
-void GSP_ParamsInitDefaults(void);
-
-/**
  * Boot entry: load user-saved table (or factory) via the param store into
  * gspParamTable, activate the boot profile into gspParams, and apply
- * compile-time feature overrides. Replaces GSP_ParamsInitDefaults() +
- * EEPROM overlay at boot.
+ * compile-time feature overrides.
  */
 void GSP_ParamsInit(void);
 
@@ -380,149 +373,6 @@ bool GSP_ParamsLoadProfile(uint8_t profileId);
  * @return Currently active profile ID (0-4).
  */
 uint8_t GSP_ParamsGetActiveProfile(void);
-
-/* ── EEPROM V2 persistence ───────────────────────────────────────────── */
-
-#define GSP_PERSIST_V1_MARKER  0xA1
-#define GSP_PERSIST_V2_MARKER  0xA2
-#define GSP_PERSIST_V3_MARKER  0xA7  /* Bumped: A2212 handoff 1000→500 rad/s */
-
-/* V2 packed persist struct — 48 bytes, fills GARUDA_CONFIG_T.reserved */
-typedef struct __attribute__((packed)) {
-    /* Header (2 bytes) */
-    uint8_t  schemaMarker;          /* 0xA2 = V2 */
-    uint8_t  activeProfile;         /* 0-3 */
-    /* Stage 1 params (13 bytes, offsets 2-14) */
-    uint8_t  rampDutyPct;           /* [2] */
-    uint8_t  clIdleDutyPct;         /* [3] */
-    uint8_t  timingAdvMaxDeg;       /* [4] */
-    uint16_t rampTargetErpm;        /* [5-6] */
-    uint16_t rampAccelErpmPerS;     /* [7-8] */
-    uint16_t hwzcCrossoverErpm;     /* [9-10] */
-    uint16_t ocSwLimitMa;           /* [11-12] */
-    uint16_t ocFaultMa;             /* [13-14] */
-    /* Motor profile params (16 bytes, offsets 15-30) */
-    uint8_t  motorPolePairs;        /* [15] */
-    uint8_t  alignDutyPct;          /* [16] */
-    uint16_t initialErpm;           /* [17-18] */
-    uint8_t  sineAlignModPct;       /* [19] */
-    uint8_t  sineRampModPct;        /* [20] */
-    uint8_t  zcDemagDutyThresh;     /* [21] */
-    uint8_t  zcDemagBlankExtraPct;  /* [22] */
-    uint16_t ocLimitMa;             /* [23-24] */
-    uint16_t ocStartupMa;           /* [25-26] */
-    uint16_t rampCurrentGateMa;     /* [27-28] */
-    uint16_t maxClosedLoopErpmLo;   /* [29-30] low 16 bits */
-    /* Tuning params (16 bytes, offsets 31-46) */
-    uint8_t  dutySlewUpPctPerMs;    /* [31] */
-    uint8_t  dutySlewDownPctPerMs;  /* [32] */
-    uint16_t postSyncSettleMs;      /* [33-34] */
-    uint8_t  postSyncSlewDivisor;   /* [35] */
-    uint8_t  zcBlankingPercent;     /* [36] */
-    uint8_t  zcAdcDeadband;         /* [37] */
-    uint8_t  zcSyncThreshold;       /* [38] */
-    uint8_t  zcFilterThreshold;     /* [39] */
-    uint16_t vbusOvAdc;             /* [40-41] */
-    uint16_t vbusUvAdc;             /* [42-43] */
-    uint16_t desyncCoastMs;         /* [44-45] */
-    uint8_t  desyncMaxRestarts;     /* [46] */
-    /* High byte of maxClosedLoopErpm (1 byte, offset 47) */
-    uint8_t  maxClErpmHi;           /* [47] bits [23:16] */
-} GSP_CONFIG_PERSIST_V2_T;
-
-_Static_assert(sizeof(GSP_CONFIG_PERSIST_V2_T) == 48, "V2 persist must be 48 bytes");
-
-/* V3 packed persist struct — extends V2 with FOC motor model params */
-typedef struct __attribute__((packed)) {
-    /* --- V2 portion (bytes 0-47, identical layout) --- */
-    uint8_t  schemaMarker;          /* 0xA3 = V3 */
-    uint8_t  activeProfile;
-    uint8_t  rampDutyPct;
-    uint8_t  clIdleDutyPct;
-    uint8_t  timingAdvMaxDeg;
-    uint16_t rampTargetErpm;
-    uint16_t rampAccelErpmPerS;
-    uint16_t hwzcCrossoverErpm;
-    uint16_t ocSwLimitMa;
-    uint16_t ocFaultMa;
-    uint8_t  motorPolePairs;
-    uint8_t  alignDutyPct;
-    uint16_t initialErpm;
-    uint8_t  sineAlignModPct;
-    uint8_t  sineRampModPct;
-    uint8_t  zcDemagDutyThresh;
-    uint8_t  zcDemagBlankExtraPct;
-    uint16_t ocLimitMa;
-    uint16_t ocStartupMa;
-    uint16_t rampCurrentGateMa;
-    uint16_t maxClosedLoopErpmLo;
-    uint8_t  dutySlewUpPctPerMs;
-    uint8_t  dutySlewDownPctPerMs;
-    uint16_t postSyncSettleMs;
-    uint8_t  postSyncSlewDivisor;
-    uint8_t  zcBlankingPercent;
-    uint8_t  zcAdcDeadband;
-    uint8_t  zcSyncThreshold;
-    uint8_t  zcFilterThreshold;
-    uint16_t vbusOvAdc;
-    uint16_t vbusUvAdc;
-    uint16_t desyncCoastMs;
-    uint8_t  desyncMaxRestarts;
-    uint8_t  maxClErpmHi;
-    /* --- V3 FOC extension (bytes 48-81) --- */
-    uint16_t focRsMilliOhm;
-    uint16_t focLsMicroH;
-    uint16_t focKeUvSRad;
-    uint16_t focVbusNomCentiV;
-    uint16_t focMaxCurrentCentiA;
-    uint16_t focMaxElecRadS;
-    uint16_t focKpDqMilli;
-    uint16_t focKiDq;
-    uint16_t focObsLpfAlphaMilli;
-    uint16_t focAlignIqCentiA;
-    uint16_t focRampIqCentiA;
-    uint16_t focAlignTimeMs;
-    uint16_t focIqRampTimeMs;
-    uint16_t focRampRateRps2;
-    uint16_t focHandoffRadS;
-    uint16_t focFaultOcCentiA;
-    uint16_t focFaultStallDeciRadS;
-} GSP_CONFIG_PERSIST_V3_T;
-
-_Static_assert(sizeof(GSP_CONFIG_PERSIST_V3_T) == 82, "V3 persist must be 82 bytes");
-
-/* V1 persist (for backward compat read) */
-typedef struct __attribute__((packed)) {
-    uint8_t  schemaV1Marker;
-    uint8_t  rampDutyPct;
-    uint8_t  clIdleDutyPct;
-    uint8_t  timingAdvMaxDeg;
-    uint16_t rampTargetErpm;
-    uint16_t rampAccelErpmPerS;
-    uint16_t hwzcCrossoverErpm;
-    uint16_t ocSwLimitMa;
-    uint16_t ocFaultMa;
-    uint8_t  reserved2[18];
-} GSP_CONFIG_PERSIST_V1_T;
-
-_Static_assert(sizeof(GSP_CONFIG_PERSIST_V1_T) == 32, "V1 persist must be 32 bytes");
-
-/**
- * Load params from EEPROM config reserved bytes.
- * Supports V1 (0xA1) and V2 (0xA2) schemas.
- * V1: loads 8 Stage 1 params, 23 new get defaults from active profile.
- * V2: loads all 31 params + activeProfile.
- *
- * @param cfg  Pointer to loaded GARUDA_CONFIG_T
- */
-void GSP_ParamsLoadFromConfig(const void *cfg);
-
-/**
- * Pack current params into GARUDA_CONFIG_T reserved bytes (V2 schema).
- *
- * @param cfg  Pointer to GARUDA_CONFIG_T to update
- */
-void GSP_ParamsSaveToConfig(void *cfg);
 
 #ifdef __cplusplus
 }

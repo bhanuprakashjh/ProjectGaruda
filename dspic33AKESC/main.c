@@ -7,7 +7,7 @@
  *   1. InitOscillator() — 200MHz system clock, 400MHz PWM, 100MHz ADC
  *   2. SetupGPIOPorts() — PWM, BEMF, LED, button, UART, DShot pins
  *   3. HAL_InitPeripherals() — ADC, PWM, Timer1
- *   4. (GSP) GSP_ParamsInitDefaults + LoadFromConfig + RecomputeDerived
+ *   4. (GSP) GSP_ParamsInit + RecomputeDerived
  *   5. GARUDA_ServiceInit() — state machine data, enable ADC ISR
  *   6. Main loop — button polling, GSP intents, heartbeat, board service
  *

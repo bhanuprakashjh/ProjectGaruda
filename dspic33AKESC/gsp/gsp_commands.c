@@ -38,9 +38,6 @@
 #include "foc/an1078_motor.h"
 #include "foc/an1078_smc.h"
 #endif
-#if FEATURE_EEPROM_V2
-#include "hal/eeprom.h"
-#endif
 #if (FEATURE_RX_PWM || FEATURE_RX_DSHOT || FEATURE_RX_AUTO)
 #include <xc.h>
 #include "input/rx_decode.h"
@@ -477,29 +474,8 @@ static void HandleSaveConfig(const uint8_t *payload, uint8_t payloadLen)
     (void)payload;
     (void)payloadLen;
 
-#if FEATURE_EEPROM_V2 && FEATURE_GSP_EEPROM
-    uint32_t remaining = EEPROM_GetCooldownRemainingMs(garudaData.systemTick);
-    if (remaining > 0) {
-        uint8_t resp[2];
-        resp[0] = GSP_ERR_EEPROM_THROTTLED;
-        resp[1] = (uint8_t)((remaining + 999) / 1000);
-        GSP_SendResponse(GSP_CMD_ERROR, resp, 2);
-        return;
-    }
-
-    GARUDA_CONFIG_T cfg;
-    EEPROM_LoadConfig(&cfg);
-    GSP_ParamsSaveToConfig(&cfg);
-
-    if (!EEPROM_SaveConfig(&cfg, garudaData.systemTick)) {
-        SendError(GSP_ERR_BUSY);
-        return;
-    }
-
+    /* TODO(Task 5): rewrite against the new gsp_param_store persistence path. */
     GSP_SendResponse(GSP_CMD_SAVE_CONFIG, NULL, 0);
-#else
-    GSP_SendResponse(GSP_CMD_SAVE_CONFIG, NULL, 0);
-#endif
 }
 
 static void HandleLoadDefaults(const uint8_t *payload, uint8_t payloadLen)
@@ -512,27 +488,7 @@ static void HandleLoadDefaults(const uint8_t *payload, uint8_t payloadLen)
         return;
     }
 
-    uint8_t profile = GSP_ParamsGetActiveProfile();
-
-    if (profile < GSP_PROFILE_COUNT) {
-        /* Built-in profile: reload from profile defaults */
-        GSP_ParamsLoadProfile(profile);
-    } else {
-        /* Custom profile: reload from EEPROM V2 if available */
-#if FEATURE_EEPROM_V2
-        GARUDA_CONFIG_T cfg;
-        EEPROM_LoadConfig(&cfg);
-        /* Re-init defaults then overlay from EEPROM */
-        GSP_ParamsInitDefaults();
-        GSP_ParamsLoadFromConfig(&cfg);
-        GSP_RecomputeDerived();
-#else
-        /* No EEPROM — can't restore custom profile */
-        SendError(GSP_ERR_WRONG_STATE);
-        return;
-#endif
-    }
-
+    /* TODO(Task 5): rewrite against the new gsp_param_store persistence path. */
     GSP_SendResponse(GSP_CMD_LOAD_DEFAULTS, NULL, 0);
 }
 
@@ -594,17 +550,10 @@ static void HandleLoadProfile(const uint8_t *payload, uint8_t payloadLen)
         return;
     }
 
-    /* Auto-save profile to EEPROM so it persists across resets.
-     * Without this, selecting A2212 in GUI then resetting reverts
-     * to compile-time MOTOR_PROFILE (Hurst). */
-#if FEATURE_EEPROM_V2 && FEATURE_GSP_EEPROM
-    {
-        GARUDA_CONFIG_T cfg;
-        EEPROM_LoadConfig(&cfg);
-        GSP_ParamsSaveToConfig(&cfg);
-        EEPROM_SaveConfig(&cfg, garudaData.systemTick);
-    }
-#endif
+    /* Auto-save profile so it persists across resets. Without this,
+     * selecting A2212 in GUI then resetting reverts to compile-time
+     * MOTOR_PROFILE (Hurst).
+     * TODO(Task 5): rewrite against the new gsp_param_store persistence path. */
 
     /* Respond with ACK + profile ID */
     uint8_t resp = profileId;
