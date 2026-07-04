@@ -50,7 +50,19 @@ static uint8_t activeProfile;
     .morphLockZcCount     = 4,  \
     .morphLockTolPct      = 25,  \
     .ifCurrentCa          = 600, \
-    .ifRampErpmPerS       = 12000
+    .ifRampErpmPerS       = 12000, \
+    /* WS3 BEMF trigger (2026-07-04): MUST be here, not per-profile. Before
+     * this, only U3 initialized these — every other profile got C's implicit
+     * 0, and basePct=0 puts PG1TRIGA at the PWM switching edge: every phase-
+     * voltage sample lands in the spike/ring instead of freewheel-center.
+     * With MEASURED_NEUTRAL that garbage becomes the comparator threshold →
+     * the 2810's 130k wall (2026-07-04). 50/50/0 = the fixed MPER/2 point.
+     * NOTE: TUNING_DEFAULTS expands at the END of each profile block, so by
+     * C's last-initializer-wins rule it OVERRIDES any explicit per-profile
+     * value written above it — per-profile overrides must go BELOW the macro. */ \
+    .bemfTrigBasePct       = 50, \
+    .bemfTrigDutyThreshPct = 50, \
+    .bemfTrigShiftQ        = 0
 
 static const GSP_PARAMS_T profileDefaults[10] = {
     [GSP_PROFILE_HURST] = {
@@ -211,12 +223,6 @@ static const GSP_PARAMS_T profileDefaults[10] = {
                                         * (2026-06-13 had reduced 25->20: "25 over-advances, falling-ZC
                                         * sectors lost >210k" — moot since HWZC_FALLING_MUTE_ERPM: falling
                                         * never captures above 70k now.) */
-        .vbusUvAdc          = 300,     /* bench 2026-07-04: ~5.6V. At 500 (~9.3V) slam sense-dips false-
-                                        * tripped UV and executed recoverable events; 300 only trips on a
-                                        * real PSU fold (seen at 14V/6.4V collapses) */
-        .desyncMaxRestarts  = 0,       /* restart parked (2026-07-04): coast then latch FAULT_DESYNC.
-                                        * Restart-into-spin PCI'd twice at 118k/145k; re-enable after
-                                        * the Vbus spin-catch gate is bench-proven. */
         .stallIphaseAdc     = 1800,    /* bench 2026-07-04: 14A bar killed the (passable) 120-150k
                                         * valley mid-crossing; ~19.4A rides it, hard OC still above */
         .stallDebounceMs    = 150,
@@ -227,6 +233,16 @@ static const GSP_PARAMS_T profileDefaults[10] = {
         .ocStartupMa        = 22000,   /* Startup relaxed near sensor saturation */
         .rampCurrentGateMa  = 10000,   /* Gate ramp accel if bus >10A during OL */
         TUNING_DEFAULTS,
+        /* Per-profile overrides of TUNING_DEFAULTS fields MUST come after the
+         * macro (C last-initializer-wins). These two sat above it until
+         * 2026-07-04 and were silently reverted to 500/3 — the `get` audit
+         * caught the live board running UV=500 despite the baked 300. */
+        .vbusUvAdc          = 300,     /* bench 2026-07-04: ~5.6V. At 500 (~9.3V) slam sense-dips false-
+                                        * tripped UV and executed recoverable events; 300 only trips on a
+                                        * real PSU fold (seen at 14V/6.4V collapses) */
+        .desyncMaxRestarts  = 0,       /* restart parked (2026-07-04): coast then latch FAULT_DESYNC.
+                                        * Restart-into-spin PCI'd twice at 118k/145k; re-enable after
+                                        * the Vbus spin-catch gate is bench-proven. */
         /* FOC motor model: 2810 1350KV (7PP, 24V) — PRODRONE bench
          * 2026-04-23: corrected phase-to-neutral values. The EEPROM
          * defaults are the actual runtime source (the .h #defines aren't
@@ -688,10 +704,8 @@ static const GSP_PARAMS_T profileDefaults[10] = {
                                           * ~zero error and doesn't command current up (5000 was above idle →
                                           * forced accel → current ramp → rail). Floor clamp = 3000. */
         .cascadeTgtErpmMax     = 90000,
-        /* WS3 variable BEMF trigger — defaults reproduce today's fixed MPER/2 point. */
-        .bemfTrigBasePct       = 50,
-        .bemfTrigDutyThreshPct = 50,
-        .bemfTrigShiftQ        = 0,
+        /* WS3 BEMF trigger defaults now live in TUNING_DEFAULTS (all profiles);
+         * a per-profile override would have to go BELOW the macro to take. */
         .ocLimitMa          = 20000,   /* CMP3 chop parked just below sensor saturation (same as 2810) */
         .ocStartupMa        = 22000,
         .rampCurrentGateMa  = 10000,   /* gate ramp accel if bus >10A during OL */
