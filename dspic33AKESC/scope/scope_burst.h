@@ -151,6 +151,11 @@ void Scope_ForceTrigger(void);
  */
 void Scope_WriteSample(const SCOPE_SAMPLE_T *sample);
 
+/* True while ARMED or FILLING — callers should skip SAMPLE ASSEMBLY entirely
+ * when false so a disarmed scope costs ~2 cycles/tick, not the full 14-field
+ * struct build (production CPU hygiene). */
+bool Scope_IsActive(void);
+
 /**
  * Get current scope status.
  */

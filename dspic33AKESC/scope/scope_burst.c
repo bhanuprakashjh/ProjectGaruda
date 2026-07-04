@@ -159,6 +159,11 @@ void Scope_ForceTrigger(void)
     }
 }
 
+bool Scope_IsActive(void)
+{
+    return (s_state == SCOPE_ARMED || s_state == SCOPE_FILLING);
+}
+
 void Scope_WriteSample(const SCOPE_SAMPLE_T *sample)
 {
     /* Fast exit for non-active states */

@@ -1364,6 +1364,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
         }
 
 #if FEATURE_BURST_SCOPE
+        if (Scope_IsActive()) {
         /* Stream 6-step diagnostic channels into burst scope ring (24 kHz).
          *
          * Reuses the FOC-oriented SCOPE_SAMPLE_T fields:
@@ -1431,6 +1432,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
             ss.tick_lsb = (uint16_t)(garudaData.systemTick & 0xFFFF);
             Scope_WriteSample(&ss);
         }
+        }   /* Scope_IsActive */
 #endif /* FEATURE_BURST_SCOPE */
     }
 #endif
