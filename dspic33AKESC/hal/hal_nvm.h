@@ -11,6 +11,14 @@
 #include <stdint.h>
 #include <stdbool.h>
 
+/* Erase/write floor: the only legitimate mutable region is the parameter
+ * user area in the last pages of flash. Guards in ErasePages/WriteImage
+ * reject anything below this or past the end of flash — a caller bug can
+ * then never touch firmware code. Raise deliberately if a second mutable
+ * region is ever added. */
+#define NVMFLASH_WRITE_FLOOR  0x87F000UL
+#define NVMFLASH_FLASH_END    0x880000UL
+
 /* Erase nPages consecutive flash pages starting at page-aligned addr. */
 bool NVMFLASH_ErasePages(uint32_t addr, uint16_t nPages);
 

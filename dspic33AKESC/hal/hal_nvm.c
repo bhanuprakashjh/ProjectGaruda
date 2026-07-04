@@ -31,6 +31,8 @@ bool NVMFLASH_ErasePages(uint32_t addr, uint16_t nPages)
 {
     if (addr % _FLASH_PAGE)
         return false;
+    if (addr < NVMFLASH_WRITE_FLOOR || addr + (uint32_t)nPages * _FLASH_PAGE > NVMFLASH_FLASH_END)
+        return false;
     for (uint16_t p = 0; p < nPages; p++) {
         if (!NvmOp(addr + (uint32_t)p * _FLASH_PAGE, NULL, NVM_OP_PAGE_ERASE))
             return false;
@@ -41,6 +43,8 @@ bool NVMFLASH_ErasePages(uint32_t addr, uint16_t nPages)
 bool NVMFLASH_WriteImage(uint32_t addr, const uint8_t *src, uint16_t len)
 {
     if (addr % _FLASH_ROW)
+        return false;
+    if (addr < NVMFLASH_WRITE_FLOOR || addr + len > NVMFLASH_FLASH_END)
         return false;
     uint8_t rowBuf[_FLASH_ROW];
     uint16_t offset = 0;
