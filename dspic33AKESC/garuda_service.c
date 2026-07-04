@@ -2547,6 +2547,31 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                          garudaData.vbusRaw, throttle_an,
                          &da_an, &db_an, &dc_an);
 
+        /* Telemetry bridge (2026-07-04): the GSP snapshot reads 6-step
+         * structs, so FOC runs showed eRPM=0 / Ia=0. Export the observer
+         * state through the same fields the host already decodes:
+         *   - eRPM: |OmegaFltred| rad/s(e) -> eRPM -> HR period ns, via the
+         *     hwzc seqlock (host shows eRPM = 1e9/hwzcStepPeriodHR in CL).
+         *   - Ibus column: torque current iq [A] (93 counts/A, 2048 bias,
+         *     driving = negative) - the meaningful FOC load number.
+         * Every 32nd tick (~1.4kHz) to keep the ISR cost negligible. */
+        {
+            static uint8_t s_telDiv = 0;
+            if (++s_telDiv >= 32u) {
+                s_telDiv = 0;
+                float erpmE = s_foc_an.smc.OmegaFltred * 9.5492966f; /* 60/2pi */
+                if (erpmE < 0) erpmE = -erpmE;
+                uint32_t hr = (erpmE > 500.0f) ? (uint32_t)(1.0e9f / erpmE) : 0u;
+                garudaData.hwzc.writeSeq++;
+                garudaData.hwzc.stepPeriodHR = hr;
+                garudaData.hwzc.writeSeq++;
+                float iqCounts = s_foc_an.iq_meas * 93.0f;
+                if (iqCounts >  2000.0f) iqCounts =  2000.0f;
+                if (iqCounts < -2000.0f) iqCounts = -2000.0f;
+                garudaData.ibusRaw = (uint16_t)(2048 - (int16_t)iqCounts);
+            }
+        }
+
         /* PWM enable: match V2/V3 pattern (proven on this hardware).
          * Release overrides first, then write duty.  V2/V3's first PWM
          * cycle sees duty register state from prior HAL_MC1PWMDisableOutputs
