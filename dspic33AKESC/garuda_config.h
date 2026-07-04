@@ -433,7 +433,7 @@ extern "C" {
 #define FEATURE_FOC              0  /* Phase I: OLD FOC v1 (reference, deprecated) */
 #define FEATURE_FOC_V2           0  /* Phase I v2: closed-loop current control + MXLEMMING */
 #define FEATURE_FOC_V3           0  /* Phase J: FOC v3 — SMO observer + PLL */
-#define FEATURE_FOC_AN1078       1  /* 2026-07-04 DISCRIMINATOR TEST: SMO bypasses the BEMF-ZC chain entirely; proved 206k on this 2810 (docs/an1078_200k_optimization.md). 0 = back to 6-step. */
+#define FEATURE_FOC_AN1078       0  /* 2026-07-04: discriminator CONCLUDED - first FOC run on this MCU did 223,914 eRPM peak, 215-223k sustained @90-96%/25.2V, zero faults. Plant exonerated; the 6-step wall was the ZC chain (June-18 ZC_DUTY_DIVISOR 2.6 bias, reverted). Flip to 1 for the FOC engine. */
 #define FEATURE_SMO              0  /* 0=PLL only, 1=PLL+SMO parallel (v1 only) */
 #define FEATURE_MXLEMMING        0  /* 0=PLL chain, 1=MXLEMMING flux observer (v1 only) */
 #define FEATURE_LEARN_MODULES    0  /* master: ring buffer + quality + health */
