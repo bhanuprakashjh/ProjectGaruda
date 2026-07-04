@@ -177,12 +177,6 @@ static const GSP_PARAMS_T profileDefaults[10] = {
                                         * 3k-handoff gap and trimming the pulse ~22->~19.6A.
                                         * Lowering further is a dead end (idle is floored
                                         * by MIN_DUTY in the trap waveform). Was 6. */
-        .timingAdvMaxDeg    = 20,      /* AK512 bench 2026-06-13: 25° OVER-advances ->
-                                        * falling-ZC sectors lost >210k -> desync/UV at
-                                        * ~214k on accel. 20° reaches full 260k cap
-                                        * (AK128 parity), holds clean. 10° also safe but
-                                        * less mid-band advance. (Remaining hard-decel-chop
-                                        * desync ~220k is the duty-down-slew issue, not advance.) */
         .hwzcCrossoverErpm  = 1500,    /* Enable HWZC immediately after morph */
         .ocSwLimitMa        = 18000,   /* Soft limit. Board shunt saturates ~22A */
         .ocFaultMa          = 21000,   /* SW hard fault just below sensor saturation */
@@ -211,12 +205,21 @@ static const GSP_PARAMS_T profileDefaults[10] = {
         .zcDemagBlankPerA   = 8,       /* WS1 load-adaptive blank — bench 2026-07-04: with MaxPct 33
                                         * the desync wall moved ~90k -> ~114k eRPM at 24V. */
         .zcDemagBlankIbusDb = 30,
-        .zcDemagBlankMaxPct = 33,
+        .zcDemagBlankMaxPct = 40,      /* bench 2026-07-04: 33->40 bought 141->143.6k (tail vs blank) */
+        .timingAdvMaxDeg    = 25,      /* bench 2026-07-04: 20->25 cut the 51%-band current 11-14A -> 8-9A
+                                        * (voltage->time-domain comp rebalance); 260k-era value.
+                                        * (2026-06-13 had reduced 25->20: "25 over-advances, falling-ZC
+                                        * sectors lost >210k" — moot since HWZC_FALLING_MUTE_ERPM: falling
+                                        * never captures above 70k now.) */
+        .vbusUvAdc          = 300,     /* bench 2026-07-04: ~5.6V. At 500 (~9.3V) slam sense-dips false-
+                                        * tripped UV and executed recoverable events; 300 only trips on a
+                                        * real PSU fold (seen at 14V/6.4V collapses) */
         .desyncMaxRestarts  = 0,       /* restart parked (2026-07-04): coast then latch FAULT_DESYNC.
                                         * Restart-into-spin PCI'd twice at 118k/145k; re-enable after
                                         * the Vbus spin-catch gate is bench-proven. */
-        .stallIphaseAdc     = 1300,    /* WS2 (ported from U3): ~14A phase sustained = circulating/stall */
-        .stallDebounceMs    = 50,
+        .stallIphaseAdc     = 1800,    /* bench 2026-07-04: 14A bar killed the (passable) 120-150k
+                                        * valley mid-crossing; ~19.4A rides it, hard OC still above */
+        .stallDebounceMs    = 150,
         .stallArmErpm       = 5000,
         .ocLimitMa          = 20000,   /* 2026-06-17 reverted 600->20000 to the committed 2810
                                         * baseline (CMP3 chop parked just below sensor saturation;
