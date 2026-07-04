@@ -976,8 +976,8 @@ extern "C" {
 #define HWZC_MISS_LIMIT          3   /* Missed HW ZCs before fallback to software ZC (low for debug) */
 /* 2026-06-17 PER-PROFILE: high-KV micros (6/7/8) use a smaller deadband so their
  * ~6-count 10V BEMF can cross; 2810 etc. keep the default 4. */
-#if MOTOR_PROFILE == 6 || MOTOR_PROFILE == 7 || MOTOR_PROFILE == 8 || MOTOR_PROFILE == 2
-#define HWZC_CMP_DEADBAND        2   /* 2026-06-18 TEST: profile 2 on the relaxed deadband */
+#if MOTOR_PROFILE == 6 || MOTOR_PROFILE == 7 || MOTOR_PROFILE == 8
+#define HWZC_CMP_DEADBAND        2   /* high-KV micros: ~6-count BEMF needs the tight band */
 #else
 #define HWZC_CMP_DEADBAND        4   /* ADC counts deadband for comparator sanity check (default) */
 #endif
