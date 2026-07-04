@@ -71,16 +71,16 @@ class Broker:
             self._port = self.gsp.port
         print(f"garuda-broker: reconnected to {self.gsp.port}", flush=True)
 
-    def _uart(self, method, params):
+    def _uart(self, method, params, kwargs=None):
         """Run one UART transaction under the lock; on a serial I/O error
         (Errno 5 / SerialException — a dead fd after a USB glitch) reconnect once
         and retry, so the daemon self-heals instead of failing forever."""
         with self.lock:
             try:
-                return getattr(self.gsp, method)(*params)
+                return getattr(self.gsp, method)(*params, **(kwargs or {}))
             except (OSError, _serial.SerialException):
                 self._reconnect()
-                return getattr(self.gsp, method)(*params)
+                return getattr(self.gsp, method)(*params, **(kwargs or {}))
 
     def _poll(self):
         period = 1.0 / POLL_HZ
@@ -124,6 +124,7 @@ class Broker:
                 rid = req.get("id")
                 method = req.get("method")
                 params = req.get("params", []) or []
+                kwargs = req.get("kwargs", {}) or {}
                 resp = {"id": rid}
                 try:
                     if method == "get_snapshot":
@@ -131,7 +132,7 @@ class Broker:
                     elif method == "info":
                         resp["result"] = self.gsp.info
                     else:
-                        resp["result"] = self._uart(method, params)   # +reconnect
+                        resp["result"] = self._uart(method, params, kwargs)   # +reconnect
                 except Exception as e:                           # noqa
                     resp["error"] = f"{type(e).__name__}: {e}"
                 c.send(resp)
@@ -203,12 +204,13 @@ class BrokerClient:
                     self._pending[msg["id"]] = msg
                     self._cv.notify_all()
 
-    def _rpc(self, method, *params, timeout=4.0):
+    def _rpc(self, method, *params, timeout=4.0, _kwargs=None):
         with self._cv:
             self._id += 1
             rid = self._id
         self._wf.write((json.dumps({"id": rid, "method": method,
-                                    "params": list(params)}) + "\n").encode())
+                                    "params": list(params),
+                                    "kwargs": _kwargs or {}}) + "\n").encode())
         self._wf.flush()
         end = time.time() + timeout
         with self._cv:
@@ -252,8 +254,8 @@ class BrokerClient:
     def __getattr__(self, name):
         if name.startswith("_"):
             raise AttributeError(name)
-        def _f(*params):
-            return self._rpc(name, *params)
+        def _f(*params, **kwargs):
+            return self._rpc(name, *params, _kwargs=kwargs)
         return _f
 
 
