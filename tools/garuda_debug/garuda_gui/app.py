@@ -108,6 +108,11 @@ class SerialWorker(QtCore.QThread):
         self._run = True
         self._q = Queue()
         self._broker_proc = None
+        self._scope_cancel = False
+
+    def cancel_scope(self):
+        """Abort a pending scope wait (thread-safe flag)."""
+        self._scope_cancel = True
 
     def submit(self, action, **kw):
         """Thread-safe: enqueue an action for the worker to run on the port."""
@@ -136,16 +141,24 @@ class SerialWorker(QtCore.QThread):
                     elif cmd == "throttle":
                         c.set_throttle(int(kw["value"]))
                 elif action == "scope_capture":
-                    c.scope_arm(trig_mode=kw.get("mode", 0), pre_pct=kw.get("pre", 25))
-                    st, ready = {"state": 0}, False
-                    for _ in range(150):          # ~3s waiting for the trigger
+                    self._scope_cancel = False
+                    c.scope_arm(trig_mode=kw.get("mode", 0), pre_pct=kw.get("pre", 25),
+                                trig_ch=kw.get("trig_ch", 0), trig_edge=kw.get("trig_edge", 0),
+                                threshold=kw.get("threshold", 0))
+                    st, ready, cancelled = {"state": 0}, False, False
+                    polls = int(kw.get("wait_s", 30) * 20)   # 50ms poll
+                    for _ in range(polls):
+                        if self._scope_cancel:
+                            cancelled = True
+                            break
                         st = c.scope_status()
                         if st.get("state") == 3:  # READY
                             ready = True
                             break
-                        self.msleep(20)
+                        self.msleep(50)
                     samples = c.scope_read_all() if ready else []
-                    self.scope_ready.emit({"ok": ready, "samples": samples, "status": st})
+                    self.scope_ready.emit({"ok": ready, "cancelled": cancelled,
+                                           "samples": samples, "status": st})
             except Exception as e:  # noqa
                 self.param_written.emit({"ok": False, "pid": kw.get("pid"),
                                          "name": kw.get("name", ""), "error": str(e)})
@@ -594,9 +607,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tabs.addTab(self._build_monitor_tab(), "📈 Monitor")
         self.tabs.addTab(self._build_tune_tab(), "🎛 Tune")
         self.tabs.addTab(self._build_wizard_tab(), "🧙 Wizard")
-        self.tabs.addTab(self._build_scope_tab(), "🔬 ZC Explainer")
+        self.tabs.addTab(self._build_scope_tab(), "🔬 Burst Scope")
         self.tabs.addTab(self._build_sim_tab(), "🧪 ZC Lab")
         root.addWidget(self.tabs, 1)
+
+        # SAFETY: Esc = motor STOP from anywhere in the app (armed benches).
+        sc_stop = QtGui.QShortcut(QtGui.QKeySequence(QtCore.Qt.Key_Escape), self)
+        sc_stop.setContext(QtCore.Qt.ApplicationShortcut)
+        def _panic_stop():
+            if self.worker:
+                self.worker.submit("motor_cmd", cmd="stop")
+                self._log("⛔ Esc pressed — STOP sent")
+        sc_stop.activated.connect(_panic_stop)
 
         # console dock (shared across tabs)
         dock = QtWidgets.QDockWidget("Console", self)
@@ -1146,6 +1168,29 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scope_pre.setRange(0, 90); self.scope_pre.setValue(25)
         self.scope_pre.setSuffix(" % pre")
         bar.addWidget(self.scope_pre)
+        # Threshold-trigger controls (enabled only in Threshold mode)
+        self.scope_trig_ch = QtWidgets.QComboBox()
+        self.scope_trig_ch.addItem("Ibus", 2); self.scope_trig_ch.addItem("Ia", 0)
+        bar.addWidget(self.scope_trig_ch)
+        self.scope_trig_edge = QtWidgets.QComboBox()
+        self.scope_trig_edge.addItem("rising", 0); self.scope_trig_edge.addItem("falling", 1)
+        bar.addWidget(self.scope_trig_edge)
+        self.scope_thresh_a = QtWidgets.QDoubleSpinBox()
+        self.scope_thresh_a.setRange(0.5, 30.0); self.scope_thresh_a.setValue(12.0)
+        self.scope_thresh_a.setDecimals(1); self.scope_thresh_a.setSuffix(" A")
+        bar.addWidget(self.scope_thresh_a)
+        def _mode_changed(_=None):
+            th = self.scope_mode.currentText() == "Threshold"
+            for wdg in (self.scope_trig_ch, self.scope_trig_edge, self.scope_thresh_a):
+                wdg.setEnabled(th)
+        self.scope_mode.currentTextChanged.connect(_mode_changed)
+        _mode_changed()
+        self.scope_wait_s = QtWidgets.QSpinBox()
+        self.scope_wait_s.setRange(3, 300); self.scope_wait_s.setValue(30)
+        self.scope_wait_s.setSuffix(" s wait")
+        self.scope_wait_s.setToolTip("How long to stay armed waiting for the trigger "
+                                     "(arm, then do the bench move that provokes the event)")
+        bar.addWidget(self.scope_wait_s)
         self.btn_scope = QtWidgets.QPushButton("◉ Arm & Capture")
         self.btn_scope.clicked.connect(self._capture_scope)
         bar.addWidget(self.btn_scope)
@@ -1170,13 +1215,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sc_p2 = glw.addPlot(row=1, col=0, title="Phase current Ia (A)")
         self.sc_p2.showGrid(x=True, y=True, alpha=0.2)
         self.sc_ia = self.sc_p2.plot(pen=pg.mkPen("#ffa726", width=2))
-        self.sc_p3 = glw.addPlot(row=2, col=0, title="Sector (0-5)")
+        self.sc_p2b = glw.addPlot(row=2, col=0, title="Ibus (A)  /  duty (%)")
+        self.sc_p2b.showGrid(x=True, y=True, alpha=0.2)
+        self.sc_p2b.addLegend(offset=(10, 10))
+        self.sc_ibus = self.sc_p2b.plot(pen=pg.mkPen("#ef5350", width=2), name="Ibus A")
+        self.sc_duty = self.sc_p2b.plot(pen=pg.mkPen("#9e9e9e", width=1,
+                                        style=QtCore.Qt.DashLine), name="duty %")
+        self.sc_p3 = glw.addPlot(row=3, col=0, title="Sector (0-5)")
         self.sc_p3.showGrid(x=True, y=True, alpha=0.2)
         self.sc_sec = self.sc_p3.plot(pen=pg.mkPen("#80cbc4", width=2))
-        self.sc_p2.setXLink(self.sc_p1); self.sc_p3.setXLink(self.sc_p1)
+        self.sc_p2.setXLink(self.sc_p1); self.sc_p2b.setXLink(self.sc_p1)
+        self.sc_p3.setXLink(self.sc_p1)
         self.sc_p3.setLabel("bottom", "time (µs)")
         self.sc_trig_lines = []
-        for pl in (self.sc_p1, self.sc_p2, self.sc_p3):
+        for pl in (self.sc_p1, self.sc_p2, self.sc_p2b, self.sc_p3):
             ln = pg.InfiniteLine(angle=90, movable=False,
                                  pen=pg.mkPen("#66bb6a", style=QtCore.Qt.DotLine))
             ln.setVisible(False); pl.addItem(ln); self.sc_trig_lines.append(ln)
@@ -1187,17 +1239,31 @@ class MainWindow(QtWidgets.QMainWindow):
     def _capture_scope(self):
         if not self.worker:
             self._log("scope: not connected"); return
+        if self.btn_scope.text().startswith("✕"):
+            self.worker.cancel_scope()
+            self.btn_scope.setText("◉ Arm & Capture")
+            return
         mode = P.SCOPE_TRIG[self.scope_mode.currentText()]
-        self.scope_status_lbl.setText("arming / waiting for trigger…")
-        self.btn_scope.setEnabled(False)
-        self._log(f"scope: arm ({self.scope_mode.currentText()}, {self.scope_pre.value()}% pre)")
-        self.worker.submit("scope_capture", mode=mode, pre=self.scope_pre.value())
+        thr = 0
+        if self.scope_mode.currentText() == "Threshold":
+            thr = int(self.scope_thresh_a.value() * 1000)   # firmware: mA on current chans
+        self.scope_status_lbl.setText("ARMED — waiting for trigger… (do the bench move now)")
+        self.btn_scope.setText("✕ Cancel wait")
+        self._log(f"scope: arm ({self.scope_mode.currentText()}, {self.scope_pre.value()}% pre"
+                  + (f", {self.scope_trig_ch.currentText()} {self.scope_trig_edge.currentText()}"
+                     f" {self.scope_thresh_a.value():.1f}A" if thr else "") + ")")
+        self.worker.submit("scope_capture", mode=mode, pre=self.scope_pre.value(),
+                           trig_ch=self.scope_trig_ch.currentData(),
+                           trig_edge=self.scope_trig_edge.currentData(),
+                           threshold=thr, wait_s=self.scope_wait_s.value())
 
     def on_scope_ready(self, data):
         self.btn_scope.setEnabled(True)
+        self.btn_scope.setText("◉ Arm & Capture")
         if not data.get("ok"):
-            self.scope_status_lbl.setText("no trigger (timed out)")
-            self._log("scope: timed out waiting for trigger"); return
+            msg = "cancelled" if data.get("cancelled") else "no trigger (timed out)"
+            self.scope_status_lbl.setText(msg)
+            self._log(f"scope: {msg}"); return
         samples = data.get("samples", [])
         self._scope_samples = samples
         if not samples:
@@ -1210,6 +1276,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sc_bemf.setData(xs, bemf)
         self.sc_zc.setData(xs, zc)
         self.sc_ia.setData(xs, [s["ia_A"] for s in samples])
+        self.sc_ibus.setData(xs, [s["ibus_A"] for s in samples])
+        self.sc_duty.setData(xs, [s["duty_pct"] for s in samples])
         self.sc_sec.setData(xs, [s["sector"] for s in samples])
         # zero-cross = where (BEMF - threshold) changes sign
         zx, zy = [], []
