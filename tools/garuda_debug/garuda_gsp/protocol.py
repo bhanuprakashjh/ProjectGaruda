@@ -72,12 +72,37 @@ PARAM_NAMES = {
     0x53: "maxClosedLoopErpm", 0x54: "sineAlignModPct", 0x55: "sineRampModPct",
     0x56: "zcDemagDutyThresh", 0x57: "zcDemagBlankExtraPct",
     0x58: "ocLimitMa", 0x59: "ocStartupMa", 0x5A: "rampCurrentGateMa",
+    # WS1 load-adaptive demag blank, WS2 phase-stall fault
+    0x5B: "zcDemagBlankPerA", 0x5C: "zcDemagBlankIbusDb",
+    0x5D: "stallIphaseAdc", 0x5E: "stallDebounceMs", 0x5F: "stallArmErpm",
     0x60: "dutySlewUpPctPerMs", 0x61: "dutySlewDownPctPerMs",
     0x62: "postSyncSettleMs", 0x63: "postSyncSlewDivisor",
     0x64: "zcBlankingPercent", 0x65: "zcAdcDeadband",
     0x66: "zcSyncThreshold", 0x67: "zcFilterThreshold",
     0x68: "vbusOvAdc", 0x69: "vbusUvAdc",
     0x6A: "desyncCoastMs", 0x6B: "desyncMaxRestarts",
+    # AN1078 SMC tuning
+    0x90: "an1078ThetaBaseDegX10", 0x91: "an1078ThetaKE7",
+    0x92: "an1078KslideMv", 0x93: "an1078IdFwMaxDecia",
+    # WS4 nested speed→current→duty cascade
+    0x94: "cascadeSpeedKpMilli", 0x95: "cascadeSpeedKiMicro",
+    0x96: "cascadeCurrKpMilli", 0x97: "cascadeCurrKiMicro",
+    0x98: "cascadeIrefCeilingAdc", 0x99: "cascadeTgtErpmIdle",
+    0x9A: "cascadeTgtErpmMax",
+    # WS3 duty-adaptive BEMF sample trigger
+    0x9B: "bemfTrigBasePct", 0x9C: "bemfTrigDutyThreshPct", 0x9D: "bemfTrigShiftQ",
+    # WS1 (extended): demag blank cap
+    0x9E: "zcDemagBlankMaxPct",
+    # morph lock quality + I-f startup (present when those features compile in)
+    0x6C: "morphLockZcCount", 0x6D: "morphLockTolPct",
+    0x6E: "ifCurrentCa", 0x6F: "ifRampErpmPerS",
+    # FOC block (legacy - served only by FOC builds)
+    0x70: "focRsMohm", 0x71: "focLsUh", 0x72: "focKeUvSRad", 0x73: "focVbusNomCv",
+    0x74: "focMaxCurrentCa", 0x75: "focMaxElecRadS", 0x76: "focKpDqMilli",
+    0x77: "focKiDq", 0x78: "focObsLpfMilli", 0x79: "focAlignIqCa",
+    0x7A: "focRampIqCa", 0x7B: "focAlignTimeMs", 0x7C: "focIqRampTimeMs",
+    0x7D: "focRampRateRps2", 0x7E: "focHandoffRadS", 0x7F: "focFaultOcCa",
+    0x80: "focFaultStallDrs",
 }
 PARAM_IDS = {v: k for k, v in PARAM_NAMES.items()}
 

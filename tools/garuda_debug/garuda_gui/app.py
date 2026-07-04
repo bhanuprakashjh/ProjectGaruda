@@ -27,6 +27,7 @@ import pyqtgraph as pg
 from garuda_gsp import GspClient, GspError, Session, __version__ as GSP_VER
 from garuda_gsp.broker import connect_auto, ensure_broker
 from garuda_gsp import protocol as P
+from garuda_gsp import params_meta as PM
 from . import diagnose as DIAG
 from garuda_gsp import analyze as ANALYZE
 from . import wizard as WIZ
@@ -556,6 +557,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.btn_diag = QtWidgets.QPushButton("🔍 Diagnose")
         self.btn_diag.setEnabled(False)
         self.btn_diag.clicked.connect(self.run_diagnosis)
+        self.btn_report = QtWidgets.QPushButton("🤖 Copy report")
+        self.btn_report.setToolTip("Build a compact markdown debug report (fw, params in real "
+                                   "units, run stats, faults, console tail) — copied to the "
+                                   "clipboard and saved to sessions/, ready to paste to Claude")
+        self.btn_report.setEnabled(False)
+        self.btn_report.clicked.connect(self._copy_claude_report)
         self.lbl_id = QtWidgets.QLabel("not connected")
         self.lbl_id.setStyleSheet("color:#9e9e9e;")
         top.addWidget(QtWidgets.QLabel("Port:"))
@@ -564,6 +571,7 @@ class MainWindow(QtWidgets.QMainWindow):
         top.addWidget(self.btn_connect)
         top.addWidget(self.btn_record)
         top.addWidget(self.btn_diag)
+        top.addWidget(self.btn_report)
         top.addStretch(1)
         top.addWidget(self.lbl_id, 3)
         root.addLayout(top)
@@ -1078,9 +1086,9 @@ class MainWindow(QtWidgets.QMainWindow):
         bar.addWidget(self.tune_filter, 1)
         v.addLayout(bar)
 
-        self.tbl = QtWidgets.QTableWidget(0, 5)
+        self.tbl = QtWidgets.QTableWidget(0, 6)
         self.tbl.setHorizontalHeaderLabels(
-            ["Parameter", "Value", "Min", "Max", "Group · est."])
+            ["Parameter", "Value", "≈ Physical", "Min", "Max", "Group · est."])
         self.tbl.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.Stretch)
         self.tbl.verticalHeader().setVisible(False)
         self.tbl.itemChanged.connect(self._on_tune_edit)
@@ -1488,6 +1496,7 @@ class MainWindow(QtWidgets.QMainWindow):
             f"PWM={info['pwmFrequency']:,}Hz  cap={info['maxErpm']:,}")
         self.btn_record.setEnabled(True)
         self.btn_diag.setEnabled(True)
+        self.btn_report.setEnabled(True)
         self.sim_panel.setVisible(bool(info.get("sim")))
         self._log(f"connected: fw v{info['fwVersion']} build={bh} "
                   f"profile={info['motorProfile']} {'FOC' if info.get('isFoc') else '6-step'}")
@@ -1527,8 +1536,17 @@ class MainWindow(QtWidgets.QMainWindow):
 
         name_it = QtWidgets.QTableWidgetItem(name)
         name_it.setFlags(name_it.flags() & ~QtCore.Qt.ItemIsEditable)
+        desc = PM.describe(name)
+        if desc:
+            name_it.setToolTip(desc)
         val_it = QtWidgets.QTableWidgetItem("" if val is None else str(val))
         val_it.setTextAlignment(QtCore.Qt.AlignCenter)
+        phys_it = QtWidgets.QTableWidgetItem(PM.phys(name, val))
+        phys_it.setFlags(phys_it.flags() & ~QtCore.Qt.ItemIsEditable)
+        phys_it.setForeground(QtGui.QColor("#4fc3f7"))
+        phys_it.setTextAlignment(QtCore.Qt.AlignCenter)
+        if desc:
+            phys_it.setToolTip(desc)
         mn_it = QtWidgets.QTableWidgetItem("" if mn is None else str(mn))
         mn_it.setFlags(mn_it.flags() & ~QtCore.Qt.ItemIsEditable)
         mn_it.setForeground(QtGui.QColor("#777"))
@@ -1543,7 +1561,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if warn:
             val_it.setForeground(QtGui.QColor("#ef5350"))
             val_it.setToolTip(warn)
-        for col, it in enumerate((name_it, val_it, mn_it, mx_it, note_it)):
+        for col, it in enumerate((name_it, val_it, phys_it, mn_it, mx_it, note_it)):
             self.tbl.setItem(r, col, it)
 
     def _est_current(self, name, val):
@@ -1862,8 +1880,10 @@ class MainWindow(QtWidgets.QMainWindow):
         op = parts[0].lower()
         if op in ("help", "?"):
             self._log("commands: help · clear · pause · resume · mark <text> · "
-                      "diagnose · params · get <param> · set <param> <value> · "
+                      "diagnose · report · params · get <param> · set <param> <value> · "
                       "export · reload · save")
+        elif op == "report":
+            self._copy_claude_report()
         elif op == "clear":
             self.console.clear()
         elif op == "pause":
@@ -1906,6 +1926,78 @@ class MainWindow(QtWidgets.QMainWindow):
             self.toggle_record()
         else:
             self._log(f"unknown command: {op}  (try 'help')")
+
+    def _copy_claude_report(self):
+        """Compact markdown debug report -> clipboard + sessions/report_*.md.
+
+        Purpose: hand Claude (or a teammate) everything relevant in ~100 lines
+        instead of pasting thousands of raw telemetry rows."""
+        import types
+        lines = []
+        info = self.info or {}
+        lines.append(f"# Garuda debug report {time.strftime('%Y-%m-%d %H:%M:%S')}")
+        lines.append(f"fw: {info.get('fw_version','?')} build=0x{info.get('build_id',0):08X} "
+                     f"profile={info.get('profile_name','?')}")
+        samples = list(self.live)
+        if samples:
+            ns = types.SimpleNamespace(samples=samples, info=info, params=self.params)
+            try:
+                summ = DIAG.summarize(ns)
+                lines.append("")
+                lines.append("## Run summary (per state)")
+                for st, d in (summ.get("per_state") or {}).items():
+                    lines.append(f"- {st}: {d.get('n',0)} frames, "
+                                 f"{d.get('t0',0):.1f}-{d.get('t1',0):.1f}s, "
+                                 f"peak {d.get('peak_eRPM',0):,} eRPM / {d.get('peak_Ia',0):.1f} A")
+                if "rej_pct" in summ:
+                    lines.append(f"- ZC noise-rejection over run: {summ['rej_pct']:.1f}% "
+                                 f"(NOISE metric; lock quality is cap= on the console lines)")
+            except Exception as e:  # noqa
+                lines.append(f"(summary error: {e})")
+            # fault episodes
+            faults = [(x.get("t",0), x.get("fault_name","?")) for x in samples
+                      if x.get("fault") and x.get("fault_name") not in (None, "NONE")]
+            if faults:
+                lines.append("")
+                lines.append("## Fault frames")
+                seen = set()
+                for t, fn in faults:
+                    if fn not in seen:
+                        seen.add(fn)
+                        lines.append(f"- first {fn} at t={t:.2f}s "
+                                     f"({sum(1 for _,f in faults if f==fn)} frames)")
+            last = samples[-1]
+            lines.append("")
+            lines.append(f"## Last frame  t={last.get('t',0):.2f}s")
+            lines.append(f"state={last.get('state_name')} thr={last.get('throttle')} "
+                         f"duty={last.get('duty')}% eRPM={last.get('eRPM',0):,} "
+                         f"Vbus={last.get('vbus_V',0):.1f}V fault={last.get('fault_name')}")
+        else:
+            lines.append("(no telemetry captured yet)")
+        # params with physical units
+        if self.params:
+            lines.append("")
+            lines.append("## Parameters (raw -> physical)")
+            lines.append("| name | raw | phys | range |")
+            lines.append("|---|---|---|---|")
+            for name, p in sorted(self.params.items()):
+                v = p.get("value")
+                ph = PM.phys(name, v)
+                lines.append(f"| {name} | {v} | {ph} | {p.get('min')}-{p.get('max')} |")
+        # console tail
+        tail = self.console.toPlainText().split("\n")[-25:]
+        lines.append("")
+        lines.append("## Console tail")
+        lines.append("```")
+        lines.extend(tail)
+        lines.append("```")
+        md = "\n".join(lines)
+        QtWidgets.QApplication.clipboard().setText(md)
+        os.makedirs("sessions", exist_ok=True)
+        path = os.path.join("sessions", f"report_{time.strftime('%Y%m%d_%H%M%S')}.md")
+        with open(path, "w") as f:
+            f.write(md)
+        self._log(f"🤖 report copied to clipboard + saved {path} ({len(lines)} lines)")
 
     def run_diagnosis(self):
         if not self.live:
