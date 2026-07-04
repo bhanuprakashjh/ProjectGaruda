@@ -212,6 +212,9 @@ static const GSP_PARAMS_T profileDefaults[10] = {
                                         * the desync wall moved ~90k -> ~114k eRPM at 24V. */
         .zcDemagBlankIbusDb = 30,
         .zcDemagBlankMaxPct = 33,
+        .desyncMaxRestarts  = 0,       /* restart parked (2026-07-04): coast then latch FAULT_DESYNC.
+                                        * Restart-into-spin PCI'd twice at 118k/145k; re-enable after
+                                        * the Vbus spin-catch gate is bench-proven. */
         .stallIphaseAdc     = 1300,    /* WS2 (ported from U3): ~14A phase sustained = circulating/stall */
         .stallDebounceMs    = 50,
         .stallArmErpm       = 5000,

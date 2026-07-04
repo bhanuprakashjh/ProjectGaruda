@@ -4647,11 +4647,12 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
                  * "run at idle duty", not "stop". */
                 bool restartGateThrottle = true;
 
-                /* AUTO_DISARM=0: never run out of restart attempts.
-                 * Reset the counter when it would otherwise cap, so the
-                 * motor keeps restarting indefinitely at any throttle. */
-                if (garudaData.desyncRestartAttempts >= RT_DESYNC_MAX_RESTARTS)
-                    garudaData.desyncRestartAttempts = 0;
+                /* Honor desyncMaxRestarts (2026-07-04): the old block reset
+                 * the attempt counter whenever it capped, so the motor
+                 * restarted forever and the param was dead. Now: 0 = no
+                 * restart, latch FAULT_DESYNC straight after the coast
+                 * ("stall on fault" — restart-into-spin parked until the
+                 * spin-catch path is bench-proven); N = N attempts. */
                 garudaData.runCommandActive = true;
 
                 if (garudaData.runCommandActive &&
