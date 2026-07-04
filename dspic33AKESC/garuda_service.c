@@ -3771,9 +3771,11 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                         {
                             float erpmFf = (vbus_v * dutyFrac)
                                 * (1.0e9f / (181.380f * lam));
+                            /* Threshold vs formula no-load itself, NOT vs the
+                             * floor: a mistimed lock pins AT the floor, so
+                             * floor+margin never trips (bench 2026-07-04). */
                             float ceilE = erpmFf
-                                * ((float)(HWZC_ABS_FLOOR_OVERSPEED_PCT_LOW
-                                           + HWZC_MISTIME_MARGIN_PCT) / 100.0f);
+                                * ((float)(100 + HWZC_MISTIME_MARGIN_PCT) / 100.0f);
                             uint8_t falling = (mtPrevErpm > 0u)
                                 && (erpm * 100u < mtPrevErpm
                                     * (100u - HWZC_MISTIME_DECEL_EXCL_PCT));

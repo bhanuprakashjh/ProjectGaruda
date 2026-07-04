@@ -1530,15 +1530,15 @@ extern "C" {
  * Below LOW_DUTYFRAC use a TIGHT ceiling so that phantom is clamped down to ~no-
  * load. 100% = the physical idle ceiling; drop to ~95/92 if it still settles a
  * touch high (true idle ≈ 92% of the formula no-load on this 2810). */
-#if MOTOR_PROFILE == 9
-#define HWZC_ABS_FLOOR_OVERSPEED_PCT_LOW  130  /* U3 (2026-06-25): raised 100->130. The propped
-                                                * low-KV U3 idles at 6% duty where the tight 100%
-                                                * ceiling pinned it at exactly no-load (~6.7k, 12A
-                                                * half-blind). 130% lets the rotor climb off the
-                                                * idle floor. Tune down if a decel phantom appears. */
-#else
-#define HWZC_ABS_FLOOR_OVERSPEED_PCT_LOW  100  /* idle/low-duty ceiling (no advance) */
-#endif
+#define HWZC_ABS_FLOOR_OVERSPEED_PCT_LOW  130  /* ALL profiles (2026-07-04): was 100 for non-U3.
+                                                * The tight 100% ceiling is itself an attractor:
+                                                * IR-drop-skewed early ZCs pin the PLL at exactly
+                                                * the floor (U3: 6.7k/12A half-blind; A2212: 10.3k
+                                                * /9A at 8% duty — bench-proven via focKeUvSRad A/B:
+                                                * floor moved out of reach -> mistimed transients
+                                                * self-correct in <200ms). 130% keeps the phantom
+                                                * ceiling while sitting above the self-correcting
+                                                * transient band (~110-122% of no-load). */
 #define HWZC_ABS_FLOOR_LOW_DUTYFRAC      0.12f /* below this duty, use the LOW ceiling */
 
 /* ── Mistimed-lock watchdog (A2212 bench 2026-07-04) ─────────────────────
@@ -1553,7 +1553,11 @@ extern "C" {
  * every gentle re-entry lands in the clean 1A idle). Uses per-profile
  * gspParams.focKeUvSRad - correct for all seeded motors. */
 #define FEATURE_HWZC_MISTIME_WATCHDOG    1
-#define HWZC_MISTIME_MARGIN_PCT          5   /* trip above (PCT_LOW + this)% of no-load */
+#define HWZC_MISTIME_MARGIN_PCT         15   /* trip above (100 + this)% of formula no-load.
+                                              * Sits between true idle (~92-97% of formula) and
+                                              * the 130% floor; self-correcting transients peak
+                                              * ~110-122% but for <200ms — the 8x50ms persistence
+                                              * filter passes them, a pinned lock does not. */
 #define HWZC_MISTIME_STRIKES             8   /* consecutive 50ms windows (~400ms) */
 #define HWZC_MISTIME_DECEL_EXCL_PCT      5   /* window-over-window fall > this % = coasting */
 
