@@ -1216,9 +1216,21 @@ extern "C" {
  * ~118k). Above this eRPM, falling sectors leave the comparator IE off and
  * the PI dead-reckons them (a missed ZC is a non-update by design).
  * 0 = falling heard at all speeds. Per-profile: only the 2810 for now
- * (one-flip discipline; U3 tops ~83k on its own campaign baseline). */
+ * (one-flip discipline; U3 tops ~83k on its own campaign baseline).
+ *
+ * 70000 -> 20000 (2026-07-04 evening, classic-startup bench): the GUI
+ * per-sector export showed S3 (C-falling) walking -3 -> +30 deg to the
+ * detection rail (sd 15) while every rising sector held +/-3 deg, and two
+ * runs snapped 62k->98k / 68k->96k at CONSTANT duty (1.5x harmonic lock)
+ * before the desync kill — falling captures below the old 70k mute were
+ * feeding the PI progressively-later poison, the same RC-lag walk the
+ * 2026-06-12 sweep measured from 30k up (547->955 permille). 20000 is the
+ * ON-window falling detector's own measured reliability ceiling (see the
+ * FALLING_SW block: "silent on FALLING above ~20k"). Below 20k falling
+ * still arms — startup/handoff keeps all 6 captures where they are clean
+ * and needed. */
 #if MOTOR_PROFILE == 2
-#define HWZC_FALLING_MUTE_ERPM     70000
+#define HWZC_FALLING_MUTE_ERPM     20000
 #else
 #define HWZC_FALLING_MUTE_ERPM         0
 #endif
