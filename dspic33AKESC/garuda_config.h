@@ -386,14 +386,18 @@ extern "C" {
  * DIRECTLY, no MORPH. The sine MORPH seeded the CL period + trusted sync at handoff,
  * letting CL run PHANTOM (good_zc=0, even sectors 0/2/4 masked 100%, Ia ~14A). Regular
  * startup enters CL from the forced ramp and must detect REAL floating-phase ZC. */
-#if MOTOR_PROFILE == 1 || MOTOR_PROFILE == 8 || MOTOR_PROFILE == 9
+#if MOTOR_PROFILE == 1 || MOTOR_PROFILE == 2 || MOTOR_PROFILE == 8 || MOTOR_PROFILE == 9
 /* Profile 1 A2212 (2026-07-04): joined the classic carve-out - sine's morph
  * handoff parked it in a stable MISTIMED lock at idle (10.3k @ 10.5A for 5s,
  * snapped to 1.2A same speed on a throttle poke; reproduced twice). Classic
  * enters CL from the forced ramp and must detect real ZC - A/B for that bug.
  * Profile 9 (2026-07-04): classic 6-step startup selected on the bench -
  * align -> forced OL ramp -> direct CL handoff, no sine/morph. Flip back
- * to sine by removing profile 9 from this override. */
+ * to sine by removing profile 9 from this override.
+ * Profile 2 2810 (2026-07-04 evening): bench A/B - sine morph "locked" on
+ * PWM-ripple phantoms at 3k handoff and CL ran phantom to the 16.6k
+ * watchdog kill (same family as the U3 trusted-handoff phantom above).
+ * Classic forces real-ZC sync before CL. Flip back by removing 2. */
 #undef  FEATURE_SINE_STARTUP
 #define FEATURE_SINE_STARTUP     0
 #endif
