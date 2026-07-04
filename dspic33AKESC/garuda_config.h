@@ -55,7 +55,14 @@ extern "C" {
                                      * time the motor needs to accelerate hand-off->idle. */
 #define CL_SOFT_ENTRY_DIVISOR   64  /* Entry up-rate = DUTY_SLEW_UP_RATE / this. Bigger =
                                      * gentler (lower current, slower spin-up). Bench-tune. */
-#define FEATURE_SPINDOWN_FLOOR (MOTOR_PROFILE == 9 || MOTOR_PROFILE == 2)
+#define FEATURE_SPINDOWN_FLOOR (MOTOR_PROFILE == 9)
+                                    /* U3-ONLY until made lambda-driven: SPINDOWN_FLOOR_KV_NUM is
+                                     * calibrated to U3 Ke (lam~1125). Ported to the 2810 (lam=583)
+                                     * 2026-07-04 it computed ~2x the true BEMF-equivalent duty ->
+                                     * positive-feedback duty runaway at CL entry (5->93% in 100ms,
+                                     * 21.9A, thr at idle; WS2 STALL caught it both runs). Any motor
+                                     * with lam < U3's is unstable under this floor. Generalize by
+                                     * deriving KV_NUM from gspParams.focKeUvSRad before re-porting. */
                                     /* Spin-down BEMF duty floor (2026-07-03, 20V pot-0 desync).
                                      * A pot-0 from cruise drops duty full-scale in ~4ms
                                      * (DUTY_SLEW_DOWN 5%/ms; the HIGH_RPM penalty only bites
