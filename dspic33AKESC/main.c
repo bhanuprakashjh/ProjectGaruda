@@ -7,7 +7,8 @@
  *   1. InitOscillator() — 200MHz system clock, 400MHz PWM, 100MHz ADC
  *   2. SetupGPIOPorts() — PWM, BEMF, LED, button, UART, DShot pins
  *   3. HAL_InitPeripherals() — ADC, PWM, Timer1
- *   4. (GSP) GSP_ParamsInit + RecomputeDerived
+ *   4. (GSP) [FEATURE_NVM_SELFTEST boot flash self-test] + GSP_ParamsInit
+ *      + RecomputeDerived
  *   5. GARUDA_ServiceInit() — state machine data, enable ADC ISR
  *   6. Main loop — button polling, GSP intents, heartbeat, board service
  *
@@ -39,9 +40,13 @@
 #if FEATURE_GSP
 #include "gsp/gsp.h"
 #include "gsp/gsp_params.h"
+#include "gsp/gsp_param_store.h"
 #endif
 #if FEATURE_EEPROM_V2
 #include "hal/eeprom.h"
+#endif
+#if FEATURE_NVM_SELFTEST
+#include "hal/hal_nvm.h"
 #endif
 #if FEATURE_COMMISSION
 #include "learn/commission.h"
@@ -76,6 +81,15 @@ int main(void)
     /* GSP runtime params — BEFORE GARUDA_ServiceInit so RT_* reads are valid
      * from the first ISR tick. */
 #if FEATURE_GSP
+    /* Boot-time destructive flash self-test on the param-store user area,
+     * BEFORE GSP_ParamsInit() reads/writes that same region. NOTE ordering
+     * consequence: while FEATURE_NVM_SELFTEST is on, this wipes any saved
+     * user params at every boot (test pattern write + final erase), so
+     * persistence testing (bench card step 4) requires a build with
+     * FEATURE_NVM_SELFTEST 0. */
+#if FEATURE_NVM_SELFTEST
+    g_nvmSelfTestResult = NVMFLASH_SelfTest(PARAM_STORE_ADDR, PARAM_STORE_PAGES);
+#endif
     GSP_ParamsInit();               /* factory (or saved user table) → RAM */
     GSP_RecomputeDerived();         /* precompute ISR values */
 #endif

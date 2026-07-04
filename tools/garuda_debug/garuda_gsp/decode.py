@@ -2,9 +2,10 @@
 Version-negotiated decoders for GET_INFO and GET_SNAPSHOT.
 
 The whole point of this module: the wire formats GROW over firmware versions
-(INFO went 20B→24B, snapshot is 68..228B). We decode by *payload length*, never
-assume, and fill missing fields with defaults — so an older or newer board both
-decode without the tool crashing (the bug we hit twice by hand today).
+(INFO went 20B->24B->26B, snapshot is 68..228B). We decode by *payload length*,
+never assume, and fill missing fields with defaults - so an older or newer
+board both decode without the tool crashing (the bug we hit twice by hand
+today).
 """
 import struct
 
@@ -12,7 +13,8 @@ from . import protocol as P
 
 
 def decode_info(payload: bytes) -> dict:
-    """GSP_INFO_T. V2 = 20B; V3 = 24B (appends buildHash). maxErpm @ offset 16."""
+    """GSP_INFO_T. V2 = 20B; V3 = 24B (appends buildHash);
+    V4 = 26B (appends paramSource + nvmSelfTest, 1B each). maxErpm @ offset 16."""
     n = len(payload)
     if n < 20:
         return {"error": f"INFO too short ({n}B)"}
@@ -30,10 +32,40 @@ def decode_info(payload: bytes) -> dict:
         "maxErpm": f[9],
         "buildHash": None,
         "infoBytes": n,
+        # V4 fields — None on older/shorter payloads (pre-Task-5 firmware).
+        "paramSource": None,
+        "paramSourceName": None,
+        "nvmSelfTest": None,
     }
     if n >= 24:
         info["buildHash"] = struct.unpack_from("<I", payload, 20)[0]
+    if n >= 26:
+        param_source, nvm_selftest = struct.unpack_from("<BB", payload, 24)
+        info["paramSource"] = param_source
+        info["paramSourceName"] = "user" if param_source == 1 else "factory"
+        info["nvmSelfTest"] = nvm_selftest
+    info["connectLine"] = _build_connect_line(info)
     return info
+
+
+def _build_connect_line(info: dict) -> str:
+    """Short human-readable suffix for identity/connect banners.
+
+    params=<source> always shown (defaults to 'factory?' when the firmware
+    is too old to report a source). flashtest=FAIL:<n> only appears when
+    the self-test ran and reported a nonzero, non-"not run" step code —
+    silent otherwise so a healthy or absent self-test doesn't clutter the
+    line."""
+    if info.get("paramSourceName"):
+        parts = [f"params={info['paramSourceName']}"]
+    else:
+        parts = ["params=factory?"]
+
+    selftest = info.get("nvmSelfTest")
+    if selftest is not None and selftest != 0 and selftest != 0xFF:
+        parts.append(f"flashtest=FAIL:{selftest}")
+
+    return " ".join(parts)
 
 
 def _adc_to_amp(raw):

@@ -441,6 +441,16 @@ extern "C" {
 #define FEATURE_COMMISSION       0  /* requires FEATURE_LEARN_MODULES */
 #define FEATURE_EEPROM_V2        1  /* NVM persistent storage DRIVER for GSP params */
 
+#define FEATURE_NVM_SELFTEST  1  /* boot-time destructive user-area flash test;
+                                  * result in GET_INFO. Flip to 0 once the
+                                  * param store is bench-proven (it erases any
+                                  * saved user params every boot while on).
+                                  * While ON, this wipes any saved user params
+                                  * at every boot (writes a test pattern then
+                                  * does a final erase over PARAM_STORE_ADDR),
+                                  * so persistence testing (bench card step 4)
+                                  * requires a build with this set to 0. */
+
 /* ── EEPROM parameter persistence — THE development/production switch ──────
  * 0 = DEVELOPMENT: gsp_params.c profileDefaults[] are the ONLY source of truth.
  *     The EEPROM overlay is never read at boot and GSP "save" never writes NVM,

@@ -24,9 +24,11 @@
 #include "gsp.h"
 #include "gsp_snapshot.h"
 #include "gsp_params.h"
+#include "gsp_param_store.h"
 #include "garuda_calc_params.h"
 #include "garuda_types.h"
 #include "garuda_service.h"
+#include "../hal/hal_nvm.h"
 /* Pulled in so the build hash recompiles when any tuning param/header
  * changes (Make tracks header deps via .d files).  Without these,
  * edits to an1078_params.h or motor.h leave gsp_commands.o stale and
@@ -94,6 +96,19 @@ static void SendError(uint8_t errCode)
     GSP_SendResponse(GSP_CMD_ERROR, &errCode, 1);
 }
 
+/* ── Motor-stopped gate ──────────────────────────────────────────────────
+ * Allow-list (not deny-list): only the states where the rotor is provably
+ * not spinning and no drive path is active. Every other ESC_STATE_T value
+ * (DETECT/ALIGN/OL_RAMP/MORPH/CLOSED_LOOP/BRAKING/RECOVERY/IF_RAMP) means
+ * the motor is being driven or is coasting from a drive — flash erase
+ * stalling the ISR fetch there is unacceptable. */
+static bool MotorStopped(void)
+{
+    return garudaData.state == ESC_IDLE
+        || garudaData.state == ESC_ARMED
+        || garudaData.state == ESC_FAULT;
+}
+
 /* ── Phase 0 handlers ────────────────────────────────────────────────── */
 
 static void HandlePing(const uint8_t *payload, uint8_t payloadLen)
@@ -150,6 +165,8 @@ static void HandleGetInfo(const uint8_t *payload, uint8_t payloadLen)
     info.pwmFrequency    = PWMFREQUENCY_HZ;
     info.maxErpm         = gspParams.maxClosedLoopErpm;
     info.buildHash       = buildHash;
+    info.paramSource     = (uint8_t)GSP_ParamStore_GetSource();  /* 0=factory 1=user */
+    info.nvmSelfTest     = (uint8_t)(g_nvmSelfTestResult & 0xFFu); /* 0=pass 0xFF=not run */
 
     GSP_SendResponse(GSP_CMD_GET_INFO, (const uint8_t *)&info, sizeof(info));
 }
@@ -471,24 +488,32 @@ static void HandleSetParam(const uint8_t *payload, uint8_t payloadLen)
 
 static void HandleSaveConfig(const uint8_t *payload, uint8_t payloadLen)
 {
-    (void)payload;
-    (void)payloadLen;
-
-    /* TODO(Task 5): rewrite against the new gsp_param_store persistence path. */
+    (void)payload; (void)payloadLen;
+    if (!MotorStopped()) {           /* flash erase stalls fetch — never mid-run */
+        SendError(GSP_ERR_BUSY);
+        return;
+    }
+    if (!GSP_ParamsSaveAll()) {
+        SendError(GSP_ERR_BUSY);     /* NVM failure; RAM untouched */
+        return;
+    }
     GSP_SendResponse(GSP_CMD_SAVE_CONFIG, NULL, 0);
 }
 
+/* (No 60 s throttle: that existed for automatic learned-data writes; explicit
+ * `save` at bench rates is endurance-irrelevant.) */
+
 static void HandleLoadDefaults(const uint8_t *payload, uint8_t payloadLen)
 {
-    (void)payload;
-    (void)payloadLen;
-
-    if (garudaData.state != ESC_IDLE) {
-        SendError(GSP_ERR_WRONG_STATE);
+    (void)payload; (void)payloadLen;
+    if (!MotorStopped()) {
+        SendError(GSP_ERR_BUSY);
         return;
     }
-
-    /* TODO(Task 5): rewrite against the new gsp_param_store persistence path. */
+    if (!GSP_ParamsFactoryReset()) {
+        SendError(GSP_ERR_BUSY);
+        return;
+    }
     GSP_SendResponse(GSP_CMD_LOAD_DEFAULTS, NULL, 0);
 }
 
@@ -550,10 +575,8 @@ static void HandleLoadProfile(const uint8_t *payload, uint8_t payloadLen)
         return;
     }
 
-    /* Auto-save profile so it persists across resets. Without this,
-     * selecting A2212 in GUI then resetting reverts to compile-time
-     * MOTOR_PROFILE (Hurst).
-     * TODO(Task 5): rewrite against the new gsp_param_store persistence path. */
+    /* Profile switch is RAM-only; persistence is explicit via `save`
+     * (HandleSaveConfig / GSP_CMD_SAVE_CONFIG). */
 
     /* Respond with ACK + profile ID */
     uint8_t resp = profileId;

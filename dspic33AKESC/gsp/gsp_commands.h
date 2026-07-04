@@ -25,8 +25,9 @@ extern "C" {
 #define GSP_FW_PATCH    0
 
 /* GSP protocol version — bump when GSP_INFO_T or other wire formats
- * change.  V3 = added 4-byte buildHash to GSP_INFO_T. */
-#define GSP_PROTOCOL_VERSION  3
+ * change.  V3 = added 4-byte buildHash to GSP_INFO_T.
+ * V4 = appended paramSource + nvmSelfTest (1B each) to GSP_INFO_T. */
+#define GSP_PROTOCOL_VERSION  4
 
 /* Board IDs */
 #define GSP_BOARD_MCLV48V300W  0x0001
@@ -83,14 +84,20 @@ typedef enum {
     GSP_ERR_OUT_OF_RANGE     = 0x05,
     GSP_ERR_UNKNOWN_PARAM    = 0x06,
     GSP_ERR_CROSS_VALIDATION = 0x07,
-    GSP_ERR_EEPROM_THROTTLED = 0x08
+    GSP_ERR_EEPROM_THROTTLED = 0x08  /* retained for wire-protocol compat; throttle path removed 2026-07-04 */
 } GSP_ERR_CODE_T;
 
-/* GSP_INFO_T — 24 bytes, returned by GET_INFO.
+/* GSP_INFO_T — 26 bytes, returned by GET_INFO.
  *
  * V3 ADDED buildHash: a djb2 hash of __DATE__ " " __TIME__ computed at
  * firmware boot.  Every recompile produces a new buildHash, so the host
- * tool can unambiguously identify which binary is on the chip. */
+ * tool can unambiguously identify which binary is on the chip.
+ *
+ * V4 APPENDED paramSource + nvmSelfTest (1B each): which param-store source
+ * booted (0=factory, 1=user) and the boot-time flash self-test result
+ * (0=pass, 0xFF=not run, else step code) — see gsp_param_store.h /
+ * hal_nvm.h. Appended at the end so V3 hosts reading only the first 24
+ * bytes keep working unmodified. */
 typedef struct __attribute__((packed)) {
     uint8_t  protocolVersion;
     uint8_t  fwMajor;
@@ -103,9 +110,11 @@ typedef struct __attribute__((packed)) {
     uint32_t pwmFrequency;
     uint32_t maxErpm;           /* V2: widened from u16+reserved to u32 */
     uint32_t buildHash;         /* V3: hash of __DATE__ __TIME__ */
+    uint8_t  paramSource;       /* V4: 0=factory 1=user (PARAM_SOURCE_T) */
+    uint8_t  nvmSelfTest;       /* V4: 0=pass 0xFF=not run else step code */
 } GSP_INFO_T;
 
-_Static_assert(sizeof(GSP_INFO_T) == 24, "GSP_INFO_T wire size mismatch");
+_Static_assert(sizeof(GSP_INFO_T) == 26, "GSP_INFO_T wire size mismatch");
 
 /* GSP_SNAPSHOT_T — 68 bytes, returned by GET_SNAPSHOT */
 typedef struct __attribute__((packed)) {
