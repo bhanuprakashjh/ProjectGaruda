@@ -4629,6 +4629,16 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
             {
                 garudaData.recoveryCounter--;
             }
+#ifdef RECOVERY_SPINCATCH_VBUS_ADC
+            else if (garudaData.vbusRaw > RECOVERY_SPINCATCH_VBUS_ADC)
+            {
+                /* Spin-catch gate: bus above nominal = rotor still fast
+                 * (regen). Restarting into it braked at 21A+ and tripped
+                 * the board PCI (bench 2026-07-04 x2, 34-38V). Keep
+                 * coasting; the freewheel diodes bleed the energy. */
+                garudaData.recoveryCounter = RT_DESYNC_COAST_COUNTS;
+            }
+#endif
             else
             {
                 /* Throttle-zero auto-disarm disabled — recovery always

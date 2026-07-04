@@ -1590,6 +1590,17 @@ extern "C" {
 #define HWZC_MISTIME_STRIKES             8   /* consecutive 50ms windows (~400ms) */
 #define HWZC_MISTIME_DECEL_EXCL_PCT      5   /* window-over-window fall > this % = coasting */
 
+/* ── Recovery spin-catch gate (regen witness) ─────────────────────────────
+ * Bench 2026-07-04 (2810, twice): recovery coast from a high-speed desync
+ * (118k, 145k) pumped the bus to 34-38V by regeneration; when the coast
+ * counter expired the restart re-ALIGNed into a still-fast rotor and the
+ * board PCI latched. The tracker eRPM is UNTRUSTWORTHY during coast (read
+ * 4.6k while the bus sat at 34.8V), but the bus itself is a hypothesis-
+ * independent witness: a rotor pumping Vbus above nominal+margin is still
+ * spinning fast. Hold the coast (re-arm the counter) until the regen
+ * subsides. 1390 counts ~ 26V on the 18.694mV/count divider. */
+#define RECOVERY_SPINCATCH_VBUS_ADC   1390
+
 /* ── Phase-current clip trip (desync distress witness) ────────────────────
  * Bench 2026-07-04 (2810 @24V, twice): a mistimed/desynced lock at 37-46%
  * duty circulates 21+ A phase-to-phase (Ia pinned at ADC full scale) while
