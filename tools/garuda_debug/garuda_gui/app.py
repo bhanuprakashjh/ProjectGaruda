@@ -528,6 +528,7 @@ class MainWindow(QtWidgets.QMainWindow):
         self.map_pts = deque(maxlen=2000)        # (eRPM, Ia_pk) operating-point scatter
         self.live = deque(maxlen=4000)           # rolling samples for on-demand diagnosis
         self._prev_rej = None                    # (zc, reject, t_mono) for windowed reject- and capture-rate
+        self._cap_hist = deque()                 # (t_mono, hwzc_zc, eRPM) rolling window for cap%
         self._console_paused = False
         self._was_running = False                 # gate console mirror to run-only
 
@@ -1742,12 +1743,29 @@ class MainWindow(QtWidgets.QMainWindow):
             denom = d_acc + d_rej
             rejrate = (100.0 * d_rej / denom) if denom > 0 else 0.0
             # capture ratio: accepted captures / commutations expected from eRPM
-            # (sectors/s = eRPM/10). ~100% locked, ~40% towel-drag worst case,
-            # ~1% phantom lock — separates the states rej% cannot.
-            dt = now_mono - self._prev_rej[2]
-            exp_sectors = (s["eRPM"] / 10.0) * dt
-            if exp_sectors >= 5:
-                caprate = max(0.0, min(100.0, 100.0 * d_acc / exp_sectors))
+            # (sectors/s = eRPM/10). Computed over a ROLLING >=150ms window —
+            # telemetry frames arrive in close pairs, and per-frame deltas
+            # undercount on the short gap (counter quantization), which made
+            # live cap= alternate 50<->100 on a healthy run (bench 2026-07-04).
+            self._cap_hist.append((now_mono, s["hwzc_zc"], s["eRPM"]))
+            while len(self._cap_hist) > 2 and now_mono - self._cap_hist[0][0] > 0.6:
+                self._cap_hist.popleft()
+            base = None
+            for e in self._cap_hist:
+                if now_mono - e[0] >= 0.15:
+                    base = e            # newest entry at least 150ms old
+                else:
+                    break
+            if base is not None:
+                dtw = now_mono - base[0]
+                d_acc_w = s["hwzc_zc"] - base[1]
+                if d_acc_w < 0:         # firmware counter reset (stop/restart)
+                    self._cap_hist.clear()
+                else:
+                    e_avg = (s["eRPM"] + base[2]) / 2.0
+                    exp_sectors = (e_avg / 10.0) * dtw
+                    if exp_sectors >= 20:
+                        caprate = max(0.0, min(100.0, 100.0 * d_acc_w / exp_sectors))
         else:
             rejrate = (100.0 * s["hwzc_reject"] / rej_tot) if rej_tot else 0.0
         rejrate = max(0.0, min(100.0, rejrate))   # can't exceed 100%
