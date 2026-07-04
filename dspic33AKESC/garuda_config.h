@@ -1541,6 +1541,22 @@ extern "C" {
 #endif
 #define HWZC_ABS_FLOOR_LOW_DUTYFRAC      0.12f /* below this duty, use the LOW ceiling */
 
+/* ── Mistimed-lock watchdog (A2212 bench 2026-07-04) ─────────────────────
+ * A STABLE early-crossing lock at idle: rotor sustained ~110% of no-load
+ * speed at 8% duty with ~10x idle phase current. Captures flow (caprate
+ * watchdog blind) and the ABS_FLOOR shrink-only clamp never engages (the
+ * state is entered by genuine tracked acceleration and held at steady
+ * state, not by the PI driving the period down). Judge the OPERATING
+ * POINT instead: eRPM above the lambda-derived no-load ceiling at low
+ * duty, sustained across windows and NOT falling (falling = legitimate
+ * pot-down coast), is provably mistimed -> coast + resync (bench-proven:
+ * every gentle re-entry lands in the clean 1A idle). Uses per-profile
+ * gspParams.focKeUvSRad - correct for all seeded motors. */
+#define FEATURE_HWZC_MISTIME_WATCHDOG    1
+#define HWZC_MISTIME_MARGIN_PCT          5   /* trip above (PCT_LOW + this)% of no-load */
+#define HWZC_MISTIME_STRIKES             8   /* consecutive 50ms windows (~400ms) */
+#define HWZC_MISTIME_DECEL_EXCL_PCT      5   /* window-over-window fall > this % = coasting */
+
 /* ── Anti cap-slam: hold duty at the maxClosedLoopErpm clamp ──────────────
  * In direct-duty mode the throttle->duty map raises duty toward 100% regardless
  * of speed. When eRPM is pinned at the maxClosedLoopErpm clamp (commutation

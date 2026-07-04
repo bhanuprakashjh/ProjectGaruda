@@ -43,9 +43,10 @@
 #include "input/rx_decode.h"
 #endif
 
+#include "garuda_foc_params.h"  /* VBUS_SCALE_V_PER_COUNT + focKeUvSRad
+ * scaling (mistimed-lock watchdog); include-guarded, fine with FOC out */
 #if FEATURE_FOC
 #include <math.h>
-#include "garuda_foc_params.h"
 #include "foc/foc_types.h"
 #include "foc/clarke.h"
 #include "foc/park.h"
@@ -3735,6 +3736,68 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                     }
                 }
 #endif /* FEATURE_HWZC_CAPRATE_WATCHDOG */
+
+#if FEATURE_HWZC_ABS_FLOOR && FEATURE_HWZC_MISTIME_WATCHDOG
+                /* Mistimed-lock watchdog - see garuda_config.h block for the
+                 * failure signature. Same recovery mirror as the watchdogs
+                 * above; the coast lets the rotor re-enter like a gentle
+                 * pot-down, which lands in the clean idle every time. */
+                {
+                    static uint32_t mtWinTick  = 0;
+                    static uint32_t mtPrevErpm = 0;
+                    static uint8_t  mtStrikes  = 0;
+                    if (prevAdcState != ESC_CLOSED_LOOP)
+                    {
+                        mtWinTick  = garudaData.systemTick;
+                        mtPrevErpm = 0;
+                        mtStrikes  = 0;
+                    }
+                    if (garudaData.hwzc.enabled && garudaData.timing.zcSynced
+                        && (garudaData.systemTick - mtWinTick)
+                           >= HWZC_CAPRATE_WINDOW_MS)
+                    {
+                        mtWinTick = garudaData.systemTick;
+                        uint32_t p = garudaData.hwzc.stepPeriodHR;
+                        uint32_t erpm = (p > 0u) ? (1000000000UL / p) : 0u;
+                        float dutyFrac = (float)garudaData.duty
+                                       / (float)LOOPTIME_TCY;
+                        float vbus_v = (float)garudaData.vbusRaw
+                                     * VBUS_SCALE_V_PER_COUNT;
+                        float lam = (float)gspParams.focKeUvSRad;
+                        uint8_t strike = 0;
+                        if (erpm > 0u && lam > 0.0f && vbus_v > 6.0f
+                            && dutyFrac > HWZC_ABS_FLOOR_MIN_DUTYFRAC
+                            && dutyFrac < HWZC_ABS_FLOOR_LOW_DUTYFRAC)
+                        {
+                            float erpmFf = (vbus_v * dutyFrac)
+                                * (1.0e9f / (181.380f * lam));
+                            float ceilE = erpmFf
+                                * ((float)(HWZC_ABS_FLOOR_OVERSPEED_PCT_LOW
+                                           + HWZC_MISTIME_MARGIN_PCT) / 100.0f);
+                            uint8_t falling = (mtPrevErpm > 0u)
+                                && (erpm * 100u < mtPrevErpm
+                                    * (100u - HWZC_MISTIME_DECEL_EXCL_PCT));
+                            if ((float)erpm > ceilE && !falling)
+                                strike = 1;
+                        }
+                        mtPrevErpm = erpm;
+                        if (strike) mtStrikes++; else mtStrikes = 0;
+                        if (mtStrikes >= HWZC_MISTIME_STRIKES)
+                        {
+                            garudaData.zcDiag.zcDesyncCount++;
+#if FEATURE_HW_OVERCURRENT
+                            HAL_CMP3_SetThreshold(RT_OC_CMP3_STARTUP_DAC);
+#endif
+                            HAL_MC1PWMDisableOutputs();
+                            garudaData.runCommandActive = true;
+                            garudaData.state = ESC_RECOVERY;
+                            garudaData.recoveryCounter = RT_DESYNC_COAST_COUNTS;
+                            LED2 = 0;
+                            mtStrikes = 0;
+                        }
+                    }
+                }
+#endif /* FEATURE_HWZC_MISTIME_WATCHDOG */
 
 #if FEATURE_BEMF_INTEGRATION
                 /* Read-only observer: keep shadow integration warm (Rule 11) */
