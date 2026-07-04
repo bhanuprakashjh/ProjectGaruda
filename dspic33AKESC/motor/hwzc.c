@@ -601,7 +601,19 @@ void HWZC_OnZcDetected(volatile GARUDA_DATA_T *pData)
      * exactly like a PWM-OFF capture. Reject; the period fallback carries
      * missed captures (bench: 60% single-polarity misses survivable), a
      * false capture here is a 60-degree slip (scope run 18 @18A). */
-    if (pData->hwzc.chopBlank)
+    if (pData->hwzc.chopBlank
+#if HWZC_FALLING_MUTE_ERPM > 0
+        /* Speed-gate (2026-07-04): the chop gate postdates the 260k run and
+         * blanks ~44us (2 PWM cycles) per chop - at 150k that is 2/3 of a
+         * 66us sector. With the OC limiter riding 12-18A at the top, chops
+         * are frequent and the rejections starve the PI: timing degrades,
+         * current rises, more chops - a positive-feedback loop that engages
+         * exactly in the top band. Below the mute speed sectors are long and
+         * a chop-phantom is a real 60-degree slip risk (scope run 18), so
+         * the gate stays. Above it, interval check + verify reads carry. */
+        && pData->hwzc.timerPeriod >= (1000000000UL / (uint32_t)HWZC_FALLING_MUTE_ERPM)
+#endif
+       )
     {
         pData->hwzc.noiseRejectCount++;
         pData->hwzc.rejectsThisStep++;
