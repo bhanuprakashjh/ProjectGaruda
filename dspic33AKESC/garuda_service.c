@@ -3803,6 +3803,54 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                 }
 #endif /* FEATURE_HWZC_MISTIME_WATCHDOG */
 
+#if FEATURE_IPHASE_CLIP_TRIP
+                /* Desync distress: phase current pinned near ADC full scale
+                 * for consecutive windows = circulating/braking current from
+                 * mistimed commutation (bus-side OC is blind to it). See
+                 * garuda_config.h for the bench signature. */
+                {
+                    static uint32_t ctWinTick = 0;
+                    static uint16_t ctWinMax = 0;
+                    static uint8_t  ctStrikes = 0;
+                    if (prevAdcState != ESC_CLOSED_LOOP)
+                    {
+                        ctWinTick = garudaData.systemTick;
+                        ctWinMax = 0;
+                        ctStrikes = 0;
+                    }
+                    int32_t dev = (int32_t)garudaData.phaseCurrent.iaRaw - 2048;
+                    if (dev < 0) dev = -dev;
+                    if ((uint16_t)dev > ctWinMax) ctWinMax = (uint16_t)dev;
+                    if ((garudaData.systemTick - ctWinTick)
+                        >= HWZC_CAPRATE_WINDOW_MS)
+                    {
+                        ctWinTick = garudaData.systemTick;
+                        float dutyFrac = (float)garudaData.duty
+                                         / (float)LOOPTIME_TCY;
+                        uint8_t hot = (ctWinMax
+                              >= (uint16_t)((IPHASE_CLIP_TRIP_MA / 1000)
+                                            * COUNTS_PER_AMP))
+                            && (dutyFrac > IPHASE_CLIP_TRIP_MIN_DUTYFRAC);
+                        ctWinMax = 0;
+                        if (hot) ctStrikes++; else ctStrikes = 0;
+                        if (ctStrikes >= IPHASE_CLIP_TRIP_STRIKES)
+                        {
+                            garudaData.zcDiag.zcDesyncCount++;
+#if FEATURE_HW_OVERCURRENT
+                            HAL_CMP3_SetThreshold(RT_OC_CMP3_STARTUP_DAC);
+#endif
+                            HAL_MC1PWMDisableOutputs();
+                            garudaData.runCommandActive = true;
+                            garudaData.state = ESC_RECOVERY;
+                            garudaData.recoveryCounter = RT_DESYNC_COAST_COUNTS;
+                            LED2 = 0;
+                            ctStrikes = 0;
+                            gspParams.dbgMistimeEvents += 1000; /* clip-trip marker */
+                        }
+                    }
+                }
+#endif /* FEATURE_IPHASE_CLIP_TRIP */
+
 #if FEATURE_BEMF_INTEGRATION
                 /* Read-only observer: keep shadow integration warm (Rule 11) */
                 {

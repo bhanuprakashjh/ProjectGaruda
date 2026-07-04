@@ -1561,6 +1561,22 @@ extern "C" {
 #define HWZC_MISTIME_STRIKES             8   /* consecutive 50ms windows (~400ms) */
 #define HWZC_MISTIME_DECEL_EXCL_PCT      5   /* window-over-window fall > this % = coasting */
 
+/* ── Phase-current clip trip (desync distress witness) ────────────────────
+ * Bench 2026-07-04 (2810 @24V, twice): a mistimed/desynced lock at 37-46%
+ * duty circulates 21+ A phase-to-phase (Ia pinned at ADC full scale) while
+ * BUS current stays moderate — so bus-side OC never trips and the caprate
+ * watchdog sees a dense-but-poisoned capture stream. Both episodes braked
+ * for 2-3 s until the Vbus sag hit the UV latch. Hypothesis-independent
+ * witness: healthy operation never holds phase current near ADC clip for
+ * consecutive windows (CL-entry pulse peaks ~17.5 A for <0.5 s). Window
+ * MAX of |Ia-2048| >= trip level for STRIKES consecutive 50 ms windows at
+ * dutyFrac > MIN_DUTYFRAC -> same coast-resync mirror as the watchdogs.
+ * (Low-duty mistimed locks are the mistime watchdog's job.) */
+#define FEATURE_IPHASE_CLIP_TRIP         1
+#define IPHASE_CLIP_TRIP_MA          20000   /* window-max threshold (ADC clips ~22 A) */
+#define IPHASE_CLIP_TRIP_STRIKES         3   /* x 50 ms windows = 150 ms sustained */
+#define IPHASE_CLIP_TRIP_MIN_DUTYFRAC 0.15f  /* below this the CL-entry pulse lives; excluded */
+
 /* ── Anti cap-slam: hold duty at the maxClosedLoopErpm clamp ──────────────
  * In direct-duty mode the throttle->duty map raises duty toward 100% regardless
  * of speed. When eRPM is pinned at the maxClosedLoopErpm clamp (commutation
