@@ -433,7 +433,7 @@ extern "C" {
 #define FEATURE_FOC              0  /* Phase I: OLD FOC v1 (reference, deprecated) */
 #define FEATURE_FOC_V2           0  /* Phase I v2: closed-loop current control + MXLEMMING */
 #define FEATURE_FOC_V3           0  /* Phase J: FOC v3 — SMO observer + PLL */
-#define FEATURE_FOC_AN1078       0  /* 2026-05-25: switched to 6-step. Flip back to 1 to return to FOC AN1078. */
+#define FEATURE_FOC_AN1078       1  /* 2026-07-04 DISCRIMINATOR TEST: SMO bypasses the BEMF-ZC chain entirely; proved 206k on this 2810 (docs/an1078_200k_optimization.md). 0 = back to 6-step. */
 #define FEATURE_SMO              0  /* 0=PLL only, 1=PLL+SMO parallel (v1 only) */
 #define FEATURE_MXLEMMING        0  /* 0=PLL chain, 1=MXLEMMING flux observer (v1 only) */
 #define FEATURE_LEARN_MODULES    0  /* master: ring buffer + quality + health */
@@ -932,11 +932,10 @@ extern "C" {
 #endif
 /* 2026-06-17 PER-PROFILE: high-KV micros (6/7/8) run the coherence check OFF —
  * it rejects marginal-but-real crossings on their weak 10V BEMF. 2810 etc. keep it ON. */
-#if MOTOR_PROFILE == 6 || MOTOR_PROFILE == 7 || MOTOR_PROFILE == 8 || MOTOR_PROFILE == 2
-/* 2026-06-18 TEST: profile 2 added — the coherence re-read corrupts ZC timing at
- * high speed (~175k = ~2.5 ADC samples/step) -> circulating 22A. Trusting the
- * comparator edge (OFF) is what runs profile 6 clean. Revert to the #else if this
- * doesn't clear the 2810 top-end. */
+#if MOTOR_PROFILE == 6 || MOTOR_PROFILE == 7 || MOTOR_PROFILE == 8
+/* (2026-07-04: profile 2 removed - the June-18 TEST never got its revert review.
+ * Verify is auto-skipped above HWZC_VERIFY_SKIP_ERPM=80k, so it costs nothing
+ * at the top and restores the only single-sample noise filter below 80k.) */
 #define FEATURE_HWZC_VERIFY_READS  0
 #else
 #define FEATURE_HWZC_VERIFY_READS  1   /* default ON */
@@ -1496,17 +1495,7 @@ extern "C" {
 #define HWZC_PI_DEFENSIVE_EXIT         2    /* good streak (consecutive captures) to exit */
 #define HWZC_PI_DEFENSIVE_GROW_PCT     1    /* walk T by this % per event when defensive */
 
-#if MOTOR_PROFILE == 2
-#define HWZC_PI_KP_SHIFT               3   /* TEST 2026-07-04 (bench-review before keeping!): Kp = 1/8.
-                                            * 2810 top band shows a +/-5% PI limit cycle (116<->125k
-                                            * alternation, 68%) that grows with duty until a slip at
-                                            * ~124-136k. Excitation = settle-tail capture jitter (physics);
-                                            * halving Kp lets the integrator flywheel average over it.
-                                            * Risk: slower accel tracking. Revert to 2 if OL->CL handoff
-                                            * or pot transients degrade. */
-#else
 #define HWZC_PI_KP_SHIFT               2   /* Kp = 1/4  — proportional gain  */
-#endif
 #define HWZC_PI_KI_SHIFT               4   /* Ki = 1/16 — integral gain      */
 #define HWZC_PI_DELTA_CLAMP_SHIFT      3   /* ±T/8 per-sample clamp (default).
                                             * At low/mid RPM this gives responsive

@@ -14,6 +14,14 @@
  */
 
 #include "startup.h"
+
+/* FOC builds exclude the 6-step sine-start constants (garuda_calc_params.h
+ * keeps them inside the !FOC dependency-guard region) - compile the sine
+ * machinery out entirely; the FOC engines run their own startup. */
+#if FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3 || FEATURE_FOC_AN1078
+#undef  FEATURE_SINE_STARTUP
+#define FEATURE_SINE_STARTUP 0
+#endif
 #include "commutation.h"
 #include "../garuda_calc_params.h"
 #include "../hal/hal_pwm.h"

@@ -45,6 +45,16 @@
 
 #include "garuda_foc_params.h"  /* VBUS_SCALE_V_PER_COUNT + focKeUvSRad
  * scaling (mistimed-lock watchdog); include-guarded, fine with FOC out */
+
+/* FOC builds: the BEMF-ZC sampling glue reads phaseB_val/phaseAC_val (which the
+ * FOC ADC mapping replaces with ia/ib) and WS2 reads garudaData.phaseCurrent
+ * (6-step-only struct). Compile the 6-step-only ISR blocks out in this TU. */
+#if FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3 || FEATURE_FOC_AN1078
+#undef  FEATURE_BEMF_CLOSED_LOOP
+#define FEATURE_BEMF_CLOSED_LOOP 0
+#undef  FEATURE_PHASE_STALL_FAULT
+#define FEATURE_PHASE_STALL_FAULT 0
+#endif
 #if FEATURE_FOC
 #include <math.h>
 #include "foc/foc_types.h"

@@ -25,6 +25,12 @@
 #if FEATURE_ADC_CMP_ZC
 
 #include "hwzc.h"
+
+/* garudaData.phaseCurrent (WS1 blank input) exists only in 6-step builds */
+#if FEATURE_FOC || FEATURE_FOC_V2 || FEATURE_FOC_V3 || FEATURE_FOC_AN1078
+#undef  FEATURE_ZC_CURRENT_BLANK
+#define FEATURE_ZC_CURRENT_BLANK 0
+#endif
 #include "speed_pi.h"
 #include "commutation.h"
 #include "../garuda_calc_params.h"
