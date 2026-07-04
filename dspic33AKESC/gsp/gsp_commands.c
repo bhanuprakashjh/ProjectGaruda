@@ -490,7 +490,7 @@ static void HandleSaveConfig(const uint8_t *payload, uint8_t payloadLen)
 {
     (void)payload; (void)payloadLen;
     if (!MotorStopped()) {           /* flash erase stalls fetch — never mid-run */
-        SendError(GSP_ERR_BUSY);
+        SendError(GSP_ERR_WRONG_STATE);
         return;
     }
     if (!GSP_ParamsSaveAll()) {
@@ -507,7 +507,7 @@ static void HandleLoadDefaults(const uint8_t *payload, uint8_t payloadLen)
 {
     (void)payload; (void)payloadLen;
     if (!MotorStopped()) {
-        SendError(GSP_ERR_BUSY);
+        SendError(GSP_ERR_WRONG_STATE);
         return;
     }
     if (!GSP_ParamsFactoryReset()) {
