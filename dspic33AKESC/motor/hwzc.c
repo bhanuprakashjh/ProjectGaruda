@@ -89,9 +89,6 @@ void HWZC_Init(volatile GARUDA_DATA_T *pData)
     pData->hwzc.lastCaptureHR = 0;
     pData->hwzc.prevCommHR = 0;
     pData->hwzc.captureValid = false;
-    pData->hwzc.pllStartActive = 0;
-    pData->hwzc.pllStartGood = 0;
-    pData->hwzc.pllPrevCap = 0;
     pData->hwzc.stepPeriodForFilterComp = 0;
     pData->hwzc.dbgPiDelta = 0;
     pData->hwzc.dbgPiCaptureCount = 0;
@@ -433,21 +430,9 @@ void HWZC_OnBlankingExpired(volatile GARUDA_DATA_T *pData)
 #if !HWZC_USE_SW_COMPARE
     uint8_t core = pData->hwzc.activeCore;
 
-#if FEATURE_HWZC_FALLING_SW
-    /* Hybrid per-polarity: arm the HW comparator ONLY for rising sectors.
-     * Falling sectors are detected via the OFF-center SW compare in the ADC ISR
-     * (the HW comparator is silent on falling at speed). Leaving its IE off for
-     * falling avoids phantom ON-time fires competing with the SW capture. */
-    if (commutationTable[pData->currentStep].zcPolarity > 0)
-    {
-        HAL_ADC_ClearComparatorFlag(core);
-        HAL_ADC_EnableComparatorIE(core);
-    }
-#else
     /* Clear any stale comparator events, then enable interrupt */
     HAL_ADC_ClearComparatorFlag(core);
     HAL_ADC_EnableComparatorIE(core);
-#endif
 #else
     /* SW compare mode: leave the HW digital comparator IE disabled.
      * ZC detection runs in the 24 kHz ADC ISR via HWZC_OnSoftwareSample(). */
@@ -560,37 +545,6 @@ void HWZC_OnZcDetected(volatile GARUDA_DATA_T *pData)
 #endif
     }
 
-#if FEATURE_HWZC_FALLING_HW && FEATURE_HWZC_FREEWHEEL_GATE
-    /* Per-polarity FREEWHEEL gate (U3 falling-via-HW-comparator, 2026-06-26).
-     * A RISING ZC is detectable during PWM-ON (driven-phase coupling assists the
-     * upward crossing); a FALLING ZC is only clean during PWM-OFF (freewheel) —
-     * during PWM-ON the driven phases couple the floating phase UP and bury the
-     * downward crossing (bench 2026-06-07). So accept the comparator capture
-     * ONLY in the correct window for this sector's polarity:
-     *   rising  -> accept while PWM ON
-     *   falling -> accept while PWM OFF (freewheel)
-     * The freewheel window always exists around the trough at ANY duty <100%,
-     * and the 1 MHz free-running ADC gets several conversions inside it, so the
-     * comparator finds the true falling crossing at any duty — without the fixed
-     * MPER/2 sample's 50%-duty wall. Read the H-side GPIO of the PWMing phase
-     * (complementary mode: H HIGH = PWM ON). */
-    {
-        const COMMUTATION_STEP_T *fcs = &commutationTable[pData->currentStep];
-        bool pwmOn;
-        if      (fcs->phaseA == PHASE_PWM_ACTIVE) pwmOn = (PORTD & (1u << 2)) != 0; /* RD2 = PWM1H */
-        else if (fcs->phaseB == PHASE_PWM_ACTIVE) pwmOn = (PORTD & (1u << 0)) != 0; /* RD0 = PWM2H */
-        else                                      pwmOn = (PORTC & (1u << 3)) != 0; /* RC3 = PWM3H */
-        bool wantOn = (fcs->zcPolarity > 0);   /* rising->PWM-ON, falling->PWM-OFF */
-        if (pwmOn != wantOn) {
-            pData->hwzc.noiseRejectCount++;
-            pData->hwzc.rejectsThisStep++;
-            uint8_t fc = pData->hwzc.activeCore;
-            HAL_ADC_ClearComparatorFlag(fc);
-            HAL_ADC_EnableComparatorIE(fc);
-            return;
-        }
-    }
-#endif
 
 #if FEATURE_HWZC_PWM_GATE
     /* PWM-state gate: reject captures during PWM OFF time. At BEMF crossover
@@ -850,98 +804,9 @@ void HWZC_OnCommDeadline(volatile GARUDA_DATA_T *pData)
  * On capture-miss: skip PI update (timerPeriod unchanged), still commutate.
  * The motor is more robust to a missed sample than to a wrong correction.
  */
-#if FEATURE_PLL_STARTUP
-/* PLL-from-align blind startup tick (task #10, twin-prototyped).
- * Runs INSTEAD of the PI while pllStartActive: commutates on an
- * accelerating commanded schedule, consumes captures (discarding them
- * below the BEMF floor — phantom-proof), and hands over to the normal
- * PI after PLL_START_SYNC_CAPS consecutive plausible captures. */
-static void HWZC_PllStartTick(volatile GARUDA_DATA_T *pData)
-{
-    uint32_t T = pData->hwzc.timerPeriod;
-    uint32_t eCmd = (T > 0) ? HWZC_TICKS_TO_ERPM(T) : PLL_START_ERPM0;
-
-    /* Capture floor: never trust captures below the active profile's HWZC
-     * crossover (per-motor BEMF detectability), whichever is higher. */
-    uint32_t pllFloorErpm = PLL_START_CAPTURE_FLOOR_ERPM;
-    if (RT_HWZC_CROSSOVER_ERPM > pllFloorErpm)
-        pllFloorErpm = RT_HWZC_CROSSOVER_ERPM;
-    if (pData->hwzc.captureValid) {
-        if (eCmd >= pllFloorErpm) {
-            uint32_t cap = pData->hwzc.lastCaptureHR
-                         - pData->hwzc.lastCommStamp;   /* modular */
-            /* CONSISTENCY gate (twin iteration #5). A locked rotor puts the
-             * ZC at the SAME sector fraction every sector; phantoms land
-             * randomly. The old absolute window (0.30T..0.75T) was fragile:
-             * load angle / timing advance / RC filter lag all shift the
-             * true crossing (twin saw a fully-locked rotor pinned at the
-             * blanking edge ~0.14T and never synced). Gate instead on
-             * sector-plausible (T/8..7T/8, outside blanking, inside sector)
-             * AND stable vs the previous capture (|Δ| < T/4 — wide enough
-             * for the rising/falling polarity lag split, narrow enough that
-             * a 6-streak of random phantoms is ~3% likely). */
-            uint32_t prevCap = pData->hwzc.pllPrevCap;
-            pData->hwzc.pllPrevCap = cap;
-            if (cap > (T >> 3) && cap < (T - (T >> 3))) {
-                uint32_t d = (cap > prevCap) ? cap - prevCap : prevCap - cap;
-                if (prevCap != 0u && d < (T >> 2)) {
-                    if (++pData->hwzc.pllStartGood >= PLL_START_SYNC_CAPS) {
-                        /* HANDOVER: declared synced; leave captureValid set
-                         * so the normal PI consumes THIS capture next event. */
-                        pData->hwzc.pllStartActive = 0;
-                        pData->timing.zcSynced = true;
-                        pData->timing.goodZcCount = (uint16_t)RT_ZC_SYNC_THRESHOLD;
-                        goto pll_commutate;
-                    }
-                } else {
-                    pData->hwzc.pllStartGood = 1;   /* plausible, streak restarts */
-                }
-            } else {
-                pData->hwzc.pllStartGood = 0;
-                pData->hwzc.pllPrevCap = 0;
-            }
-        }
-        pData->hwzc.captureValid = false;   /* consume in blind phase */
-    } else if (eCmd >= pllFloorErpm
-               && pData->hwzc.pllStartGood > 0) {
-        pData->hwzc.pllStartGood = 0;       /* silence resets the streak */
-        pData->hwzc.pllPrevCap = 0;
-    }
-
-    /* blind accel schedule toward the target */
-    if (eCmd < PLL_START_TARGET_ERPM) {
-        /* Sector time in seconds = T / SCCP_CLOCK_HZ (HR tick = 10 ns).
-         * NOT /1e9 — that unit slip made the schedule accelerate exactly
-         * 10× slower than commanded (twin iteration #4 root cause). */
-        uint32_t eNew = eCmd + (uint32_t)(((uint64_t)PLL_START_ACCEL_ERPM_PER_S
-                                           * T) / (uint64_t)SCCP_CLOCK_HZ);
-        if (eNew <= eCmd) eNew = eCmd + 1u;
-        if (eNew > PLL_START_TARGET_ERPM) eNew = PLL_START_TARGET_ERPM;
-        T = HWZC_ERPM_TO_TICKS(eNew);       /* symmetric: 1e9/e */
-        pData->hwzc.timerPeriod = T;
-        pData->hwzc.integrator  = (int32_t)T;
-#if FEATURE_HWZC_PI_FLOAT
-        pData->hwzc.integratorF = (float)T;
-#endif
-        pData->hwzc.writeSeq++;             /* Rule 13 seqlock */
-        pData->hwzc.stepPeriodHR = T;
-        pData->hwzc.writeSeq++;
-    }
-
-pll_commutate:
-    COMMUTATION_AdvanceStep(pData);
-    pData->hwzc.totalCommCount++;
-    pData->hwzc.commSeq++;
-    pData->hwzc.stepsSinceLastHwZc = 0;
-    HWZC_OnCommutation(pData);
-}
-#endif /* FEATURE_PLL_STARTUP */
 
 void HWZC_OnPiPeriodExpired(volatile GARUDA_DATA_T *pData)
 {
-#if FEATURE_PLL_STARTUP
-    if (pData->hwzc.pllStartActive) { HWZC_PllStartTick(pData); return; }
-#endif
     /* Compute current torque-advance (interpolated from RT_TIMING_ADV_MAX_DEG)
      * — same schedule the reactive path uses, just consumed differently. */
     uint16_t advDeg;

@@ -105,11 +105,6 @@
 /* Global ESC runtime data — volatile: shared between ISRs and main loop */
 volatile GARUDA_DATA_T garudaData;
 
-#if FEATURE_AM32_STARTUP
-/* Set by Timer1 ARMED exit, consumed by the ADC-ISR CL entry-init: do the
- * one blind kick + immediate HWZC arm (AM32 startMotor() semantics). */
-static volatile uint8_t g_am32EntryPending;
-#endif
 
 #if FEATURE_FOC_V2
 /* FOC v2 state — accessed only from ADC ISR (not volatile) */
@@ -1295,94 +1290,8 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
             if (vfo < garudaData.bemf.fallOffBemfMin) garudaData.bemf.fallOffBemfMin = vfo;
             if (vfo > garudaData.bemf.fallOffBemfMax) garudaData.bemf.fallOffBemfMax = vfo;
 
-#if FEATURE_HWZC_FALLING_SW && FEATURE_HWZC_SECTOR_PI
-            /* Hybrid falling detector: the rotor's falling ZC is invisible to
-             * the ON-time comparator but present here at OFF-center. Detect the
-             * downward crossing of zcThreshold (one accept per sector) and record
-             * it into the sector-PI path exactly as the HW comparator does
-             * (hwzc.c:549) — OnPiPeriodExpired then uses it. Plausibility floor:
-             * only past 1/4 of the period (the falling ZC sits ~mid-sector;
-             * rejects early demag dips). Optional speed cap for coarse-resolution
-             * top end. */
-            if (!garudaData.hwzc.captureValid)
-            {
-                /* RC-lag compensation, falling branch (added 2026-06-07) — the
-                 * HW rising path applies this (hwzc.c:251 / live refresh :726)
-                 * but the falling SW path historically didn't, so falling drifted
-                 * late vs rising as ω·τ grew. Apply the same per-polarity offset
-                 * (falling: thresh + offset) then the falling deadband, so both
-                 * polarities are phase-consistent. Magnitude tunes via
-                 * HWZC_FILTER_AMP_PCT_FALLING. */
-                uint16_t fth = HWZC_ApplyFilterComp(&garudaData,
-                                                    garudaData.bemf.zcThreshold,
-                                                    false /* falling */);
-                fth = (fth > HWZC_CMP_DEADBAND) ? (uint16_t)(fth - HWZC_CMP_DEADBAND) : 0;
-                uint32_t zc = HAL_SCCP2_ReadTimestamp();
-                uint32_t intoSector = zc - garudaData.hwzc.lastCommStamp;
-                bool plausible = intoSector > (garudaData.hwzc.timerPeriod >> 2);
-#if HWZC_FALLING_SW_MAX_ERPM > 0
-                uint32_t erpmNow = garudaData.hwzc.stepPeriodHR
-                    ? HWZC_TICKS_TO_ERPM(garudaData.hwzc.stepPeriodHR) : 0;
-                if (erpmNow > HWZC_FALLING_SW_MAX_ERPM) plausible = false;
-#endif
-                if (plausible && vfo < fth)
-                {
-                    garudaData.hwzc.lastCaptureHR = zc;
-                    garudaData.hwzc.captureValid  = true;
-                    garudaData.hwzc.lastZcStamp   = zc;
-                    if (garudaData.hwzc.goodZcCount < 0xFFFE)
-                        garudaData.hwzc.goodZcCount++;
-                    garudaData.hwzc.missCount = 0;
-                    garudaData.hwzc.totalZcCount++;
-                }
-            }
-#endif
         }
 
-#if FEATURE_HWZC_LOWSPD_OFFCTR && FEATURE_HWZC_FALLING_SW && FEATURE_HWZC_SECTOR_PI
-        /* Phase 1 (OL->CL smooth-handoff plan): detect RISING ZC on the SAME
-         * RC-filtered OFF-center (PWM-OFF) sample at low speed, so neither
-         * polarity needs the PWM-ON comparator window. This is the enabler for a
-         * low-duty hand-off (it removes the reason for the ~6% duty floor).
-         * Mirrors the falling detector above with opposite sign. ADDITIVE: the
-         * rising HW comparator still runs; first capture per sector wins
-         * (!captureValid). Speed-gated (OFF-center res is ~1 PWM period). */
-        if (garudaData.hwzc.enabled
-            && garudaData.hwzc.phase == HWZC_WATCHING
-            && garudaData.bemf.bemfSampleValid
-            && commutationTable[garudaData.currentStep].zcPolarity > 0
-            && !garudaData.hwzc.captureValid)
-        {
-            uint32_t erpmNow = garudaData.hwzc.stepPeriodHR
-                ? HWZC_TICKS_TO_ERPM(garudaData.hwzc.stepPeriodHR) : 0;
-            if (erpmNow > 0 && erpmNow < HWZC_LOWSPD_OFFCTR_MAX_ERPM)
-            {
-                uint16_t vfo = garudaData.bemf.bemfRaw;
-                /* rising threshold: filter-comp + deadband on the HIGH side
-                 * (mirror of the falling fth - deadband). Clamp to ADC range. */
-                uint16_t rth = HWZC_ApplyFilterComp(&garudaData,
-                                                    garudaData.bemf.zcThreshold,
-                                                    true /* rising */);
-                {
-                    uint32_t r = (uint32_t)rth + HWZC_CMP_DEADBAND;
-                    rth = (r > 4095u) ? 4095u : (uint16_t)r;
-                }
-                uint32_t zc = HAL_SCCP2_ReadTimestamp();
-                uint32_t intoSector = zc - garudaData.hwzc.lastCommStamp;
-                bool plausible = intoSector > (garudaData.hwzc.timerPeriod >> 2);
-                if (plausible && vfo > rth)
-                {
-                    garudaData.hwzc.lastCaptureHR = zc;
-                    garudaData.hwzc.captureValid  = true;
-                    garudaData.hwzc.lastZcStamp   = zc;
-                    if (garudaData.hwzc.goodZcCount < 0xFFFE)
-                        garudaData.hwzc.goodZcCount++;
-                    garudaData.hwzc.missCount = 0;
-                    garudaData.hwzc.totalZcCount++;
-                }
-            }
-        }
-#endif
 #endif
     }
     adcIsrTick++;
@@ -1584,12 +1493,6 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                  * tolerate bus sag from CC-limited bench supply. Normal
                  * threshold resumes after ZC sync is achieved. */
                 uint16_t uvThreshold = RT_VBUS_UNDERVOLTAGE_ADC;
-#if FEATURE_PRESYNC_RAMP
-                if (garudaData.state <= ESC_OL_RAMP
-                    || (garudaData.state == ESC_CLOSED_LOOP
-                        && !garudaData.timing.zcSynced))
-                    uvThreshold = RT_VBUS_UV_STARTUP_ADC;
-#endif
 
             if (vbusFilt < uvThreshold)
             {
@@ -3257,14 +3160,6 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
 #elif FEATURE_BEMF_CLOSED_LOOP
         case ESC_CLOSED_LOOP:
         {
-#if FEATURE_HANDOFF_CHOP
-            /* Handoff-chop arm latch: set at CL entry (below) BEFORE the
-             * coast-listen block can `break` and skip the rest of the case,
-             * then consumed by the handoff-chop block once driving resumes.
-             * Fixes the chop never arming on the coast-listen entry path
-             * (2810) — the old `prevAdcState != CL` arm was eaten by the break. */
-            static bool hcArmPending = false;
-#endif
             /* Throttle-zero shutdown: if pot returns to zero after being raised,
              * gracefully stop. Don't wait for desync — at low duty the HW ZC
              * comparator can trigger on noise indefinitely, keeping the motor
@@ -3281,46 +3176,16 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                 {
                     hasSeenThrottle = false;
                     zeroThrottleCount = 0;
-#if FEATURE_HANDOFF_CHOP
-                    hcArmPending = true;   /* arm entry chop before any coast-listen break */
-#endif
                 }
 
                 if (garudaData.throttle >= ARM_THROTTLE_ZERO_ADC)
                     hasSeenThrottle = true;
 
-#if FEATURE_THROTTLE_ZERO_AUTO_DISARM
-                if (hasSeenThrottle && garudaData.throttle < ARM_THROTTLE_ZERO_ADC)
-                {
-                    if (++zeroThrottleCount >= (PWMFREQUENCY_HZ / 20))  /* 50ms */
-                    {
-#if FEATURE_ADC_CMP_ZC
-                        if (garudaData.hwzc.enabled)
-                            HWZC_Disable(&garudaData);
-                        garudaData.hwzc.fallbackPending = false;
-#endif
-#if FEATURE_HW_OVERCURRENT
-                        HAL_CMP3_SetThreshold(RT_OC_CMP3_STARTUP_DAC);
-#endif
-                        HAL_MC1PWMDisableOutputs();
-                        garudaData.runCommandActive = false;
-                        garudaData.state = ESC_IDLE;
-                        LED2 = 0;
-                        zeroThrottleCount = 0;
-                        break;
-                    }
-                }
-                else
-                {
-                    zeroThrottleCount = 0;
-                }
-#else
                 /* Throttle-zero auto-disarm disabled — motor keeps running at
                  * CL_IDLE_DUTY when pot is at zero. Use GSP stop or power cycle
                  * to stop the motor. */
                 (void)hasSeenThrottle;
                 (void)zeroThrottleCount;
-#endif
             }
 
             /* Detect first entry into CLOSED_LOOP (state transition) */
@@ -3367,16 +3232,6 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                     garudaData.hwzc.enablePending = false;
                     garudaData.hwzc.dbgLatchDisable = false;
 
-#if FEATURE_PRESYNC_RAMP
-                    /* Defensively disable HWZC: stale hwzc.enabled=true from a
-                     * prior run (e.g. desync recovery) would skip the entire SW
-                     * pre-sync block (line ~479 gates on !hwzc.enabled). Force
-                     * HWZC off so pre-sync runs. Clear fallbackPending to prevent
-                     * stale HWZC state from re-seeding SW ZC. */
-                    if (garudaData.hwzc.enabled)
-                        HWZC_Disable(&garudaData);
-                    garudaData.hwzc.fallbackPending = false;
-#else
                     /* Immediate HWZC enable for motors with reliable OL ramp
                      * delivery speed (non-presync-ramp path). */
                     {
@@ -3390,53 +3245,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                             HWZC_Enable(&garudaData);
                         }
                     }
-#endif
 
-#if FEATURE_AM32_STARTUP
-                    if (g_am32EntryPending)
-                    {
-                        g_am32EntryPending = 0;
-#if FEATURE_SINE_STARTUP
-                        garudaData.sine.active = false;
-#endif
-                        /* One blind commutation from the UNKNOWN rotor angle
-                         * (AM32 does exactly this — worst case zero torque on
-                         * the first step; the listener sorts it out). */
-                        COMMUTATION_ApplyStep(&garudaData,
-                            (uint8_t)((garudaData.currentStep + 1u) % 6u));
-                        garudaData.duty = MIN_DUTY;
-                        HAL_PWM_SetDutyCycle(garudaData.duty);
-                        if (!garudaData.hwzc.enabled)
-                            HWZC_Enable(&garudaData);
-                        /* Trust the listener from event 1: capture-driven PI
-                         * immediately, no blind phase, no sync gate. */
-                        garudaData.timing.zcSynced = true;
-                        garudaData.timing.goodZcCount =
-                            (uint16_t)RT_ZC_SYNC_THRESHOLD;
-                    }
-#endif
-#if FEATURE_PLL_STARTUP
-                    if (garudaData.hwzc.pllStartActive)
-                    {
-                        /* Engage 6-step from the align angle and start the
-                         * blind PLL schedule: comparator armed from the
-                         * first commutation, captures gated in hwzc.c. */
-                        /* rotor is parked AT the align vector = step s0's
-                         * center → applying s0 gives ~zero torque. Lead by
-                         * one step (60°) so the schedule pulls forward. */
-#if FEATURE_SINE_STARTUP
-                        garudaData.sine.active = false;
-                        uint8_t s0 = STARTUP_SineGetTransitionStep(&garudaData);
-#else
-                        uint8_t s0 = 0;   /* classic STARTUP_Align parks at step 0 */
-#endif
-                        COMMUTATION_ApplyStep(&garudaData, (uint8_t)((s0 + 1u) % 6u));
-                        garudaData.duty = MIN_DUTY;
-                        HAL_PWM_SetDutyCycle(garudaData.duty);
-                        if (!garudaData.hwzc.enabled)
-                            HWZC_Enable(&garudaData);
-                    }
-#endif
 #endif
                 }
             }
@@ -3524,59 +3333,11 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                     COMMUTATION_AdvanceStep(&garudaData);
                     BEMF_ZC_OnCommutation(&garudaData, adcIsrTick);
 
-#if FEATURE_PRESYNC_RAMP
-                    /* Feedback-gated pre-sync ramp: accelerate forced commutation
-                     * only when ZC evidence is strong. Requires goodZcCount >= 3
-                     * AND risingZcWorks — not a single noisy edge. If motor is
-                     * stale (no recent ZC), hold current speed until motor catches
-                     * up and ZC resumes. Same eRPM formula as OL_RAMP. */
-                    if (garudaData.timing.stepPeriod > RT_MIN_ADC_STEP_PERIOD
-                        && garudaData.timing.goodZcCount >= 3
-                        && garudaData.timing.risingZcWorks
-                        && garudaData.timing.stepsSinceLastZc <= ZC_STALENESS_LIMIT)
-                    {
-                        uint32_t sp = garudaData.timing.stepPeriod;
-                        uint32_t curErpm = ERPM_FROM_ADC_STEP_NUM / sp;
-                        uint32_t deltaErpm = ((uint32_t)RT_RAMP_ACCEL_ERPM_PER_S * sp)
-                                             / PWMFREQUENCY_HZ;
-                        if (deltaErpm < 1) deltaErpm = 1;
-                        uint32_t newErpm = curErpm + deltaErpm;
-                        uint32_t newPeriod = ERPM_FROM_ADC_STEP_NUM / newErpm;
-                        if (newPeriod < RT_MIN_ADC_STEP_PERIOD)
-                            newPeriod = RT_MIN_ADC_STEP_PERIOD;
-                        garudaData.timing.stepPeriod = (uint16_t)newPeriod;
-                    }
-#endif
 
                     garudaData.timing.forcedCountdown = garudaData.timing.stepPeriod;
                     garudaData.zcDiag.forcedStepPresyncCount++;
                 }
 
-#if FEATURE_PRESYNC_RAMP
-                /* Pre-sync timeout: fault if ZC never achieved */
-                {
-                    static uint32_t presyncEntryTick = 0;
-                    if (prevAdcState != ESC_CLOSED_LOOP)
-                        presyncEntryTick = garudaData.systemTick;
-
-                    if ((garudaData.systemTick - presyncEntryTick) > PRESYNC_TIMEOUT_MS)
-                    {
-#if FEATURE_ADC_CMP_ZC
-                        if (garudaData.hwzc.enabled)
-                            HWZC_Disable(&garudaData);
-                        garudaData.hwzc.fallbackPending = false;
-#endif
-#if FEATURE_HW_OVERCURRENT
-                        HAL_CMP3_SetThreshold(RT_OC_CMP3_STARTUP_DAC);
-#endif
-                        HAL_MC1PWMDisableOutputs();
-                        garudaData.state = ESC_FAULT;
-                        garudaData.faultCode = FAULT_STARTUP_TIMEOUT;
-                        garudaData.runCommandActive = false;
-                        LED2 = 0;
-                    }
-                }
-#endif
 
                 /* Passive ZC detection (builds goodZcCount, no commutation trigger) */
                 BEMF_ZC_Poll(&garudaData, adcIsrTick);
@@ -3755,17 +3516,13 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
 #endif
 #if FEATURE_DESYNC_RECOVERY
                     if (garudaData.runCommandActive
-#if !FEATURE_THROTTLE_ZERO_AUTO_DISARM
                         || true   /* AUTO_DISARM=0: stay in the run loop even
                                    * if some earlier path cleared the flag.
                                    * Re-arm here so the recovery exit can
                                    * restart instead of falling to IDLE. */
-#endif
                        )
                     {
-#if !FEATURE_THROTTLE_ZERO_AUTO_DISARM
                         garudaData.runCommandActive = true;
-#endif
                         HAL_MC1PWMDisableOutputs();
                         garudaData.state = ESC_RECOVERY;
                         garudaData.recoveryCounter = RT_DESYNC_COAST_COUNTS;
@@ -3809,14 +3566,6 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                             initPeriod = RT_MIN_ADC_STEP_PERIOD;
                         garudaData.timing.stepPeriod = initPeriod;
                         garudaData.timing.forcedCountdown = initPeriod;
-#if FEATURE_PRESYNC_RAMP
-                        /* Reset duty to ramp level to prevent ratchet:
-                         * post-sync CL_IDLE floor inflates duty, and pre-sync
-                         * holds mappedDuty=garudaData.duty. Without reset,
-                         * each sync→unsync cycle pumps duty higher, driving
-                         * massive current through low-R motor. */
-                        garudaData.duty = RT_RAMP_DUTY_CAP;
-#endif
                     }
                 }
             }
@@ -3838,12 +3587,6 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                  * This unlocks pot-mapped duty (CL_IDLE_DUTY floor)
                  * and MAX_DUTY cap instead of RAMP_DUTY_CAP. */
                 if (!garudaData.timing.zcSynced
-#if FEATURE_PLL_STARTUP
-                    /* during the PLL blind ramp, sync is declared ONLY by
-                     * HWZC_PllStartTick's gated-capture handover — raw
-                     * goodZcCount here counts low-speed phantoms */
-                    && !garudaData.hwzc.pllStartActive
-#endif
                     && garudaData.hwzc.goodZcCount >= RT_ZC_SYNC_THRESHOLD)
                 {
                     garudaData.timing.zcSynced = true;
@@ -3913,9 +3656,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                             HAL_CMP3_SetThreshold(RT_OC_CMP3_STARTUP_DAC);
 #endif
                             HAL_MC1PWMDisableOutputs();
-#if !FEATURE_THROTTLE_ZERO_AUTO_DISARM
                             garudaData.runCommandActive = true;
-#endif
                             garudaData.state = ESC_RECOVERY;
                             garudaData.recoveryCounter = RT_DESYNC_COAST_COUNTS;
                             LED2 = 0;
@@ -3973,9 +3714,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                                 HAL_CMP3_SetThreshold(RT_OC_CMP3_STARTUP_DAC);
 #endif
                                 HAL_MC1PWMDisableOutputs();
-#if !FEATURE_THROTTLE_ZERO_AUTO_DISARM
                                 garudaData.runCommandActive = true;
-#endif
                                 garudaData.state = ESC_RECOVERY;
                                 garudaData.recoveryCounter = RT_DESYNC_COAST_COUNTS;
                                 LED2 = 0;
@@ -4106,38 +3845,12 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
 #endif
                 if (mappedDuty > cap) mappedDuty = cap;
 
-#if FEATURE_CL_ENTRY_SOFTSTART
-                /* CL-ENTRY SOFT-START: cap duty to a ceiling that ramps linearly
-                 * from CL_ENTRY_START_DUTY up to the requested (idle) duty over
-                 * CL_ENTRY_RAMP_TICKS. The phase current then builds gradually
-                 * with the rising BEMF instead of stepping to full idle duty
-                 * against ~0 BEMF at entry -> smaller inrush PEAK + longer ramp,
-                 * final idle speed unchanged. Stops limiting once the ceiling
-                 * reaches the idle floor. */
-                {
-                    static uint16_t clEntryTick = CL_ENTRY_RAMP_TICKS;
-                    if (prevAdcState != ESC_CLOSED_LOOP)
-                        clEntryTick = 0;                 /* arm at CL entry */
-                    if (clEntryTick < CL_ENTRY_RAMP_TICKS) {
-                        uint32_t span = (RT_CL_IDLE_DUTY > CL_ENTRY_START_DUTY)
-                                      ? (RT_CL_IDLE_DUTY - CL_ENTRY_START_DUTY) : 0u;
-                        uint32_t entryCeil = CL_ENTRY_START_DUTY +
-                            ((span * (uint32_t)clEntryTick) / CL_ENTRY_RAMP_TICKS);
-                        if (mappedDuty > entryCeil) mappedDuty = entryCeil;
-                        clEntryTick++;
-                    }
-                }
-#endif
 
 #if FEATURE_DUTY_SLEW
                 {
                     static uint32_t prevDuty = 0;
                     if (prevAdcState != ESC_CLOSED_LOOP)
-#if FEATURE_CL_ENTRY_SOFTSTART
-                        prevDuty = CL_ENTRY_START_DUTY;  /* low baseline so the soft-start ramp isn't fought by a down-slew */
-#else
                         prevDuty = garudaData.duty;
-#endif
 
                     /* Post-sync settle: use reduced slew-up rate for
                      * POST_SYNC_SETTLE_MS after ZC lock. This prevents
@@ -4302,15 +4015,6 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                     vbusFiltered = (uint16_t)(
                         ((uint32_t)vbusFiltered * 7 + garudaData.vbusRaw) >> 3);
 
-#if FEATURE_PRESYNC_RAMP
-                    /* Bypass sag limiter during pre-sync: at 12V CC-limited supply,
-                     * vbus sags to ~636 ADC (8.9V) under startup load. With
-                     * VBUS_SAG_THRESHOLD_ADC=900, the sag limiter would reduce
-                     * RAMP_DUTY_CAP by ~26%, killing startup torque. Allow full
-                     * startup duty until ZC sync is achieved. */
-                    if (garudaData.timing.zcSynced)
-                    {
-#endif
                     if (!vbusSagActive && vbusFiltered < VBUS_SAG_THRESHOLD_ADC)
                         vbusSagActive = true;
                     else if (vbusSagActive && vbusFiltered > VBUS_SAG_RECOVERY_ADC)
@@ -4326,13 +4030,6 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                         else
                             mappedDuty -= reduction;
                     }
-#if FEATURE_PRESYNC_RAMP
-                    }
-                    else
-                    {
-                        vbusSagActive = false;  /* Reset so it re-evaluates on sync */
-                    }
-#endif
 
 #if FEATURE_CL_LOW_IDLE
                     /* respect the lowered CL idle floor (this sag block's
@@ -4400,67 +4097,6 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                         softCap += step;
                         if (mappedDuty > softCap)
                             mappedDuty = softCap;
-                    }
-                }
-#endif
-#if FEATURE_IF_BRIDGE
-                /* Option D — I-f current-limited OL->CL hand-off bridge.
-                 * Ramp duty up from MIN_DUTY, but back off whenever bus current
-                 * exceeds the cap, so the motor accelerates from the (low-BEMF)
-                 * hand-off speed to the idle equilibrium at BOUNDED current
-                 * instead of the structural ~22A slam. Motor-agnostic: the cap
-                 * is the only knob. Only ever LOWERS mappedDuty (exits, leaving
-                 * normal control, once the regulated duty catches up to demand),
-                 * so OC/regen/OV protections above still win. */
-                {
-                    static uint32_t ifDuty = 0;
-                    static uint16_t ifCtr  = 0;
-                    static uint16_t ifPeak = 0;
-                    static bool ifActive   = false;
-                    if (prevAdcState != ESC_CLOSED_LOOP) {
-                        ifActive = true;
-                        ifDuty   = MIN_DUTY;
-                        ifCtr    = 0;
-                        ifPeak   = 0;
-                    }
-                    if (ifActive) {
-                        ifCtr++;
-                        /* back off on current MAGNITUDE (both motoring + and regen -
-                         * excursions); the bus current swings negative during the
-                         * unlocked hand-off, which a signed compare would miss.
-                         * ibusRaw is sampled at the PWM valley (~0 there), so the real
-                         * hand-off current registers only as a RECURRING spike that a
-                         * single per-tick read mostly misses — PEAK-HOLD it (decaying)
-                         * so the back-off actually sees the −22A and reacts. */
-                        int32_t iInst = (int32_t)garudaData.ibusRaw
-                                      - (int32_t)OC_BIAS_COUNTS;
-                        if (iInst < 0) iInst = -iInst;
-                        if ((uint16_t)iInst > ifPeak)
-                            ifPeak = (uint16_t)iInst;
-                        else
-                            ifPeak -= (ifPeak >> IF_BRIDGE_PEAK_DECAY_SHIFT);
-                        int32_t iMag = (int32_t)ifPeak;
-                        if (iMag > IF_BRIDGE_LIMIT_DELTA) {
-                            /* over the current cap — back off fast */
-                            if (ifDuty > MIN_DUTY + IF_BRIDGE_DOWN_RATE)
-                                ifDuty -= IF_BRIDGE_DOWN_RATE;
-                            else
-                                ifDuty = MIN_DUTY;
-                        } else {
-                            /* under the cap — ramp up toward normal demand */
-                            ifDuty += IF_BRIDGE_UP_RATE;
-                        }
-                        /* Never exceed the normal demand, but DON'T exit just
-                         * because the ramp caught up — a single PWM-gated low
-                         * current sample must not let the bridge bail before the
-                         * real overcurrent develops. Stay active for the whole
-                         * window; once the motor reaches idle, ifDuty simply sits
-                         * at the demand (harmless) until the window expires. */
-                        if (ifDuty > mappedDuty)
-                            ifDuty = mappedDuty;
-                        if (ifCtr >= IF_BRIDGE_TICKS)
-                            ifActive = false;        /* window elapsed -> hand back */
-                        mappedDuty = ifDuty;         /* apply the bounded-current duty */
                     }
                 }
 #endif
@@ -4568,33 +4204,6 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                 }
 #endif
 
-#if FEATURE_HANDOFF_CHOP
-                /* Sub-MIN_DUTY current bound via the CMP3 HARDWARE chop, not duty.
-                 * Hold a LOW chop threshold for a window at CL entry so the
-                 * cycle-by-cycle CLPCI truncates each pulse at OC_CMP3_HANDOFF_MA
-                 * — bounding the phase current (and its −freewheel bus pulse)
-                 * regardless of duty/MIN_DUTY, with no regen oscillation. Other
-                 * state transitions also write the CMP3 DAC (zcSync etc.), so we
-                 * RE-ASSERT every tick to own the threshold for the whole window,
-                 * then restore the operational value once. Armed only at CL entry;
-                 * align/OL/morph keep STARTUP_DAC so their torque isn't chopped. */
-                {
-                    static uint16_t hcCtr = 0;
-                    static bool hcActive = false;
-                    if (hcArmPending) {        /* armed at CL entry; survives the coast-listen break */
-                        hcArmPending = false;
-                        hcActive = true;
-                        hcCtr = 0;
-                    }
-                    if (hcActive) {
-                        HAL_CMP3_SetThreshold(OC_CMP3_HANDOFF_DAC);
-                        if (++hcCtr >= HANDOFF_CHOP_TICKS) {
-                            hcActive = false;
-                            HAL_CMP3_SetThreshold(RT_OC_CMP3_DAC_VAL);
-                        }
-                    }
-                }
-#endif
             }
             HAL_PWM_SetDutyCycle(garudaData.duty);
             break;
@@ -4685,47 +4294,13 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
              * cross-ISR races. Timer1 is a no-op for ESC_ARMED with FOC. */
             break;
 #else
-#if FEATURE_ARM_BEEP
-            /* Arm melody: plays AFTER the quiet arm window (OC auto-zero has
-             * already latched its bias) and BEFORE startup. Three sequential
-             * pitches over ARM_BEEP_TICKS; the arm-complete transition below
-             * is pushed out by the same amount. Throttle-up during the
-             * melody resets the countdown (same rule as arming itself). */
-            if (garudaData.throttle < ARM_THROTTLE_ZERO_ADC
-                && garudaData.armCounter >= ARM_TIME_COUNTS)
-            {
-                static const uint16_t halfTbl[3] = {
-                    (uint16_t)(10000u / (2u * ARM_BEEP_FREQ1_HZ)),
-                    (uint16_t)(10000u / (2u * ARM_BEEP_FREQ2_HZ)),
-                    (uint16_t)(10000u / (2u * ARM_BEEP_FREQ3_HZ)),
-                };
-                uint32_t t = garudaData.armCounter - ARM_TIME_COUNTS;
-                uint32_t noteLen = ARM_BEEP_TICKS / 3u;
-                uint8_t note = (uint8_t)(t / noteLen);
-                if (note > 2u) note = 2u;
-                if (((t / halfTbl[note]) & 1u) == 0u)
-                {
-                    HAL_PWM_SetCommutationStep(0);
-                    HAL_PWM_SetDutyCycle((uint16_t)(((uint32_t)LOOPTIME_TCY
-                                          * ARM_BEEP_DUTY_PCT) / 100u));
-                }
-                else
-                {
-                    HAL_MC1PWMDisableOutputs();
-                }
-            }
-#endif
             /* Arm window + launch gate. The pot must sit near zero for ARM_TIME
              * (the safety gate). With FEATURE_POT_START_STOP the motor then HOLDS
              * armed-and-off until the pot is raised past THROTTLE_START_ADC;
              * without it, the motor auto-starts when the arm window completes. */
             {
                 bool armReady =
-#if FEATURE_ARM_BEEP
-                    (garudaData.armCounter >= ARM_TIME_COUNTS + ARM_BEEP_TICKS);
-#else
                     (garudaData.armCounter >= ARM_TIME_COUNTS);
-#endif
                 bool launchNow = false;
 
                 if (garudaData.throttle < ARM_THROTTLE_ZERO_ADC)
@@ -4765,24 +4340,6 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
                      * SetCommutationStep path never energized the bridge from
                      * this entry → zero current; the sine drive does. */
                     garudaData.state = ESC_ALIGN;
-#elif FEATURE_AM32_STARTUP
-                    /* AM32-style: no align, no ramp. Seed the listener's
-                     * period guess and enter CL; the ADC-ISR entry block
-                     * does the one blind kick + HWZC arm (startMotor()
-                     * semantics, AM32 main.c:977). */
-                    {
-                        uint32_t seedErpm = AM32_START_SEED_ERPM;
-                        if (seedErpm == 0u)   /* derive from active profile */
-                            seedErpm = (2u * RT_RAMP_TARGET_ERPM) / 3u;
-                        if (seedErpm < 300u) seedErpm = 300u;
-                        garudaData.rampStepPeriod =
-                            (uint16_t)ERPM_TO_STEP_TICKS(seedErpm);
-                    }
-                    g_am32EntryPending = 1;
-#if FEATURE_HW_OVERCURRENT
-                    HAL_CMP3_SetThreshold(RT_OC_CMP3_DAC_VAL);
-#endif
-                    garudaData.state = ESC_CLOSED_LOOP;
 #elif FEATURE_IF_STARTUP
                     /* I-f self-aligns from the clean override-low bridge state.
                      * STARTUP_Init's SineInit briefly wrote sine duties + released
@@ -4838,44 +4395,14 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
              * runs in the non-IF build. */
             if (STARTUP_SineAlign(&garudaData))
             {
-#if FEATURE_PLL_STARTUP
-                /* PLL-from-align: no OL ramp, no morph. Seed the slow
-                 * initial period, flag the blind schedule, and enter CL —
-                 * the ADC-ISR entry block engages 6-step + HWZC there. */
-                garudaData.rampStepPeriod =
-                    (uint16_t)ERPM_TO_STEP_TICKS(PLL_START_ERPM0);
-                garudaData.hwzc.pllStartActive = 1;
-                garudaData.hwzc.pllStartGood = 0;
-                garudaData.hwzc.pllPrevCap = 0;
-#if FEATURE_HW_OVERCURRENT
-                HAL_CMP3_SetThreshold(RT_OC_CMP3_DAC_VAL);
-#endif
-                garudaData.state = ESC_CLOSED_LOOP;
-#else
                 garudaData.state = ESC_OL_RAMP;
-#endif
             }
             break;
 #else
             if (STARTUP_Align(&garudaData))
             {
-#if FEATURE_PLL_STARTUP
-                /* PLL-from-align over the CLASSIC align: same exit as the
-                 * sine-align path — seed slow period, flag the blind
-                 * schedule, enter CL (ADC-ISR entry block engages). */
-                garudaData.rampStepPeriod =
-                    (uint16_t)ERPM_TO_STEP_TICKS(PLL_START_ERPM0);
-                garudaData.hwzc.pllStartActive = 1;
-                garudaData.hwzc.pllStartGood = 0;
-                garudaData.hwzc.pllPrevCap = 0;
-#if FEATURE_HW_OVERCURRENT
-                HAL_CMP3_SetThreshold(RT_OC_CMP3_DAC_VAL);
-#endif
-                garudaData.state = ESC_CLOSED_LOOP;
-#else
                 garudaData.state = ESC_OL_RAMP;
                 garudaData.rampCounter = garudaData.rampStepPeriod;
-#endif
             }
             break;
 #endif
@@ -4906,37 +4433,14 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
                  * CMP3 never trips and the board PCI hard-faults. */
                 HAL_CMP3_SetThreshold(RT_OC_CMP3_DAC_VAL);
 #endif
-#if FEATURE_SKIP_MORPH && FEATURE_CL_COAST_VERIFY
-                if (garudaData.direction == 0)
-                {
-                    /* Skip the morph: the CL-entry coast-listen measures the
-                     * TRUE sector/period from clean coast BEMF — no trap
-                     * converge, no windowed-Hi-Z grind (deletes the morph
-                     * current kick). MorphInit above already did the critical
-                     * rampStepPeriod sync; the morph fields it set go unused.
-                     * Next ADC tick: normal CL entry init (prev==OL_RAMP →
-                     * BEMF_ZC_Init path), then CL_CoastBegin cuts the bridge. */
-                    garudaData.sine.active = false;
-                    garudaData.state = ESC_CLOSED_LOOP;
-                    break;
-                }
-#endif
                 garudaData.state = ESC_MORPH;
             }
             break;
-#else
-#if FEATURE_PRESYNC_RAMP
-            /* Skip blind forced ramp. Enter CL directly with slow initial
-             * step period. ADC ISR pre-sync handles feedback-gated
-             * acceleration with ZC detection in parallel. */
-            garudaData.duty = RT_RAMP_DUTY_CAP;
-            garudaData.state = ESC_CLOSED_LOOP;
 #else
             if (STARTUP_OpenLoopRamp(&garudaData))
             {
                 garudaData.state = ESC_CLOSED_LOOP;
             }
-#endif
             break;
 #endif
 
@@ -4990,25 +4494,18 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
             }
             else
             {
-#if FEATURE_THROTTLE_ZERO_AUTO_DISARM
-                bool restartGateThrottle =
-                    (garudaData.throttle >= ARM_THROTTLE_ZERO_ADC);
-#else
                 /* Throttle-zero auto-disarm disabled — recovery always
                  * attempts restart while runCommandActive is still set,
                  * regardless of throttle level. Pot-at-zero is treated as
                  * "run at idle duty", not "stop". */
                 bool restartGateThrottle = true;
-#endif
 
-#if !FEATURE_THROTTLE_ZERO_AUTO_DISARM
                 /* AUTO_DISARM=0: never run out of restart attempts.
                  * Reset the counter when it would otherwise cap, so the
                  * motor keeps restarting indefinitely at any throttle. */
                 if (garudaData.desyncRestartAttempts >= RT_DESYNC_MAX_RESTARTS)
                     garudaData.desyncRestartAttempts = 0;
                 garudaData.runCommandActive = true;
-#endif
 
                 if (garudaData.runCommandActive &&
                     garudaData.desyncRestartAttempts < RT_DESYNC_MAX_RESTARTS &&
@@ -5019,17 +4516,6 @@ void __attribute__((__interrupt__, no_auto_psv)) _T1Interrupt(void)
                     garudaData.state = ESC_ALIGN;
                     LED2 = 1;
                 }
-#if FEATURE_THROTTLE_ZERO_AUTO_DISARM
-                else if (garudaData.throttle < ARM_THROTTLE_ZERO_ADC)
-                {
-                    /* Throttle is zero — user wants motor stopped.
-                     * Don't restart, go to IDLE. */
-                    garudaData.runCommandActive = false;
-                    garudaData.desyncRestartAttempts = 0;
-                    garudaData.state = ESC_IDLE;
-                    LED2 = 0;
-                }
-#endif
                 else if (!garudaData.runCommandActive)
                 {
                     /* User pressed stop during coast — graceful idle */

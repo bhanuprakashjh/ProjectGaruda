@@ -275,12 +275,6 @@ _Static_assert(MIN_ADC_STEP_PERIOD > MIN_CL_ADC_STEP_PERIOD,
 #if FEATURE_FOC_V2 && FEATURE_ADC_CMP_ZC
 #error "FEATURE_FOC_V2 and FEATURE_ADC_CMP_ZC are mutually exclusive"
 #endif
-#if FEATURE_PLL_STARTUP && (!FEATURE_ADC_CMP_ZC || !FEATURE_HWZC_SECTOR_PI)
-#error "FEATURE_PLL_STARTUP requires ADC_CMP_ZC + HWZC_SECTOR_PI (the PI/SCCP1 machinery)"
-#endif
-#if FEATURE_AM32_STARTUP && (!FEATURE_ADC_CMP_ZC || !FEATURE_HWZC_SECTOR_PI)
-#error "FEATURE_AM32_STARTUP requires ADC_CMP_ZC + HWZC_SECTOR_PI (the listener)"
-#endif
 #if FEATURE_FOC && DIAGNOSTIC_MANUAL_STEP
 #error "FEATURE_FOC and DIAGNOSTIC_MANUAL_STEP are mutually exclusive"
 #endif
@@ -515,40 +509,6 @@ _Static_assert(HWZC_BLANKING_PERCENT >= 1 && HWZC_BLANKING_PERCENT <= 20,
 /* Option D: I-f current-limited hand-off bridge thresholds (frequency-independent).
  * IF_BRIDGE_LIMIT_ADC uses the same bias+scale as OC_SW_LIMIT_ADC, so it's
  * directly comparable to garudaData.ibusRaw. */
-#if FEATURE_IF_BRIDGE
-#define IF_BRIDGE_LIMIT_ADC  OC_MV_TO_COUNTS(OC_TRIP_MV(IF_BRIDGE_LIMIT_MA))
-#define IF_BRIDGE_TICKS      ((uint16_t)((uint32_t)IF_BRIDGE_MS * PWMFREQUENCY_HZ / 1000))
-#define IF_BRIDGE_UP_RATE    (uint32_t)((uint64_t)MAX_DUTY * IF_BRIDGE_UP_PCT_PER_MS \
-                                        / 100 / (PWMFREQUENCY_HZ / 1000))
-#define IF_BRIDGE_DOWN_RATE  (uint32_t)((uint64_t)MAX_DUTY * IF_BRIDGE_DOWN_PCT_PER_MS \
-                                        / 100 / (PWMFREQUENCY_HZ / 1000))
-/* Cap expressed as a MAGNITUDE delta from the zero-current bias, so the limiter
- * backs off on BOTH motoring (+) and regen (-) excursions. During the unlocked
- * hand-off the bus current swings strongly negative (phase-mismatch slosh) — a
- * SIGNED compare is fooled into "current is low" and ramps duty up. */
-#define IF_BRIDGE_LIMIT_DELTA ((int32_t)IF_BRIDGE_LIMIT_ADC - (int32_t)OC_BIAS_COUNTS)
-_Static_assert(IF_BRIDGE_LIMIT_ADC < OC_FAULT_ADC_VAL,
-               "IF_BRIDGE_LIMIT must be below the OC fault threshold");
-_Static_assert(IF_BRIDGE_LIMIT_DELTA > 0, "IF_BRIDGE_LIMIT must exceed the zero bias");
-#endif
-
-/* Hand-off CMP3 chop: a LOW cycle-by-cycle current threshold held for a window
- * at CL entry. Same DAC scale as OC_CMP3_DAC_VAL / OC_CMP3_STARTUP_DAC. */
-#if FEATURE_HANDOFF_CHOP
-#define OC_CMP3_HANDOFF_DAC  OC_MV_TO_COUNTS(OC_TRIP_MV(OC_CMP3_HANDOFF_MA))
-#define HANDOFF_CHOP_TICKS   ((uint16_t)((uint32_t)HANDOFF_CHOP_MS * PWMFREQUENCY_HZ / 1000))
-_Static_assert(OC_CMP3_HANDOFF_DAC < OC_CMP3_STARTUP_DAC,
-               "hand-off chop must be below the startup chop threshold");
-_Static_assert(OC_CMP3_HANDOFF_DAC > OC_BIAS_COUNTS,
-               "hand-off chop must be above the zero-current bias");
-#endif
-
-/* CL-entry soft-start derived constants (see FEATURE_CL_ENTRY_SOFTSTART). */
-#if FEATURE_CL_ENTRY_SOFTSTART
-#define CL_ENTRY_START_DUTY  (uint32_t)((CL_ENTRY_START_PCT / 100.0f) * LOOPTIME_TCY)
-#define CL_ENTRY_RAMP_TICKS  ((uint16_t)((uint32_t)CL_ENTRY_RAMP_MS * PWMFREQUENCY_HZ / 1000))
-_Static_assert(CL_ENTRY_RAMP_TICKS > 0, "CL-entry ramp must span >=1 tick");
-#endif
 
 /* I-f spin-up derived constants (the control loop runs in the 24kHz ADC ISR). */
 #if FEATURE_IF_STARTUP

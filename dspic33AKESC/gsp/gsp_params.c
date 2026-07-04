@@ -170,7 +170,7 @@ static const GSP_PARAMS_T profileDefaults[10] = {
         .rampAccelErpmPerS  = 3000,    /* ~1s ramp 200->3000 eRPM on 2810 at 24V. */
         .rampDutyPct        = 8,       /* At 24V, 8% * 24V / 0.050Ω = 38A stall.
                                         * Motor should be moving early; 8% is ramp cap */
-        .clIdleDutyPct      = 4,       /* With FEATURE_HWZC_LOWSPD_OFFCTR=1, rising ZC no
+        .clIdleDutyPct      = 4,       /* rising ZC no
                                         * longer needs the PWM-ON window, so idle holds
                                         * below the old 6% floor: this clamps to MIN_DUTY
                                         * -> ~10.4k idle (was ~14.3k at 6%), shrinking the

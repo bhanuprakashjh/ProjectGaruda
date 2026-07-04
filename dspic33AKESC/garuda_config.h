@@ -91,76 +91,6 @@ extern "C" {
                                      * gap until eRPM falls under the cap region, then the
                                      * normal 3% glide takes over). Belt-and-braces vs the
                                      * droop term above — either alone breaks the latch. */
-#define FEATURE_IF_BRIDGE        0  /* Option D: I-f current-limited OL->CL hand-off bridge.
-                                     * MOTOR-AGNOSTIC smoothing. At CL entry, ramp duty up
-                                     * from MIN_DUTY but BACK OFF whenever bus current
-                                     * exceeds IF_BRIDGE_LIMIT_MA — so the motor accelerates
-                                     * from the (low-BEMF) hand-off speed to the idle
-                                     * equilibrium at a BOUNDED current instead of the
-                                     * structural ~22A slam. One knob (the current cap)
-                                     * scales across motors — no per-motor speed/duty tune.
-                                     * Final cap (after OC limiter); only lowers duty, so
-                                     * regen/OV/OC protections still win. Default OFF. */
-#define IF_BRIDGE_LIMIT_MA   10000  /* Bridge bus-current cap. Keep < active ocSwLimitMa
-                                     * (18A on profile 2). Lower = gentler/slower spin-up. */
-#define IF_BRIDGE_MS           800  /* Safety: max bridge duration after CL entry (ms).
-                                     * Must exceed the hand-off->idle spin-up time. */
-#define IF_BRIDGE_UP_PCT_PER_MS   2 /* Duty ramp-up rate while UNDER the current cap. */
-#define IF_BRIDGE_DOWN_PCT_PER_MS 8 /* Duty back-off rate when OVER the cap (faster). */
-#define IF_BRIDGE_PEAK_DECAY_SHIFT 6 /* Bridge current sense = PEAK-HOLD of |ibusRaw-bias|,
-                                     * not the instantaneous sample. ibusRaw is sampled at
-                                     * the PWM valley (~0 there), so the real hand-off
-                                     * current shows up only as a RECURRING spike (the −22A
-                                     * freewheel of the ~22A phase current) that a single
-                                     * per-tick read mostly misses. Peak-hold catches it;
-                                     * it decays by >>SHIFT/tick (6 ≈ 1.5%/tick, holds the
-                                     * peak ~2-3ms across the inter-commutation gap so the
-                                     * back-off doesn't chatter). Smaller = holds longer. */
-#define FEATURE_HANDOFF_CHOP     0  /* DISABLED 2026-06-24 (cycle-by-cycle chop off). Was: current-limits the CL-entry
-                                     * speed-gap pulse (rotor 2-3k vs ~10.4k idle equilib at MIN_DUTY)
-                                     * that duty/soft-start can't touch (idle already at the floor).
-                                     * Sub-MIN_DUTY OL->CL current bound via the CMP3 HARDWARE
-                                     * cycle-by-cycle chop (CLPCI), not duty. The startup CMP3
-                                     * threshold is set HIGH (OC_CMP3_STARTUP_DAC ~22A) to not
-                                     * chop startup torque — which is exactly why the hand-off
-                                     * pulse reaches ~22A. This holds CMP3 at a LOW chop level
-                                     * (OC_CMP3_HANDOFF_MA) for a window at CL entry, so the
-                                     * hardware truncates each PWM pulse at that current —
-                                     * effective duty goes BELOW MIN_DUTY naturally (no deadtime
-                                     * issue) and the phase current (hence the −freewheel pulse)
-                                     * is bounded, WITHOUT the regen-oscillation the duty-clamp
-                                     * IF_BRIDGE caused. CMP3 is analog/continuous so it sees the
-                                     * true ON-time motoring peak the valley-sampled ADC misses.
-                                     * Armed only at CL entry (align/OL/morph keep STARTUP_DAC). */
-#define OC_CMP3_HANDOFF_MA     500  /* 2026-06-16 Handoff WINDOW is NOT the live mechanism on 2810:
-                                     * sweeping this 500/300/150 changed nothing because the
-                                     * OPERATIONAL chop (gspDerived.ocCmp3DacVal = profile ocLimitMa)
-                                     * is what's active at CL entry. The real lever is the profile's
-                                     * ocLimitMa (lowered to 600 = morning's proven 4-7A). Left 500
-                                     * here as a neutral default. (orig note:) 500 for 2810 entry-chop
-                                     * (Ia held 15A through the 5%-duty handoff). The CMP3 sense is
-                                     * the FILTERED bus current; at MIN_DUTY (~5%) its average is
-                                     * ~5x below the phase peak, so a 500cfg threshold sits above it.
-                                     * Lowered so the filtered signal crosses. FLOOR WATCH below.
-                                     * (was) 500 for 2810 entry-chop (bench cal ~400cfg=~4A;
-                                     * proven 400-600 clamps 16A->4-6A and still spins 260k). NOTE
-                                     * global: applies to whatever MOTOR_PROFILE is built. Tune:
-                                     * stalls/can't clear gap -> raise; pulse still high -> lower.
-                                     * (prior A2212 note, kept:) USE THE CHOP to tame CL-entry inrush.
-                                     * MEASURED CAL: 6000 didn't bite (~10A); 500 clamped ~8.5A;
-                                     * 300 = push lower (~6-7A?) for an even smaller spike + longer
-                                     * ramp. A LOWER chop = smaller peak AND gentler torque ->
-                                     * longer spin-up. Held for HANDOFF_CHOP_MS (covers the ramp)
-                                     * then auto-restores 18A operational (top-end UNAFFECTED).
-                                     * FLOOR WATCH: too low truncates the ON-window so far that
-                                     * low-speed ZC detection / breakaway from 2k fails (stall or
-                                     * desync) -> raise back toward 400. Must stay > bias (assert). */
-#define HANDOFF_CHOP_MS       2000  /* 2026-06-16 1000->2000: lower chop = gentler torque = LONGER
-                                     * spin-up, so widen the window to cover it (else it expires
-                                     * mid-ramp and the current un-clamps -> end-of-ramp spike).
-                                     * Window after CL entry to hold the low chop (ms). Must
-                                     * exceed the hand-off->past-the-gap accel time. Idle draw
-                                     * is < cap so holding it there is inert. */
 
 /* ── CL-ENTRY SOFT-START ──────────────────────────────────────────────────
  * At CL entry the duty normally steps straight to the idle floor (e.g. 8%)
@@ -173,9 +103,6 @@ extern "C" {
  * the chop can't. Tune: START_PCT lower = smaller peak, but must stay above the
  * entry-speed equilibrium (~2k handoff) or the rotor coasts/desyncs -> raise it;
  * RAMP_MS longer = gentler. START_PCT must be >= the deadtime MIN_DUTY (~3%). */
-#define FEATURE_CL_ENTRY_SOFTSTART   1
-#define CL_ENTRY_START_PCT           4    /* initial CL-entry duty %  (peak knob) */
-#define CL_ENTRY_RAMP_MS           400    /* ms to climb START_PCT -> CL idle duty */
 
 /* ── Pot start/stop (2026-06-18) ──────────────────────────────────────────
  * FEATURE_POT_START_STOP=1: zero pot = motor STOPPED (bridge off, coasts to
@@ -192,15 +119,6 @@ extern "C" {
                                       * (and FEATURE_THROTTLE_ZERO_AUTO_DISARM follows it → off).
                                       * Arm/start via GSP/switch; pot is throttle only. */
 #define THROTTLE_START_ADC      400   /* armed motor launches when pot ADC rises above this (hysteresis vs ARM_THROTTLE_ZERO_ADC=200) */
-#define FEATURE_THROTTLE_ZERO_AUTO_DISARM 0  /* OFF 2026-07-03 evening (was 1 same day): pot 0
-                                      * pinned to idle speed per bench. The stop half proved
-                                      * hair-triggered: hasSeenThrottle latches on a SINGLE
-                                      * ISR-rate pot sample >=200 (idle pot reads ~40 with
-                                      * noise spikes >200 between 10Hz telemetry frames), then
-                                      * any 50ms <200 kills the motor ~1.5s after CL entry.
-                                      * Re-enable only after debouncing the latch (require
-                                      * sustained >=THROTTLE_START_ADC for ~100ms, not one
-                                      * sample >=ARM_THROTTLE_ZERO_ADC). */
 #define FEATURE_TIMING_ADVANCE   1  /* Phase B3: Linear timing advance by RPM — RE-ENABLED 2026-05-26 to compensate detection-chain latency at high RPM. Original baseline schedule: 0° below 3k eRPM, linear ramp to 22° at MAX_CLOSED_LOOP_ERPM (70k for 2810), clamped 22° above. */
 #define FEATURE_DYNAMIC_BLANKING 1  /* Phase C1: Speed+duty-aware blanking (extra blank at high duty/demag) */
 #define FEATURE_ZC_CURRENT_BLANK 1  /* WS1: LOAD-adaptive demag blanking on the HW-ZC path. Adds extra
@@ -422,21 +340,6 @@ extern "C" {
                                     * window (~0.17A). A rotor still spinning
                                     * down puts regen ripple on the bus that
                                     * fails this → retry until quiescent. */
-#define FEATURE_PLL_STARTUP     0  /* 2026-06-11 twin design study (task #10): after ALIGN,
-                                    * enter CL directly — the sector-PI/SCCP1 machinery runs a
-                                    * BLIND accelerating commutation schedule from
-                                    * PLL_START_ERPM0, comparator armed the whole way; captures
-                                    * are consumed-and-discarded below PLL_START_CAPTURE_FLOOR
-                                    * (phantom-proof), counted above it; PLL_START_SYNC_CAPS
-                                    * consecutive plausible captures => declared synced and the
-                                    * NORMAL sector PI takes over seamlessly (no morph, no OL
-                                    * ramp, no lock gate, no hand-off event). AM32-style
-                                    * "closed loop with training wheels". Prototype in
-                                    * garuda_sil before any bench flash. */
-#define PLL_START_ERPM0              300   /* first commanded speed after align */
-#define PLL_START_ACCEL_ERPM_PER_S 32000   /* blind schedule acceleration */
-#define PLL_START_CAPTURE_FLOOR_ERPM 2500  /* ignore captures below (BEMF noise floor) */
-#define PLL_START_SYNC_CAPS            6   /* consecutive plausible captures = synced */
 
 /* MOTOR_PROFILE selects the motor model + tuning. It MUST be #defined HERE,
  * BEFORE the per-profile AM32-startup #if below. (Bug fixed 2026-06-24: it was
@@ -454,23 +357,8 @@ extern "C" {
  * carve-out — a heavy 97 g PROPPED rotor must NOT take the AM32 blind kick (it
  * phantom-locks / slams). It uses the classic 6-step align->ramp->morph->CL. */
 #if MOTOR_PROFILE == 6 || MOTOR_PROFILE == 7 || MOTOR_PROFILE == 8 || MOTOR_PROFILE == 9
-#define FEATURE_AM32_STARTUP    0
 #else
-#define FEATURE_AM32_STARTUP    1  /* 2026-06-12 bench experiment: AM32-style "kick + listen".
-                                    * NO align, NO ramp, NO blind schedule: on arm-complete,
-                                    * one blind commutation at MIN_DUTY from the unknown rotor
-                                    * angle, HWZC armed immediately with the period seeded at
-                                    * AM32_START_SEED_ERPM, zcSynced trusted from event 1 --
-                                    * the normal sector PI + defensive machinery do EVERYTHING
-                                    * (AM32 main.c:977 startMotor() semantics; their polling/
-                                    * voting low-speed mode maps onto our defensive PI).
-                                    * Mutually exclusive w/ PLL_STARTUP. */
 #endif
-#define AM32_START_SEED_ERPM       0   /* initial period guess. 0 = derive from the
-                                            * active profile: (2/3)*rampTargetErpm —
-                                            * gives the bench-proven 2000 on profile 2
-                                            * (rampTarget 3000) and scales for high-BEMF-
-                                            * floor motors (VEX: 8000). Nonzero = use as-is. */
 
 /* U3 (profile 9, 2026-06-25): REGULAR trapezoidal 6-step startup, NOT sine. Done as
  * an #undef HERE (not at the FEATURE_SINE_STARTUP definition ~line 150) because
@@ -485,33 +373,7 @@ extern "C" {
 #define FEATURE_SINE_STARTUP     0
 #endif
 
-#if FEATURE_AM32_STARTUP && FEATURE_PLL_STARTUP
-#error "FEATURE_AM32_STARTUP and FEATURE_PLL_STARTUP both own CL entry - pick one"
-#endif
 
-#define FEATURE_ARM_BEEP        0  /* 2026-06-12: arm melody through the motor windings.
-                                    * Sequence: button -> quiet 500ms arm (OC auto-zero
-                                    * calibrates undisturbed) -> ARM_BEEP_MS of music (three
-                                    * sequential pitches, 45kHz PWM burst-gated at each note's
-                                    * rate, align sector, ARM_BEEP_DUTY_PCT drive; rotor stays
-                                    * parked) -> startup. Startup is therefore delayed by
-                                    * ARM_BEEP_MS after the normal arm window. */
-#define ARM_BEEP_MS          2000  /* melody length (delays startup by this much) */
-#define ARM_BEEP_TICKS       (uint32_t)(ARM_BEEP_MS * 10u)
-#define ARM_BEEP_FREQ1_HZ     800  /* note 1 (first ~ARM_BEEP_MS/3) */
-#define ARM_BEEP_FREQ2_HZ    1200  /* note 2 */
-#define ARM_BEEP_FREQ3_HZ    1600  /* note 3 — rising chirp */
-#define ARM_BEEP_DUTY_PCT       3  /* drive strength — louder; = profile align duty class. 4+ NOT
-                                    * recommended at 24V: burst peaks approach the 18A SW OC. */
-#define PLL_START_TARGET_ERPM      10000   /* blind schedule ceiling (hold if unsynced) */
-#define FEATURE_SKIP_MORPH      0  /* PARKED 2026-06-10 (bench-proven 9/9 but engage is
-                                    * effectively blind at the 3k entry: the post-sine coast
-                                    * listen reads a uniform 2× crossing artifact — likely
-                                    * 3rd-harmonic/neutral wobble dominating the weak 3k
-                                    * fundamental — "5696 eRPM" every run; starts succeed via
-                                    * HWZC self-capture, not verified engage. User chose to
-                                    * return to the proven morph baseline. Revive for feel:
-                                    * single-jerk startup, one climb instead of kick+climb. */
                                    /* ORIGINAL NOTE: skip ESC_MORPH entirely (CW only; needs
                                     * FEATURE_CL_COAST_VERIFY). The morph's job — establish ZC
                                     * lock before CL — is done better by the coast-listen
@@ -737,7 +599,6 @@ extern "C" {
 #define OC_FAULT_MA               3000     /* Software hard fault (3.0A, mode 2) */
 #define OC_SW_LIMIT_MA            1500     /* Software soft limit (1.5A) */
 #define RAMP_CURRENT_GATE_MA         0     /* 0=disabled: Hurst starts easily without gating */
-#define FEATURE_PRESYNC_RAMP       0       /* Hurst: standard forced OL_RAMP */
 #define OC_CLPCI_ENABLE            0       /* Disabled for FOC: SVPWM incompatible with CLPCI chopping */
 
 #elif MOTOR_PROFILE == 1
@@ -786,7 +647,6 @@ extern "C" {
                                             * when motor catches up and current drops. 10V works
                                             * because lower V/L means slower current rise → less
                                             * braking torque during wrong commutation. */
-#define FEATURE_PRESYNC_RAMP       0       /* Disabled: standard forced OL_RAMP (reliable no-prop) */
 #define OC_CLPCI_ENABLE            1       /* 2026-06-16 RE-ENABLED: CMP3->CLPCI current-limit chop.
                                             * Prior note (kept): A2212 OA3 ringing (25x gain) caused
                                             * 54-80% false trips, LEB couldn't fix — but that was BEFORE
@@ -865,7 +725,6 @@ extern "C" {
 #define OC_FAULT_MA              21000     /* SW hard fault just below saturation */
 #define OC_SW_LIMIT_MA           18000     /* production SW soft limit (below CMP3 operational) */
 #define RAMP_CURRENT_GATE_MA     10000     /* production: hold ramp accel when ibus > 10A */
-#define FEATURE_PRESYNC_RAMP       0       /* Standard forced OL_RAMP */
 #define OC_CLPCI_ENABLE            0       /* DISABLED 2026-06-24: cycle-by-cycle CMP3->CLPCI chop OFF.
                                             * Overcurrent now relies on the software ADC OC path
                                             * (OC_PROTECT_MODE=2) — no cycle-by-cycle current limiting.
@@ -902,7 +761,6 @@ extern "C" {
 #define RAMP_CURRENT_GATE_MA      6000     /* Hold ramp if bus current > 6A.
                                             * Critical for 0.05 ohm: prevents
                                             * runaway current during forced comm. */
-#define FEATURE_PRESYNC_RAMP       0
 #define OC_CLPCI_ENABLE            0       /* CLPCI disabled: OA3 ringing issue */
 
 #elif MOTOR_PROFILE == 4
@@ -932,7 +790,6 @@ extern "C" {
 #define OC_FAULT_MA              21000
 #define OC_SW_LIMIT_MA           16000     /* ≈ rated 17A continuous */
 #define RAMP_CURRENT_GATE_MA     12000
-#define FEATURE_PRESYNC_RAMP       0
 #define OC_CLPCI_ENABLE            0
 
 #elif MOTOR_PROFILE == 5
@@ -961,7 +818,6 @@ extern "C" {
 #define OC_FAULT_MA              21000
 #define OC_SW_LIMIT_MA           18000
 #define RAMP_CURRENT_GATE_MA     10000
-#define FEATURE_PRESYNC_RAMP       0
 #define OC_CLPCI_ENABLE            0
 
 #elif MOTOR_PROFILE == 6
@@ -1000,7 +856,6 @@ extern "C" {
 #define OC_SW_LIMIT_MA           13000     /* 2026-06-16 7250->13000: above the HW chop so the inrush
                                             * peak no longer false-trips OC_SW at align (=stall, brief) */
 #define RAMP_CURRENT_GATE_MA      7000
-#define FEATURE_PRESYNC_RAMP       0
 #define OC_CLPCI_ENABLE            0
 
 #elif MOTOR_PROFILE == 7
@@ -1029,7 +884,6 @@ extern "C" {
 #define OC_FAULT_MA               9500
 #define OC_SW_LIMIT_MA            7250
 #define RAMP_CURRENT_GATE_MA      7000
-#define FEATURE_PRESYNC_RAMP       0
 #define OC_CLPCI_ENABLE            1       /* handoff chop on for the low-L startup pulse */
 
 #elif MOTOR_PROFILE == 8
@@ -1056,7 +910,6 @@ extern "C" {
 #define OC_FAULT_MA               9500
 #define OC_SW_LIMIT_MA            7250
 #define RAMP_CURRENT_GATE_MA      7000
-#define FEATURE_PRESYNC_RAMP       0
 #define OC_CLPCI_ENABLE            1
 
 #elif MOTOR_PROFILE == 9
@@ -1087,7 +940,6 @@ extern "C" {
 #define OC_FAULT_MA              21000
 #define OC_SW_LIMIT_MA           18000
 #define RAMP_CURRENT_GATE_MA     10000
-#define FEATURE_PRESYNC_RAMP       0
 #define OC_CLPCI_ENABLE            0        /* cycle-by-cycle CMP3 chop OFF (matches 2810 committed baseline;
                                             * SW ADC OC path handles overcurrent) */
 
@@ -1120,10 +972,6 @@ extern "C" {
                                                 * above brownout while staying well below the
                                                 * CC-sag floor (~636 ADC = 8.9V at 10A).
                                                 * Normal UV threshold resumes after zcSynced. */
-#define PRESYNC_TIMEOUT_MS         5000        /* Max time in pre-sync before FAULT_STARTUP_TIMEOUT.
-                                                * At 200 eRPM / 7pp = ~2.5 mech revolutions.
-                                                * If BEMF too weak for 3 ZC confirmations in this
-                                                * time, motor/prop combination can't start. */
 
 /* Duty Slew Rate (Phase B1) */
 #if FEATURE_DUTY_SLEW
@@ -1695,12 +1543,6 @@ extern "C" {
 #define FEATURE_HWZC_FALLING_HW        0
 #endif
 
-/* FEATURE_HWZC_FREEWHEEL_GATE — when 1 (default) the FALLING_HW path only
- * accepts a comparator capture in the correct PWM window for the sector's
- * polarity (rising during PWM-ON, falling during PWM-OFF/freewheel). Set 0 to
- * accept EVERY comparator capture regardless of PWM state — i.e. the plain
- * "HW comparator ZC, no PWM gate" behaviour, for A/B comparison on the bench. */
-#define FEATURE_HWZC_FREEWHEEL_GATE     0   /* CHECK: gate OFF (ungated HW-comparator ZC) */
 
 /* FEATURE_HWZC_FALLING_OFFWIN — detection-window schedule step 1 (2026-07-03).
  * Below the engage duty, FALLING sectors detect their ZC in the PWM-OFF
@@ -1743,9 +1585,7 @@ extern "C" {
                                          * 70-75 band holds previous state (hysteresis) */
 
 #if FEATURE_HWZC_FALLING_HW
-#define FEATURE_HWZC_FALLING_SW        0   /* superseded by FALLING_HW (HW comparator both polarities) */
 #else
-#define FEATURE_HWZC_FALLING_SW        1   /* falling ZC via SW OFF-center sample */
 #endif
 #if GARUDA_TARGET_AK512
 /* AK512 bench 2026-06-12 (polarity-split cap diag, stepped GSP ramp): rising
@@ -1766,34 +1606,11 @@ extern "C" {
  * falling-coast (extending falling-SW made it worse, not better) -> it's the
  * comp-amp saturation transition (~125k = float starts railing). */
 #if MOTOR_PROFILE == 1
-#define HWZC_FALLING_SW_MAX_ERPM       35000   /* A2212 1400KV @12V (2026-06-16 pass 1): falling BEMF is
-                                                * half-amplitude (12V) AND the motor is faster (1400KV), so
-                                                * the falling-SW captures walk late and destabilize the PI
-                                                * ~30k earlier than the 2810's 70k -> desync at the rising
-                                                * ->falling crossover ~40k. Cap falling-SW at 35k; let
-                                                * rising-only carry above (the 2810 ran rising-only to 234k).
-                                                * Tune: raise if rising-only stalls early, lower if 40k wall
-                                                * persists. */
 #elif MOTOR_PROFILE == 6
-#define HWZC_FALLING_SW_MAX_ERPM       45000   /* VEX 4000KV @10V (2026-06-17 bench): the rising/falling
-                                                * asymmetry (eRPM oscillation that ends in a phantom) BUILDS
-                                                * from ~46k as the falling-SW OFF-center captures walk late
-                                                * (half-amplitude BEMF @10V + high KV — the A2212/1407 lesson,
-                                                * more extreme). 70k default desynced ~70k; 58k cap still
-                                                * desynced ~57-74k. Coast falling at 45k — BEFORE the
-                                                * oscillation builds — and let rising-only mid-ON carry above
-                                                * (ran clean to 74k once falling was out; 2810 did rising-only
-                                                * to 234k). Raise if rising-only stalls early. */
 #elif MOTOR_PROFILE == 7 || MOTOR_PROFILE == 8
-#define HWZC_FALLING_SW_MAX_ERPM       50000   /* 1407 4000KV: high-KV low-L like the A2212, so gate
-                                                * falling-SW low and let rising-only carry above (the
-                                                * 2810 ran rising-only to 234k @ 70k). START 50k; tune
-                                                * per cell (raise if rising-only stalls early). */
 #else
-#define HWZC_FALLING_SW_MAX_ERPM       70000
 #endif
 #else
-#define HWZC_FALLING_SW_MAX_ERPM       0   /* 0 = falling-SW at all speeds; else cap */
 #endif
 
 /* ── Virtual neutral (AK512 only) ──────────────────────────────────────────
@@ -1850,11 +1667,8 @@ extern "C" {
  * PWM-OFF rising path. Gate: bench at idle, confirm lock holds + rising
  * OFF-center captures appear, before Phase 2 lowers the duty. */
 #if FEATURE_HWZC_FALLING_HW
-#define FEATURE_HWZC_LOWSPD_OFFCTR     0   /* U3: rising HW comparator covers all speeds; no SW OFF-center */
 #else
-#define FEATURE_HWZC_LOWSPD_OFFCTR     1   /* rising ZC via SW OFF-center at low speed */
 #endif
-#define HWZC_LOWSPD_OFFCTR_MAX_ERPM 40000  /* rising OFF-center engages below this eRPM */
 
 /* Hand-off period-collapse damp (OL->CL smooth plan, 2026-06-07). For the first
  * HWZC_HANDOFF_DAMP_EVENTS commutations after CL entry, tightly clamp how fast the

@@ -80,7 +80,6 @@ static uint32_t BuildFeatureFlags(void)
     if (FEATURE_X2CSCOPE)         f |= (1UL << 15);
     if (FEATURE_GSP)              f |= (1UL << 16);
     if (OC_CLPCI_ENABLE)          f |= (1UL << 17);
-    if (FEATURE_PRESYNC_RAMP)     f |= (1UL << 18);
     /* Phase H: RX input features (bits 19-22) */
     if (FEATURE_ADC_POT)         f |= (1UL << 19);
     if (FEATURE_RX_PWM)          f |= (1UL << 20);
