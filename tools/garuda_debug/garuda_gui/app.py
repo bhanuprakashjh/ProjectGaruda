@@ -1880,10 +1880,12 @@ class MainWindow(QtWidgets.QMainWindow):
         op = parts[0].lower()
         if op in ("help", "?"):
             self._log("commands: help · clear · pause · resume · mark <text> · "
-                      "diagnose · report · params · get <param> · set <param> <value> · "
+                      "diagnose · report · wl · params · get <param> · set <param> <value> · "
                       "export · reload · save")
         elif op == "report":
             self._copy_claude_report()
+        elif op == "wl":
+            self._export_wolfram()
         elif op == "clear":
             self.console.clear()
         elif op == "pause":
@@ -1998,6 +2000,30 @@ class MainWindow(QtWidgets.QMainWindow):
         with open(path, "w") as f:
             f.write(md)
         self._log(f"🤖 report copied to clipboard + saved {path} ({len(lines)} lines)")
+
+    def _export_wolfram(self):
+        """One aligned bundle for external modeling (tools/wolfram/garuda.wl):
+        telemetry + last burst capture + params(raw&physical) + fw info."""
+        import json
+        os.makedirs("sessions", exist_ok=True)
+        path = os.path.join("sessions", f"run_{time.strftime('%Y%m%d_%H%M%S')}.wl.json")
+        params = {}
+        for name, p in (self.params or {}).items():
+            params[name] = {"raw": p.get("value"), "phys": PM.phys(name, p.get("value")),
+                            "min": p.get("min"), "max": p.get("max")}
+        bundle = {
+            "info": self.info or {},
+            "params": params,
+            "telemetry": list(self.live),
+            "scope": self._scope_samples or [],
+            "exported_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        }
+        with open(path, "w") as f:
+            json.dump(bundle, f)
+        self._log(f"wolfram bundle: {path} "
+                  f"({len(bundle['telemetry'])} telem frames, "
+                  f"{len(bundle['scope'])} scope samples) — load with "
+                  f"GarudaImport[\"{path}\"] from tools/wolfram/garuda.wl")
 
     def run_diagnosis(self):
         if not self.live:
