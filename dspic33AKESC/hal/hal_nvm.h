@@ -26,13 +26,27 @@ bool NVMFLASH_ErasePages(uint32_t addr, uint16_t nPages);
  * Target range must be erased first. */
 bool NVMFLASH_WriteImage(uint32_t addr, const uint8_t *src, uint16_t len);
 
-/* Read len bytes from memory-mapped flash. */
+/* Read len bytes from memory-mapped flash. ONLY for regions known to be
+ * programmed (ECC-valid) — reading raw-erased flash is undocumented on
+ * this ECC part and hung the first bench boot. */
 void NVMFLASH_Read(uint32_t addr, uint8_t *dst, uint16_t len);
 
+/* Device row size in bytes (asserted == _FLASH_ROW in hal_nvm.c), exported
+ * so callers can reason about commit-order without including <xc.h>. */
+#define NVMFLASH_ROW_BYTES  0x80u
+
+/* Program one all-zero row at row-aligned addr (target must be erased):
+ * an ECC-valid "committed blank" stamp so an erased region is never left
+ * raw-erased for a later read to trip on. Zeros can't alias a valid image
+ * header. */
+bool NVMFLASH_ZeroRow(uint32_t addr);
+
 /* Destructive test on [addr, addr + nPages*_FLASH_PAGE):
- * erase → verify 0xFF → write pattern → readback-verify → erase.
- * Returns 0 = pass; 1 = erase fail; 2 = not blank after erase;
- * 3 = write fail; 4 = readback mismatch; 5 = final erase fail. */
+ * erase → write pattern page → readback-verify → erase → zero-row stamp.
+ * Never reads raw-erased flash (no blank-check read — see hal_nvm.c).
+ * Returns 0 = pass; 1 = erase fail; 2 = retired (was blank-check);
+ * 3 = write fail; 4 = readback mismatch; 5 = final erase fail;
+ * 6 = commit-stamp write fail. */
 uint16_t NVMFLASH_SelfTest(uint32_t addr, uint16_t nPages);
 
 /* Result of the boot-time self-test (0xFFFF = not run). */

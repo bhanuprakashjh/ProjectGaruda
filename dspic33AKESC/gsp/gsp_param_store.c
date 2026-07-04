@@ -52,14 +52,28 @@ PARAM_SOURCE_T GSP_ParamStore_Load(GSP_PARAMS_T *table, uint8_t *activeProfileOu
      * already does). Copy the image out byte-by-byte, then validate the
      * RAM copy. */
     static GSP_PARAM_IMAGE_T s_loadImg;   /* static: too large for the stack */
-    {
-        const volatile uint8_t *src = (const volatile uint8_t *)s_userArea;
-        uint8_t *dst = (uint8_t *)&s_loadImg;
-        for (uint16_t i = 0; i < (uint16_t)sizeof(s_loadImg); i++)
+    const volatile uint8_t *src = (const volatile uint8_t *)s_userArea;
+    uint8_t *dst = (uint8_t *)&s_loadImg;
+
+    /* ECC-safe header-first read: row 0 is ALWAYS programmed (by the .hex
+     * filler, by Save — which commits it last — or by the zero-row stamp
+     * EraseUser/self-test leave behind). Rows past it are only guaranteed
+     * programmed when the header is valid, because Save writes them BEFORE
+     * committing the header row. So: read row 0, screen the header, and
+     * only then read the rest — never byte-read possibly-erased tail
+     * pages (undocumented on this ECC part; hung the first bench boot). */
+    for (uint16_t i = 0; i < (uint16_t)NVMFLASH_ROW_BYTES; i++)
+        dst[i] = src[i];
+
+    bool headerPlausible = (s_loadImg.magic == GSP_PARAM_MAGIC)
+                        && (s_loadImg.schema == (uint16_t)sizeof(GSP_PARAMS_T));
+    if (headerPlausible) {
+        for (uint16_t i = (uint16_t)NVMFLASH_ROW_BYTES;
+             i < (uint16_t)sizeof(s_loadImg); i++)
             dst[i] = src[i];
     }
 
-    if (UserImageValid(&s_loadImg)) {
+    if (headerPlausible && UserImageValid(&s_loadImg)) {
         memcpy(table, s_loadImg.table, sizeof(s_loadImg.table));
         /* CUSTOM has no table slot: load the table but keep the caller's
          * compile-time default as the active selection. */
@@ -89,8 +103,17 @@ bool GSP_ParamStore_Save(const GSP_PARAMS_T *table, uint8_t activeProfileNow)
 
     if (!NVMFLASH_ErasePages(PARAM_STORE_ADDR, PARAM_STORE_PAGES))
         return false;
+    /* Commit-header-last: write everything AFTER row 0 first, then row 0
+     * (which carries the magic/schema/CRC header). A power loss mid-save
+     * therefore leaves row 0 erased or stale — never a valid header over a
+     * half-written table — and the boot loader's header-first read screens
+     * it out without ever touching the unwritten tail. */
+    if (!NVMFLASH_WriteImage(PARAM_STORE_ADDR + NVMFLASH_ROW_BYTES,
+                             (const uint8_t *)&img + NVMFLASH_ROW_BYTES,
+                             (uint16_t)(sizeof(img) - NVMFLASH_ROW_BYTES)))
+        return false;
     if (!NVMFLASH_WriteImage(PARAM_STORE_ADDR, (const uint8_t *)&img,
-                             (uint16_t)sizeof(img)))
+                             (uint16_t)NVMFLASH_ROW_BYTES))
         return false;
 
     /* Readback through a volatile view: s_userArea is const to C but its
@@ -107,7 +130,12 @@ bool GSP_ParamStore_Save(const GSP_PARAMS_T *table, uint8_t activeProfileNow)
 
 bool GSP_ParamStore_EraseUser(void)
 {
-    return NVMFLASH_ErasePages(PARAM_STORE_ADDR, PARAM_STORE_PAGES);
+    if (!NVMFLASH_ErasePages(PARAM_STORE_ADDR, PARAM_STORE_PAGES))
+        return false;
+    /* Stamp a zero row so the area is never left raw-erased — the next
+     * boot's header read must land on ECC-valid cells. Magic 0x0000
+     * ensures the factory fallback. */
+    return NVMFLASH_ZeroRow(PARAM_STORE_ADDR);
 }
 
 PARAM_SOURCE_T GSP_ParamStore_GetSource(void)
