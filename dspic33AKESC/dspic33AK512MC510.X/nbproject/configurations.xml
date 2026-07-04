@@ -161,6 +161,7 @@
         <itemPath>../x2cscope/diagnostics.c</itemPath>
       </logicalFolder>
       <itemPath>../hal/eeprom.c</itemPath>
+      <itemPath>../hal/hal_nvm.c</itemPath>
       <itemPath>../garuda_service.c</itemPath>
       <itemPath>../main.c</itemPath>
     </logicalFolder>
