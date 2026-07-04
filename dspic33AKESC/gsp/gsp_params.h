@@ -303,12 +303,35 @@ typedef enum {
 extern GSP_PARAMS_T  gspParams;
 extern GSP_DERIVED_T gspDerived;
 extern const GSP_PARAMS_T profileDefaults[10];  /* factory image (const, in .hex) */
+extern GSP_PARAMS_T gspParamTable[GSP_PROFILE_COUNT];  /* live RAM table, all profiles */
 
 /**
  * Initialize all params to compile-time defaults from motor profile.
  * Call once at boot before GARUDA_ServiceInit().
  */
 void GSP_ParamsInitDefaults(void);
+
+/**
+ * Boot entry: load user-saved table (or factory) via the param store into
+ * gspParamTable, activate the boot profile into gspParams, and apply
+ * compile-time feature overrides. Replaces GSP_ParamsInitDefaults() +
+ * EEPROM overlay at boot.
+ */
+void GSP_ParamsInit(void);
+
+/**
+ * Persist the current gspParamTable (with the active profile's live
+ * values folded in) plus activeProfile to the user flash area.
+ * @return true on success, false on any NVM failure.
+ */
+bool GSP_ParamsSaveAll(void);
+
+/**
+ * Erase the user flash area and reload gspParamTable/gspParams from the
+ * compiled factory defaults.
+ * @return true on success, false on any NVM failure.
+ */
+bool GSP_ParamsFactoryReset(void);
 
 /**
  * Set a parameter by ID with bounds + cross-parameter validation.

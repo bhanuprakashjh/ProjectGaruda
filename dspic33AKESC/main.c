@@ -76,22 +76,7 @@ int main(void)
     /* GSP runtime params — BEFORE GARUDA_ServiceInit so RT_* reads are valid
      * from the first ISR tick. */
 #if FEATURE_GSP
-    GSP_ParamsInitDefaults();       /* compile-time defaults */
-#if FEATURE_EEPROM_V2
-#if FEATURE_PARAMS_FORCE_DEFAULTS
-    /* Bring-up: code values always win — skip the EEPROM overlay entirely so
-     * edits to profileDefaults[]/.h take effect on reflash without an NVM reset.
-     * Save path still compiles; nothing is loaded. */
-#else
-    {
-        EEPROM_IMAGE_T eepromImage;
-        EEPROM_Init(&eepromImage);
-        GARUDA_CONFIG_T cfg;
-        EEPROM_LoadConfig(&cfg);
-        GSP_ParamsLoadFromConfig(&cfg);  /* overlay persisted values */
-    }
-#endif
-#endif
+    GSP_ParamsInit();               /* factory (or saved user table) → RAM */
     GSP_RecomputeDerived();         /* precompute ISR values */
 #endif
 

@@ -20,11 +20,17 @@
 
 #include "gsp_params.h"
 #include "garuda_calc_params.h"
+#include "gsp_param_store.h"
 
 /* ── Global instances ────────────────────────────────────────────────── */
 
 GSP_PARAMS_T  gspParams;
 GSP_DERIVED_T gspDerived;
+
+/* Whole-profile RAM table backing gspParams (the active working copy).
+ * set writes both; profile switch copies table[new] → gspParams, so live
+ * tunes survive switching away and back within a session. */
+GSP_PARAMS_T gspParamTable[GSP_PROFILE_COUNT];
 
 static uint8_t activeProfile;
 
@@ -883,6 +889,14 @@ static void WriteField(const PARAM_DESCRIPTOR_T *desc, uint32_t value)
     } else {
         memcpy(base + desc->offsetInParams, &value, 4);
     }
+
+    /* Mirror into the RAM table so profile switches and saves see live tunes.
+     * GSP_PROFILE_CUSTOM has no table slot — active copy only. */
+    if (activeProfile < GSP_PROFILE_COUNT) {
+        uint8_t *tbase = (uint8_t *)&gspParamTable[activeProfile];
+        memcpy(tbase + desc->offsetInParams, base + desc->offsetInParams,
+               desc->fieldSize);
+    }
 }
 
 /* ── OC mA to ADC conversion ────────────────────────────────────────── */
@@ -901,18 +915,10 @@ static uint16_t OcMaToAdcCounts(uint16_t ma)
 
 /* ── Public API ──────────────────────────────────────────────────────── */
 
-void GSP_ParamsInitDefaults(void)
+/* Zero out params whose features are compiled away — must run after ANY
+ * load of gspParams (boot, profile switch, factory reset). */
+static void ApplyCompileTimeOverrides(void)
 {
-    /* Load from compile-time MOTOR_PROFILE */
-    activeProfile = MOTOR_PROFILE;
-
-#if MOTOR_PROFILE < GSP_PROFILE_COUNT
-    memcpy(&gspParams, &profileDefaults[MOTOR_PROFILE], sizeof(gspParams));
-#else
-    /* Custom profile at compile time — use A2212 as base */
-    memcpy(&gspParams, &profileDefaults[GSP_PROFILE_A2212], sizeof(gspParams));
-#endif
-
     /* Override from compile-time config for features that may be disabled */
 #if !FEATURE_TIMING_ADVANCE
     gspParams.timingAdvMaxDeg = 0;
@@ -927,11 +933,59 @@ void GSP_ParamsInitDefaults(void)
     gspParams.ocStartupMa = 0;
     gspParams.rampCurrentGateMa = 0;
 #endif
+}
+
+void GSP_ParamsInitDefaults(void)
+{
+    /* Load from compile-time MOTOR_PROFILE */
+    activeProfile = MOTOR_PROFILE;
+
+#if MOTOR_PROFILE < GSP_PROFILE_COUNT
+    memcpy(&gspParams, &profileDefaults[MOTOR_PROFILE], sizeof(gspParams));
+#else
+    /* Custom profile at compile time — use A2212 as base */
+    memcpy(&gspParams, &profileDefaults[GSP_PROFILE_A2212], sizeof(gspParams));
+#endif
+
+    ApplyCompileTimeOverrides();
 
 #if FEATURE_FOC_V2
     extern volatile bool gspFocReinitNeeded;
     gspFocReinitNeeded = true;
 #endif
+}
+
+void GSP_ParamsInit(void)
+{
+    uint8_t bootProfile = MOTOR_PROFILE;
+#if MOTOR_PROFILE >= GSP_PROFILE_COUNT
+    bootProfile = GSP_PROFILE_A2212;   /* custom compile profile: A2212 base */
+#endif
+
+    (void)GSP_ParamStore_Load(gspParamTable, &bootProfile);
+    activeProfile = bootProfile;
+    memcpy(&gspParams, &gspParamTable[activeProfile], sizeof(gspParams));
+    ApplyCompileTimeOverrides();
+}
+
+bool GSP_ParamsSaveAll(void)
+{
+    /* Keep the active profile's latest live values in the table (WriteField
+     * mirrors them, but belt-and-braces before a flash write). */
+    memcpy(&gspParamTable[activeProfile], &gspParams, sizeof(gspParams));
+    return GSP_ParamStore_Save(gspParamTable, activeProfile);
+}
+
+bool GSP_ParamsFactoryReset(void)
+{
+    if (!GSP_ParamStore_EraseUser())
+        return false;
+    memcpy(gspParamTable, profileDefaults,
+           sizeof(GSP_PARAMS_T) * GSP_PROFILE_COUNT);
+    memcpy(&gspParams, &gspParamTable[activeProfile], sizeof(gspParams));
+    ApplyCompileTimeOverrides();
+    GSP_RecomputeDerived();
+    return true;
 }
 
 void GSP_RecomputeDerived(void)
@@ -1242,8 +1296,10 @@ const PARAM_DESCRIPTOR_T *GSP_ParamGetDescriptor(uint8_t idx)
 bool GSP_ParamsLoadProfile(uint8_t profileId)
 {
     if (profileId < GSP_PROFILE_COUNT) {
-        /* Built-in profile: copy defaults */
-        memcpy(&gspParams, &profileDefaults[profileId], sizeof(gspParams));
+        /* Built-in profile: copy from the live RAM table (preserves any
+         * saved/live tunes for that profile within this session). */
+        memcpy(&gspParams, &gspParamTable[profileId], sizeof(gspParams));
+        ApplyCompileTimeOverrides();
         activeProfile = profileId;
         GSP_RecomputeDerived();
         /* Signal FOC re-init needed (checked by ISR when IDLE) */
