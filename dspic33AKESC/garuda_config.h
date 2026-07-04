@@ -1116,7 +1116,17 @@ extern "C" {
  * rejects on the OLD HW-comparator ON-time path); current regime is PWM-gate
  * OFF + OFF-center SW detect, so re-evaluating on the bench. MOTOR_PROFILE is
  * #defined at line ~216, so this direct compare is safe. */
-#if MOTOR_PROFILE == 9 || MOTOR_PROFILE == 2  /* U3-proven stack ported to 2810 2026-07-04 */
+#if MOTOR_PROFILE == 9  /* U3-proven ONLY. Profile 2 REMOVED 2026-07-04 bench:
+                         * first run with the REPAIRED trigger (PG1TRIGA=50%)
+                         * idled at 16.6k instead of ~10.4k and the mistimed-
+                         * lock watchdog executed it. Mechanism: at 5% idle
+                         * duty the freewheel-center phase-B samples read both
+                         * rails clamped ~0V -> measuredNeutral ~0 -> threshold
+                         * collapses -> early phantom crossings -> fast PLL.
+                         * The Jul-4 port to profile 2 only ever ran with the
+                         * broken TRIGA=0 (ON-pulse-ish samples), which masked
+                         * this. 2810 returns to the duty-model threshold (the
+                         * June-13 260k configuration). */
 #define FEATURE_HWZC_MEASURED_NEUTRAL  1
 #else
 #define FEATURE_HWZC_MEASURED_NEUTRAL  0
