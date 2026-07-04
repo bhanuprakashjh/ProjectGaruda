@@ -451,22 +451,6 @@ extern "C" {
                                   * so persistence testing (bench card step 4)
                                   * requires a build with this set to 0. */
 
-/* ── EEPROM parameter persistence — THE development/production switch ──────
- * 0 = DEVELOPMENT: gsp_params.c profileDefaults[] are the ONLY source of truth.
- *     The EEPROM overlay is never read at boot and GSP "save" never writes NVM,
- *     so code edits ALWAYS win and no stale EEPROM can shadow them (the trap that
- *     cost flash cycles tuning the A2212). Live GSP tuning still works but is
- *     RAM-only and reverts to the compiled values on the next power cycle.
- * 1 = PRODUCTION: persist tuned params to EEPROM and overlay them at boot
- *     (signature-gated). Requires FEATURE_EEPROM_V2=1. Flip to 1 for release.
- * Gates: gsp_params.c LoadFromConfig/SaveToConfig (no-op when 0), the main.c boot
- * overlay, and the GSP SAVE_CONFIG / LOAD_PROFILE EEPROM writes. */
-#define FEATURE_GSP_EEPROM       0
-
-/* Legacy name, now DERIVED from the switch above (was a separate bring-up flag).
- * Forces compiled defaults at boot whenever EEPROM persistence is disabled. */
-#define FEATURE_PARAMS_FORCE_DEFAULTS  (!FEATURE_GSP_EEPROM)
-
 #define FEATURE_X2CSCOPE         0  /* X2CScope via UART1 (bring-up debug) */
 #define FEATURE_GSP              1  /* Garuda Serial Protocol via UART1 */
 
