@@ -27,7 +27,10 @@ static bool UserImageValid(const GSP_PARAM_IMAGE_T *img)
         return false;
     if (img->schema != (uint16_t)sizeof(GSP_PARAMS_T))
         return false;
-    if (img->activeProfile >= GSP_PROFILE_COUNT)
+    /* CUSTOM (== GSP_PROFILE_COUNT) is a legitimate saved active profile —
+     * it has no table slot but the table itself is still good. Only values
+     * beyond CUSTOM indicate corruption. */
+    if (img->activeProfile > GSP_PROFILE_CUSTOM)
         return false;
     uint16_t crc = EEPROM_ComputeCRC16((const uint8_t *)img->table,
                                        (uint16_t)sizeof(img->table));
@@ -40,7 +43,10 @@ PARAM_SOURCE_T GSP_ParamStore_Load(GSP_PARAMS_T *table, uint8_t *activeProfileOu
 
     if (UserImageValid(img)) {
         memcpy(table, img->table, sizeof(img->table));
-        *activeProfileOut = img->activeProfile;
+        /* CUSTOM has no table slot: load the table but keep the caller's
+         * compile-time default as the active selection. */
+        if (img->activeProfile < GSP_PROFILE_COUNT)
+            *activeProfileOut = img->activeProfile;
         s_source = PARAM_SOURCE_USER;
     } else {
         memcpy(table, profileDefaults,
