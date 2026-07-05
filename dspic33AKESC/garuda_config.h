@@ -39,6 +39,12 @@ extern "C" {
  *   region of this file, line ~360).
  * ════════════════════════════════════════════════════════════════════ */
 
+/* ── ZC ENGINE FLIP (softneutral front end, 2026-07-05 spec) ─────────────
+ * Uncomment to switch profile 2 from the legacy comparator engine to the
+ * softneutral front end (A/B bench card: docs/bench/). Must be defined HERE
+ * (top of file) — the falling-SW block below keys off it. */
+/* #define GARUDA_ZC_SOFTNEUTRAL_SEL 1 */
+
 /* Feature Flags (0=disabled, 1=enabled) */
 #define FEATURE_BEMF_CLOSED_LOOP 1  /* Phase 2: BEMF ZC detection — ENABLED for 6-step (2026-05-25) */
 #define FEATURE_VBUS_FAULT       1  /* Phase A4: Bus voltage OV/UV fault enforcement */
@@ -1248,7 +1254,7 @@ extern "C" {
  * CAVEAT (from the original block): the OFF-center sample is one fixed
  * point per PWM period -> swallowed by the ON pulse above ~50% duty. Fine
  * for the current campaign band (<=31% duty); the cap bounds it anyway. */
-#if MOTOR_PROFILE == 2
+#if MOTOR_PROFILE == 2 && !defined(GARUDA_ZC_SOFTNEUTRAL_SEL)
 #define FEATURE_HWZC_FALLING_SW        1
 #define HWZC_FALLING_SW_MAX_ERPM   70000   /* 2810 proven cap (06-12): above this the
                                             * fixed RC lag is a growing fraction of a
@@ -1258,6 +1264,40 @@ extern "C" {
 #define FEATURE_HWZC_FALLING_SW        0
 #define HWZC_FALLING_SW_MAX_ERPM       0
 #endif
+
+/* ── ZC front-end engine select (2026-07-05 spec: softneutral-frontend) ──
+ * COMPARATOR  = legacy threshold detector (ADC digital comparator lane).
+ * SOFTNEUTRAL = per-sample sign(3*Vfloat - (Va+Vb+Vc)) on the SCCP3-paced
+ *               3-channel fast lane; both polarities; no thresholds. The
+ *               digital comparator is never armed (its reference register
+ *               cannot represent the window-jumping neutral; the truthful
+ *               reference is computed per-sample from same-instant Va/Vb/Vc).
+ * FEATURE_ZC_FE_SAMPLER may be enabled ALONE (with COMPARATOR engine) for
+ * the zero-risk bring-up: the fast lane runs and dbgFeSamples counts, but
+ * detection stays on the legacy engine. NOTE in that combined mode the
+ * legacy 1 MHz comparator lane loses its channels to the sampler — bring-up
+ * card 1 is ARMED/hand-spin only, no closed-loop runs.
+ * GARUDA_ZC_SOFTNEUTRAL_SEL: define BEFORE this block (or via -D) to flip
+ * profile 2 to the new engine; it also compiles falling-SW out (subsumed —
+ * softneutral detects both polarities natively). */
+#define ZC_FE_COMPARATOR    0
+#define ZC_FE_SOFTNEUTRAL   1
+#ifdef GARUDA_ZC_SOFTNEUTRAL_SEL
+#define FEATURE_ZC_FRONTEND ZC_FE_SOFTNEUTRAL
+#else
+#define FEATURE_ZC_FRONTEND ZC_FE_COMPARATOR
+#endif
+#if FEATURE_ZC_FRONTEND == ZC_FE_SOFTNEUTRAL
+#define FEATURE_ZC_FE_SAMPLER 1
+#else
+#define FEATURE_ZC_FE_SAMPLER 0   /* set 1 for bring-up card 1 (rate check) */
+#endif
+#define ZC_FE_SAMPLE_TICKS  250    /* SCCP3 period, FCY ticks: 250 = 400 kHz */
+#define ZC_FE_TAU_NS        30000  /* stock MCLV BEMF divider lag (spec 4.4) */
+#define ZC_FE_VOTE_SLOW     3      /* voteN below ZC_FE_VOTE_ERPM_1 */
+#define ZC_FE_VOTE_MID      2      /* voteN between the two speed points */
+#define ZC_FE_VOTE_ERPM_1   20000
+#define ZC_FE_VOTE_ERPM_2   60000
 
 /* ── Rising-only top end (restores the 260k-era behavior) ─────────────────
  * AK512 bench 2026-06-12 (archived at the old FALLING_SW block, verbatim):

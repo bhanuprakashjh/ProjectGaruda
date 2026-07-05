@@ -382,6 +382,17 @@ typedef struct {
     volatile uint16_t dbgPiNoCap;     /* bring-up diag: PI events w/o capture */
 #endif
 
+#if FEATURE_ZC_FE_SAMPLER
+    /* Softneutral front end (2026-07-05 spec) — per-sector detection state,
+     * reset at each commutation; written by the 400 kHz sample ISR. */
+    volatile uint16_t feSamplesThisSector; /* fast-lane samples since commutation */
+    volatile uint16_t feVoteResets;        /* wrong-sample vote resets (cumulative) */
+    volatile uint8_t  feArmed;             /* evidence gate: pre-ZC polarity seen */
+    volatile uint8_t  feVoteCount;         /* consecutive post-ZC samples */
+    volatile uint8_t  feDone;              /* one accept per sector */
+    volatile uint8_t  feVoteN;             /* current vote requirement (1..3) */
+#endif
+
 #if FEATURE_BEMF_INTEGRATION
     uint32_t     shadowHwzcSkipCount; /* Scoring opportunities skipped in HW ZC mode */
     uint16_t     obsCommSeq;      /* Observer's last-seen commSeq */

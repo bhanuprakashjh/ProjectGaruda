@@ -503,10 +503,37 @@ void HAL_ADC_BemfBurstOff(void)
 }
 #endif
 
+#if GARUDA_TARGET_AK512 && FEATURE_ZC_FE_SAMPLER
+void HAL_ADC_FeSamplerArm(void)
+{
+    /* Softneutral fast lane: all three dedicated fast channels paced by
+     * SCCP3 (TRG1SRC=34). Legacy armed only the floating phase (see
+     * HAL_ADC_SelectBemfPhase below); softneutral needs Va,Vb,Vc every
+     * sample for the same-instant neutral. AD1 carries two fast channels —
+     * fine at the sampler's 400 kHz (the <=1-per-core rule was written
+     * for the 1 MHz lane). Sample ISR = AD1CH2 (VB, converts last on AD1). */
+    AD1CH1CON1bits.TRG1SRC = 34;   /* VA */
+    AD1CH2CON1bits.TRG1SRC = 34;   /* VB — data-ready = sample ISR */
+    AD2CH2CON1bits.TRG1SRC = 34;   /* VC */
+    _AD1CH2IF = 0;
+    _AD1CH2IP = 6;                 /* below control ISR (7), above the rest */
+    _AD1CH2IE = 1;
+}
+
+void HAL_ADC_FeSamplerDisarm(void)
+{
+    _AD1CH2IE = 0;
+    AD1CH1CON1bits.TRG1SRC = 0;
+    AD1CH2CON1bits.TRG1SRC = 0;
+    AD2CH2CON1bits.TRG1SRC = 0;
+}
+#endif /* GARUDA_TARGET_AK512 && FEATURE_ZC_FE_SAMPLER */
+
 uint8_t HAL_ADC_SelectBemfPhase(uint8_t floatPhase)
 {
 #if GARUDA_TARGET_AK512
     uint8_t ph = (floatPhase <= FLOATING_PHASE_C) ? floatPhase : FLOATING_PHASE_B;
+#if !FEATURE_ZC_FE_SAMPLER
     /* Trigger ONLY the active phase's high-speed channel (SCCP3 = 34);
      * silence the other two. Keeps each AD core at <=1 burst channel —
      * same effective load as the 106 — so the PWM-triggered channels
@@ -514,6 +541,9 @@ uint8_t HAL_ADC_SelectBemfPhase(uint8_t floatPhase)
     AD1CH1CON1bits.TRG1SRC = (ph == FLOATING_PHASE_A) ? 34 : 0;
     AD1CH2CON1bits.TRG1SRC = (ph == FLOATING_PHASE_B) ? 34 : 0;
     AD2CH2CON1bits.TRG1SRC = (ph == FLOATING_PHASE_C) ? 34 : 0;
+#endif
+    /* FE-sampler mode: the sampler owns all three channels permanently
+     * (HAL_ADC_FeSamplerArm); this function only resolves the handle. */
     return ph;
 #else
     uint8_t core;

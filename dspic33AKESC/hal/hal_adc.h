@@ -103,6 +103,19 @@ uint16_t HAL_ADC_ReadPhaseAC(void);
 #define GARUDA_ADC_IP                   _AD1CH3IP
 #endif
 
+#if FEATURE_ZC_FE_SAMPLER
+/* Softneutral fast lane (2026-07-05 spec): the three DEDICATED high-speed
+ * phase channels (the legacy comparator lane's channels), all armed on
+ * SCCP3 together. VB's channel (AD1CH2) converts after VA's (AD1CH1) on the
+ * AD1 core, so its data-ready is the sample ISR (_AD1CH2Interrupt); AD2CH2
+ * (VC) converts in parallel on AD2. */
+#define ADCBUF_FE_VA        (uint16_t)AD1CH1DATA
+#define ADCBUF_FE_VB        (uint16_t)AD1CH2DATA
+#define ADCBUF_FE_VC        (uint16_t)AD2CH2DATA
+void HAL_ADC_FeSamplerArm(void);    /* all 3 fast channels on SCCP3 + CH2 IRQ */
+void HAL_ADC_FeSamplerDisarm(void); /* IRQ off, channels de-triggered */
+#endif
+
 #else /* !GARUDA_TARGET_AK512 — original dsPIC33AK128MC106 map */
 
 /* ADC buffer read macros — MUST read to clear data-ready condition */

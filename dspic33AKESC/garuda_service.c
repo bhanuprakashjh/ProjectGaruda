@@ -942,7 +942,12 @@ void GARUDA_ServiceInit(void)
     HAL_ADC_InitHighSpeedBEMF();
     HAL_SCCP1_Init();
     HAL_SCCP2_Init();
+#if FEATURE_ZC_FE_SAMPLER
+    HAL_SCCP3_InitPeriodic(ZC_FE_SAMPLE_TICKS); /* softneutral fast lane, 400 kHz */
+    HAL_ADC_FeSamplerArm();
+#else
     HAL_SCCP3_InitPeriodic(HWZC_SCCP3_PERIOD);  /* Start high-speed ADC trigger */
+#endif
 #endif
 
 #if FEATURE_LEARN_MODULES
@@ -4467,6 +4472,25 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
     /* Clear interrupt flag AFTER reading all buffers (matches reference) */
     GARUDA_ClearADCIF();
 }
+
+#if FEATURE_ZC_FE_SAMPLER
+/**
+ * @brief Softneutral front-end fast-lane sample ISR — SCCP3-paced (~400 kHz),
+ * priority 6 (below the 24 kHz control ISR). Task 1 scope: rate observability
+ * only (dbgFeSamples via the per-sector latch in HWZC_OnCommutation).
+ * Task 2 adds the sign/evidence/vote detector.
+ */
+void __attribute__((__interrupt__, no_auto_psv)) _AD1CH2Interrupt(void)
+{
+    (void)ADCBUF_FE_VA;                    /* clear data-ready, VA */
+    (void)ADCBUF_FE_VB;                    /* VB */
+    (void)ADCBUF_FE_VC;                    /* VC */
+    if (garudaData.hwzc.enabled
+        && garudaData.hwzc.feSamplesThisSector < 0xFFFF)
+        garudaData.hwzc.feSamplesThisSector++;
+    _AD1CH2IF = 0;
+}
+#endif /* FEATURE_ZC_FE_SAMPLER */
 
 /**
  * @brief Timer1 ISR — 100us tick.

@@ -315,6 +315,17 @@ static inline uint32_t HWZC_BlankTicks(volatile GARUDA_DATA_T *pData, uint32_t p
 void HWZC_OnCommutation(volatile GARUDA_DATA_T *pData)
 {
     uint32_t now = HAL_SCCP2_ReadTimestamp();
+#if FEATURE_ZC_FE_SAMPLER
+    /* Softneutral FE: latch last sector's fast-lane sample count for the GUI
+     * (get dbgFeSamples), publish the cumulative vote-reset counter, then
+     * reset the per-sector detection state. */
+    gspParams.dbgFeSamples = pData->hwzc.feSamplesThisSector;
+    gspParams.dbgFeVoteResets = pData->hwzc.feVoteResets;
+    pData->hwzc.feSamplesThisSector = 0;
+    pData->hwzc.feArmed = 0;
+    pData->hwzc.feVoteCount = 0;
+    pData->hwzc.feDone = 0;
+#endif
 #if FEATURE_HWZC_SECTOR_PI
     /* Save previous commutation timestamp before overwriting — capValue is
      * computed as (lastCaptureHR - prevCommHR) at next OnPiPeriodExpired. */

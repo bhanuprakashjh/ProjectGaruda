@@ -67,6 +67,8 @@ extern "C" {
 #define PARAM_ID_ZC_DEMAG_BLANK_MAX_PCT 0x9E   /* total blank cap as % of period (25 = legacy period/4) */
 #define PARAM_ID_DBG_MIN_STEP_PERIOD    0xA0   /* RO mirror of gspDerived.minStepPeriod */
 #define PARAM_ID_DBG_MISTIME_EVENTS     0xA1   /* mistime watchdog: +1 strike, +100 trip */
+#define PARAM_ID_DBG_FE_SAMPLES         0xA2   /* softneutral FE: fast-lane samples/sector */
+#define PARAM_ID_DBG_FE_VOTERESETS      0xA3   /* softneutral FE: cumulative vote resets */
 
 /* Tuning params (12 new) */
 #define PARAM_ID_DUTY_SLEW_UP           0x60
@@ -233,6 +235,8 @@ typedef struct {
      * strikes (+1 each) and trips (+100 each). */
     uint16_t dbgMinStepPeriod;
     uint16_t dbgMistimeEvents;
+    uint16_t dbgFeSamples;      /* softneutral FE: fast-lane samples/sector (latched) */
+    uint16_t dbgFeVoteResets;   /* softneutral FE: cumulative wrong-sample vote resets */
 } GSP_PARAMS_T;
 
 /* ── Derived values (precomputed from params, ISR reads these) ───────── */
