@@ -31,13 +31,16 @@ _Static_assert(PARAM_STORE_ADDR >= NVMFLASH_WRITE_FLOOR,
  * pair produces a NEVER_LOAD section on xc-dsc (contents present in the
  * ELF, still zero hex records — brick #3). space(prog) is the toolchain's
  * blessed flash-placement idiom and yields CONTENTS+ALLOC+LOAD. */
-static const uint8_t s_userArea[PARAM_STORE_PAGES * 0x400UL]
+static const uint8_t s_userArea[PARAM_STORE_PAGES * NVMFLASH_PAGE_BYTES]
     __attribute__((space(prog), address(PARAM_STORE_ADDR), keep))
-    = { [0 ... (PARAM_STORE_PAGES * 0x400UL) - 1] = 0xA5 };
+    = { [0 ... (PARAM_STORE_PAGES * NVMFLASH_PAGE_BYTES) - 1] = 0xA5 };
 
 _Static_assert(sizeof(GSP_PARAM_IMAGE_T) <= sizeof(s_userArea),
                "param image must fit the reserved user area");
-_Static_assert(PARAM_STORE_ADDR % 0x400UL == 0,
+_Static_assert(sizeof(GSP_PARAM_IMAGE_T) >= NVMFLASH_ROW_BYTES,
+               "image must cover row 0: Load reads a full row first and "
+               "Save's tail length would underflow on a smaller image");
+_Static_assert(PARAM_STORE_ADDR % NVMFLASH_PAGE_BYTES == 0,
                "user area must be page-aligned");
 
 static PARAM_SOURCE_T s_source = PARAM_SOURCE_FACTORY;

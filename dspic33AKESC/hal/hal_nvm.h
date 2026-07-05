@@ -31,9 +31,17 @@ bool NVMFLASH_WriteImage(uint32_t addr, const uint8_t *src, uint16_t len);
  * this ECC part and hung the first bench boot. */
 void NVMFLASH_Read(uint32_t addr, uint8_t *dst, uint16_t len);
 
-/* Device row size in bytes (asserted == _FLASH_ROW in hal_nvm.c), exported
- * so callers can reason about commit-order without including <xc.h>. */
-#define NVMFLASH_ROW_BYTES  0x80u
+/* Device geometry in BYTES. THE DFP'S _FLASH_PAGE/_FLASH_ROW ARE IN
+ * INSTRUCTIONS (×4 bytes each) — treating them as bytes was the 2026-07-05
+ * root cause of every save failure and trap-blink: 1KB erase strides and
+ * 128-byte "rows" made 3 of 4 row writes misaligned (WRERR → BUSY) and left
+ * pages part-raw-erased (later read → ECC trap → blink loop). Ground truth:
+ * Microchip's dspic33a-curiosity-data-eeprom-emulation-demo MCC driver —
+ * FLASH_ERASE_PAGE_SIZE_IN_INSTRUCTIONS 1024 → 4096-byte page; row = 128
+ * instructions → 512 bytes. Asserted against _FLASH_PAGE/_FLASH_ROW ×4 in
+ * hal_nvm.c. */
+#define NVMFLASH_PAGE_BYTES 0x1000u
+#define NVMFLASH_ROW_BYTES  0x200u
 
 /* Program one all-zero row at row-aligned addr (target must be erased):
  * an ECC-valid "committed blank" stamp so an erased region is never left

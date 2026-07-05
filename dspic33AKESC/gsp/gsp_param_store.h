@@ -14,9 +14,14 @@
 #include <stdint.h>
 #include <stdbool.h>
 #include "gsp_params.h"
+#include "../hal/hal_nvm.h"   /* NVMFLASH_PAGE_BYTES — real 4096-byte pages */
 
-#define PARAM_STORE_PAGES  4u
-#define PARAM_STORE_ADDR   (0x880000UL - (uint32_t)PARAM_STORE_PAGES * 0x400UL) /* 0x87F000 */
+/* GEOMETRY FIX 2026-07-05: the area was declared as "4 pages of 0x400"
+ * back when the driver believed pages were 1 KB — the DFP's _FLASH_PAGE is
+ * in INSTRUCTIONS and a real dsPIC33AK page is 4096 BYTES. Total size and
+ * address are UNCHANGED (4 KB at 0x87F000); it is simply ONE real page. */
+#define PARAM_STORE_PAGES  1u
+#define PARAM_STORE_ADDR   (0x880000UL - (uint32_t)PARAM_STORE_PAGES * NVMFLASH_PAGE_BYTES) /* 0x87F000 */
 #define GSP_PARAM_MAGIC    0x4750u  /* 'GP' */
 
 typedef enum {
