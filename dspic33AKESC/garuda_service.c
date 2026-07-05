@@ -1341,7 +1341,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
                     plausible = false;   /* faster than the cap → rising-only */
 #endif
                 if (plausible && vfo < fth)
-                    HWZC_OnSwFallingCapture(&garudaData, zc);
+                    HWZC_OnFrontEndCapture(&garudaData, zc);
             }
 #endif /* FEATURE_HWZC_FALLING_SW && FEATURE_HWZC_SECTOR_PI */
         }
@@ -4476,19 +4476,60 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
 #if FEATURE_ZC_FE_SAMPLER
 /**
  * @brief Softneutral front-end fast-lane sample ISR — SCCP3-paced (~400 kHz),
- * priority 6 (below the 24 kHz control ISR). Task 1 scope: rate observability
- * only (dbgFeSamples via the per-sector latch in HWZC_OnCommutation).
- * Task 2 adds the sign/evidence/vote detector.
+ * priority 6 (below the 24 kHz control ISR).
+ *
+ * Per sample (spec 2026-07-05 §4.2, integer-only, branch-light):
+ *   d3 = 3*Vfloat − (Va+Vb+Vc)  — sign vs the INSTANTANEOUS neutral; the
+ *        PWM window, divider RC mush and DCM are common-mode and cancel.
+ *   evidence gate — no crossing counts until the signal has been seen on
+ *        the PRE-ZC side this sector (proof the demag clamp released).
+ *   vote — feVoteN consecutive post-ZC samples; any wrong sample resets.
+ *   accept — timestamp + HWZC_OnFrontEndCapture (interval anchor + gated
+ *        re-anchor, the bench-proven path).
  */
 void __attribute__((__interrupt__, no_auto_psv)) _AD1CH2Interrupt(void)
 {
-    (void)ADCBUF_FE_VA;                    /* clear data-ready, VA */
-    (void)ADCBUF_FE_VB;                    /* VB */
-    (void)ADCBUF_FE_VC;                    /* VC */
-    if (garudaData.hwzc.enabled
-        && garudaData.hwzc.feSamplesThisSector < 0xFFFF)
-        garudaData.hwzc.feSamplesThisSector++;
+    uint16_t va = ADCBUF_FE_VA;
+    uint16_t vb = ADCBUF_FE_VB;
+    uint16_t vc = ADCBUF_FE_VC;
     _AD1CH2IF = 0;
+
+    if (garudaData.hwzc.feSamplesThisSector < 0xFFFF)
+        garudaData.hwzc.feSamplesThisSector++;
+
+#if FEATURE_ZC_FRONTEND == ZC_FE_SOFTNEUTRAL && FEATURE_HWZC_SECTOR_PI
+    /* Detect only while watching (post-blank) and not already captured. */
+    if (!garudaData.hwzc.enabled
+        || garudaData.hwzc.phase != HWZC_WATCHING
+        || garudaData.hwzc.feDone)
+        return;
+
+    {
+        const COMMUTATION_STEP_T *cs = &commutationTable[garudaData.currentStep];
+        uint16_t vf;
+        if      (cs->floatingPhase == FLOATING_PHASE_A) vf = va;
+        else if (cs->floatingPhase == FLOATING_PHASE_B) vf = vb;
+        else                                            vf = vc;
+
+        int32_t d3 = 3 * (int32_t)vf - ((int32_t)va + (int32_t)vb + (int32_t)vc);
+        bool post = (cs->zcPolarity > 0) ? (d3 > 0) : (d3 < 0);
+
+        if (!garudaData.hwzc.feArmed) {
+            if (!post)
+                garudaData.hwzc.feArmed = 1;
+        } else if (post) {
+            if (++garudaData.hwzc.feVoteCount >= garudaData.hwzc.feVoteN) {
+                garudaData.hwzc.feDone = 1;
+                HWZC_OnFrontEndCapture(&garudaData, HAL_SCCP2_ReadTimestamp());
+            }
+        } else {
+            if (garudaData.hwzc.feVoteCount != 0
+                && garudaData.hwzc.feVoteResets < 0xFFFF)
+                garudaData.hwzc.feVoteResets++;
+            garudaData.hwzc.feVoteCount = 0;
+        }
+    }
+#endif /* SOFTNEUTRAL && SECTOR_PI */
 }
 #endif /* FEATURE_ZC_FE_SAMPLER */
 

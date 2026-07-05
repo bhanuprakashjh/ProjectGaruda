@@ -29,13 +29,14 @@ void HWZC_OnTimeout(volatile GARUDA_DATA_T *pData);
 #if FEATURE_HWZC_SECTOR_PI
 void HWZC_OnPiPeriodExpired(volatile GARUDA_DATA_T *pData);
 #endif
-#if FEATURE_HWZC_FALLING_SW && FEATURE_HWZC_SECTOR_PI
-/* Falling-SW hybrid (restored 2026-07-05): accept bookkeeping for a falling
- * ZC found by the OFF-center SW detector in the ADC ISR. The caller does the
- * falling-specific screening (one-per-sector, T/4 floor, speed cap,
- * threshold compare); this records the capture into the sector-PI path
- * exactly as the rising comparator accept does. */
-void HWZC_OnSwFallingCapture(volatile GARUDA_DATA_T *pData, uint32_t zcStamp);
+#if (FEATURE_HWZC_FALLING_SW || FEATURE_ZC_FRONTEND == ZC_FE_SOFTNEUTRAL) && FEATURE_HWZC_SECTOR_PI
+/* Software-front-end capture accept (2026-07-05): entry point for BOTH the
+ * falling-SW OFF-center detector and the softneutral sample ISR (either
+ * polarity). The caller does the screening (one-per-sector, plausibility,
+ * vote/evidence); this records the capture into the sector-PI path exactly
+ * as the rising comparator accept does — keep in lockstep with
+ * HWZC_OnZcDetected's PI accept branch. */
+void HWZC_OnFrontEndCapture(volatile GARUDA_DATA_T *pData, uint32_t zcStamp);
 #endif
 #if HWZC_USE_SW_COMPARE
 void HWZC_OnSoftwareSample(volatile GARUDA_DATA_T *pData);

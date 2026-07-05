@@ -178,6 +178,16 @@ void HWZC_Enable(volatile GARUDA_DATA_T *pData)
     /* Re-anchor delay seed (adv=0 → T/2) until the first PI tick caches
      * the advance-aware value — an accept can arrive before that. */
     pData->hwzc.cachedCommDelay     = pData->hwzc.stepPeriodHR / 2;
+#if FEATURE_ZC_FE_SAMPLER
+    /* Softneutral FE seeds: conservative vote until the first PI tick
+     * computes the speed-scaled value; fresh per-sector state. */
+    pData->hwzc.feVoteN             = ZC_FE_VOTE_SLOW;
+    pData->hwzc.feSamplesThisSector = 0;
+    pData->hwzc.feVoteResets        = 0;
+    pData->hwzc.feArmed             = 0;
+    pData->hwzc.feVoteCount         = 0;
+    pData->hwzc.feDone              = 0;
+#endif
 #if FEATURE_HWZC_PI_FLOAT
     /* integratorF = period (same semantics as integer integrator). */
     pData->hwzc.integratorF = (float)pData->hwzc.stepPeriodHR;
@@ -372,6 +382,11 @@ void HWZC_OnCommutation(volatile GARUDA_DATA_T *pData)
     }
 #endif
 
+#if FEATURE_ZC_FRONTEND == ZC_FE_SOFTNEUTRAL
+    /* Softneutral engine: no comparator to configure, no threshold to
+     * compute — detection is sign-vs-instantaneous-neutral in the sample
+     * ISR. Floating-phase selection (above) and blanking (below) stay. */
+#else
     /* Compute threshold with deadband (Rule 4).
      * Filter compensation (if enabled) shifts the threshold AWAY from neutral
      * in the direction OPPOSITE the deadband, so the comparator fires earlier
@@ -399,6 +414,7 @@ void HWZC_OnCommutation(volatile GARUDA_DATA_T *pData)
     }
 
     HAL_ADC_ConfigComparator(core, thresh, risingZc);
+#endif /* FEATURE_ZC_FRONTEND == ZC_FE_SOFTNEUTRAL */
 
     /* Calculate blanking delay from step period.
      * In sector PI mode, use timerPeriod (the PI-controlled commutation
@@ -465,6 +481,14 @@ void HWZC_OnBlankingExpired(volatile GARUDA_DATA_T *pData)
 #if !HWZC_USE_SW_COMPARE
     uint8_t core = pData->hwzc.activeCore;
 
+#if FEATURE_ZC_FRONTEND == ZC_FE_SOFTNEUTRAL
+    /* Softneutral engine: the ADC digital comparator is NEVER armed — its
+     * reference register cannot represent the window-jumping neutral (spec
+     * 2026-07-05). Detection runs in the 400 kHz sample ISR from blank
+     * expiry (phase -> WATCHING below is the ISR's gate); this function's
+     * remaining job is the WATCHING transition + autonomous deadline. */
+    (void)core;
+#else
     /* Clear any stale comparator events, then enable interrupt */
     HAL_ADC_ClearComparatorFlag(core);
 #if FEATURE_HWZC_FALLING_SW
@@ -496,6 +520,7 @@ void HWZC_OnBlankingExpired(volatile GARUDA_DATA_T *pData)
 #endif
     HAL_ADC_EnableComparatorIE(core);
 #endif /* FEATURE_HWZC_FALLING_SW */
+#endif /* FEATURE_ZC_FRONTEND == ZC_FE_SOFTNEUTRAL */
 #else
     /* SW compare mode: leave the HW digital comparator IE disabled.
      * ZC detection runs in the 24 kHz ADC ISR via HWZC_OnSoftwareSample(). */
@@ -902,9 +927,10 @@ void HWZC_OnZcDetected(volatile GARUDA_DATA_T *pData)
     HAL_SCCP1_StartOneShot(commDelay);
 }
 
-#if FEATURE_HWZC_FALLING_SW && FEATURE_HWZC_SECTOR_PI
+#if (FEATURE_HWZC_FALLING_SW || FEATURE_ZC_FRONTEND == ZC_FE_SOFTNEUTRAL) && FEATURE_HWZC_SECTOR_PI
 /**
- * @brief Accept a falling ZC found by the OFF-center SW detector (ADC ISR).
+ * @brief Accept a ZC found by a software front end (falling-SW OFF-center
+ *        detector, or the softneutral sample ISR — BOTH polarities).
  *
  * RESTORED 2026-07-05 (falling-SW hybrid, purged 9ec01c8). The caller
  * (garuda_service.c ADC ISR) has already done the falling-specific
@@ -919,7 +945,7 @@ void HWZC_OnZcDetected(volatile GARUDA_DATA_T *pData)
  * armed rising-only, so falling sectors never fire it. No verify reads —
  * the SW sample IS a settled ADC conversion, not an edge event.
  */
-void HWZC_OnSwFallingCapture(volatile GARUDA_DATA_T *pData, uint32_t zcStamp)
+void HWZC_OnFrontEndCapture(volatile GARUDA_DATA_T *pData, uint32_t zcStamp)
 {
     pData->hwzc.lastCaptureHR = zcStamp;
     pData->hwzc.captureValid  = true;
@@ -967,7 +993,7 @@ void HWZC_OnSwFallingCapture(volatile GARUDA_DATA_T *pData, uint32_t zcStamp)
         }
     }
 }
-#endif /* FEATURE_HWZC_FALLING_SW && FEATURE_HWZC_SECTOR_PI */
+#endif /* (FALLING_SW || SOFTNEUTRAL) && FEATURE_HWZC_SECTOR_PI */
 
 /**
  * @brief Commutation deadline reached — advance to next step.
@@ -1056,6 +1082,17 @@ void HWZC_OnPiPeriodExpired(volatile GARUDA_DATA_T *pData)
      * Cached here (once per tick) to keep the capture ISR division-free —
      * same pattern as the reactive path's cachedCommDelay. */
     pData->hwzc.cachedCommDelay = T - (((uint32_t)advFp8 * T) >> 8);
+
+#if FEATURE_ZC_FRONTEND == ZC_FE_SOFTNEUTRAL
+    {   /* Speed-scaled vote (spec §4.2): filter latency collapses as sectors
+         * shrink (BLHeli 20->1 / AM32 12->2 pattern). Period compare,
+         * division-free; recomputed once per sector, consumed by the
+         * 400 kHz sample ISR. */
+        if      (T > (1000000000UL / ZC_FE_VOTE_ERPM_1)) pData->hwzc.feVoteN = ZC_FE_VOTE_SLOW;
+        else if (T > (1000000000UL / ZC_FE_VOTE_ERPM_2)) pData->hwzc.feVoteN = ZC_FE_VOTE_MID;
+        else                                             pData->hwzc.feVoteN = 1;
+    }
+#endif
 
 #if FEATURE_HWZC_PI_DEFENSIVE
     /* Track whether THIS event has a capture (BEFORE the gate below
