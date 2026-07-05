@@ -1092,6 +1092,20 @@ void HWZC_OnPiPeriodExpired(volatile GARUDA_DATA_T *pData)
         else if (T > (1000000000UL / ZC_FE_VOTE_ERPM_2)) pData->hwzc.feVoteN = ZC_FE_VOTE_MID;
         else                                             pData->hwzc.feVoteN = 1;
     }
+    {   /* Known-latency compensation (spec §4.4): the divider RC lag and the
+         * vote's detection lag are DETERMINISTIC TIMES — subtract them from
+         * the re-anchor delay so commutation lands on the true rotor phase
+         * at every speed (replaces the legacy threshold-side filter-comp).
+         * HR/SCCP ticks are FCY ticks = 10 ns (eRPM = 1e9/periodTicks at
+         * 100 MHz FCY); ZC_FE_TAU_NS is ns -> /10; ZC_FE_SAMPLE_TICKS is
+         * already FCY ticks. Vote lag = (N-1) sample periods + half a
+         * period mean detection delay. */
+        uint32_t tauTicks = (uint32_t)ZC_FE_TAU_NS / 10u
+                          + (uint32_t)(pData->hwzc.feVoteN - 1u) * ZC_FE_SAMPLE_TICKS
+                          + ZC_FE_SAMPLE_TICKS / 2u;
+        uint32_t d = pData->hwzc.cachedCommDelay;
+        pData->hwzc.cachedCommDelay = (d > tauTicks + 10u) ? (d - tauTicks) : 10u;
+    }
 #endif
 
 #if FEATURE_HWZC_PI_DEFENSIVE

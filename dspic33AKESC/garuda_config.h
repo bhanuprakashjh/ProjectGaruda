@@ -1299,6 +1299,17 @@ extern "C" {
 #define ZC_FE_VOTE_ERPM_1   20000
 #define ZC_FE_VOTE_ERPM_2   60000
 
+#if MOTOR_PROFILE == 2 && FEATURE_ZC_FRONTEND == ZC_FE_SOFTNEUTRAL
+/* Low-band advance anchor (07-05 sweep: ~2deg at 27k with the 260k anchor
+ * starves torque -- form% fell 68->40 with duty; sessions gui_auto_20260705_*).
+ * Advance reaches timingAdvMaxDeg at 80k instead of maxClosedLoopErpm (260k).
+ * SOFTNEUTRAL-gated so the legacy A/B baseline stays byte-identical. (An
+ * earlier HWZC_ADV_FULL_ERPM=25000 was retracted 06-17 on a different
+ * theory/profile -- see the note near line 695; this one is data-driven for
+ * the 2810 low band and rides the engine A/B.) */
+#define HWZC_ADV_FULL_ERPM  80000
+#endif
+
 /* ── Rising-only top end (restores the 260k-era behavior) ─────────────────
  * AK512 bench 2026-06-12 (archived at the old FALLING_SW block, verbatim):
  * rising comparator captures sit ~500 permille of T at every speed 30k-92k;
