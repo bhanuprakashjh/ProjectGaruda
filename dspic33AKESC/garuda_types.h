@@ -331,6 +331,19 @@ typedef struct {
     float        integratorF;          /* Float integrator state for FEATURE_HWZC_PI_FLOAT.
                                         * Unused / zero when feature off. Lives here so
                                         * the FPU never has to reload from the int field. */
+    uint32_t     measuredPeriodHR;     /* INTERVAL ANCHOR (2026-07-05): IIR of the
+                                        * MEASURED ZC-to-ZC interval divided back by
+                                        * sectors elapsed — a true frequency measurement.
+                                        * The PI integrator is pinned to this each tick
+                                        * (PI demoted to bounded phase trim), which is
+                                        * what makes the 1.5-2x alias fixed point
+                                        * impossible to sustain: every accepted true
+                                        * crossing re-measures the frequency. Port of
+                                        * the Simplified tree's 2026-07-01 cure. */
+    uint16_t     sectorsSinceCapture;  /* PI ticks since the last ACCEPTED capture —
+                                        * the divide-back denominator (capped; resets
+                                        * on accept). Distinct from missCount which
+                                        * also feeds defensive mode. */
     uint16_t     piDefMissStreak;      /* Consecutive sectors of TRUE silence (no capture).
                                         * Drives FEATURE_HWZC_PI_DEFENSIVE entry. */
     uint16_t     piDefGoodStreak;      /* Consecutive good captures. Drives exit. */

@@ -92,6 +92,8 @@ void HWZC_Init(volatile GARUDA_DATA_T *pData)
 #if FEATURE_HWZC_SECTOR_PI
     pData->hwzc.timerPeriod = 0;
     pData->hwzc.integrator = 0;
+    pData->hwzc.measuredPeriodHR = 0;
+    pData->hwzc.sectorsSinceCapture = 0;
 #if FEATURE_HWZC_PI_FLOAT
     pData->hwzc.integratorF = 0.0f;
 #endif
@@ -169,6 +171,10 @@ void HWZC_Enable(volatile GARUDA_DATA_T *pData)
     pData->hwzc.lastCaptureHR = now - pData->hwzc.stepPeriodHR / 2;
     pData->hwzc.captureValid  = false;
     pData->hwzc.stepPeriodForFilterComp = pData->hwzc.stepPeriodHR;
+    /* Interval anchor: start the frequency measurement at the handoff
+     * period; the first accepted intervals take over from there. */
+    pData->hwzc.measuredPeriodHR    = pData->hwzc.stepPeriodHR;
+    pData->hwzc.sectorsSinceCapture = 0;
 #if FEATURE_HWZC_PI_FLOAT
     /* integratorF = period (same semantics as integer integrator). */
     pData->hwzc.integratorF = (float)pData->hwzc.stepPeriodHR;
@@ -740,7 +746,35 @@ void HWZC_OnZcDetected(volatile GARUDA_DATA_T *pData)
      * the next OnBlankingExpired re-enables. */
     pData->hwzc.lastCaptureHR = zcStamp;
     pData->hwzc.captureValid  = true;
-    pData->hwzc.lastZcStamp   = zcStamp;   /* keep legacy field for diag */
+
+    /* INTERVAL ANCHOR measurement (2026-07-05, port of the Simplified tree's
+     * 2026-07-01 cure): the ZC-to-ZC interval IS the rotor frequency — the
+     * one quantity the phase-only PI never measured, which is why a 1.5-2x
+     * alias was a stable fixed point (accepted captures gave zero phase
+     * error while the true frequency went unmeasured). Divide multi-sector
+     * gaps back by the sectors elapsed so silent/muted sectors don't bias
+     * the estimate (the reactive path's single-step-only guard is exactly
+     * what froze it at low speed in the 2026-07-05 A/B).
+     * Guards: need a prior accept this enable (goodZcCount>0), a sane
+     * sector count (1..6), and a per-step result within [floor, 4x current
+     * estimate] — outside that the gap spans a resync/blind stretch and is
+     * discarded (counter resets; next pair measures cleanly). */
+    if (pData->hwzc.goodZcCount > 0
+        && pData->hwzc.sectorsSinceCapture >= 1
+        && pData->hwzc.sectorsSinceCapture <= 6)
+    {
+        uint32_t perStep = (zcStamp - pData->hwzc.lastZcStamp)
+                           / pData->hwzc.sectorsSinceCapture;
+        if (perStep >= RT_HWZC_MIN_STEP_TICKS
+            && perStep <= (pData->hwzc.measuredPeriodHR << 2))
+        {
+            pData->hwzc.measuredPeriodHR =
+                (3 * pData->hwzc.measuredPeriodHR + perStep) / 4;
+        }
+    }
+    pData->hwzc.sectorsSinceCapture = 0;
+
+    pData->hwzc.lastZcStamp   = zcStamp;   /* interval base + legacy diag */
     if (pData->hwzc.goodZcCount < 0xFFFE)
         pData->hwzc.goodZcCount++;
     pData->hwzc.missCount = 0;
@@ -848,6 +882,13 @@ void HWZC_OnCommDeadline(volatile GARUDA_DATA_T *pData)
 
 void HWZC_OnPiPeriodExpired(volatile GARUDA_DATA_T *pData)
 {
+    /* One PI tick = one commutation: count sectors for the interval
+     * anchor's divide-back (reset on each accepted capture). Saturate
+     * well above the 6-step validity cap so a long blind stretch stays
+     * recognizable as invalid. */
+    if (pData->hwzc.sectorsSinceCapture < 0xFF)
+        pData->hwzc.sectorsSinceCapture++;
+
     /* Compute current torque-advance (interpolated from RT_TIMING_ADV_MAX_DEG)
      * — same schedule the reactive path uses, just consumed differently. */
     uint16_t advDeg;
@@ -958,7 +999,19 @@ void HWZC_OnPiPeriodExpired(volatile GARUDA_DATA_T *pData)
          * logic below the if/else block walks T larger. */
         if (!pData->hwzc.piDefActive) {
   #endif
-            pData->hwzc.integratorF += HWZC_PI_KI_FLOAT * deltaF;
+            /* INTERVAL ANCHOR (2026-07-05): pin the integrator to the
+             * MEASURED frequency every tick instead of free-integrating
+             * phase error. The old law (integratorF += Ki*delta) owned the
+             * period through accumulated phase momentum — a 1.5-2x alias
+             * satisfied it (near-zero deltas on the captures it kept) and
+             * every clamp only bounded the drift, none re-anchored it. Now
+             * the period IS the interval measurement, and the PI survives
+             * only as a bounded phase trim: |Kp*delta| <= Kp*T/8 ~ 3% of T.
+             * An alias cannot hold: each accepted true crossing re-measures
+             * the frequency and pulls the grid back 25% per accept.
+             * (Same law that cured the identical 192k-vs-150k wall in the
+             * Simplified tree, control.c:452-511, bench-proven 2026-07-01.) */
+            pData->hwzc.integratorF = (float)pData->hwzc.measuredPeriodHR;
             if (pData->hwzc.integratorF < (float)RT_HWZC_MIN_STEP_TICKS)
                 pData->hwzc.integratorF = (float)RT_HWZC_MIN_STEP_TICKS;
 
@@ -1025,6 +1078,12 @@ void HWZC_OnPiPeriodExpired(volatile GARUDA_DATA_T *pData)
   #endif
                     if (pData->hwzc.integrator < floorP)
                         pData->hwzc.integrator = floorP;
+                    /* Lift the interval-anchor measurement too — a measured
+                     * period below the no-load physics floor came from
+                     * phantom-pair intervals; don't let the anchor re-inject
+                     * it next tick. */
+                    if (pData->hwzc.measuredPeriodHR < floorP)
+                        pData->hwzc.measuredPeriodHR = floorP;
                 }
             }
         }

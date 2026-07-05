@@ -1174,8 +1174,18 @@ extern "C" {
  * Paired flip: HWZC_MISS_LIMIT 3->8 (debug-tight fallback latch would
  * contaminate the A/B). See docs/reviews/2026-07-05-morning-synthesis.md.
  * If confirmed, the keeper is the ~30-line interval-anchor port into the
- * sector-PI (reviews/2026-07-04-overnight-C §3), then flip this back to 1. */
-#define FEATURE_HWZC_SECTOR_PI         0
+ * sector-PI (reviews/2026-07-04-overnight-C §3), then flip this back to 1.
+ *
+ * A/B RESULT (2026-07-05 morning bench) -- diagnosis CONFIRMED both ways:
+ * reactive mode ran 18 s continuously through 20-48k with throttle sweeps
+ * and ZERO alias snaps (the PI snapped every run in that band), but its
+ * single-step-only IIR froze at low speed (stuck at the 3040 seed or at a
+ * phantom 74k pair) so starts needed a pot bump. KEEPER LANDED: the PI is
+ * back ON with the INTERVAL ANCHOR ported into it (hwzc.c: measuredPeriodHR
+ * divide-back IIR at accept; integratorF pinned to it each tick; PI = ~3%
+ * phase trim) -- frequency is now measured, the alias fixed point cannot
+ * hold, and the PI's handoff/blind-sector machinery still owns starts. */
+#define FEATURE_HWZC_SECTOR_PI         1
 
 /* Hybrid per-polarity ZC detection (2026-06-07). Bench-proven root cause: the
  * ON-time HW comparator detects RISING sectors (even 0/2/4) perfectly at all
