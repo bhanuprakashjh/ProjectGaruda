@@ -512,6 +512,9 @@ void HAL_ADC_FeSamplerArm(void)
      * sample for the same-instant neutral. AD1 carries two fast channels —
      * fine at the sampler's 400 kHz (the <=1-per-core rule was written
      * for the 1 MHz lane). Sample ISR = AD1CH2 (VB, converts last on AD1). */
+    AD1CH1CON1bits.SAMC = ZC_FE_SAMC;   /* settle the divider properly — */
+    AD1CH2CON1bits.SAMC = ZC_FE_SAMC;   /* SAMC=3 (1 MHz-lane value) left a */
+    AD2CH2CON1bits.SAMC = ZC_FE_SAMC;   /* +150-350 count bias on VB (07-05) */
     AD1CH1CON1bits.TRG1SRC = 34;   /* VA */
     AD1CH2CON1bits.TRG1SRC = 34;   /* VB — data-ready = sample ISR */
     AD2CH2CON1bits.TRG1SRC = 34;   /* VC */

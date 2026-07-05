@@ -1293,6 +1293,13 @@ extern "C" {
 #define FEATURE_ZC_FE_SAMPLER 0   /* set 1 for bring-up card 1 (rate check) */
 #endif
 #define ZC_FE_SAMPLE_TICKS  250    /* SCCP3 period, FCY ticks: 250 = 400 kHz */
+#define ZC_FE_SAMC          12     /* fast-channel acquisition time in sampler mode.
+                                    * The legacy 1 MHz lane runs HWZC_SAMC=3 (throughput-
+                                    * bound); the slow channels use 5 ("increased for
+                                    * divider impedance"). Bench 2026-07-05: with SAMC=3
+                                    * the fast VB read ~+150-350 counts hot (duty-coupled)
+                                    * -> B-float sectors blind. At 400 kHz there is ample
+                                    * budget: 2ch x (12+conv) clocks << 2.5 us trigger. */
 #define ZC_FE_TAU_NS        30000  /* stock MCLV BEMF divider lag (spec 4.4) */
 #define ZC_FE_VOTE_SLOW     3      /* voteN below ZC_FE_VOTE_ERPM_1 */
 #define ZC_FE_VOTE_MID      2      /* voteN between the two speed points */
