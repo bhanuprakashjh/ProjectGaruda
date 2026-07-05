@@ -331,7 +331,11 @@ void HWZC_OnCommutation(volatile GARUDA_DATA_T *pData)
      * reset the per-sector detection state. */
     gspParams.dbgFeSamples = pData->hwzc.feSamplesThisSector;
     gspParams.dbgFeVoteResets = pData->hwzc.feVoteResets;
-    if (pData->currentStep == 2) {   /* leaving the probe sector: latch d3 envelope */
+    {   /* Latch the probe-sector d3 envelope. Only sector 2 ever accumulates
+         * (the ISR checks currentStep==2 live), so lo<=hi identifies "we just
+         * left the probe sector" without depending on currentStep here —
+         * which has ALREADY advanced past 2 by the time this runs (the
+         * original ==2 check never fired; bench 2026-07-05 21:15 run). */
         int32_t lo = pData->hwzc.feD3Min, hi = pData->hwzc.feD3Max;
         if (lo <= hi) {              /* had at least one sample */
             lo += 32768; if (lo < 0) lo = 0; if (lo > 65535) lo = 65535;
