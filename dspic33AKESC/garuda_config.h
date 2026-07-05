@@ -445,28 +445,24 @@ extern "C" {
 #define FEATURE_COMMISSION       0  /* requires FEATURE_LEARN_MODULES */
 #define FEATURE_EEPROM_V2        1  /* NVM persistent storage DRIVER for GSP params */
 
-#define FEATURE_NVM_SELFTEST  1  /* boot-time destructive user-area flash test;
+#define FEATURE_NVM_SELFTEST  0  /* boot-time destructive user-area flash test;
                                   * result in GET_INFO (connect line shows
                                   * flashtest=FAIL:<step> on failure).
-                                  * ON (2026-07-05 DIAGNOSTIC): runtime `save`
-                                  * failed on first-ever bench exercise (BUSY,
-                                  * then a hard hang on retry). The self-test
-                                  * runs the same erase/write/readback pre-ISR
-                                  * at boot, so its step code separates a raw
-                                  * driver fault from ISR interference. NvmOp
-                                  * now masks GIE + bounds the WR wait.
-                                  * History: first boot with it ON (2026-07-04)
-                                  * hung — blamed on the post-erase blank check
-                                  * byte-reading raw-erased ECC flash; that
-                                  * read was removed (step code 2 retired). If
-                                  * THIS build still hangs at boot, the WR
-                                  * busy-wait cannot execute from flash and the
-                                  * driver must move to RAM.
-                                  * While ON, this wipes any saved user params
-                                  * at every boot (writes a test pattern then
-                                  * does a final erase over PARAM_STORE_ADDR),
-                                  * so persistence testing (bench card step 4)
-                                  * requires a build with this set to 0. */
+                                  * OFF (2026-07-05): served its purpose — the
+                                  * 07-05 diagnostic builds walked the failure
+                                  * from BUSY/trap-blink to the ROOT CAUSE
+                                  * (3135d74: DFP _FLASH_PAGE/_FLASH_ROW are
+                                  * INSTRUCTION counts; real page 4096 B, row
+                                  * 512 B). With corrected geometry the boot
+                                  * self-test PASSED and the first runtime
+                                  * `save` succeeded on bench (readback-
+                                  * verified). OFF because while ON it wipes
+                                  * any saved user params at every boot (test
+                                  * pattern + final erase over
+                                  * PARAM_STORE_ADDR) — persistence needs it 0.
+                                  * Flip to 1 any time the flash driver or
+                                  * store layout changes: one boot gives a
+                                  * pass/fail step code on the connect line. */
 
 #define FEATURE_X2CSCOPE         0  /* X2CScope via UART1 (bring-up debug) */
 #define FEATURE_GSP              1  /* Garuda Serial Protocol via UART1 */
