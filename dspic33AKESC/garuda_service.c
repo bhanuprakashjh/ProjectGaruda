@@ -1275,6 +1275,20 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
             garudaData.bemf.bemfSampleValid = true;
         }
 
+#if FEATURE_ZC_FE_SAMPLER
+        /* FE probe v2 (2026-07-05 late): fast-vs-slow VB, SAME pin (AN4),
+         * both valley-adjacent (this ISR runs just after PG1TRIGA; the fast
+         * lane's latest conversion is <=2.5us old). Latched in sector 2
+         * (dead B-float). If they track -> fast lane is honest and the d3
+         * offset is real signal physics (clipped windows); if they diverge
+         * -> fast-channel acquisition bug, pinpointed. Packed into the
+         * dbgFeD3Min/Max params -> spi_error stream slot. */
+        if (garudaData.currentStep == 2 && garudaData.hwzc.phase == HWZC_WATCHING) {
+            gspParams.dbgFeD3Min = (uint16_t)AD1CH2DATA;      /* vb fast */
+            gspParams.dbgFeD3Max = (uint16_t)ADCBUF_PHASE_B;  /* vb slow */
+        }
+#endif
+
 #if FEATURE_HWZC_FILTER_COMP && GARUDA_TARGET_AK512
         /* Accumulate the TRUE BEMF swing for the filter-comp amplitude (latched
          * per sector by the block above): peak |float - neutral| while WATCHING,

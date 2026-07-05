@@ -337,12 +337,10 @@ void HWZC_OnCommutation(volatile GARUDA_DATA_T *pData)
          * which has ALREADY advanced past 2 by the time this runs (the
          * original ==2 check never fired; bench 2026-07-05 21:15 run). */
         int32_t lo = pData->hwzc.feD3Min, hi = pData->hwzc.feD3Max;
-        if (lo <= hi) {              /* had at least one sample */
-            lo += 32768; if (lo < 0) lo = 0; if (lo > 65535) lo = 65535;
-            hi += 32768; if (hi < 0) hi = 0; if (hi > 65535) hi = 65535;
-            gspParams.dbgFeD3Min = (uint16_t)lo;
-            gspParams.dbgFeD3Max = (uint16_t)hi;
-        }
+        (void)lo; (void)hi;          /* probe v2: params now carry the
+                                      * fast-vs-slow VB pair (garuda_service
+                                      * control-ISR latch); envelope latch
+                                      * disabled, accumulators still reset. */
     }
     pData->hwzc.feD3Min = INT32_MAX;
     pData->hwzc.feD3Max = INT32_MIN;
