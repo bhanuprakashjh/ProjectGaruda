@@ -269,7 +269,19 @@ void GSP_CaptureSnapshot(GSP_SNAPSHOT_T *dst)
      *   spiInteg   = AD3CH2DATA  (VBUS raw)
      * Remove before merge. */
     dst->speedPiEnabled        = 0xDDu;   /* marker: diagnostics active */
-#if FEATURE_HWZC_SECTOR_PI
+#if FEATURE_ZC_FE_SAMPLER && FEATURE_HWZC_SECTOR_PI
+    /* Softneutral FE diag riding the stream (2026-07-05, B-float dead-sector
+     * hunt) — no console 'get' needed, lands in every auto-CSV:
+     *   spi_zcs    = dbgFeSamples      (fast-lane samples, last sector)
+     *   spi_output = dbgFeVoteResets   (cumulative, wraps u16)
+     *   spi_error  = (dbgFeD3Min<<16)|dbgFeD3Max  (probe-sector d3 envelope,
+     *                both offset-binary +32768; unpack in analysis)
+     *   spi_target = rising capture ‰  (kept — the A/B instrument) */
+    dst->speedPiZcsSinceEnable = gspParams.dbgFeSamples;
+    dst->speedPiTarget         = (int32_t)src->hwzc.dbgLastCapPm;
+    dst->speedPiLastError      = (int32_t)(((uint32_t)gspParams.dbgFeD3Min << 16)
+                                           | gspParams.dbgFeD3Max);
+#elif FEATURE_HWZC_SECTOR_PI
     dst->speedPiZcsSinceEnable = src->hwzc.dbgPiNoCap;        /* silent PI events */
     dst->speedPiTarget         = (int32_t)src->hwzc.dbgLastCapPm; /* cap pos ‰ of T */
     dst->speedPiLastError      = (int32_t)src->hwzc.dbgPiCrossSector;
@@ -278,6 +290,9 @@ void GSP_CaptureSnapshot(GSP_SNAPSHOT_T *dst)
     dst->speedPiTarget         = 0;
     dst->speedPiLastError      = 0;
 #endif
+#if FEATURE_ZC_FE_SAMPLER && FEATURE_HWZC_SECTOR_PI
+    dst->speedPiOutputDuty     = gspParams.dbgFeVoteResets;
+#else
     dst->speedPiOutputDuty     = (uint16_t)(
                                  ((uint16_t)PG1STATbits.SEVT    << 12)
                                | ((uint16_t)PG1STATbits.FFEVT   << 11)
@@ -292,6 +307,7 @@ void GSP_CaptureSnapshot(GSP_SNAPSHOT_T *dst)
                                | ((uint16_t)AD1CONbits.ADRDY << 2)
                                | ((uint16_t)_AD1CH3IE << 1)
                                | (uint16_t)_AD1CH3IF);
+#endif
     dst->speedPiIntegratorF    = (float)(uint32_t)AD3CH2DATA;
 #else
     dst->speedPiEnabled        = src->speedPi.enabled ? 1u : 0u;
