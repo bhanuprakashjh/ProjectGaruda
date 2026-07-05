@@ -16,15 +16,24 @@ volatile uint16_t g_nvmSelfTestResult = 0xFFFFu;
 #define NVM_OP_PAGE_ERASE  0x4003u
 #define NVM_OP_ROW_WRITE   0x4002u
 
-static bool NvmOp(uint32_t addr, const uint8_t *src, uint32_t opcode)
+/* RAM-RESIDENT (2026-07-05 bench, trap-blink boot): NO instruction may be
+ * fetched from flash while WR is active. The selftest build trapped at boot
+ * (LED2 fast-blink loop) — the busy-wait below, executing from flash,
+ * faults the moment an op engages. Traps are unmaskable, so the GIE guard
+ * alone can't save it; the op + wait must run from RAM. ramfunc: startup
+ * copies this function to data RAM; it touches only SFRs and stack.
+ * noinline: inlining into a flash-resident caller would silently undo the
+ * whole point. */
+static bool __attribute__((ramfunc, noinline))
+NvmOp(uint32_t addr, const uint8_t *src, uint32_t opcode)
 {
     /* GIE off for the whole op (2026-07-05 bench: first-ever runtime save
      * returned BUSY, retry hard-hung the CPU; boot-context ops were the only
      * ones ever proven). An ISR taken while WR is active fetches vectors and
-     * code from the busy flash panel — the same read-in-a-bad-state family
-     * this part has already hung on. Every caller is motor-stopped; the
-     * blackout is bounded by one op (~ms row write, ~tens of ms page erase).
-     * Interrupts breathe between ops so UART/heartbeat survive a full save. */
+     * code from the busy flash panel — fatal (see ramfunc note). Every
+     * caller is motor-stopped; the blackout is bounded by one op (~ms row
+     * write, ~tens of ms page erase). Interrupts breathe between ops so
+     * UART/heartbeat survive a full save. */
     uint32_t gie = INTCON1bits.GIE;
     INTCON1bits.GIE = 0;
     NVMADR = addr;
