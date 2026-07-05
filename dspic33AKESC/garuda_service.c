@@ -4514,6 +4514,16 @@ void __attribute__((__interrupt__, no_auto_psv)) _AD1CH2Interrupt(void)
         int32_t d3 = 3 * (int32_t)vf - ((int32_t)va + (int32_t)vb + (int32_t)vc);
         bool post = (cs->zcPolarity > 0) ? (d3 > 0) : (d3 < 0);
 
+        /* DIAG (2026-07-05 bench: B-float sectors 2/5 miss ~100%): envelope
+         * of d3 across the probe sector, latched to dbgFeD3Min/Max at
+         * commutation. Answers whether the dead sector's signal never
+         * reaches the pre-ZC side (offset), never crosses (sign), or is
+         * garbage (huge swing). Probe = step 2 (B float, rising). */
+        if (garudaData.currentStep == 2) {
+            if (d3 < garudaData.hwzc.feD3Min) garudaData.hwzc.feD3Min = d3;
+            if (d3 > garudaData.hwzc.feD3Max) garudaData.hwzc.feD3Max = d3;
+        }
+
         if (!garudaData.hwzc.feArmed) {
             if (!post)
                 garudaData.hwzc.feArmed = 1;

@@ -391,6 +391,8 @@ typedef struct {
     volatile uint8_t  feVoteCount;         /* consecutive post-ZC samples */
     volatile uint8_t  feDone;              /* one accept per sector */
     volatile uint8_t  feVoteN;             /* current vote requirement (1..3) */
+    volatile int32_t  feD3Min;             /* diag: d3 min in the probed sector */
+    volatile int32_t  feD3Max;             /* diag: d3 max in the probed sector */
 #endif
 
 #if FEATURE_BEMF_INTEGRATION

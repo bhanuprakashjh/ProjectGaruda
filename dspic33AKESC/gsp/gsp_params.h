@@ -69,6 +69,8 @@ extern "C" {
 #define PARAM_ID_DBG_MISTIME_EVENTS     0xA1   /* mistime watchdog: +1 strike, +100 trip */
 #define PARAM_ID_DBG_FE_SAMPLES         0xA2   /* softneutral FE: fast-lane samples/sector */
 #define PARAM_ID_DBG_FE_VOTERESETS      0xA3   /* softneutral FE: cumulative vote resets */
+#define PARAM_ID_DBG_FE_D3MIN           0xA4   /* FE diag: d3 min in probe sector, +32768 offset */
+#define PARAM_ID_DBG_FE_D3MAX           0xA5   /* FE diag: d3 max in probe sector, +32768 offset */
 
 /* Tuning params (12 new) */
 #define PARAM_ID_DUTY_SLEW_UP           0x60
@@ -237,6 +239,8 @@ typedef struct {
     uint16_t dbgMistimeEvents;
     uint16_t dbgFeSamples;      /* softneutral FE: fast-lane samples/sector (latched) */
     uint16_t dbgFeVoteResets;   /* softneutral FE: cumulative wrong-sample vote resets */
+    uint16_t dbgFeD3Min;        /* FE diag: probe-sector d3 min, offset-binary +32768 */
+    uint16_t dbgFeD3Max;        /* FE diag: probe-sector d3 max, offset-binary +32768 */
 } GSP_PARAMS_T;
 
 /* ── Derived values (precomputed from params, ISR reads these) ───────── */

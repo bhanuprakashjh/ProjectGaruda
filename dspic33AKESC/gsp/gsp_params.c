@@ -776,7 +776,9 @@ static const PARAM_DESCRIPTOR_T paramDescriptors[] = {
     { PARAM_ID_DBG_MIN_STEP_PERIOD,   PARAM_TYPE_U16, PARAM_GROUP_CLOSED_LOOP,   0,   65535, offsetof(GSP_PARAMS_T, dbgMinStepPeriod), 2 },   /* debug: derived ramp-exit period */
     { PARAM_ID_DBG_MISTIME_EVENTS,    PARAM_TYPE_U16, PARAM_GROUP_CLOSED_LOOP,   0,   65535, offsetof(GSP_PARAMS_T, dbgMistimeEvents), 2 },
     { PARAM_ID_DBG_FE_SAMPLES,        PARAM_TYPE_U16, PARAM_GROUP_CLOSED_LOOP,   0,   65535, offsetof(GSP_PARAMS_T, dbgFeSamples),     2 },  /* debug: FE fast-lane samples/sector */
-    { PARAM_ID_DBG_FE_VOTERESETS,     PARAM_TYPE_U16, PARAM_GROUP_CLOSED_LOOP,   0,   65535, offsetof(GSP_PARAMS_T, dbgFeVoteResets),  2 },  /* debug: FE vote resets (cumulative) */   /* debug: mistime watchdog activity */  /* WS1: total HW-ZC blank cap, % of period (25=legacy period/4, 33=period/3) */
+    { PARAM_ID_DBG_FE_VOTERESETS,     PARAM_TYPE_U16, PARAM_GROUP_CLOSED_LOOP,   0,   65535, offsetof(GSP_PARAMS_T, dbgFeVoteResets),  2 },  /* debug: FE vote resets (cumulative) */
+    { PARAM_ID_DBG_FE_D3MIN,          PARAM_TYPE_U16, PARAM_GROUP_CLOSED_LOOP,   0,   65535, offsetof(GSP_PARAMS_T, dbgFeD3Min),       2 },  /* diag: probe-sector d3 min (+32768) */
+    { PARAM_ID_DBG_FE_D3MAX,          PARAM_TYPE_U16, PARAM_GROUP_CLOSED_LOOP,   0,   65535, offsetof(GSP_PARAMS_T, dbgFeD3Max),       2 },  /* diag: probe-sector d3 max (+32768) */   /* debug: mistime watchdog activity */  /* WS1: total HW-ZC blank cap, % of period (25=legacy period/4, 33=period/3) */
     /* Current Protection (group 2) */
     { PARAM_ID_OC_SW_LIMIT_MA,        PARAM_TYPE_U16, PARAM_GROUP_OVERCURRENT,  500, OC_MAX_SAFE_MA, offsetof(GSP_PARAMS_T, ocSwLimitMa),      2 },
     { PARAM_ID_OC_FAULT_MA,           PARAM_TYPE_U16, PARAM_GROUP_OVERCURRENT, 1000, OC_MAX_SAFE_MA, offsetof(GSP_PARAMS_T, ocFaultMa),        2 },
