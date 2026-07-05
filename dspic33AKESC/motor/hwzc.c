@@ -789,11 +789,32 @@ void HWZC_OnZcDetected(volatile GARUDA_DATA_T *pData)
      * of at the autonomous lastComm+T deadline. Silent sectors still get
      * the autonomous fire (dead-reckon preserved); phase stays WATCHING so
      * the fire dispatches OnPiPeriodExpired as before. Delay was cached by
-     * the last PI tick (one tick stale ≈ the reactive path's tolerance). */
+     * the last PI tick (one tick stale ≈ the reactive path's tolerance).
+     *
+     * PLAUSIBILITY-GATED (2026-07-05 second bench pass): a raw re-anchor
+     * bypasses every clamp — at CL entry, post-blank phantom fires dragged
+     * each commutation earlier in a self-reinforcing cascade to the 2x
+     * lock (15.9k at 5% duty, every start). Re-time the grid ONLY when the
+     * crossing sits where a real ZC can be: past 5/16 of the sector (post-
+     * blank ripple lives below ~0.2T; real crossings at ~0.5T+adv, early
+     * under accel ~0.4T) and inside the sector. Captures that fail the
+     * gate still feed the interval measurement and the clamped PI trim —
+     * exactly the part-1 behavior that idled clean. Also held off during
+     * the CL-entry handoff-damp window. */
     {
-        uint32_t d = pData->hwzc.cachedCommDelay;
-        if (d < 10) d = 10;
-        HAL_SCCP1_StartOneShot(d);
+        uint32_t Tcur = pData->hwzc.timerPeriod;
+        uint32_t posInSector = zcStamp - pData->hwzc.lastCommStamp;
+        if (
+#if FEATURE_HWZC_HANDOFF_DAMP
+            pData->hwzc.handoffDamp == 0 &&
+#endif
+            posInSector >= ((Tcur >> 2) + (Tcur >> 4))   /* >= 0.3125*T */
+            && posInSector < Tcur)
+        {
+            uint32_t d = pData->hwzc.cachedCommDelay;
+            if (d < 10) d = 10;
+            HAL_SCCP1_StartOneShot(d);
+        }
     }
 
     HAL_ADC_DisableComparatorIE(pData->hwzc.activeCore);
