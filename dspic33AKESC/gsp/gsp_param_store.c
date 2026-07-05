@@ -115,31 +115,43 @@ bool GSP_ParamStore_Save(const GSP_PARAMS_T *table, uint8_t activeProfileNow)
     img.crc16 = EEPROM_ComputeCRC16((const uint8_t *)img.table,
                                     (uint16_t)sizeof(img.table));
 
-    if (!NVMFLASH_ErasePages(PARAM_STORE_ADDR, PARAM_STORE_PAGES))
-        return false;
     /* Commit-header-last: write everything AFTER row 0 first, then row 0
      * (which carries the magic/schema/CRC header). A power loss mid-save
      * therefore leaves row 0 erased or stale — never a valid header over a
      * half-written table — and the boot loader's header-first read screens
      * it out without ever touching the unwritten tail. */
-    if (!NVMFLASH_WriteImage(PARAM_STORE_ADDR + NVMFLASH_ROW_BYTES,
-                             (const uint8_t *)&img + NVMFLASH_ROW_BYTES,
-                             (uint16_t)(sizeof(img) - NVMFLASH_ROW_BYTES)))
-        return false;
-    if (!NVMFLASH_WriteImage(PARAM_STORE_ADDR, (const uint8_t *)&img,
-                             (uint16_t)NVMFLASH_ROW_BYTES))
-        return false;
+    bool ok = NVMFLASH_ErasePages(PARAM_STORE_ADDR, PARAM_STORE_PAGES)
+           && NVMFLASH_WriteImage(PARAM_STORE_ADDR + NVMFLASH_ROW_BYTES,
+                                  (const uint8_t *)&img + NVMFLASH_ROW_BYTES,
+                                  (uint16_t)(sizeof(img) - NVMFLASH_ROW_BYTES))
+           && NVMFLASH_WriteImage(PARAM_STORE_ADDR, (const uint8_t *)&img,
+                                  (uint16_t)NVMFLASH_ROW_BYTES);
 
     /* Readback through a volatile view: s_userArea is const to C but its
      * flash content just changed via the NVM registers — force real reads. */
-    {
+    if (ok) {
         const volatile uint8_t *rb = (const volatile uint8_t *)s_userArea;
         const uint8_t *src = (const uint8_t *)&img;
         for (uint16_t i = 0; i < (uint16_t)sizeof(img); i++)
-            if (rb[i] != src[i])
-                return false;
+            if (rb[i] != src[i]) {
+                ok = false;
+                break;
+            }
     }
-    return true;
+
+    if (!ok) {
+        /* SAFE-STATE (2026-07-05 bench): a failed save must NEVER leave the
+         * area erased-but-uncommitted — row 0 raw-erased hangs the next
+         * boot's header read (the 2026-07-04 brick family), and stamping a
+         * zero row over an already-programmed row 0 would double-program
+         * (ECC-invalid, same hang). Full erase + zero-row stamp = the
+         * EraseUser sequence: committed blank, factory fallback at boot.
+         * Best-effort — if the driver is truly wedged these fail too, but
+         * they can't make things worse than the state we're recovering. */
+        (void)NVMFLASH_ErasePages(PARAM_STORE_ADDR, PARAM_STORE_PAGES);
+        (void)NVMFLASH_ZeroRow(PARAM_STORE_ADDR);
+    }
+    return ok;
 }
 
 bool GSP_ParamStore_EraseUser(void)

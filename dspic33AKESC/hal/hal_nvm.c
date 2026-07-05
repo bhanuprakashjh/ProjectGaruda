@@ -18,14 +18,29 @@ volatile uint16_t g_nvmSelfTestResult = 0xFFFFu;
 
 static bool NvmOp(uint32_t addr, const uint8_t *src, uint32_t opcode)
 {
+    /* GIE off for the whole op (2026-07-05 bench: first-ever runtime save
+     * returned BUSY, retry hard-hung the CPU; boot-context ops were the only
+     * ones ever proven). An ISR taken while WR is active fetches vectors and
+     * code from the busy flash panel — the same read-in-a-bad-state family
+     * this part has already hung on. Every caller is motor-stopped; the
+     * blackout is bounded by one op (~ms row write, ~tens of ms page erase).
+     * Interrupts breathe between ops so UART/heartbeat survive a full save. */
+    uint32_t gie = INTCON1bits.GIE;
+    INTCON1bits.GIE = 0;
     NVMADR = addr;
     if (src != NULL)
         NVMSRCADR = (uint32_t)(uintptr_t)src;
     NVMCON = opcode;
     NVMCONbits.WR = 1;
-    while (NVMCONbits.WR);
+    /* Bounded wait: a stuck WR must degrade to a reported failure, not a
+     * silent forever-hang (WDT is fused off on this board). ~100M iterations
+     * is seconds at 200 MHz — orders of magnitude past a worst-case erase. */
+    uint32_t spins = 100000000u;
+    while (NVMCONbits.WR && --spins);
     NVMCONbits.WREN = 0;   /* defense-in-depth: don't leave WE latched */
-    return !NVMCONbits.WRERR;
+    bool ok = (spins != 0u) && !NVMCONbits.WRERR;
+    INTCON1bits.GIE = gie;
+    return ok;
 }
 
 bool NVMFLASH_ErasePages(uint32_t addr, uint16_t nPages)

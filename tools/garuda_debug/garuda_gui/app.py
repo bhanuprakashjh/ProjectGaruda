@@ -1520,8 +1520,10 @@ class MainWindow(QtWidgets.QMainWindow):
         self.btn_diag.setEnabled(True)
         self.btn_report.setEnabled(True)
         self.sim_panel.setVisible(bool(info.get("sim")))
+        extra = info.get("connectLine", "")
         self._log(f"connected: fw v{info['fwVersion']} build={bh} "
-                  f"profile={info['motorProfile']} {'FOC' if info.get('isFoc') else '6-step'}")
+                  f"profile={info['motorProfile']} {'FOC' if info.get('isFoc') else '6-step'}"
+                  f"{' ' + extra if extra else ''}")
         self.status.showMessage(f"Connected ({self.port}).")
 
     def _sim_pot_changed(self, v):
