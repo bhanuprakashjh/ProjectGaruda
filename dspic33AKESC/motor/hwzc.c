@@ -175,6 +175,9 @@ void HWZC_Enable(volatile GARUDA_DATA_T *pData)
      * period; the first accepted intervals take over from there. */
     pData->hwzc.measuredPeriodHR    = pData->hwzc.stepPeriodHR;
     pData->hwzc.sectorsSinceCapture = 0;
+    /* Re-anchor delay seed (adv=0 → T/2) until the first PI tick caches
+     * the advance-aware value — an accept can arrive before that. */
+    pData->hwzc.cachedCommDelay     = pData->hwzc.stepPeriodHR / 2;
 #if FEATURE_HWZC_PI_FLOAT
     /* integratorF = period (same semantics as integer integrator). */
     pData->hwzc.integratorF = (float)pData->hwzc.stepPeriodHR;
@@ -475,11 +478,12 @@ void HWZC_OnBlankingExpired(volatile GARUDA_DATA_T *pData)
 
 #if FEATURE_HWZC_SECTOR_PI
     /* Sector PI mode: schedule SCCP1 to fire at the autonomous commutation
-     * deadline (lastCommStamp + timerPeriod). ZC events that arrive between
-     * now and that deadline just timestamp lastCaptureHR; the PI math runs
-     * in HWZC_OnPiPeriodExpired (dispatched from _CCT1Interrupt at phase
-     * WATCHING when in PI mode). No separate timeout — a missed ZC is
-     * absorbed by the PI as a non-update (timerPeriod unchanged). */
+     * deadline (lastCommStamp + timerPeriod). An accepted ZC RE-ANCHORS the
+     * timer to zc + (30-adv)/60*T (2026-07-05 — grid slaved to the rotor);
+     * this autonomous deadline is the SILENT-SECTOR fallback only. PI math
+     * runs in HWZC_OnPiPeriodExpired (dispatched from _CCT1Interrupt at
+     * phase WATCHING when in PI mode). No separate timeout — a missed ZC
+     * is absorbed by the PI as a non-update (timerPeriod unchanged). */
     uint32_t blankTicks = HWZC_BlankTicks(pData, pData->hwzc.timerPeriod);
     uint32_t remaining = (pData->hwzc.timerPeriod > blankTicks)
                          ? (pData->hwzc.timerPeriod - blankTicks)
@@ -779,6 +783,19 @@ void HWZC_OnZcDetected(volatile GARUDA_DATA_T *pData)
         pData->hwzc.goodZcCount++;
     pData->hwzc.missCount = 0;
     pData->hwzc.totalZcCount++;
+
+    /* PHASE RE-ANCHOR: slave the commutation grid to the rotor — restart
+     * SCCP1 so the sector ends (30−adv)/60·T after THIS crossing instead
+     * of at the autonomous lastComm+T deadline. Silent sectors still get
+     * the autonomous fire (dead-reckon preserved); phase stays WATCHING so
+     * the fire dispatches OnPiPeriodExpired as before. Delay was cached by
+     * the last PI tick (one tick stale ≈ the reactive path's tolerance). */
+    {
+        uint32_t d = pData->hwzc.cachedCommDelay;
+        if (d < 10) d = 10;
+        HAL_SCCP1_StartOneShot(d);
+    }
+
     HAL_ADC_DisableComparatorIE(pData->hwzc.activeCore);
     return;
 #endif
@@ -914,6 +931,18 @@ void HWZC_OnPiPeriodExpired(volatile GARUDA_DATA_T *pData)
     /* advancePlus30Fp8 = (30 + advDeg) × 256 / 60. Max value at advDeg=30 is 256;
      * at advDeg=0 is 128. Fits comfortably in uint16. */
     uint16_t advFp8 = (uint16_t)(((30u + (uint32_t)advDeg) * 256u) / 60u);
+
+    /* PHASE RE-ANCHOR precompute (2026-07-05, second half of the interval-
+     * anchor port): ZC-to-commutation delay = T − setValue = (30−adv)/60·T.
+     * OnZcDetected restarts SCCP1 with this on every accepted capture, so
+     * commutation phase is enforced GEOMETRICALLY from the rotor's own
+     * crossing — the role the deleted free integrator used to play by
+     * slowly absorbing phase error. Without this, the ±3% Kp trim is too
+     * weak to hold alignment and the grid slips continuously against the
+     * rotor (bench 2026-07-05: 22k at 24% duty, 5-6 A of torque-fighting).
+     * Cached here (once per tick) to keep the capture ISR division-free —
+     * same pattern as the reactive path's cachedCommDelay. */
+    pData->hwzc.cachedCommDelay = T - (((uint32_t)advFp8 * T) >> 8);
 
 #if FEATURE_HWZC_PI_DEFENSIVE
     /* Track whether THIS event has a capture (BEFORE the gate below
