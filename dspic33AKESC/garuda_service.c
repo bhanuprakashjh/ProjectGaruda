@@ -1301,6 +1301,44 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
             if (vfo < garudaData.bemf.fallOffBemfMin) garudaData.bemf.fallOffBemfMin = vfo;
             if (vfo > garudaData.bemf.fallOffBemfMax) garudaData.bemf.fallOffBemfMax = vfo;
 
+#if FEATURE_HWZC_FALLING_SW && FEATURE_HWZC_SECTOR_PI
+            /* Hybrid falling detector (RESTORED 2026-07-05, purged 9ec01c8;
+             * the proven 06-12..17 2810 stack). The falling ZC is invisible
+             * to the armed-rising-only comparator; here at OFF-center the
+             * floating terminal is the raw BEMF and its descent through the
+             * (filter-comped, deadbanded) neutral threshold is the real
+             * crossing. One accept per sector (!captureValid). Plausibility
+             * floor: past T/4 of the sector — rejects the demag/DCM dips
+             * that pin fall_off_min to 0 early in the sector (the exact
+             * phantom source the 07-05 sweep exposed on the falling-HW
+             * path). Speed cap: above HWZC_FALLING_SW_MAX_ERPM the fixed
+             * RC lag is a growing fraction of a shrinking sector and the
+             * late captures poison the PI on accel (06-12 bench) — the
+             * sector becomes a PI non-update and rising-only carries, as
+             * the 234k-era top end did. Period compare, division-free.
+             * Adaptation vs the purged original: speed gate reads
+             * timerPeriod (the PI-mode period; stepPeriodHR is paused in
+             * PI mode) and the accept bookkeeping lives in
+             * HWZC_OnSwFallingCapture so the interval anchor and gated
+             * phase re-anchor (both post-purge additions) stay coherent. */
+            if (!garudaData.hwzc.captureValid)
+            {
+                uint16_t fth = HWZC_ApplyFilterComp(&garudaData,
+                                                    garudaData.bemf.zcThreshold,
+                                                    false /* falling */);
+                fth = (fth > HWZC_CMP_DEADBAND) ? (uint16_t)(fth - HWZC_CMP_DEADBAND) : 0;
+                uint32_t zc = HAL_SCCP2_ReadTimestamp();
+                uint32_t intoSector = zc - garudaData.hwzc.lastCommStamp;
+                bool plausible = intoSector > (garudaData.hwzc.timerPeriod >> 2);
+#if HWZC_FALLING_SW_MAX_ERPM > 0
+                if (garudaData.hwzc.timerPeriod
+                        < (1000000000UL / (uint32_t)HWZC_FALLING_SW_MAX_ERPM))
+                    plausible = false;   /* faster than the cap → rising-only */
+#endif
+                if (plausible && vfo < fth)
+                    HWZC_OnSwFallingCapture(&garudaData, zc);
+            }
+#endif /* FEATURE_HWZC_FALLING_SW && FEATURE_HWZC_SECTOR_PI */
         }
 
 #endif

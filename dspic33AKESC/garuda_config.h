@@ -1222,12 +1222,41 @@ extern "C" {
  * watches continuously and is duty-independent. Mutually exclusive with
  * FALLING_SW. ConfigComparator already sets CMPMOD for falling each
  * commutation; this only arms the IE for falling + adds the freewheel gate. */
-#if MOTOR_PROFILE == 9 || MOTOR_PROFILE == 2  /* U3-proven stack ported to 2810 2026-07-04 */
+#if MOTOR_PROFILE == 9  /* U3 keeps its proven falling-HW stack */
 #define FEATURE_HWZC_FALLING_HW        1   /* NOTE: dead flag (2026-07-04 audit) — falling via the
                                             * HW comparator is UNCONDITIONAL in hwzc.c since the
                                             * FALLING_SW purge. Kept for config history only. */
 #else
 #define FEATURE_HWZC_FALLING_HW        0
+#endif
+
+/* FEATURE_HWZC_FALLING_SW — RESTORED 2026-07-05 (purged 9ec01c8, ported back
+ * from the proven 06-12..17 stack). The 2810 got U3's falling-HW comparator
+ * on 2026-07-04 ("U3-proven stack ported to 2810") and the 07-05 pot-sweep
+ * dataset (sessions/gui_auto_20260705_142351) showed what that does on this
+ * motor: falling captures sit at ~150-185 permille at EVERY speed = the
+ * comparator fires the moment blanking opens, because during the freewheel
+ * window the floating terminal is ground-referenced raw BEMF and sits BELOW
+ * the neutral-referenced falling threshold (fall_off_min = 0 at every duty).
+ * 100% phantoms — falling sectors contributed zero timing information.
+ * The June stack on this same motor measured REAL falling crossings this
+ * way (547->901 permille walk, capped at 70k; rising-only carried to 234k):
+ * comparator armed RISING-ONLY, falling detected by the OFF-center SW
+ * compare in the ADC ISR (one accept per sector, plausibility floor T/4,
+ * neutral threshold + falling filter-comp + deadband). Above the cap the
+ * top end runs rising-only exactly as the 234k-era did.
+ * CAVEAT (from the original block): the OFF-center sample is one fixed
+ * point per PWM period -> swallowed by the ON pulse above ~50% duty. Fine
+ * for the current campaign band (<=31% duty); the cap bounds it anyway. */
+#if MOTOR_PROFILE == 2
+#define FEATURE_HWZC_FALLING_SW        1
+#define HWZC_FALLING_SW_MAX_ERPM   70000   /* 2810 proven cap (06-12): above this the
+                                            * fixed RC lag is a growing fraction of a
+                                            * shrinking sector -> late captures poison
+                                            * the PI on accel; rising-only carries. */
+#else
+#define FEATURE_HWZC_FALLING_SW        0
+#define HWZC_FALLING_SW_MAX_ERPM       0
 #endif
 
 /* ── Rising-only top end (restores the 260k-era behavior) ─────────────────

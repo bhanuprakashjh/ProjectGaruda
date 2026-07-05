@@ -456,6 +456,19 @@ void HWZC_OnBlankingExpired(volatile GARUDA_DATA_T *pData)
 
     /* Clear any stale comparator events, then enable interrupt */
     HAL_ADC_ClearComparatorFlag(core);
+#if FEATURE_HWZC_FALLING_SW
+    /* Hybrid per-polarity (RESTORED 2026-07-05, proven 06-12..17 stack):
+     * comparator armed RISING-ONLY. Falling ZC comes from the OFF-center SW
+     * detector in the ADC ISR (garuda_service.c, <= HWZC_FALLING_SW_MAX_ERPM;
+     * above the cap the sector is a PI non-update and rising-only carries,
+     * as the 234k-era top end did). Never arming falling kills the phantom
+     * flood the 07-05 sweep exposed: during freewheel the floating terminal
+     * is ground-referenced raw BEMF, already below the neutral-referenced
+     * falling threshold, so an armed falling comparator fires the instant
+     * the gate opens (~150 permille, zero information). */
+    if (commutationTable[pData->currentStep].zcPolarity > 0)
+        HAL_ADC_EnableComparatorIE(core);
+#else
 #if HWZC_FALLING_MUTE_ERPM > 0
     /* Rising-only top end: above the mute speed, falling sectors are heard
      * ~0.7-0.95T late (fixed RC lag on a shrinking sector — see config) and
@@ -471,6 +484,7 @@ void HWZC_OnBlankingExpired(volatile GARUDA_DATA_T *pData)
     else
 #endif
     HAL_ADC_EnableComparatorIE(core);
+#endif /* FEATURE_HWZC_FALLING_SW */
 #else
     /* SW compare mode: leave the HW digital comparator IE disabled.
      * ZC detection runs in the 24 kHz ADC ISR via HWZC_OnSoftwareSample(). */
@@ -876,6 +890,73 @@ void HWZC_OnZcDetected(volatile GARUDA_DATA_T *pData)
 
     HAL_SCCP1_StartOneShot(commDelay);
 }
+
+#if FEATURE_HWZC_FALLING_SW && FEATURE_HWZC_SECTOR_PI
+/**
+ * @brief Accept a falling ZC found by the OFF-center SW detector (ADC ISR).
+ *
+ * RESTORED 2026-07-05 (falling-SW hybrid, purged 9ec01c8). The caller
+ * (garuda_service.c ADC ISR) has already done the falling-specific
+ * screening: one-per-sector (!captureValid), plausibility floor
+ * (> T/4 into the sector, past demag/DCM dips), speed cap, and the
+ * threshold compare (filter-comped neutral − deadband). This function is
+ * the accept bookkeeping — an exact mirror of HWZC_OnZcDetected's PI
+ * accept branch (keep the two in lockstep):
+ *   capture record, INTERVAL-ANCHOR measurement (divide-back over silent
+ *   sectors), counters, and the plausibility-GATED phase re-anchor.
+ * No comparator IE to disable here — with FALLING_SW the comparator is
+ * armed rising-only, so falling sectors never fire it. No verify reads —
+ * the SW sample IS a settled ADC conversion, not an edge event.
+ */
+void HWZC_OnSwFallingCapture(volatile GARUDA_DATA_T *pData, uint32_t zcStamp)
+{
+    pData->hwzc.lastCaptureHR = zcStamp;
+    pData->hwzc.captureValid  = true;
+
+    /* INTERVAL ANCHOR measurement — same guards as the rising path:
+     * prior accept this enable, sane sector count, per-step within
+     * [floor, 4x estimate]. See HWZC_OnZcDetected for the full story. */
+    if (pData->hwzc.goodZcCount > 0
+        && pData->hwzc.sectorsSinceCapture >= 1
+        && pData->hwzc.sectorsSinceCapture <= 6)
+    {
+        uint32_t perStep = (zcStamp - pData->hwzc.lastZcStamp)
+                           / pData->hwzc.sectorsSinceCapture;
+        if (perStep >= RT_HWZC_MIN_STEP_TICKS
+            && perStep <= (pData->hwzc.measuredPeriodHR << 2))
+        {
+            pData->hwzc.measuredPeriodHR =
+                (3 * pData->hwzc.measuredPeriodHR + perStep) / 4;
+        }
+    }
+    pData->hwzc.sectorsSinceCapture = 0;
+
+    pData->hwzc.lastZcStamp   = zcStamp;
+    if (pData->hwzc.goodZcCount < 0xFFFE)
+        pData->hwzc.goodZcCount++;
+    pData->hwzc.missCount = 0;
+    pData->hwzc.totalZcCount++;
+
+    /* PHASE RE-ANCHOR, plausibility-gated — identical to the rising path.
+     * The caller's T/4 floor overlaps but is looser than the 0.3125T gate;
+     * both apply. */
+    {
+        uint32_t Tcur = pData->hwzc.timerPeriod;
+        uint32_t posInSector = zcStamp - pData->hwzc.lastCommStamp;
+        if (
+#if FEATURE_HWZC_HANDOFF_DAMP
+            pData->hwzc.handoffDamp == 0 &&
+#endif
+            posInSector >= ((Tcur >> 2) + (Tcur >> 4))   /* >= 0.3125*T */
+            && posInSector < Tcur)
+        {
+            uint32_t d = pData->hwzc.cachedCommDelay;
+            if (d < 10) d = 10;
+            HAL_SCCP1_StartOneShot(d);
+        }
+    }
+}
+#endif /* FEATURE_HWZC_FALLING_SW && FEATURE_HWZC_SECTOR_PI */
 
 /**
  * @brief Commutation deadline reached — advance to next step.
