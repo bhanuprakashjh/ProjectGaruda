@@ -285,6 +285,9 @@ class GspClient:
     def save_config(self):
         self._cmd(P.CMD_SAVE_CONFIG)
 
+    def load_defaults(self):
+        self._cmd(P.CMD_LOAD_DEFAULTS)
+
     def load_profile(self, profile_id: int):
         self._cmd(P.CMD_LOAD_PROFILE, bytes([profile_id]))
 

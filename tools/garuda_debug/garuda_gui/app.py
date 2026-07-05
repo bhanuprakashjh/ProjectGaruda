@@ -133,6 +133,19 @@ class SerialWorker(QtCore.QThread):
                                              "name": kw.get("name", ""), "value": rb})
                 elif action == "refresh_params":
                     self.params_ready.emit(c.dump_params())
+                elif action == "flash_cmd":
+                    # save/defaults are stopped-only in firmware (WRONG_STATE
+                    # while running); surface the result on the console.
+                    if kw["cmd"] == "save":
+                        c.save_config()
+                        self.param_written.emit({"ok": True,
+                                                 "name": "(flash save)",
+                                                 "value": "params written to flash"})
+                    elif kw["cmd"] == "defaults":
+                        c.load_defaults()
+                        self.param_written.emit({"ok": True,
+                                                 "name": "(factory defaults)",
+                                                 "value": "restored (not saved)"})
                 elif action == "motor_cmd":
                     cmd = kw["cmd"]
                     if cmd == "start":
@@ -1907,7 +1920,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if op in ("help", "?"):
             self._log("commands: help · clear · pause · resume · mark <text> · "
                       "diagnose · report · wl · params · get <param> · set <param> <value> · "
-                      "export · reload · save")
+                      "export · reload · save · defaults · record")
         elif op == "report":
             self._copy_claude_report()
         elif op == "wl":
@@ -1951,6 +1964,16 @@ class MainWindow(QtWidgets.QMainWindow):
         elif op == "diagnose":
             self.run_diagnosis()
         elif op == "save":
+            if not self.worker:
+                self._log("save: not connected"); return
+            self._log("flash save → writing param table (motor must be stopped)…")
+            self.worker.submit("flash_cmd", cmd="save")
+        elif op == "defaults":
+            if not self.worker:
+                self._log("defaults: not connected"); return
+            self._log("factory defaults → restoring (RAM only until 'save')…")
+            self.worker.submit("flash_cmd", cmd="defaults")
+        elif op == "record":
             self.toggle_record()
         else:
             self._log(f"unknown command: {op}  (try 'help')")
