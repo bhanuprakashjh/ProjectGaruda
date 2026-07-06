@@ -279,8 +279,27 @@ void GSP_CaptureSnapshot(GSP_SNAPSHOT_T *dst)
      *   spi_target = rising capture ‰  (kept — the A/B instrument) */
     dst->speedPiZcsSinceEnable = gspParams.dbgFeSamples;
     dst->speedPiTarget         = (int32_t)src->hwzc.dbgLastCapPm;
-    dst->speedPiLastError      = (int32_t)(((uint32_t)gspParams.dbgFeD3Min << 16)
-                                           | gspParams.dbgFeD3Max);
+    {   /* Drain the d3 waveform capture: 2 samples per snapshot, index in
+         * spi_output (0xFFFF when no wave). Falls back to the fast/slow VB
+         * pair once drained. */
+        extern volatile int16_t  g_feWave[];
+        extern volatile uint16_t g_feWaveN, g_feWaveOut;
+        extern volatile uint8_t  g_feWaveState;
+        if (g_feWaveState == 3 && g_feWaveOut < g_feWaveN) {
+            uint16_t a = (uint16_t)g_feWave[g_feWaveOut];
+            uint16_t b = (g_feWaveOut + 1 < g_feWaveN)
+                         ? (uint16_t)g_feWave[g_feWaveOut + 1] : 0x8000u;
+            dst->speedPiLastError = (int32_t)(((uint32_t)a << 16) | b);
+            dst->speedPiOutputDuty = g_feWaveOut;
+            g_feWaveOut += 2;
+            if (g_feWaveOut >= g_feWaveN)
+                g_feWaveState = 4;             /* drained (stay off) */
+        } else {
+            dst->speedPiLastError = (int32_t)(((uint32_t)gspParams.dbgFeD3Min << 16)
+                                              | gspParams.dbgFeD3Max);
+            dst->speedPiOutputDuty = 0xFFFFu;
+        }
+    }
 #elif FEATURE_HWZC_SECTOR_PI
     dst->speedPiZcsSinceEnable = src->hwzc.dbgPiNoCap;        /* silent PI events */
     dst->speedPiTarget         = (int32_t)src->hwzc.dbgLastCapPm; /* cap pos ‰ of T */
@@ -291,7 +310,7 @@ void GSP_CaptureSnapshot(GSP_SNAPSHOT_T *dst)
     dst->speedPiLastError      = 0;
 #endif
 #if FEATURE_ZC_FE_SAMPLER && FEATURE_HWZC_SECTOR_PI
-    dst->speedPiOutputDuty     = gspParams.dbgFeVoteResets;
+    /* speedPiOutputDuty set above (wave index / 0xFFFF sentinel) */
 #else
     dst->speedPiOutputDuty     = (uint16_t)(
                                  ((uint16_t)PG1STATbits.SEVT    << 12)

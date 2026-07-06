@@ -181,6 +181,14 @@ void HWZC_Enable(volatile GARUDA_DATA_T *pData)
 #if FEATURE_ZC_FE_SAMPLER
     /* Softneutral FE seeds: conservative vote until the first PI tick
      * computes the speed-scaled value; fresh per-sector state. */
+    {   /* arm the one-shot d3 waveform capture 2 s after this enable */
+        extern volatile uint8_t g_feWaveState;
+        extern volatile uint32_t g_feWaveArmTick;
+        if (g_feWaveState == 0) {
+            g_feWaveArmTick = pData->systemTick + 2000u;
+            g_feWaveState = 1;
+        }
+    }
     pData->hwzc.feVoteN             = ZC_FE_VOTE_SLOW;
     pData->hwzc.feSamplesThisSector = 0;
     pData->hwzc.feVoteResets        = 0;
@@ -326,6 +334,19 @@ void HWZC_OnCommutation(volatile GARUDA_DATA_T *pData)
 {
     uint32_t now = HAL_SCCP2_ReadTimestamp();
 #if FEATURE_ZC_FE_SAMPLER
+    {   /* d3 waveform capture control (garuda_service.c g_feWave*): arm 2 s
+         * after enable, start when ENTERING sector 2, finish when leaving. */
+        extern volatile uint16_t g_feWaveN;
+        extern volatile uint8_t  g_feWaveState;
+        extern volatile uint32_t g_feWaveArmTick;
+        if (g_feWaveState == 2) {
+            g_feWaveState = 3;                 /* sector over -> drain */
+        } else if (g_feWaveState == 1 && pData->currentStep == 2
+                   && pData->systemTick >= g_feWaveArmTick) {
+            g_feWaveN = 0;
+            g_feWaveState = 2;                 /* entering probe sector */
+        }
+    }
     /* Softneutral FE: latch last sector's fast-lane sample count for the GUI
      * (get dbgFeSamples), publish the cumulative vote-reset counter, then
      * reset the per-sector detection state. */

@@ -113,6 +113,19 @@
 
 #include "x2cscope/diagnostics.h"
 
+#if FEATURE_ZC_FE_SAMPLER
+/* FE d3 waveform capture (2026-07-06): one full sector-2 at the FULL sample
+ * rate, streamed out through the snapshot's spi_error slot (2 samples per
+ * snapshot, ~30/s -> ~35 s per dump). Armed automatically 2 s after HWZC
+ * enable; captures the next sector 2; GSP_CaptureSnapshot drains it.
+ * States: 0 idle, 1 armed, 2 capturing, 3 draining. */
+volatile int16_t  g_feWave[1024];
+volatile uint16_t g_feWaveN;
+volatile uint16_t g_feWaveOut;
+volatile uint8_t  g_feWaveState;
+volatile uint32_t g_feWaveArmTick;
+#endif
+
 /* Global ESC runtime data — volatile: shared between ISRs and main loop */
 volatile GARUDA_DATA_T garudaData;
 
@@ -4527,6 +4540,13 @@ void __attribute__((__interrupt__, no_auto_psv)) _AD1CH2Interrupt(void)
 
         int32_t d3 = 3 * (int32_t)vf - ((int32_t)va + (int32_t)vb + (int32_t)vc);
         bool post = (cs->zcPolarity > 0) ? (d3 > 0) : (d3 < 0);
+
+        if (g_feWaveState == 2 && garudaData.currentStep == 2
+            && g_feWaveN < 1024) {
+            int32_t c = d3;
+            if (c > 32767) c = 32767; if (c < -32768) c = -32768;
+            g_feWave[g_feWaveN++] = (int16_t)c;
+        }
 
         /* DIAG (2026-07-05 bench: B-float sectors 2/5 miss ~100%): envelope
          * of d3 across the probe sector, latched to dbgFeD3Min/Max at
