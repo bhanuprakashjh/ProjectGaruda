@@ -1717,6 +1717,26 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
         garudaData.faultCode = FAULT_OVERCURRENT;
         garudaData.runCommandActive = false;
         LED2 = 0;
+#if FEATURE_FOC_AN1078
+        /* OC forensics (2026-07-06: FOC-resume bench trips OC_SW instantly
+         * at ALIGN with every current telemetry column dead in FOC mode —
+         * this latch is the only witness). One-shot until reboot; read from
+         * the console with `get`:
+         *   dbgFeD3Min      = ibusRaw at trip (counts; 2048 bias, ~93/A)
+         *   dbgFeD3Max      = |vq| at trip, volts x100
+         *   dbgFeSamples    = ia at trip, offset-binary 32768 + A x100
+         *   dbgFeVoteResets = ib at trip, offset-binary 32768 + A x100 */
+        if (gspParams.dbgFeD3Min == 0) {
+            gspParams.dbgFeD3Min = garudaData.ibusRaw;
+            float vqAbs = (s_foc_an.vq < 0) ? -s_foc_an.vq : s_foc_an.vq;
+            if (vqAbs > 655.0f) vqAbs = 655.0f;
+            gspParams.dbgFeD3Max = (uint16_t)(vqAbs * 100.0f);
+            gspParams.dbgFeSamples =
+                (uint16_t)(32768L + (int32_t)(s_foc_an.ia * 100.0f));
+            gspParams.dbgFeVoteResets =
+                (uint16_t)(32768L + (int32_t)(s_foc_an.ib * 100.0f));
+        }
+#endif
     }
     }  /* debounce scope */
 #endif
