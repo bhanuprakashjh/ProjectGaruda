@@ -4526,11 +4526,7 @@ void __attribute__((__interrupt__, no_auto_psv)) _AD1CH2Interrupt(void)
         else                                            vf = vc;
 
         int32_t d3 = 3 * (int32_t)vf - ((int32_t)va + (int32_t)vb + (int32_t)vc);
-        /* Clamp-aware crossing test (07-06): the OFF-window floating signal
-         * is floored at ~0 by the clamp diode — a strict sign test is a
-         * knife edge in clip noise (killed B-float sectors). Rising =
-         * emergence above +EPS; falling = arrival at/below +EPS. */
-        bool post = (cs->zcPolarity > 0) ? (d3 > ZC_FE_EPS) : (d3 <= ZC_FE_EPS);
+        bool post = (cs->zcPolarity > 0) ? (d3 > 0) : (d3 < 0);
 
         /* DIAG (2026-07-05 bench: B-float sectors 2/5 miss ~100%): envelope
          * of d3 across the probe sector, latched to dbgFeD3Min/Max at

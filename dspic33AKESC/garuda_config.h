@@ -1301,18 +1301,6 @@ extern "C" {
                                     * -> B-float sectors blind. At 400 kHz there is ample
                                     * budget: 2ch x (12+conv) clocks << 2.5 us trigger. */
 #define ZC_FE_TAU_NS        30000  /* stock MCLV BEMF divider lag (spec 4.4) */
-#define ZC_FE_EPS           10     /* clamp-aware crossing band, ADC counts.
-                                    * 07-06 probe: fast lane honest (fast==slow
-                                    * +/-5) -> the d3 offset is REAL: in the
-                                    * freewheel window the floating terminal is
-                                    * ground-referenced and the clamp diode
-                                    * floors negative BEMF at 0 (clip noise
-                                    * ~+/-6). Strict sign detection put every
-                                    * sector on a knife edge. The clamp IS the
-                                    * neutral in that window: rising ZC =
-                                    * emergence above +EPS, falling ZC =
-                                    * arrival at/below +EPS - both at the true
-                                    * crossing, valid in ON, OFF and DCM. */
 #define ZC_FE_VOTE_SLOW     3      /* voteN below ZC_FE_VOTE_ERPM_1 */
 #define ZC_FE_VOTE_MID      2      /* voteN between the two speed points */
 #define ZC_FE_VOTE_ERPM_1   20000
