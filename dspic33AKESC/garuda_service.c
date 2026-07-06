@@ -4524,6 +4524,22 @@ void __attribute__((__interrupt__, no_auto_psv)) _AD1CH2Interrupt(void)
     if (garudaData.hwzc.feSamplesThisSector < 0xFFFF)
         garudaData.hwzc.feSamplesThisSector++;
 
+    /* d3 waveform capture — BEFORE the detection gate so the record covers
+     * the WHOLE sector (blanking, demag, post-capture) not just the pre-
+     * capture window (first attempt got 4 samples: capture fired instantly
+     * and feDone ended recording). */
+    if (g_feWaveState == 2 && garudaData.currentStep == 2
+        && g_feWaveN < 1024) {
+        const COMMUTATION_STEP_T *wcs = &commutationTable[garudaData.currentStep];
+        uint16_t wvf;
+        if      (wcs->floatingPhase == FLOATING_PHASE_A) wvf = va;
+        else if (wcs->floatingPhase == FLOATING_PHASE_B) wvf = vb;
+        else                                             wvf = vc;
+        int32_t wd3 = 3 * (int32_t)wvf - ((int32_t)va + (int32_t)vb + (int32_t)vc);
+        if (wd3 > 32767) wd3 = 32767; if (wd3 < -32768) wd3 = -32768;
+        g_feWave[g_feWaveN++] = (int16_t)wd3;
+    }
+
 #if FEATURE_ZC_FRONTEND == ZC_FE_SOFTNEUTRAL && FEATURE_HWZC_SECTOR_PI
     /* Detect only while watching (post-blank) and not already captured. */
     if (!garudaData.hwzc.enabled
@@ -4541,12 +4557,6 @@ void __attribute__((__interrupt__, no_auto_psv)) _AD1CH2Interrupt(void)
         int32_t d3 = 3 * (int32_t)vf - ((int32_t)va + (int32_t)vb + (int32_t)vc);
         bool post = (cs->zcPolarity > 0) ? (d3 > 0) : (d3 < 0);
 
-        if (g_feWaveState == 2 && garudaData.currentStep == 2
-            && g_feWaveN < 1024) {
-            int32_t c = d3;
-            if (c > 32767) c = 32767; if (c < -32768) c = -32768;
-            g_feWave[g_feWaveN++] = (int16_t)c;
-        }
 
         /* DIAG (2026-07-05 bench: B-float sectors 2/5 miss ~100%): envelope
          * of d3 across the probe sector, latched to dbgFeD3Min/Max at

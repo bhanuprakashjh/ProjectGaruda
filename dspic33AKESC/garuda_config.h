@@ -1301,8 +1301,17 @@ extern "C" {
                                     * -> B-float sectors blind. At 400 kHz there is ample
                                     * budget: 2ch x (12+conv) clocks << 2.5 us trigger. */
 #define ZC_FE_TAU_NS        30000  /* stock MCLV BEMF divider lag (spec 4.4) */
-#define ZC_FE_VOTE_SLOW     3      /* voteN below ZC_FE_VOTE_ERPM_1 */
-#define ZC_FE_VOTE_MID      2      /* voteN between the two speed points */
+#define ZC_FE_VOTE_SLOW     16     /* voteN below ZC_FE_VOTE_ERPM_1. Waveform
+                                    * capture 07-06 (gui_auto_122846): d3 flips
+                                    * +/-90 counts SAMPLE-TO-SAMPLE (PWM window
+                                    * ripple at 400 kHz); a vote of 3 fit inside
+                                    * one PWM phase and fired on ripple runs 4
+                                    * samples after blanking. The vote must span
+                                    * MORE than one PWM cycle (~13 samples) so
+                                    * every run includes true-signed ON-window
+                                    * samples that veto ripple. BLHeli: 20-27 at
+                                    * low speed; AM32: 12. */
+#define ZC_FE_VOTE_MID      8      /* voteN between the two speed points */
 #define ZC_FE_VOTE_ERPM_1   20000
 #define ZC_FE_VOTE_ERPM_2   60000
 
