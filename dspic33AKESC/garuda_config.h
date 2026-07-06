@@ -43,7 +43,7 @@ extern "C" {
  * Uncomment to switch profile 2 from the legacy comparator engine to the
  * softneutral front end (A/B bench card: docs/bench/). Must be defined HERE
  * (top of file) — the falling-SW block below keys off it. */
-/* #define GARUDA_ZC_SOFTNEUTRAL_SEL 1 */   /* softneutral parked 07-06 — resume by uncommenting */
+#define GARUDA_ZC_SOFTNEUTRAL_SEL 1   /* ACTIVE — vote-16 build at parity with legacy (07-06) */
 
 /* Feature Flags (0=disabled, 1=enabled) */
 #define FEATURE_BEMF_CLOSED_LOOP 1  /* Phase 2: BEMF ZC detection — ENABLED for 6-step (2026-05-25) */
