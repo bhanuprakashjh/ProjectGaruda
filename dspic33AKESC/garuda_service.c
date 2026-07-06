@@ -4524,20 +4524,26 @@ void __attribute__((__interrupt__, no_auto_psv)) _AD1CH2Interrupt(void)
     if (garudaData.hwzc.feSamplesThisSector < 0xFFFF)
         garudaData.hwzc.feSamplesThisSector++;
 
-    /* d3 waveform capture — BEFORE the detection gate so the record covers
-     * the WHOLE sector (blanking, demag, post-capture) not just the pre-
-     * capture window (first attempt got 4 samples: capture fired instantly
-     * and feDone ended recording). */
-    if (g_feWaveState == 2 && garudaData.currentStep == 2
-        && g_feWaveN < 1024) {
-        const COMMUTATION_STEP_T *wcs = &commutationTable[garudaData.currentStep];
-        uint16_t wvf;
-        if      (wcs->floatingPhase == FLOATING_PHASE_A) wvf = va;
-        else if (wcs->floatingPhase == FLOATING_PHASE_B) wvf = vb;
-        else                                             wvf = vc;
-        int32_t wd3 = 3 * (int32_t)wvf - ((int32_t)va + (int32_t)vb + (int32_t)vc);
-        if (wd3 > 32767) wd3 = 32767; if (wd3 < -32768) wd3 = -32768;
-        g_feWave[g_feWaveN++] = (int16_t)wd3;
+    /* d3 waveform capture — state machine OWNED BY THIS ISR (v2: the
+     * cross-ISR OnCommutation ordering truncated captures to 2-4 samples,
+     * twice). Watches sector transitions itself; only the arm (0/4 -> 1,
+     * HWZC_Enable) and the drain (3 -> 4, snapshot) live elsewhere. */
+    {
+        static uint8_t s_wavePrevStep = 0xFF;
+        uint8_t stepNow = garudaData.currentStep;
+        if (g_feWaveState == 1 && stepNow == 2 && s_wavePrevStep != 2
+            && garudaData.systemTick >= g_feWaveArmTick) {
+            g_feWaveN = 0;
+            g_feWaveState = 2;                 /* just entered the probe sector */
+        } else if (g_feWaveState == 2 && stepNow != 2) {
+            g_feWaveState = 3;                 /* sector over -> drain */
+        }
+        s_wavePrevStep = stepNow;
+        if (g_feWaveState == 2 && g_feWaveN < 1024) {
+            int32_t wd3 = 3 * (int32_t)vb - ((int32_t)va + (int32_t)vb + (int32_t)vc);
+            if (wd3 > 32767) wd3 = 32767; if (wd3 < -32768) wd3 = -32768;
+            g_feWave[g_feWaveN++] = (int16_t)wd3;
+        }
     }
 
 #if FEATURE_ZC_FRONTEND == ZC_FE_SOFTNEUTRAL && FEATURE_HWZC_SECTOR_PI
