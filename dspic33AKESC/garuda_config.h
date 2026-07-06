@@ -43,7 +43,7 @@ extern "C" {
  * Uncomment to switch profile 2 from the legacy comparator engine to the
  * softneutral front end (A/B bench card: docs/bench/). Must be defined HERE
  * (top of file) — the falling-SW block below keys off it. */
-#define GARUDA_ZC_SOFTNEUTRAL_SEL 1   /* ACTIVE — vote-16 build at parity with legacy (07-06) */
+/* #define GARUDA_ZC_SOFTNEUTRAL_SEL 1 */  /* OFF 07-06: FOC campaign — vote-16 state preserved, re-enable to resume 6-step softneutral */
 
 /* Feature Flags (0=disabled, 1=enabled) */
 #define FEATURE_BEMF_CLOSED_LOOP 1  /* Phase 2: BEMF ZC detection — ENABLED for 6-step (2026-05-25) */
@@ -443,7 +443,7 @@ extern "C" {
 #define FEATURE_FOC              0  /* Phase I: OLD FOC v1 (reference, deprecated) */
 #define FEATURE_FOC_V2           0  /* Phase I v2: closed-loop current control + MXLEMMING */
 #define FEATURE_FOC_V3           0  /* Phase J: FOC v3 — SMO observer + PLL */
-#define FEATURE_FOC_AN1078       0  /* 2026-07-04: discriminator CONCLUDED - first FOC run on this MCU did 223,914 eRPM peak, 215-223k sustained @90-96%/25.2V, zero faults. Plant exonerated; the 6-step wall was the ZC chain (June-18 ZC_DUTY_DIVISOR 2.6 bias, reverted). Flip to 1 for the FOC engine. */
+#define FEATURE_FOC_AN1078       1  /* 2026-07-04: discriminator CONCLUDED - first FOC run on this MCU did 223,914 eRPM peak, 215-223k sustained @90-96%/25.2V, zero faults. Plant exonerated; the 6-step wall was the ZC chain (June-18 ZC_DUTY_DIVISOR 2.6 bias, reverted). Flip to 1 for the FOC engine. */
 #define FEATURE_SMO              0  /* 0=PLL only, 1=PLL+SMO parallel (v1 only) */
 #define FEATURE_MXLEMMING        0  /* 0=PLL chain, 1=MXLEMMING flux observer (v1 only) */
 #define FEATURE_LEARN_MODULES    0  /* master: ring buffer + quality + health */
