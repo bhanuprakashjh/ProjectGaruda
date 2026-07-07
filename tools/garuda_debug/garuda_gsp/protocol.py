@@ -95,6 +95,11 @@ PARAM_NAMES = {
     0x9E: "zcDemagBlankMaxPct",
     0xA0: "dbgMinStepPeriod",
     0xA1: "dbgMistimeEvents",
+    # softneutral FE diag / FOC OC-forensics latch (dual-purpose spares)
+    0xA2: "dbgFeSamples",
+    0xA3: "dbgFeVoteResets",
+    0xA4: "dbgFeD3Min",
+    0xA5: "dbgFeD3Max",
     # morph lock quality + I-f startup (present when those features compile in)
     0x6C: "morphLockZcCount", 0x6D: "morphLockTolPct",
     0x6E: "ifCurrentCa", 0x6F: "ifRampErpmPerS",
