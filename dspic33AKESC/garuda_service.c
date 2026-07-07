@@ -1711,7 +1711,12 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
         float iMag  = (iaAbs > ibAbs) ? iaAbs : ibAbs;
         float ocLimitA = (float)gspParams.focFaultOcCentiA * 0.01f;
         if (ocLimitA < 1.0f) ocLimitA = 15.0f;   /* param unset/zero → 15 A */
-        if (iMag > ocLimitA)
+        /* RESTORED 2026-07-07: the bus check was RIGHT — run 095519 showed
+         * a REAL runaway (Vbus folded 24->7 V) that the bus ADC caught in
+         * 125 us while the mis-scaled phase feedback slept. BOTH layers now
+         * arm in FOC builds: bus (fast, compile threshold) OR phase
+         * (calibrated, live threshold). */
+        if (iMag > ocLimitA || garudaData.ibusRaw > OC_FAULT_ADC_VAL)
         {
             if (s_ocFaultDebounce < 255u) s_ocFaultDebounce++;
         }

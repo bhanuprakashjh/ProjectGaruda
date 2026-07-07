@@ -24,9 +24,15 @@ extern "C" {
  *    to AN1078 module so it can be tuned independently) ─────────── */
 
 /** Phase-current sensing scale (A per ADC count, signed about offset).
- *  MCLV-48V-300W: I_peak = 22.04 A → scale = 22.04 / 2048 = 0.01077 A/count.
- *  Polarity inverted at the op-amp (amplifier flip). */
-#define AN_CURRENT_A_PER_COUNT      0.01076636f
+ *  GAIN EXPERIMENT 2026-07-07: the 0.01077 value assumed the 24.95x
+ *  op-amp gain (22.04 A full scale). Bench evidence says the phase amps
+ *  are the 8.3x side of the documented DIM gain contradiction: align
+ *  commanded 5 A, FOC read ia/ib ~0-2.5 A while the bus carried a REAL
+ *  21 A and the PSU folded 24->7 V (run 095519). 3.006x-low feedback =
+ *  current loop drives 3x the command. Corrected scale = 0.01077 x
+ *  (24.95/8.3) = 66.26 A full scale. If align still runs away with this,
+ *  the gain is acquitted and the next suspect is PWM dead-time. */
+#define AN_CURRENT_A_PER_COUNT      0.03236533f
 #define AN_CURRENT_INVERT           1                /* op-amp inverts → negate */
 #define AN_ADC_MIDPOINT             2048
 
