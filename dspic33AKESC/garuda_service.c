@@ -1695,12 +1695,36 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
 #if OC_PROTECT_MODE == 2
     {
         static uint8_t s_ocFaultDebounce = 0;
+#if FEATURE_FOC_AN1078
+        /* FOC OC source (2026-07-07): the bus-current ADC reads a SUSTAINED
+         * ~21 A switching-ring phantom under the FOC's 45 kHz PWM — forensic
+         * latch caught the trip at ibusRaw=4012 counts with ia=+0.2 A,
+         * ib=-2.5 A, vq=1.4 V (real current ~zero). It cannot be a fault
+         * source in this PWM regime. Watch the FOC's own offset-calibrated
+         * phase currents instead: worst phase |i| vs focFaultOcCa
+         * (centiamps, live-tunable; 1500 = 15 A, align preload is 12 A).
+         * AN1078 has no internal current fault (AN_MotorFault has no
+         * callers) — this check IS the software OC layer; CMP3 + board
+         * FPCI remain the fast hardware backstops. */
+        float iaAbs = (s_foc_an.ia < 0) ? -s_foc_an.ia : s_foc_an.ia;
+        float ibAbs = (s_foc_an.ib < 0) ? -s_foc_an.ib : s_foc_an.ib;
+        float iMag  = (iaAbs > ibAbs) ? iaAbs : ibAbs;
+        float ocLimitA = (float)gspParams.focFaultOcCentiA * 0.01f;
+        if (ocLimitA < 1.0f) ocLimitA = 15.0f;   /* param unset/zero → 15 A */
+        if (iMag > ocLimitA)
+        {
+            if (s_ocFaultDebounce < 255u) s_ocFaultDebounce++;
+        }
+        else
+            s_ocFaultDebounce = 0;
+#else
         if (garudaData.ibusRaw > OC_FAULT_ADC_VAL)
         {
             if (s_ocFaultDebounce < 255u) s_ocFaultDebounce++;
         }
         else
             s_ocFaultDebounce = 0;
+#endif
 
     if (s_ocFaultDebounce >= 3u
         && ((garudaData.state >= ESC_ALIGN
@@ -2629,6 +2653,7 @@ void __attribute__((__interrupt__, no_auto_psv)) GARUDA_ADC_INTERRUPT(void)
             s_foc_an.cal_done &&
             garudaData.faultCode != FAULT_BOARD_PCI) {
             AN_MotorStart(&s_foc_an);
+            gspParams.dbgFeD3Min = 0;   /* re-arm the OC forensics latch per run */
         }
 
         float da_an, db_an, dc_an;
