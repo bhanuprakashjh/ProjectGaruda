@@ -212,6 +212,15 @@ class GspClient:
         rpl = self._cmd(P.CMD_GET_INFO, expect=P.CMD_GET_INFO)
         self.info = decode_info(rpl)
         self.protocol_version = self.info.get("protocolVersion")
+        # Board display-scaling: GarudaESE = boardId 2, or (older ESE fw that
+        # still reports the MCLV id) capability bit 25 = LIVE_TUNE, ESE-only.
+        caps = self.info.get("featureFlags") or 0
+        if self.info.get("boardId") == 2 or (caps & (1 << 25)):
+            P.set_board("garudaese")
+            self.info["board"] = "GarudaESE"
+        else:
+            P.set_board("mclv")
+            self.info["board"] = "MCLV"
         return self.info
 
     def connect(self, retries: int = 5, delay: float = 0.15) -> dict:
@@ -310,6 +319,22 @@ class GspClient:
         v = max(0, min(2000, int(val)))
         self._cmd(P.CMD_SET_THROTTLE, struct.pack("<H", v))
 
+    def ata_diag(self) -> dict:
+        """GarudaESE ATA6847 gate-driver diagnostics. NOTE: reading clears
+        latched fault flags in the device (SIR regs are read-to-clear)."""
+        p = self._cmd(P.CMD_ATA_DIAG, expect=P.CMD_ATA_DIAG)
+        if len(p) < 13:
+            raise GspError(f"ATA_DIAG short reply ({len(p)}B)")
+        return {
+            "DSR1": p[0], "DSR2": p[1],
+            "SIR1": p[2], "SIR2": p[3], "SIR3": p[4], "SIR4": p[5], "SIR5": p[6],
+            "GOPMCR": p[7],
+            "lastDsr1AtNormal": p[8],
+            "lastGduAttempts": p[9] | (p[10] << 8),
+            "lastGduResult": p[11],
+            "ataReady": p[12],
+        }
+
     def heartbeat(self):
         """Dead-man's-switch — must be sent within GSP_HEARTBEAT_TIMEOUT_MS while
         running on GSP throttle, or the firmware safe-stops the motor."""
@@ -328,8 +353,9 @@ class GspClient:
         return {"state": state, "trig_mode": trig_mode, "pre_pct": pre_pct,
                 "trig_idx": trig_idx, "sample_count": count, "sample_size": size}
 
-    def scope_read_all(self) -> list:
-        """Page out the whole frozen buffer; returns decoded samples in order."""
+    def scope_read_all(self, foc: bool = False) -> list:
+        """Page out the whole frozen buffer; returns decoded samples in order.
+        foc=True decodes with the AN1078 field map (see decode_scope_sample)."""
         st = self.scope_status()
         n = st.get("sample_count") or P.SCOPE_BUF_SIZE
         from .decode import decode_scope_sample
@@ -342,7 +368,8 @@ class GspClient:
                 break
             for i in range(actual):
                 base = 2 + i * P.SCOPE_SAMPLE_SIZE
-                out.append(decode_scope_sample(rpl[base:base + P.SCOPE_SAMPLE_SIZE]))
+                out.append(decode_scope_sample(rpl[base:base + P.SCOPE_SAMPLE_SIZE],
+                                               foc=foc))
             off += actual
         return out
 

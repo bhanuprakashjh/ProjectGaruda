@@ -28,6 +28,7 @@ CMD_LOAD_PROFILE    = 0x17
 CMD_SCOPE_ARM       = 0x30   # burst scope: arm + trigger config
 CMD_SCOPE_STATUS    = 0x31   # burst scope: state/trigIdx/sampleCount
 CMD_SCOPE_READ      = 0x32   # burst scope: page out samples
+CMD_ATA_DIAG        = 0x40   # GarudaESE: gate-driver status/fault registers
 CMD_TELEM_FRAME     = 0x80   # unsolicited
 CMD_ERROR           = 0xFF
 
@@ -58,7 +59,7 @@ FAULT_NAMES = {
 
 # ── Motor profiles (gsp/gsp_params.h) ───────────────────────────────────
 PROFILE_NAMES = {
-    0: "Hurst", 1: "A2212", 2: "2810(5010)", 3: "5055",
+    0: "Hurst", 1: "A2212", 2: "U3-KV700", 3: "5055",
     4: "Cobra-2814", 5: "XRotor-3110", 6: "VEX-4000KV",
     9: "U3-KV700",   # dspic33AKESC-Simplified default (motors.h PROFILE_U3)
 }
@@ -66,6 +67,16 @@ PROFILE_NAMES = {
 # ── Parameter IDs → names (gsp/gsp_params.h, descriptor table, 31 params) ─
 PARAM_NAMES = {
     0x15: "rampTargetErpm", 0x16: "rampAccelErpmPerS", 0x17: "rampDutyPct",
+    # 6-step ZC diagnostic: BEMF ADC sample instant (PG1TRIGA phase index),
+    # 0..2*LOOPTIME_TCY spans the whole PWM period. Live-tunable; sweep to find
+    # the instant where the floating-phase BEMF is observable (bemf_raw crosses
+    # zc_thresh → cap>0). Present only in the 6-step (FEATURE_BEMF_SAMPLE_TUNABLE) build.
+    0x18: "bemfSamplePhase",
+    # 6-step ZC neutral/threshold model select (live-tunable while spinning):
+    #   0=DUTY (Vbus·duty/divisor)  1=VBUS_HALF (Vbus/2, wrong scale on ESE)
+    #   2=COMPUTED ((Vu+Vv+Vw)/3 star, duty-independent)  3=EXTERNAL (BEMF_N pin)
+    0x19: "zcNeutralModel",
+    0x1A: "zcFixedThreshold",
     0x20: "clIdleDutyPct", 0x22: "timingAdvMaxDeg", 0x30: "hwzcCrossoverErpm",
     0x41: "ocFaultMa", 0x42: "ocSwLimitMa",
     0x50: "motorPolePairs", 0x51: "alignDutyPct", 0x52: "initialErpm",
@@ -84,11 +95,15 @@ PARAM_NAMES = {
     # AN1078 SMC tuning
     0x90: "an1078ThetaBaseDegX10", 0x91: "an1078ThetaKE7",
     0x92: "an1078KslideMv", 0x93: "an1078IdFwMaxDecia",
-    # WS4 nested speed→current→duty cascade
-    0x94: "cascadeSpeedKpMilli", 0x95: "cascadeSpeedKiMicro",
-    0x96: "cascadeCurrKpMilli", 0x97: "cascadeCurrKiMicro",
-    0x98: "cascadeIrefCeilingAdc", 0x99: "cascadeTgtErpmIdle",
-    0x9A: "cascadeTgtErpmMax",
+    # AN_STA super-twisting observer tuning (FEATURE_AN_STA build).
+    # These reuse 0x94-0x9A, which the GarudaESE/AK512 firmware does NOT use
+    # for the WS4 cascade (that lives only in the dspic33AKESC simplified build).
+    0x94: "staK1bMilli", 0x95: "staK1aE6",
+    0x96: "staK2b", 0x97: "staK2aE6",
+    0x98: "staWClampFloorMv", 0x99: "staThetaBaseDegX10",
+    0x9A: "staThetaKlatE7",
+    # OL→CL handoff settling-window iqRef clamp (both observers, live-tunable)
+    0xB0: "handoffSettleTicks", 0xB1: "handoffIqCapCa",
     # WS3 duty-adaptive BEMF sample trigger
     0x9B: "bemfTrigBasePct", 0x9C: "bemfTrigDutyThreshPct", 0x9D: "bemfTrigShiftQ",
     # WS1 (extended): demag blank cap
@@ -120,8 +135,55 @@ FEATURE_FOC_AN1078 = 1 << 23
 # ── ADC scaling — BOARD-SPECIFIC (MCLV-48V-300W). Key off boardId later. ─
 # These match tools/step6_session.py and are correct for the AKESC bench board.
 VBUS_SCALE_V        = 3.3 * 23.2 / 4095.0
+
+# ── Board display-scaling modes ──────────────────────────────────────────
+# The snapshot ships RAW ADC counts; these constants convert them for
+# display. Default = MCLV-48V-300W (AK512MC510 DIM). GarudaESE (EV60Y51A)
+# uses a 13:1 Vbus divider and dsPIC OA current sense at 36.36x/2mOhm.
+# Auto-selected on connect from INFO boardId (2 = GarudaESE) or, for older
+# ESE firmware, capability bit 25 (LIVE_TUNE — ESE-only as of 2026-07).
+BOARD = "mclv"
+
+def set_board(name: str):
+    global BOARD, VBUS_SCALE_V, IADC_COUNTS_PER_AMP
+    if name == "garudaese":
+        BOARD = "garudaese"
+        VBUS_SCALE_V = 3.3 * 13.0 / 4095.0          # 42.9 V FS
+        IADC_COUNTS_PER_AMP = 90.3                   # 36.36x, 2 mOhm (72.7 mV/A)
+    else:
+        BOARD = "mclv"
+        VBUS_SCALE_V = 3.3 * 23.2 / 4095.0
+        IADC_COUNTS_PER_AMP = 93.0
 IBUS_SCALE_A        = 3.3 / (4095.0 * 24.95 * 0.003)
 IBUS_BIAS           = 2048
 IADC_BIAS           = 2048
 IADC_COUNTS_PER_AMP = 93.0
 HWZC_ERPM_FROM_TICKS = 1_000_000_000
+
+# ── NTC temperature (GarudaESE, 2026-07-14) ─────────────────────────────
+# Schematic (GarudaESE_PinMap): +3.3V -> TH1 (10k NTC) -> TEMP node -> R65
+# (4.7k) -> GND, read on AD3AN5. ~1.055 V (~1309 counts) @25 C; the NTC is on
+# TOP so its resistance FALLS as it heats -> node voltage (and ADC counts) RISE
+# with temperature. Recover R_ntc from the divider, then Beta equation.
+#   Vnode = 3.3 * R_fix/(R_ntc+R_fix);  counts = Vnode/3.3*4095
+#   => R_ntc = R_fix * (4095/counts - 1)
+#   1/T = 1/T0 + (1/Beta)*ln(R_ntc/R25)
+# BETA IS UNCONFIRMED on this board (HW sheet Q-H8 flags it) — 3435 is the most
+# common value for a 10k 0402 NTC. Calibrate against a known temperature and
+# adjust NTC_BETA if the reading is off.
+NTC_R_FIXED = 4700.0     # R65 (node -> GND)
+NTC_R25     = 10000.0    # TH1 nominal @25 C
+NTC_BETA    = 3435.0     # UNCONFIRMED — bench-calibrate
+NTC_T0_K    = 298.15     # 25 C in Kelvin
+
+def ntc_counts_to_c(counts):
+    """Convert raw NTC ADC counts (0..4095) to degrees Celsius. Returns None
+    for non-physical readings (open/short)."""
+    import math
+    if counts <= 0 or counts >= 4095:
+        return None
+    r_ntc = NTC_R_FIXED * (4095.0 / counts - 1.0)
+    if r_ntc <= 0.0:
+        return None
+    inv_t = 1.0 / NTC_T0_K + (1.0 / NTC_BETA) * math.log(r_ntc / NTC_R25)
+    return 1.0 / inv_t - 273.15

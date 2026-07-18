@@ -74,15 +74,49 @@ def _adc_to_amp(raw):
     return (raw - P.IADC_BIAS) / P.IADC_COUNTS_PER_AMP
 
 
-def decode_scope_sample(b: bytes) -> dict:
-    """One 26-byte SCOPE_SAMPLE_T, decoded with the 6-step field repurposing
-    (garuda_service.c streams these into the FOC-shaped struct):
+def decode_scope_sample(b: bytes, foc: bool = False) -> dict:
+    """One 26-byte SCOPE_SAMPLE_T.
+
+    foc=False — 6-step field repurposing (garuda_service.c streams these
+    into the FOC-shaped struct):
       ia/ib = phase A/B current ×1000 (mA) ; id = bus current ×1000 (mA)
       vd = Vbus raw ; vq = zcThreshold raw ; theta = sector(0-5)
       obs_x1 = bemf raw ; omega = eRPM/10 ; mod_index = duty% ×100
-      flags bit0=HWZC en, bit1=fault ; state = ESC state ; tick_lsb"""
+      flags bit0=HWZC en, bit1=fault ; state = ESC state ; tick_lsb
+
+    foc=True — AN1078 field map (garuda_service.c AN1078 scope block,
+    2026-07-09; NOTE two scalings differ from the V3 block on purpose):
+      ia/ib/id/iq ×1000 (mA) ; vd/vq ×100 (cV) ; theta ×10000 (rad, ±π)
+      obs_x1/x2 = observer BEMF Eα/Eβ ×1000 (mV — NOT V3's ×1e5 flux)
+      omega = elec rad/s (×1) ; mod_index ×10000 (0..1)
+      flags bit0=CL, bit1=fault, bits2-4 = AN mode
+    Legacy keys (bemf_raw/zc_thresh/ibus_A/sector/duty_pct) are aliased to
+    the closest FOC signal so the 6-step-shaped scope plot stays useful:
+      BEMF curve→Eα [V], ZC-thresh curve→Eβ [V], Ibus curve→iq [A],
+      sector curve→theta [rad], duty→mod [%]."""
     (ia, ib, idc, iq, vd, vq, theta, ox1, ox2,
      omega, mod, flags, state, tick) = struct.unpack("<hhhhhhhhhhhBBH", b[:26])
+    if foc:
+        ea_v, eb_v = ox1 / 1000.0, ox2 / 1000.0
+        theta_rad = theta / 10000.0
+        return {
+            "ia_A": ia / 1000.0, "ib_A": ib / 1000.0,
+            "id_A": idc / 1000.0, "iq_A": iq / 1000.0,
+            "vd_V": vd / 100.0, "vq_V": vq / 100.0,
+            "theta_rad": theta_rad,
+            "bemf_a_V": ea_v, "bemf_b_V": eb_v,
+            "omega_rads": float(omega),
+            "eRPM": int(omega * 9.5493),      # elec rad/s → elec RPM
+            "mod_pct": mod / 100.0,
+            "cl": bool(flags & 0x01), "fault": bool(flags & 0x02),
+            "an_mode": (flags >> 2) & 0x07,
+            "state": state, "state_name": P.STATE_NAMES.get(state, f"?{state}"),
+            "tick": tick,
+            # legacy aliases → existing plot curves stay meaningful
+            "ibus_A": iq / 1000.0, "bemf_raw": ea_v, "zc_thresh": eb_v,
+            "sector": theta_rad, "duty_pct": mod / 100.0,
+            "vbus_raw": vd,
+        }
     return {
         "ia_A": ia / 1000.0, "ib_A": ib / 1000.0, "ibus_A": idc / 1000.0,
         "vbus_raw": vd, "zc_thresh": vq, "sector": theta, "bemf_raw": ox1,
@@ -177,6 +211,7 @@ def decode_snapshot(p: bytes, t: float = 0.0) -> dict:
     hwzc_reject = struct.unpack_from("<I", p, 170)[0] if n >= 174 else 0
 
     ia_pos = ia_neg = ib_pos = ib_neg = 0.0
+    _ia = _ib = 0
     if n >= 198:
         _ia, _ib, ia_max, ia_min, ib_max, ib_min = struct.unpack_from("<HHHHHH", p, 174)
         ia_pos, ia_neg = _adc_to_amp(ia_max), _adc_to_amp(ia_min)
@@ -208,6 +243,18 @@ def decode_snapshot(p: bytes, t: float = 0.0) -> dict:
         if _fmin != 0xFFFF:
             fall_off_min, fall_off_max = _fmin, _fmax
 
+    # 2026-07-14: real 3rd-phase current (Iw, ATA CSA, best-2-of-3), real DC-bus
+    # current (Ibus, ATA CSA), and NTC temperature. Compact int16 centi-amps +
+    # raw NTC counts appended at offset 248 (snapshot grew 248→254B). Only
+    # populated in the AN1078 FOC build; older/other builds stop before 254.
+    foc_iw_A = foc_ibus_A = temp_c = None
+    temp_raw = 0
+    if n >= 254:
+        iw_ca, ibus_ca, temp_raw = struct.unpack_from("<hhH", p, 248)
+        foc_iw_A = iw_ca / 100.0
+        foc_ibus_A = ibus_ca / 100.0
+        temp_c = P.ntc_counts_to_c(temp_raw)
+
     vbus_v = vbus_raw * P.VBUS_SCALE_V
     # Instantaneous bus current: valley-sampled, so it lands wherever the bus
     # happens to be during freewheel — UNRELIABLE (gives a phantom ~-20A at idle
@@ -229,10 +276,76 @@ def decode_snapshot(p: bytes, t: float = 0.0) -> dict:
     else:
         erpm = 0
 
+    # FOC telemetry floats (production snapshot; offsets mirror the React decoder
+    # gui/src/protocol/decode.ts). The AN1078 firmware ships these in every frame
+    # (gsp_snapshot.c:154-176) but this Qt decoder never surfaced them — so the
+    # console "Ia/Ibus" columns read the dead 6-step phase-window (compiled OUT in
+    # FOC, garuda_service.c:1382) while the REAL FOC currents sat unread. 2026-07-09.
+    #   idMeas  — d-axis current; id_ref=0 so ~0 when angle is right, swings when the
+    #             observer angle slips under load (live angle-error proxy → H3).
+    #   iqMeas  — measured torque current (what the current loop actually delivers).
+    #   spdInt  — speed-PI integrator ≈ iq demand (iq_ref proxy; H2 vs H4).
+    #   modIdx  — modulation |v|/vmax (voltage saturation → H1).
+    #   obsConf — observer BEMF confidence bemf_meas/(λ·ω) (lock quality → H3).
+    def _focf(off):
+        return struct.unpack_from("<f", p, off)[0] if n >= off + 4 else 0.0
+    foc_id_meas   = _focf(68)
+    foc_iq_meas   = _focf(72)
+    foc_omega     = _focf(80)
+
+    # High-speed eRPM resolution fix (2026-07-14). In FOC the firmware synthesizes
+    # step_period = (PWMFREQ*10)/erpm as a uint16 (gsp_snapshot.c), so the host's
+    # erpm = 450000/step_period quantizes hard at speed: step_period 8→7→6 gives
+    # ONLY 56250 / 64286 / 75000 — a motor accelerating 56k→75k reads a frozen
+    # "64285". focOmega (offset 80) is the observer's continuous elec rad/s at full
+    # float resolution, so derive eRPM straight from it when FOC is live. 9.5493 =
+    # 60/(2π): elec rad/s → electrical RPM. Bypasses the integer round-trip entirely.
+    if abs(foc_omega) > 1.0:
+        erpm = int(abs(foc_omega) * 9.54929659)
+    foc_vd        = _focf(100)
+    foc_vq        = _focf(104)
+    foc_lambda    = _focf(116)   # AN1078: thetaError-at-handoff (bleeds → 0 in CL)
+    foc_spd_integ = _focf(132)
+    foc_mod_index = _focf(136)
+    foc_obs_conf  = _focf(140)
+    foc_ia        = _focf(88)    # phase A current, A (offset-subtracted)
+    foc_ib        = _focf(92)
+    # ADC offsets measured by the AN1078 boot calibration — RAW counts.
+    # Healthy OA+UREF chain sits at ~2048 (1.65 V bias); ~0 or ~4095 means
+    # the op-amp/UREF path is dead and every "current" downstream is fiction.
+    foc_off_ia = foc_off_ib = 0
+    foc_sub = 0
+    if n >= 150:
+        foc_sub = p[144]
+        foc_off_ia, foc_off_ib = struct.unpack_from("<HH", p, 146)
+
     return {
         "t": t,
         "state": state, "state_name": P.STATE_NAMES.get(state, f"?{state}"),
         "fault": fault, "fault_name": P.FAULT_NAMES.get(fault, f"?{fault}"),
+        "focIdMeas": foc_id_meas, "focIqMeas": foc_iq_meas, "focOmega": foc_omega,
+        "focVd": foc_vd, "focVq": foc_vq, "focLambdaEst": foc_lambda,
+        "focPidSpdInteg": foc_spd_integ, "focModIndex": foc_mod_index,
+        "focObsConfidence": foc_obs_conf,
+        "focIa": foc_ia, "focIb": foc_ib,
+        # 2026-07-14 real ATA-CSA measurements + NTC temp (AN1078 build, ≥254B):
+        "focIw_A": foc_iw_A, "focIbus_A": foc_ibus_A,
+        "tempC": temp_c, "tempRaw": temp_raw,
+        # AN1078 bring-up probes (2026-07-10 firmware): focSubState carries
+        # mode|runMotor<<6|cal_done<<7; focObsGain slot = startupLock;
+        # focLambdaEst slot = AN_MotorStart call count.
+        "anMode": foc_sub & 0x0F, "anRun": (foc_sub >> 6) & 1,
+        "anCal": (foc_sub >> 7) & 1,
+        "anLock": _focf(120), "anStarts": foc_lambda,
+        # ISR/trigger liveness probes (2026-07-10 fw, main-loop-read = live):
+        "isrCount": _focf(150), "isrFlags": int(_focf(154)),
+        "pgAlive": _focf(158), "bootRcon": int(_focf(162)),
+        # PWM ground truth (2026-07-10 fw): PG1DC>>4 and override nibble
+        # (OVRENH<<3|OVRENL<<2|OVRDAT; 0x0 = overrides released, full PWM)
+        "pg1dc16": struct.unpack_from("<H", p, 166)[0] if n >= 170 else 0,
+        "ovState": p[168] if n >= 170 else 0,
+        "focOffsetIa": foc_off_ia, "focOffsetIb": foc_off_ib,
+        "ia_raw": _ia, "ib_raw": _ib,
         "throttle": throttle, "duty": duty,
         "vbus_V": vbus_v, "ibus_A": ibus_a, "ibus_win_A": ibus_win, "eRPM": erpm,
         "bemf_raw": bemf_raw, "zc_thresh": zc_thresh, "step_period": step_period,
