@@ -9,6 +9,17 @@ pyqtgraph: telemetry, scope, ZC lab, params, auto-recorded sessions), the
 serial **broker** (GUI + MCP + analyzers share one board), the **MCP server**,
 and rule-based analyzers.
 
+## Documentation
+
+- **[USER_MANUAL.md](USER_MANUAL.md)** — using the desktop GUI: safety,
+  install, every tab, console commands, files written, troubleshooting.
+- **[CLAUDE.md](CLAUDE.md)** — for developers and AI assistants: layout,
+  verification, protocol rules, packaging constraints, web-GUI parity table.
+
+This tool is developed on branch **`ak512-port`**. `main` carries a copy of this
+folder synced from it (last synced 2026-11-18); if the two differ, `ak512-port`
+is newer.
+
 ## Install (Linux / Windows / macOS)
 
 ```bash

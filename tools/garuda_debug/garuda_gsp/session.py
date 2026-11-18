@@ -21,6 +21,9 @@ SCHEMA_VERSION = 1
 # Stable column order for telemetry.csv (extra keys appended deterministically).
 CORE_COLS = [
     "t", "state_name", "fault_name", "throttle", "duty", "vbus_V", "ibus_A",
+    # 2026-07-14 real ATA-CSA measurements (AN1078 build): 3rd-phase Iw, DC-bus
+    # Ibus, NTC board temp (°C + raw counts).
+    "focIw_A", "focIbus_A", "tempC", "tempRaw",
     "eRPM", "good_zc", "synced", "hwzc_zc", "hwzc_miss", "hwzc_reject",
     "ia_pk_mag", "ib_pk_mag", "ibus_pk_mag", "step_period", "uptime",
     "spi_en", "spi_target", "spi_error", "spi_output", "spi_integ",

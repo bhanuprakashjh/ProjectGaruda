@@ -416,6 +416,23 @@ export const PARAM_NAMES: Record<number, string> = {
   0x91: 'AN1078 Theta Offset K [an1078ThetaKE7]',
   0x92: 'AN1078 SMC Kslide [an1078KslideMv]',
   0x93: 'AN1078 FW Max |Id| [an1078IdFwMaxDecia]',
+
+  // MCLV high-speed sensorless trapezoidal firmware (gsp_ak.c) — IDs 0xA0+
+  // Only listed by that firmware, so these never collide with the AK set.
+  0xA0: 'Control Loop Mode 1=Spd 2=Cur 3=Duty [controlLoop]',
+  0xA1: 'Max Speed [motorMaxSpeedRpm]',
+  0xA2: 'Speed Ramp Rate [speedRampRpmPerS]',
+  0xA3: 'Rotor Lock Time [rotorLockTimeMs]',
+  0xA4: 'Rotor Lock Current [rotorLockCurrentMa]',
+  0xA5: 'Startup Current [startupCurrentMa]',
+  0xA6: 'Speed Loop Kp [speedPiKpMicro]',
+  0xA7: 'Speed Loop Ki [speedPiKiMicro]',
+  0xA8: 'Current Loop Kp [currentPiKpMicro]',
+  0xA9: 'Current Loop Ki [currentPiKiMicro]',
+  0xAA: 'CL Blanking [clBlankingPwmCycles]',
+  0xAB: 'Startup Blanking [olBlankingPwmCycles]',
+  0xAC: 'Direction [directionCmd]',
+  0xAD: 'Pole Pairs [polePairs]',
 };
 
 export const PARAM_UNITS: Record<number, string> = {
@@ -425,6 +442,10 @@ export const PARAM_UNITS: Record<number, string> = {
   0x53: 'eRPM', 0x56: '%', 0x57: '%',
   0x42: 'mA', 0x41: 'mA', 0x58: 'mA', 0x59: 'mA', 0x5A: 'mA',
   0x64: '%', 0x65: 'counts', 0x66: 'count', 0x67: 'count',
+  // High-speed trapezoidal firmware (0xA0+)
+  0xA0: 'mode', 0xA1: 'RPM', 0xA2: 'RPM/s', 0xA3: 'ms', 0xA4: 'mA',
+  0xA5: 'mA', 0xA6: 'µ', 0xA7: 'µ', 0xA8: 'µ', 0xA9: 'µ',
+  0xAA: 'PWM cyc', 0xAB: 'PWM cyc', 0xAC: '0/1', 0xAD: 'pp',
   0x60: '%/ms', 0x61: '%/ms', 0x62: 'ms', 0x63: '\u00f7',
   0x68: 'ADC', 0x69: 'ADC',
   0x6A: 'ms', 0x6B: 'count',
@@ -445,6 +466,14 @@ export const PARAM_UNITS: Record<number, string> = {
 };
 
 export const PARAM_TOOLTIPS: Record<number, string> = {
+  // High-speed trapezoidal firmware (0xA0+)
+  0xA0: 'IDLE-only. 1=closed-loop speed PI, 2=closed-loop current PI, 3=open-loop duty (pot/slider maps straight to PWM duty).',
+  0xA1: 'IDLE-only. Mechanical RPM at full throttle; also scales the speed setpoint mapping.',
+  0xA2: 'Live. Speed reference slew in RPM per second.',
+  0xA6: 'Live while running - tune the speed loop on the bench.',
+  0xA7: 'Live while running - tune the speed loop on the bench.',
+  0xAA: 'Live. Post-commutation blanking in PWM cycles applied in closed loop.',
+  0xAC: 'IDLE-only. Motor spin direction (also on board button 2).',
   0x15: 'Speed at which open-loop ramp hands off to closed-loop BEMF tracking. Higher = more reliable lock, but slower startup.',
   0x16: 'How fast the motor accelerates during open-loop ramp. Lower = gentler start for heavy props.',
   0x17: 'Maximum duty cycle allowed during open-loop ramp. Limits startup current.',

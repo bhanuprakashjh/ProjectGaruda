@@ -26,8 +26,12 @@ def summarize(session) -> dict:
     # commutation-health: reject rate over the run
     zc0, zc1 = s[0], s[-1]
     span = max(zc1.get("t", 0) - zc0.get("t", 0), 1e-3)
-    acc = max(0, zc1.get("hwzc_zc", 0) - zc0.get("hwzc_zc", 0))
-    rej = max(0, zc1.get("hwzc_reject", 0) - zc0.get("hwzc_reject", 0))
+    # pairwise positive deltas: endpoint subtraction reads 0 whenever the
+    # firmware re-inits a counter mid-run (stop/restart) -> false rej=0%
+    acc = sum(max(0, (b.get("hwzc_zc", 0) or 0) - (a.get("hwzc_zc", 0) or 0))
+              for a, b in zip(s, s[1:]))
+    rej = sum(max(0, (b.get("hwzc_reject", 0) or 0) - (a.get("hwzc_reject", 0) or 0))
+              for a, b in zip(s, s[1:]))
     rej_pct = min(100.0, 100.0 * rej / max(acc + rej, 1))   # can't exceed 100%
 
     per_state = {}
@@ -54,11 +58,48 @@ def summarize(session) -> dict:
         "peak_Ibus_A": round(peak("ibus_pk_mag"), 1),
         "hwzc_accept": acc, "hwzc_reject": rej,
         "hwzc_reject_pct": round(rej_pct, 1),
+        "cap_pct": _cap_pct(s),
+        "min_cap_1s": _min_cap_windowed(s),
         "per_state": {k: {"peak_eRPM": v["peak_eRPM"],
                           "peak_Ia": round(v["peak_Ia"], 1),
                           "dur_s": round(v["t1"] - v["t0"], 2)}
                       for k, v in per_state.items()},
     }
+
+
+def _cap_pct(samples) -> float:
+    """Run-level LOCK quality: accepted captures / commutations expected from
+    eRPM (sectors/s = eRPM/10). ~100 locked, ~40 towel-drag worst case,
+    ~1 phantom. This — not reject% — says whether the PLL has signal."""
+    acc = exp = 0.0
+    for a, b in zip(samples, samples[1:]):
+        dt = max(0.0, (b.get("t", 0) or 0) - (a.get("t", 0) or 0))
+        if dt <= 0 or b.get("state_name") != "CL":
+            continue
+        acc += max(0, (b.get("hwzc_zc", 0) or 0) - (a.get("hwzc_zc", 0) or 0))
+        exp += (b.get("eRPM", 0) or 0) / 10.0 * dt
+    return round(min(100.0, 100.0 * acc / exp), 1) if exp > 50 else 100.0
+
+
+def _min_cap_windowed(samples, win_s=1.0) -> float:
+    """Worst 1s capture ratio in CL — a healthy run never dips far below 100;
+    a phantom-lock episode shows ~0 here even if the run average looks fine."""
+    worst, i = 100.0, 0
+    n = len(samples)
+    while i < n:
+        j = i
+        acc = exp = 0.0
+        while j + 1 < n and (samples[j+1].get("t",0) - samples[i].get("t",0)) <= win_s:
+            a, b = samples[j], samples[j+1]
+            dt = max(0.0, (b.get("t",0) or 0) - (a.get("t",0) or 0))
+            if dt > 0 and b.get("state_name") == "CL":
+                acc += max(0, (b.get("hwzc_zc",0) or 0) - (a.get("hwzc_zc",0) or 0))
+                exp += (b.get("eRPM",0) or 0) / 10.0 * dt
+            j += 1
+        if exp > 100:
+            worst = min(worst, 100.0 * acc / exp)
+        i = max(i + 1, j)
+    return round(max(0.0, worst), 1)
 
 
 def _params(session):
@@ -122,12 +163,80 @@ def local_diagnose(session) -> dict:
     # in-CL behaviour: regen, oscillation, intermittent lock (from raw samples)
     import statistics
     cl = [x for x in session.samples if x.get("state_name") == "CL"]
+    # steady CL = skip the first 1.5s after CL entry: the handoff transient is
+    # all same-direction eRPM slope and pollutes sigma/mu + alternation stats
+    cl_steady = cl
+    if cl:
+        t_entry = cl[0].get("t", 0)
+        cl_steady = [x for x in cl if x.get("t", 0) - t_entry > 1.5]
     if len(cl) >= 10:
         # windowed bus current — NOT the valley-sampled ibus_A (phantom -20A artifact)
         ibus_mean = sum(x.get("ibus_win_A", x.get("ibus_A", 0)) for x in cl) / len(cl)
-        erpms = [x.get("eRPM", 0) for x in cl]
+        src = cl_steady if len(cl_steady) >= 20 else cl
+        erpms = [x.get("eRPM", 0) for x in src]
         emean = sum(erpms) / len(erpms)
-        estd = statistics.pstdev(erpms) if len(erpms) > 1 else 0
+        # Two-band lock-stability analysis:
+        #  FAST band = residual vs 5-frame moving median -> quantization dither
+        #  SLOW band = smoothed eRPM variation WITHIN steady-throttle segments
+        #    -> genuine hunting. Throttle steadiness (not frequency) is what
+        #    separates hunting from the pilot sweeping the pot: raw sigma/mu
+        #    read 38% on a pot-exercise run that was perfectly locked.
+        if len(erpms) >= 7:
+            med5 = [statistics.median(erpms[max(0, i-2):i+3]) for i in range(len(erpms))]
+            resid = [e - m for e, m in zip(erpms, med5)]
+            estd = statistics.pstdev(resid)
+        else:
+            med5 = erpms
+            resid = erpms
+            estd = statistics.pstdev(erpms) if len(erpms) > 1 else 0
+        # steady-throttle segments (>=80 frames ~3s): throttle within +/-5% (or
+        # 20 counts) of its 21-frame moving median
+        hunt_metric, hunt_seg = 0.0, None
+        thr = [x.get("throttle", 0) for x in src]
+        if len(thr) >= 100:
+            # steadiness = small RANGE over the 21-frame window. (A window
+            # MEDIAN test fails on clean steps: the current sample is always
+            # in the majority half, so |thr-median| stays ~0 through the step.)
+            def _rng(i):
+                w = thr[max(0, i-10):i+11]
+                return max(w) - min(w)
+            steady = [_rng(i) <= max(40, 0.07 * max(thr[i], 1))
+                      for i in range(len(thr))]
+            i = 0
+            while i < len(steady):
+                if steady[i]:
+                    j = i
+                    while j < len(steady) and steady[j]:
+                        j += 1
+                    if j - i >= 80:
+                        # 5-frame MEAN removes alternating dither (the median of
+                        # a perfect alternation alternates too); mean of a zero-
+                        # mean fast component -> ~0, slow hunting passes through
+                        raw = erpms[i:j]
+                        seg = [sum(raw[max(0, k-2):k+3]) / len(raw[max(0, k-2):k+3])
+                               for k in range(len(raw))]
+                        smean = sum(seg) / len(seg)
+                        if smean > 500:
+                            sm = statistics.pstdev(seg) / smean
+                            if sm > hunt_metric:
+                                hunt_metric, hunt_seg = sm, (i, j)
+                    i = j
+                else:
+                    i += 1
+        if hunt_metric > 0.04:
+            capp0 = d.get("cap_pct", 100.0)
+            add("eRPM oscillation at STEADY throttle — genuine lock hunting"
+                + (" (captures healthy — estimator-level, not detection-level)"
+                   if capp0 >= 95 else ""),
+                "low" if capp0 >= 95 else "medium",
+                f"smoothed eRPM varies {100*hunt_metric:.1f}% within a steady-throttle "
+                f"segment of {hunt_seg[1]-hunt_seg[0]} frames, cap={capp0:.0f}%",
+                [{"param": "zcBlankingPercent", "current": str(p.get("zcBlankingPercent")),
+                  "suggested": "review (too-long blank eats late captures at this speed)",
+                  "why": "hunting usually means asymmetric/late captures feeding the sector PI"},
+                 {"param": "zcAdcDeadband", "current": str(p.get("zcAdcDeadband")),
+                  "suggested": "review vs BEMF amplitude at this eRPM",
+                  "why": "deadband comparable to BEMF swing delays crossings unevenly"}])
         if ibus_mean < -10:
             add("Sustained regen in CL — commutation mistimed at this speed/duty (BEMF≈applied balance zone)",
                 "high", f"mean Ibus in CL = {ibus_mean:.1f}A (heavy regen / shunt near rail)",
@@ -135,16 +244,114 @@ def local_diagnose(session) -> dict:
                   "suggested": "review advance at this eRPM band",
                   "why": "when BEMF≈applied V, a small late-commutation error flips motoring→regen"}])
         if emean > 0 and estd / emean > 0.03:
-            add("eRPM oscillation — marginal sensorless lock",
-                "medium", f"eRPM σ/μ = {100*estd/emean:.0f}% (μ={emean:,.0f})",
-                [{"param": "zcFilterThreshold", "current": str(p.get("zcFilterThreshold")),
-                  "suggested": "raise slightly", "why": "period estimate dithering between two values"}])
+            # Distinguish QUANTIZATION DITHER (telemetry alternates between two
+            # period readings every frame — benign, cap%≈100) from a real slow
+            # oscillation (runs of same-sign eRPM slope — lock actually hunting).
+            seq = resid if len(erpms) >= 7 else erpms
+            diffs = [b - a for a, b in zip(seq, seq[1:]) if b != a]
+            flips = sum(1 for a, b in zip(diffs, diffs[1:]) if (a < 0) != (b < 0))
+            alt_frac = flips / max(1, len(diffs) - 1)
+            capp = d.get("cap_pct", 100.0)
+            if alt_frac > 0.6 and capp > 90:
+                add("eRPM reading alternates between two values — period quantization "
+                    "dither in the 10Hz telemetry, NOT a lock problem",
+                    "low", f"eRPM jitter (vs moving median) = {100*estd/emean:.1f}% with {100*alt_frac:.0f}% "
+                    f"sign-flips (pure alternation) and cap={capp:.0f}% (locked)",
+                    [])
+            else:
+                add("eRPM oscillation — lock hunting (slow same-direction excursions)"
+                    + (" — captures healthy, likely benign estimator jitter"
+                       if capp >= 95 else ""),
+                    "low" if capp >= 95 else "medium", f"eRPM jitter (vs moving median) = {100*estd/emean:.1f}% (μ={emean:,.0f}), "
+                    f"alternation {100*alt_frac:.0f}%, cap={capp:.0f}%",
+                    [{"param": "zcBlankingPercent", "current": str(p.get("zcBlankingPercent")),
+                      "suggested": "review (too-long blank eats late captures at this speed)",
+                      "why": "hunting usually means asymmetric/late captures feeding the sector PI"},
+                     {"param": "zcAdcDeadband", "current": str(p.get("zcAdcDeadband")),
+                      "suggested": "review vs BEMF amplitude at this eRPM",
+                      "why": "deadband comparable to BEMF swing delays crossings unevenly"}])
         notsync = sum(1 for x in cl if not x.get("synced", 1))
         if notsync > 0.3 * len(cl):
             add("BEMF lock intermittent in CL",
                 "medium", f"{100*notsync/len(cl):.0f}% of CL samples report not-synced",
                 [{"param": "hwzcCrossoverErpm", "current": str(p.get("hwzcCrossoverErpm")),
                   "suggested": "review crossover / blanking", "why": "sync flag dropping during CL"}])
+
+    # ── campaign taxonomy (U3 2026-07, bench-proven signatures) ──
+    if len(cl) >= 10:
+        capp = d.get("cap_pct", 100.0)
+        min_cap = d.get("min_cap_1s", 100.0)
+        # phantom lock: PLL blind but free-running — eRPM steady, sustained
+        # negative bus current, captures dead. Hid below every fault threshold
+        # for 1.7s+ on the bench until the capture-rate watchdog was added.
+        frozen_regen = [x for x in cl
+                        if x.get("ibus_win_A", x.get("ibus_A", 0)) < -2.0]
+        if min_cap < 10 and len(frozen_regen) >= 5:
+            add("PHANTOM LOCK — commutating against a slower rotor (captures dead, "
+                "current circulating). The firmware capture-rate watchdog should coast-"
+                "restart this within 150ms; if the episode lasted longer, check "
+                "zcDesyncCount and firmware version.",
+                "high", f"worst 1s capture ratio {min_cap:.0f}%, "
+                f"{len(frozen_regen)} frames with Ibus < -2A",
+                [])
+        # throttle-authority latch: pot low but duty pinned high
+        latch = [x for x in cl if x.get("throttle", 4095) < 200
+                 and x.get("duty", 0) >= 90]
+        if len(latch) >= 10:
+            add("THROTTLE AUTHORITY LOST — duty pinned >=90% with pot at zero. "
+                "Duty-floor latch class (spindown floor model exceeding sustaining "
+                "duty). Requires firmware with the floor hard-cap fix (2026-07-04).",
+                "high", f"{len(latch)} frames thr<200 with duty>=90%", [])
+        # ADC current clip: true peak unknown, slam/chop territory
+        clip = sum(1 for x in cl if x.get("ia_pk_mag", 0) >= 21.5)
+        if clip:
+            add("Phase current CLIPPED at ADC full scale (~22A) — true peak unknown; "
+                "chop-slip / accel-slam territory",
+                "medium", f"{clip} frames at >=21.5A (93 counts/A, 2048-count range)",
+                [{"param": "ocLimitMa", "current": str(p.get("ocLimitMa")),
+                  "suggested": "verify limiter engage (18A) vs these events",
+                  "why": "sustained clipping means events are outrunning the soft limiter"}])
+        # PSU foldback signature: UV with Vbus collapsing under positive load current
+        if "UV" in faults:
+            pre = [x for x in session.samples
+                   if x.get("vbus_V", 99) < 12.0
+                   and x.get("ibus_win_A", x.get("ibus_A", 0)) > 3.0]
+            if pre:
+                add("UV likely BENCH PSU current-limit foldback, not a board fault "
+                    "(bus collapsed while sourcing current)",
+                    "medium", f"{len(pre)} frames Vbus<12V with Ibus>3A before/at fault",
+                    [])
+
+    # sustained circulating current in a WINDOW (run-wide means dilute these:
+    # A2212 bench 2026-07-04 ran 5s at Ia~10.5A after handoff and 14s at
+    # Ia~8.5A full throttle - the old mean-based rule saw neither)
+    if len(cl) >= 20:
+        win, best = [], None
+        for x in cl:
+            win.append(x)
+            while win and x.get("t", 0) - win[0].get("t", 0) > 1.0:
+                win.pop(0)
+            if len(win) >= 8:
+                ia_m = sum(w.get("ia_pk_mag", 0) for w in win) / len(win)
+                th_m = sum(w.get("throttle", 0) for w in win) / len(win)
+                if best is None or ia_m > best[0]:
+                    best = (ia_m, th_m, win[0].get("t", 0), x.get("t", 0),
+                            sum(w.get("eRPM", 0) for w in win) / len(win))
+        if best and best[0] > 4.0:
+            ia_m, th_m, t0, t1, e_m = best
+            if th_m < 200:
+                add("HIGH CURRENT AT CLOSED-LOOP IDLE — stable but MISTIMED lock "
+                    "after handoff (offset commutation holds speed by brute current; "
+                    "typically snaps back on a throttle disturbance). Capture a burst "
+                    "scope in this state to see the BEMF-vs-threshold offset.",
+                    "high", f"~{ia_m:.1f}A phase for >=1s around t={t0:.1f}s at idle "
+                    f"throttle, eRPM~{e_m:,.0f}", [])
+            else:
+                add("Sustained circulating phase current — mistimed commutation or "
+                    "advance-induced field weakening at this operating point. A burst "
+                    "scope capture (BEMF vs threshold) distinguishes the two.",
+                    "medium", f"~{ia_m:.1f}A phase for >=1s around t={t0:.1f}s, "
+                    f"eRPM~{e_m:,.0f}, thr~{th_m:.0f}", [])
 
     # regen OV
     if "OV" in faults:
@@ -155,7 +362,9 @@ def local_diagnose(session) -> dict:
 
     sev = "critical" if faults else ("warning" if findings else "ok")
     summary = (f"{d.get('samples',0)} samples / {d.get('duration_s',0)}s, "
-               f"peak {d.get('peak_eRPM',0):,} eRPM, HWZC reject {rejp:.0f}%. "
+               f"peak {d.get('peak_eRPM',0):,} eRPM, "
+               f"lock cap={d.get('cap_pct',100):.0f}% (worst-1s {d.get('min_cap_1s',100):.0f}%), "
+               f"noise rej={rejp:.0f}%. "
                + ("Faults: " + ", ".join(faults) if faults else "No faults.")) \
               if not d.get("empty") else "No telemetry captured."
     return {"summary": summary, "severity": sev, "findings": findings,
@@ -170,14 +379,39 @@ The REAL open-loop startup torque knob is sineAlignModPct/sineRampModPct (sine a
 NOT the trap ALIGN_DUTY/RAMP_DUTY. Known fault→fix mappings:
 - Stuck ALIGN/OL_RAMP, no rotation, START_TO/MORPH_TO: torque starvation → raise sineRampModPct (scale ~∝ Rs).
 - Moves then desyncs / phantom eRPM in ramp: ramp too fast → lower rampAccelErpmPerS / rampTargetErpm.
-- Idle/low-speed OC_SW with high HWZC reject%: PWM-noise phantom ZC desync → raise zcBlankingPercent/zcAdcDeadband/zcFilterThreshold.
+- Idle/low-speed OC_SW with high HWZC reject%: PWM-noise phantom ZC desync → raise zcBlankingPercent/zcAdcDeadband (zcFilterThreshold is INERT in the HWZC engine).
 - OC during ALIGN/OL_RAMP: amplitude too high (low Rs) → lower sineAlign/RampModPct.
 - High-speed desync: BEMF filter phase lag → filter comp / PWM gate.
 - Regen OV on throttle-down → lower dutySlewDownPctPerMs / Vbus emergency hold.
 - maxClosedLoopErpm cap plateau → raise maxClosedLoopErpm.
 - Param outside descriptor range → stale EEPROM shadowing code (use FEATURE_PARAMS_FORCE_DEFAULTS or reset EEPROM).
 Enforce invariants: rampTarget>initial; maxCL>rampTarget; ocSwLimit<ocLimit<=ocFault; ocStartup>=ocLimit.
-Do NOT suggest dead-ends: raising rampTargetErpm past the OL-slip ceiling; in-loop I-smoothing below loop bandwidth."""
+Do NOT suggest dead-ends: raising rampTargetErpm past the OL-slip ceiling; in-loop I-smoothing below loop bandwidth.
+
+METRICS (U3 campaign 2026-07, bench-proven):
+- reject% counts NOISE events (comparator refires in PWM-OFF windows, ~200:1 vs accepts at
+  idle). It says NOTHING about lock quality: healthy idle, degraded lock, and a dead phantom
+  all print ~100%. Lock quality = cap% (accepted captures / commutations expected from eRPM):
+  ~100 locked, ~40 worst survivable (towel drag), ~1 phantom. Judge lock ONLY by cap%.
+- Current scale: 93 ADC counts/A (gain 24.95, 22A ADC full scale). Ia>=21.5A = clipped.
+FAILURE TAXONOMY (all bench-captured):
+- PHANTOM LOCK: eRPM frozen, sustained negative Ibus, cap~0. Self-defending (sparse false
+  accepts reset naive watchdogs). Firmware fix: capture-rate watchdog (accepts<25% of comms
+  for 150ms -> coast-restart).
+- DECEL CAPTURE STARVATION: fast pot-down -> BEMF diode-clamped during regen -> captures die
+  at the bottom. Mitigations: spindown BEMF duty floor (glide at equiv-3%) + watchdog.
+- DUTY-FLOOR LATCH: any measured-state duty floor whose model exceeds the sustaining duty
+  latches full throttle (pot dead). Floors must be hard-capped below ~94% duty.
+- CHOP-SLIP: SW OC limiter duty chop corrupts the BEMF window -> 60-degree slip. Fix: chop
+  gate rejects captures in chopped cycles.
+- DCM LESSON: ground-referenced OFF-window ZC detection fails prop-less/light load (freewheel
+  current decays -> all terminals float). Proper fix direction: software neutral from
+  same-instant 3-phase sampling (window/DCM independent).
+- PSU FOLDBACK: bench-supply current limit collapses Vbus under load -> UV that is NOT a
+  board fault (Vbus falls while Ibus positive).
+STARTUP (post 2026-07-04 consolidation): exactly two types via FEATURE_SINE_STARTUP:
+sine align->ramp->morph->CL, or classic align->forced ramp->direct CL. AM32/PLL/presync
+startups were REMOVED - do not reference them."""
 
 DIAGNOSIS_SCHEMA = {
     "type": "object",

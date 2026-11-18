@@ -20,7 +20,15 @@ Close and reopen PowerShell afterwards (so `uv` is on PATH).
 uv tool install --python 3.11 "garuda-debug[gui] @ git+https://github.com/bhanuprakashjh/ProjectGaruda#subdirectory=tools/garuda_debug"
 ```
 
-This fetches the latest code from GitHub and installs these commands:
+This fetches the repo's default branch (`main`), which holds a synced copy of
+the GUI. Development happens on branch `ak512-port`; to install the very
+latest, put `@ak512-port` after the repo name:
+
+```powershell
+uv tool install --python 3.11 "garuda-debug[gui] @ git+https://github.com/bhanuprakashjh/ProjectGaruda@ak512-port#subdirectory=tools/garuda_debug"
+```
+
+Either way it installs these commands:
 `garuda-gui`, `garuda-broker`, `garuda-gsp-info`, `garuda-gsp-record`, `garuda-mcp`.
 
 ## 3. Run

@@ -27,10 +27,12 @@ import pyqtgraph as pg
 from garuda_gsp import GspClient, GspError, Session, __version__ as GSP_VER
 from garuda_gsp.broker import connect_auto, ensure_broker
 from garuda_gsp import protocol as P
+from garuda_gsp import params_meta as PM
 from . import diagnose as DIAG
 from garuda_gsp import analyze as ANALYZE
 from . import wizard as WIZ
 from . import zcsim as ZCSIM
+from . import zcsim_falling as ZCFALL
 
 STATES = ["IDLE", "ARMED", "ALIGN", "OL_RAMP", "MORPH", "CL"]
 WINDOW_S = 20.0          # default rolling plot window
@@ -59,6 +61,17 @@ SIGNALS = [
     ("duty",     "Duty",     "#26c6da", 100,    False, lambda v: f"{v:.0f}%",  False),
     ("throttle", "Throttle", "#ffee58", 4096,   False, lambda v: f"{v:.0f}",   False),
     ("cpu",      "CPU load", "#f06292", 100,    False, lambda v: f"{v:.0f}%",  False),
+    # FOC channels — fed from the AN1078 snapshot fields; auto-enabled (and the
+    # dead 6-step channels auto-disabled) on first telemetry from a FOC build.
+    ("iqM",      "Iq meas",  "#ffa726", 25,     True,  lambda v: f"{v:+.1f}A", False),
+    ("idM",      "Id meas",  "#ef5350", 10,     True,  lambda v: f"{v:+.1f}A", False),
+    ("mod",      "Mod idx",  "#90caf9", 1,      False, lambda v: f"{v:.2f}",   False),
+    ("conf",     "Obs conf", "#80cbc4", 1,      False, lambda v: f"{v:.2f}",   False),
+    # 2026-07-14 real ATA-CSA measurements (AN1078 build): 3rd-phase Iw, DC-bus
+    # Ibus (real, not the valley phantom), NTC board temperature.
+    ("iw",       "Iw",       "#ffca28", 25,     True,  lambda v: f"{v:+.1f}A", False),
+    ("ibusR",    "Ibus",     "#ef5350", 30,     True,  lambda v: f"{v:+.1f}A", False),
+    ("temp",     "Temp",     "#ff7043", 120,    False, lambda v: f"{v:.0f}°C", False),
 ]
 
 # Params whose value implies a startup/standing current = (modPct or duty%) of Vbus
@@ -108,6 +121,11 @@ class SerialWorker(QtCore.QThread):
         self._run = True
         self._q = Queue()
         self._broker_proc = None
+        self._scope_cancel = False
+
+    def cancel_scope(self):
+        """Abort a pending scope wait (thread-safe flag)."""
+        self._scope_cancel = True
 
     def submit(self, action, **kw):
         """Thread-safe: enqueue an action for the worker to run on the port."""
@@ -127,25 +145,67 @@ class SerialWorker(QtCore.QThread):
                                              "name": kw.get("name", ""), "value": rb})
                 elif action == "refresh_params":
                     self.params_ready.emit(c.dump_params())
+                elif action == "flash_cmd":
+                    # save/defaults are stopped-only in firmware (WRONG_STATE
+                    # while running); surface the result on the console.
+                    if kw["cmd"] == "save":
+                        c.save_config()
+                        self.param_written.emit({"ok": True,
+                                                 "name": "(flash save)",
+                                                 "value": "params written to flash"})
+                    elif kw["cmd"] == "defaults":
+                        c.load_defaults()
+                        self.param_written.emit({"ok": True,
+                                                 "name": "(factory defaults)",
+                                                 "value": "restored (not saved)"})
                 elif action == "motor_cmd":
                     cmd = kw["cmd"]
                     if cmd == "start":
                         c.start_motor()
                     elif cmd == "stop":
+                        # Stop must reach IDLE from ANY state. stop_motor() is a
+                        # no-op in ESC_FAULT (firmware main.c:439), so clear the
+                        # fault first (harmless WRONG_STATE if nothing latched),
+                        # then stop. Mirrors what Start already does.
+                        try:
+                            c.clear_fault()
+                        except Exception:
+                            pass    # WRONG_STATE when nothing is latched
                         c.stop_motor()
                     elif cmd == "throttle":
                         c.set_throttle(int(kw["value"]))
+                    elif cmd == "src":
+                        c.set_throttle_src(int(kw["value"]))
+                    elif cmd == "clear_fault":
+                        try:
+                            c.clear_fault()
+                        except Exception:
+                            pass    # WRONG_STATE when nothing is latched
+                elif action == "ata_diag":
+                    d = c.ata_diag()
+                    self.param_written.emit({"ok": True, "name": "(ATA diag)",
+                                             "value": d})
                 elif action == "scope_capture":
-                    c.scope_arm(trig_mode=kw.get("mode", 0), pre_pct=kw.get("pre", 25))
-                    st, ready = {"state": 0}, False
-                    for _ in range(150):          # ~3s waiting for the trigger
+                    self._scope_cancel = False
+                    c.scope_arm(trig_mode=kw.get("mode", 0), pre_pct=kw.get("pre", 25),
+                                trig_ch=kw.get("trig_ch", 0), trig_edge=kw.get("trig_edge", 0),
+                                threshold=kw.get("threshold", 0))
+                    st, ready, cancelled = {"state": 0}, False, False
+                    polls = int(kw.get("wait_s", 30) * 20)   # 50ms poll
+                    for _ in range(polls):
+                        if self._scope_cancel:
+                            cancelled = True
+                            break
                         st = c.scope_status()
                         if st.get("state") == 3:  # READY
                             ready = True
                             break
-                        self.msleep(20)
-                    samples = c.scope_read_all() if ready else []
-                    self.scope_ready.emit({"ok": ready, "samples": samples, "status": st})
+                        self.msleep(50)
+                    samples = (c.scope_read_all(foc=kw.get("foc", False))
+                               if ready else [])
+                    self.scope_ready.emit({"ok": ready, "cancelled": cancelled,
+                                           "samples": samples, "status": st,
+                                           "foc": kw.get("foc", False)})
             except Exception as e:  # noqa
                 self.param_written.emit({"ok": False, "pid": kw.get("pid"),
                                          "name": kw.get("name", ""), "error": str(e)})
@@ -513,7 +573,8 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scope_frozen = False
         self.map_pts = deque(maxlen=2000)        # (eRPM, Ia_pk) operating-point scatter
         self.live = deque(maxlen=4000)           # rolling samples for on-demand diagnosis
-        self._prev_rej = None                    # (zc, reject) for windowed reject-rate
+        self._prev_rej = None                    # (zc, reject, t_mono) for windowed reject- and capture-rate
+        self._cap_hist = deque()                 # (t_mono, hwzc_zc, eRPM) rolling window for cap%
         self._console_paused = False
         self._was_running = False                 # gate console mirror to run-only
 
@@ -543,6 +604,12 @@ class MainWindow(QtWidgets.QMainWindow):
         self.btn_diag = QtWidgets.QPushButton("🔍 Diagnose")
         self.btn_diag.setEnabled(False)
         self.btn_diag.clicked.connect(self.run_diagnosis)
+        self.btn_report = QtWidgets.QPushButton("🤖 Copy report")
+        self.btn_report.setToolTip("Build a compact markdown debug report (fw, params in real "
+                                   "units, run stats, faults, console tail) — copied to the "
+                                   "clipboard and saved to sessions/, ready to paste to Claude")
+        self.btn_report.setEnabled(False)
+        self.btn_report.clicked.connect(self._copy_claude_report)
         self.lbl_id = QtWidgets.QLabel("not connected")
         self.lbl_id.setStyleSheet("color:#9e9e9e;")
         top.addWidget(QtWidgets.QLabel("Port:"))
@@ -551,6 +618,7 @@ class MainWindow(QtWidgets.QMainWindow):
         top.addWidget(self.btn_connect)
         top.addWidget(self.btn_record)
         top.addWidget(self.btn_diag)
+        top.addWidget(self.btn_report)
         top.addStretch(1)
         top.addWidget(self.lbl_id, 3)
         root.addLayout(top)
@@ -565,10 +633,10 @@ class MainWindow(QtWidgets.QMainWindow):
         sp.setContentsMargins(8, 3, 8, 3)
         lab = QtWidgets.QLabel("🧪 SIMULATOR")
         lab.setStyleSheet("color:#81c784;font-weight:bold;border:none;")
+        self.sim_lab = lab
         sp.addWidget(lab)
         self.sim_start = QtWidgets.QPushButton("▶ Start motor")
-        self.sim_start.clicked.connect(
-            lambda: self.worker and self.worker.submit("motor_cmd", cmd="start"))
+        self.sim_start.clicked.connect(self._motor_start)
         sp.addWidget(self.sim_start)
         self.sim_stop = QtWidgets.QPushButton("⏹ Stop")
         self.sim_stop.clicked.connect(
@@ -594,9 +662,18 @@ class MainWindow(QtWidgets.QMainWindow):
         self.tabs.addTab(self._build_monitor_tab(), "📈 Monitor")
         self.tabs.addTab(self._build_tune_tab(), "🎛 Tune")
         self.tabs.addTab(self._build_wizard_tab(), "🧙 Wizard")
-        self.tabs.addTab(self._build_scope_tab(), "🔬 ZC Explainer")
+        self.tabs.addTab(self._build_scope_tab(), "🔬 Burst Scope")
         self.tabs.addTab(self._build_sim_tab(), "🧪 ZC Lab")
         root.addWidget(self.tabs, 1)
+
+        # SAFETY: Esc = motor STOP from anywhere in the app (armed benches).
+        sc_stop = QtGui.QShortcut(QtGui.QKeySequence(QtCore.Qt.Key_Escape), self)
+        sc_stop.setContext(QtCore.Qt.ApplicationShortcut)
+        def _panic_stop():
+            if self.worker:
+                self.worker.submit("motor_cmd", cmd="stop")
+                self._log("⛔ Esc pressed — STOP sent")
+        sc_stop.activated.connect(_panic_stop)
 
         # console dock (shared across tabs)
         dock = QtWidgets.QDockWidget("Console", self)
@@ -613,8 +690,16 @@ class MainWindow(QtWidgets.QMainWindow):
         self.cmd.setPlaceholderText("command…  (try: help)")
         self.cmd.returnPressed.connect(self._on_command)
         self.cmd.setStyleSheet("font-family: monospace;")
+        clear_btn = QtWidgets.QPushButton("Clear")
+        clear_btn.setFixedWidth(52)
+        clear_btn.setToolTip("Clear the console (same as typing 'clear')")
+        clear_btn.clicked.connect(self.console.clear)
+        cmd_row = QtWidgets.QHBoxLayout()
+        cmd_row.setContentsMargins(0, 0, 0, 0)
+        cmd_row.addWidget(self.cmd, 1)
+        cmd_row.addWidget(clear_btn)
         cv.addWidget(self.console, 1)
-        cv.addWidget(self.cmd)
+        cv.addLayout(cmd_row)
         dock.setWidget(cw)
         self.addDockWidget(QtCore.Qt.BottomDockWidgetArea, dock)
         self._log("Garuda console. 'help' for commands. Telemetry streams here once connected.")
@@ -632,7 +717,9 @@ class MainWindow(QtWidgets.QMainWindow):
             "mechanism (rising always seen in PWM-ON; falling via the RC-filtered OFF-center "
             "sample, limited by samples-per-sector + RC lag) calibrated to the bench. "
             "'Deep-dive' runs the switching-level waveform; the SPICE engine is EXPERIMENTAL "
-            "(runs, but does not yet reproduce the masking from first principles).")
+            "(runs, but does not yet reproduce the masking from first principles). "
+            "'Falling-ZC sweep' opens the analytic study: true vs measured falling-ZC "
+            "position across eRPM, proving why falling is capped at 70k.")
         hint.setWordWrap(True); hint.setStyleSheet("color:#9e9e9e;font-size:11px;")
         v.addWidget(hint)
 
@@ -657,6 +744,14 @@ class MainWindow(QtWidgets.QMainWindow):
         b_spice = QtWidgets.QPushButton("⚡ Deep-dive")
         b_spice.clicked.connect(self._lab_waveform)
         c.addWidget(b_spice)
+        b_sweep = QtWidgets.QPushButton("📐 Falling-ZC sweep")
+        b_sweep.setToolTip(
+            "Analytic sweep (zcsim_falling): where the falling-sector ZC is truly "
+            "located vs where the OFF-center sampler measures it, across eRPM. Shows "
+            "why the firmware caps falling detection at 70k and proves the timer "
+            "extrapolation above it is unbiased.")
+        b_sweep.clicked.connect(self._lab_falling_sweep)
+        c.addWidget(b_sweep)
         v.addLayout(c)
 
         s = QtWidgets.QHBoxLayout()
@@ -859,6 +954,100 @@ class MainWindow(QtWidgets.QMainWindow):
         else:
             self._lab_waveform_lumped(erpm, duty)
 
+    FALLING_CAP_ERPM = 70000   # firmware HWZC_FALLING_SW_MAX_ERPM
+
+    def _lab_falling_sweep(self):
+        """Pop the analytic falling-ZC sweep (zcsim_falling) for the current motor."""
+        m = ZCSIM.MOTORS[self.lab_motor.currentText()]
+        emax = int(m["erpm_max"])
+        erpms = list(np.linspace(15000, emax, 34).astype(int))
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
+        try:
+            rows = ZCFALL.falling_walk(erpms, n_phase=12, vbus=float(m["vbus"]))
+        finally:
+            QtWidgets.QApplication.restoreOverrideCursor()
+
+        er = np.array([r["erpm"] for r in rows], float)
+        true_pm = np.array([r["true_pm"] for r in rows], float)
+        # where the sampler missed every alignment, det_pm is None -> mask out
+        det = np.array([r["det_pm"] if r["det_pm"] is not None else np.nan
+                        for r in rows], float)
+        std = np.array([r["det_std"] if r["det_std"] is not None else 0.0
+                        for r in rows], float)
+        miss = np.array([r["miss_pct"] for r in rows], float)
+        timer_err = np.abs(true_pm - 500.0)            # |timer extrapolation error|
+        meas_err = det - true_pm                        # what you'd feed the PI
+
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle("Falling-ZC sweep — %s" % self.lab_motor.currentText())
+        dlg.resize(900, 720)
+        dv = QtWidgets.QVBoxLayout(dlg)
+
+        glw = pg.GraphicsLayoutWidget()
+        capx = self.FALLING_CAP_ERPM
+
+        # --- plot 1: ZC position (permille of sector) ---
+        p1 = glw.addPlot(title="Falling ZC position vs eRPM  (permille of 60° sector)")
+        p1.showGrid(x=True, y=True, alpha=0.2); p1.addLegend(offset=(10, 10))
+        p1.setLabel('left', 'permille of sector'); p1.setLabel('bottom', 'eRPM')
+        # jitter band around the measured mean
+        hi = p1.plot(er, det + std, pen=None)
+        lo = p1.plot(er, det - std, pen=None)
+        band = pg.FillBetweenItem(hi, lo, brush=pg.mkBrush(255, 167, 38, 60))
+        p1.addItem(band)
+        p1.plot(er, det, pen=pg.mkPen("#ffa726", width=2),
+                name="measured (OFF-center) ± jitter")
+        p1.plot(er, true_pm, pen=pg.mkPen("#66bb6a", width=2, style=QtCore.Qt.DashLine),
+                name="true ZC (mid-sector)")
+        cap1 = pg.InfiniteLine(pos=capx, angle=90,
+                               pen=pg.mkPen("#ef5350", style=QtCore.Qt.DashLine))
+        p1.addItem(cap1)
+        cap_lbl = pg.TextItem("70k cap", color="#ef5350", anchor=(0, 1))
+        cap_lbl.setPos(capx, 1000)
+        p1.addItem(cap_lbl)
+
+        glw.nextRow()
+        # --- plot 2: error the loop sees — timer (used) vs measurement (rejected) ---
+        p2 = glw.addPlot(title="Commutation timing error: timer extrapolation (used) "
+                               "vs falling measurement (rejected >70k)")
+        p2.showGrid(x=True, y=True, alpha=0.2); p2.addLegend(offset=(10, 10))
+        p2.setLabel('left', 'error (permille)'); p2.setLabel('bottom', 'eRPM')
+        ehi = p2.plot(er, meas_err + std, pen=None)
+        elo = p2.plot(er, meas_err - std, pen=None)
+        p2.addItem(pg.FillBetweenItem(ehi, elo, brush=pg.mkBrush(255, 167, 38, 50)))
+        p2.plot(er, meas_err, pen=pg.mkPen("#ffa726", width=2),
+                name="if PI fed falling measurement ± jitter")
+        p2.plot(er, timer_err, pen=pg.mkPen("#42a5f5", width=2),
+                name="timer extrapolation (what firmware uses)")
+        cap2 = pg.InfiniteLine(pos=capx, angle=90,
+                               pen=pg.mkPen("#ef5350", style=QtCore.Qt.DashLine))
+        p2.addItem(cap2)
+        dv.addWidget(glw, 1)
+
+        # --- verdict text computed from the sweep ---
+        hi_mask = er >= capx
+        max_timer = float(np.nanmax(timer_err[hi_mask])) if hi_mask.any() else 0.0
+        max_jit = float(np.nanmax(std[hi_mask])) if hi_mask.any() else 0.0
+        max_miss = float(np.nanmax(miss[hi_mask])) if hi_mask.any() else 0.0
+        verdict = QtWidgets.QLabel(
+            "True falling ZC stays at %.0f–%.0f permille (mid-sector) across the whole "
+            "range — the 547→900 walk is pure RC-lag + PWM-quantization MEASUREMENT "
+            "error, not a rotor asymmetry.\n"
+            "Above the 70k cap: timer-extrapolation error ≤ %.0f permille (≤%.1f%% of a "
+            "sector) = UNBIASED, while re-using the falling measurement would inject up "
+            "to ±%.0f permille jitter and miss up to %.0f%% of sectors — exactly the "
+            "bench cap-raise failure. ⇒ >70k roughness is NOT falling timing (look at "
+            "comp-amp / bemfDevPeak saturation ~125k)."
+            % (np.nanmin(true_pm), np.nanmax(true_pm), max_timer, max_timer / 10.0,
+               max_jit, max_miss))
+        verdict.setWordWrap(True)
+        verdict.setStyleSheet("color:#cfd8dc;font-size:11px;background:#263238;"
+                              "padding:8px;border-radius:4px;")
+        dv.addWidget(verdict)
+
+        self._falling_sweep_dlg = dlg   # keep a ref so it isn't GC'd
+        dlg.show()
+
     def _build_monitor_tab(self):
         w = QtWidgets.QWidget()
         v = QtWidgets.QVBoxLayout(w)
@@ -876,6 +1065,13 @@ class MainWindow(QtWidgets.QMainWindow):
             "vbus": Readout("Vbus", " V"), "ibus": Readout("Ibus", " A"),
             "thr": Readout("Throttle"), "iapk": Readout("Ia peak", " A"),
             "hwzc": Readout("HWZC rej", "%"), "cpu": Readout("CPU", "%"),
+            # 6-step ZC sample-point sweep: watch bemf_raw vs zc_thresh live while
+            # stepping bemfSamplePhase (0x18) — a crossing (bemf ≥ thr) means the
+            # sample instant found the observable BEMF window.
+            "bemf": Readout("BEMF raw"), "zcthr": Readout("ZC thr"),
+            # 2026-07-14: real ATA-CSA measurements surfaced in the AN1078 build.
+            "iw": Readout("Iw", " A"), "ibusR": Readout("Ibus", " A"),
+            "temp": Readout("Temp", " °C"),
         }
         for x in self.ro.values():
             rr.addWidget(x)
@@ -1056,9 +1252,9 @@ class MainWindow(QtWidgets.QMainWindow):
         bar.addWidget(self.tune_filter, 1)
         v.addLayout(bar)
 
-        self.tbl = QtWidgets.QTableWidget(0, 5)
+        self.tbl = QtWidgets.QTableWidget(0, 6)
         self.tbl.setHorizontalHeaderLabels(
-            ["Parameter", "Value", "Min", "Max", "Group · est."])
+            ["Parameter", "Value", "≈ Physical", "Min", "Max", "Group · est."])
         self.tbl.horizontalHeader().setSectionResizeMode(0, QtWidgets.QHeaderView.Stretch)
         self.tbl.verticalHeader().setVisible(False)
         self.tbl.itemChanged.connect(self._on_tune_edit)
@@ -1146,6 +1342,29 @@ class MainWindow(QtWidgets.QMainWindow):
         self.scope_pre.setRange(0, 90); self.scope_pre.setValue(25)
         self.scope_pre.setSuffix(" % pre")
         bar.addWidget(self.scope_pre)
+        # Threshold-trigger controls (enabled only in Threshold mode)
+        self.scope_trig_ch = QtWidgets.QComboBox()
+        self.scope_trig_ch.addItem("Ibus", 2); self.scope_trig_ch.addItem("Ia", 0)
+        bar.addWidget(self.scope_trig_ch)
+        self.scope_trig_edge = QtWidgets.QComboBox()
+        self.scope_trig_edge.addItem("rising", 0); self.scope_trig_edge.addItem("falling", 1)
+        bar.addWidget(self.scope_trig_edge)
+        self.scope_thresh_a = QtWidgets.QDoubleSpinBox()
+        self.scope_thresh_a.setRange(0.5, 30.0); self.scope_thresh_a.setValue(12.0)
+        self.scope_thresh_a.setDecimals(1); self.scope_thresh_a.setSuffix(" A")
+        bar.addWidget(self.scope_thresh_a)
+        def _mode_changed(_=None):
+            th = self.scope_mode.currentText() == "Threshold"
+            for wdg in (self.scope_trig_ch, self.scope_trig_edge, self.scope_thresh_a):
+                wdg.setEnabled(th)
+        self.scope_mode.currentTextChanged.connect(_mode_changed)
+        _mode_changed()
+        self.scope_wait_s = QtWidgets.QSpinBox()
+        self.scope_wait_s.setRange(3, 300); self.scope_wait_s.setValue(30)
+        self.scope_wait_s.setSuffix(" s wait")
+        self.scope_wait_s.setToolTip("How long to stay armed waiting for the trigger "
+                                     "(arm, then do the bench move that provokes the event)")
+        bar.addWidget(self.scope_wait_s)
         self.btn_scope = QtWidgets.QPushButton("◉ Arm & Capture")
         self.btn_scope.clicked.connect(self._capture_scope)
         bar.addWidget(self.btn_scope)
@@ -1170,13 +1389,20 @@ class MainWindow(QtWidgets.QMainWindow):
         self.sc_p2 = glw.addPlot(row=1, col=0, title="Phase current Ia (A)")
         self.sc_p2.showGrid(x=True, y=True, alpha=0.2)
         self.sc_ia = self.sc_p2.plot(pen=pg.mkPen("#ffa726", width=2))
-        self.sc_p3 = glw.addPlot(row=2, col=0, title="Sector (0-5)")
+        self.sc_p2b = glw.addPlot(row=2, col=0, title="Ibus (A)  /  duty (%)")
+        self.sc_p2b.showGrid(x=True, y=True, alpha=0.2)
+        self.sc_p2b.addLegend(offset=(10, 10))
+        self.sc_ibus = self.sc_p2b.plot(pen=pg.mkPen("#ef5350", width=2), name="Ibus A")
+        self.sc_duty = self.sc_p2b.plot(pen=pg.mkPen("#9e9e9e", width=1,
+                                        style=QtCore.Qt.DashLine), name="duty %")
+        self.sc_p3 = glw.addPlot(row=3, col=0, title="Sector (0-5)")
         self.sc_p3.showGrid(x=True, y=True, alpha=0.2)
         self.sc_sec = self.sc_p3.plot(pen=pg.mkPen("#80cbc4", width=2))
-        self.sc_p2.setXLink(self.sc_p1); self.sc_p3.setXLink(self.sc_p1)
+        self.sc_p2.setXLink(self.sc_p1); self.sc_p2b.setXLink(self.sc_p1)
+        self.sc_p3.setXLink(self.sc_p1)
         self.sc_p3.setLabel("bottom", "time (µs)")
         self.sc_trig_lines = []
-        for pl in (self.sc_p1, self.sc_p2, self.sc_p3):
+        for pl in (self.sc_p1, self.sc_p2, self.sc_p2b, self.sc_p3):
             ln = pg.InfiniteLine(angle=90, movable=False,
                                  pen=pg.mkPen("#66bb6a", style=QtCore.Qt.DotLine))
             ln.setVisible(False); pl.addItem(ln); self.sc_trig_lines.append(ln)
@@ -1187,29 +1413,48 @@ class MainWindow(QtWidgets.QMainWindow):
     def _capture_scope(self):
         if not self.worker:
             self._log("scope: not connected"); return
+        if self.btn_scope.text().startswith("✕"):
+            self.worker.cancel_scope()
+            self.btn_scope.setText("◉ Arm & Capture")
+            return
         mode = P.SCOPE_TRIG[self.scope_mode.currentText()]
-        self.scope_status_lbl.setText("arming / waiting for trigger…")
-        self.btn_scope.setEnabled(False)
-        self._log(f"scope: arm ({self.scope_mode.currentText()}, {self.scope_pre.value()}% pre)")
-        self.worker.submit("scope_capture", mode=mode, pre=self.scope_pre.value())
+        thr = 0
+        if self.scope_mode.currentText() == "Threshold":
+            thr = int(self.scope_thresh_a.value() * 1000)   # firmware: mA on current chans
+        self.scope_status_lbl.setText("ARMED — waiting for trigger… (do the bench move now)")
+        self.btn_scope.setText("✕ Cancel wait")
+        self._log(f"scope: arm ({self.scope_mode.currentText()}, {self.scope_pre.value()}% pre"
+                  + (f", {self.scope_trig_ch.currentText()} {self.scope_trig_edge.currentText()}"
+                     f" {self.scope_thresh_a.value():.1f}A" if thr else "") + ")")
+        self.worker.submit("scope_capture", mode=mode, pre=self.scope_pre.value(),
+                           trig_ch=self.scope_trig_ch.currentData(),
+                           trig_edge=self.scope_trig_edge.currentData(),
+                           threshold=thr, wait_s=self.scope_wait_s.value(),
+                           foc=bool(self.info.get("isFoc")))
 
     def on_scope_ready(self, data):
         self.btn_scope.setEnabled(True)
+        self.btn_scope.setText("◉ Arm & Capture")
         if not data.get("ok"):
-            self.scope_status_lbl.setText("no trigger (timed out)")
-            self._log("scope: timed out waiting for trigger"); return
+            msg = "cancelled" if data.get("cancelled") else "no trigger (timed out)"
+            self.scope_status_lbl.setText(msg)
+            self._log(f"scope: {msg}"); return
         samples = data.get("samples", [])
         self._scope_samples = samples
         if not samples:
             self.scope_status_lbl.setText("empty buffer"); return
         n = len(samples)
-        dt_us = 1e6 / 24000.0
+        foc = bool(data.get("foc"))
+        # FOC (AN1078) ISR runs at 45 kHz; 6-step at 24 kHz.
+        dt_us = 1e6 / (45000.0 if foc else 24000.0)
         xs = [i * dt_us for i in range(n)]
         bemf = [s["bemf_raw"] for s in samples]
         zc = [s["zc_thresh"] for s in samples]
         self.sc_bemf.setData(xs, bemf)
         self.sc_zc.setData(xs, zc)
         self.sc_ia.setData(xs, [s["ia_A"] for s in samples])
+        self.sc_ibus.setData(xs, [s["ibus_A"] for s in samples])
+        self.sc_duty.setData(xs, [s["duty_pct"] for s in samples])
         self.sc_sec.setData(xs, [s["sector"] for s in samples])
         # zero-cross = where (BEMF - threshold) changes sign
         zx, zy = [], []
@@ -1222,17 +1467,28 @@ class MainWindow(QtWidgets.QMainWindow):
         trig = st.get("trig_idx", 0)
         for ln in self.sc_trig_lines:
             ln.setPos(trig * dt_us); ln.setVisible(True)
-        self.scope_status_lbl.setText(
-            f"{n} samples · {len(zx)} zero-crossings · trig idx {trig}")
+        if foc:
+            # Same curves, FOC signals (decode aliases): BEMF→Eα[V], dashed
+            # thresh→Eβ[V], Ia→ia[A], Ibus→iq[A], duty→mod[%], sector→θ[rad].
+            self.scope_status_lbl.setText(
+                f"{n} samples @45kHz · FOC map: Eα/Eβ[V] · Ia/Iq[A] · "
+                f"mod[%] · θ[rad] · trig idx {trig}")
+        else:
+            self.scope_status_lbl.setText(
+                f"{n} samples · {len(zx)} zero-crossings · trig idx {trig}")
         self._log(f"scope: {n} samples, {len(zx)} ZC, "
                   f"state={P.SCOPE_STATE_NAMES.get(st.get('state'), '?')}")
-        # signal checks on the burst (half-period 2×, current offset)
-        try:
-            for i, s in enumerate(samples):
-                s.setdefault("t_us", i * dt_us)
-            self._render_findings(ANALYZE.analyze_scope(samples))
-        except Exception as e:  # noqa
-            self._log(f"scope checks error: {e}")
+        # signal checks on the burst (half-period 2×, current offset).
+        # 6-STEP ONLY: the checks count sector dwell / commutation cadence;
+        # on FOC captures "sector" is the aliased θ ramp → spurious
+        # "eRPM ~2× measured" findings. Skip for FOC.
+        if not foc:
+            try:
+                for i, s in enumerate(samples):
+                    s.setdefault("t_us", i * dt_us)
+                self._render_findings(ANALYZE.analyze_scope(samples))
+            except Exception as e:  # noqa
+                self._log(f"scope checks error: {e}")
         # ML collect: append this window + operating point, then grab the next one
         if self._ml_file is not None:
             self._ml_record(samples)
@@ -1420,10 +1676,55 @@ class MainWindow(QtWidgets.QMainWindow):
             f"PWM={info['pwmFrequency']:,}Hz  cap={info['maxErpm']:,}")
         self.btn_record.setEnabled(True)
         self.btn_diag.setEnabled(True)
-        self.sim_panel.setVisible(bool(info.get("sim")))
+        self.btn_report.setEnabled(True)
+        is_sim = bool(info.get("sim"))
+        # GarudaESE has no pot — GSP is the real run-control path, so the
+        # start/stop/throttle bar doubles as the live run panel there.
+        self._live_run = (not is_sim) and info.get("board") == "GarudaESE"
+        self.sim_panel.setVisible(is_sim or self._live_run)
+        if self._live_run:
+            self.sim_lab.setText("⚡ LIVE RUN")
+            self.sim_lab.setStyleSheet(
+                "color:#ef9a9a;font-weight:bold;border:none;")
+            self.sim_panel.setStyleSheet(
+                "background:#2b1d1d;border:1px solid #c62828;border-radius:4px;")
+            # Silent reset: the source is still POT until Start switches it,
+            # so a slider-signal here would send SET_THROTTLE -> WRONG_STATE.
+            self.sim_pot.blockSignals(True)
+            self.sim_pot.setRange(0, 2000)      # GSP throttle units
+            self.sim_pot.setValue(0)
+            self.sim_pot.blockSignals(False)
+            self.sim_pot_lbl.setText("0")
+        elif is_sim:
+            self.sim_lab.setText("🧪 SIMULATOR")
+            self.sim_lab.setStyleSheet(
+                "color:#81c784;font-weight:bold;border:none;")
+            self.sim_panel.setStyleSheet(
+                "background:#1d2b1d;border:1px solid #2e7d32;border-radius:4px;")
+        extra = info.get("connectLine", "")
         self._log(f"connected: fw v{info['fwVersion']} build={bh} "
-                  f"profile={info['motorProfile']} {'FOC' if info.get('isFoc') else '6-step'}")
+                  f"profile={info['motorProfile']} {'FOC' if info.get('isFoc') else '6-step'}"
+                  f"{' ' + extra if extra else ''}")
         self.status.showMessage(f"Connected ({self.port}).")
+
+    def _motor_start(self):
+        if not self.worker:
+            return
+        if getattr(self, "_live_run", False):
+            # Proven bring-up sequence (same as the autotuner): clear fault,
+            # force GSP throttle source (boot default is the pot, and a
+            # floating pot blocks arming), zero throttle, then start. Raise
+            # the slider after the motor is spinning. Esc = panic stop.
+            self.sim_pot.blockSignals(True)
+            self.sim_pot.setValue(0)
+            self.sim_pot.blockSignals(False)
+            self.sim_pot_lbl.setText("0")
+            self.worker.submit("motor_cmd", cmd="clear_fault")
+            self.worker.submit("motor_cmd", cmd="src", value=1)   # GSP
+            self.worker.submit("motor_cmd", cmd="throttle", value=0)
+            self._log("LIVE RUN: fault cleared, throttle source=GSP, "
+                      "throttle=0 — starting")
+        self.worker.submit("motor_cmd", cmd="start")
 
     def _sim_pot_changed(self, v):
         self.sim_pot_lbl.setText(str(v))
@@ -1459,8 +1760,17 @@ class MainWindow(QtWidgets.QMainWindow):
 
         name_it = QtWidgets.QTableWidgetItem(name)
         name_it.setFlags(name_it.flags() & ~QtCore.Qt.ItemIsEditable)
+        desc = PM.describe(name)
+        if desc:
+            name_it.setToolTip(desc)
         val_it = QtWidgets.QTableWidgetItem("" if val is None else str(val))
         val_it.setTextAlignment(QtCore.Qt.AlignCenter)
+        phys_it = QtWidgets.QTableWidgetItem(PM.phys(name, val))
+        phys_it.setFlags(phys_it.flags() & ~QtCore.Qt.ItemIsEditable)
+        phys_it.setForeground(QtGui.QColor("#4fc3f7"))
+        phys_it.setTextAlignment(QtCore.Qt.AlignCenter)
+        if desc:
+            phys_it.setToolTip(desc)
         mn_it = QtWidgets.QTableWidgetItem("" if mn is None else str(mn))
         mn_it.setFlags(mn_it.flags() & ~QtCore.Qt.ItemIsEditable)
         mn_it.setForeground(QtGui.QColor("#777"))
@@ -1475,7 +1785,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if warn:
             val_it.setForeground(QtGui.QColor("#ef5350"))
             val_it.setToolTip(warn)
-        for col, it in enumerate((name_it, val_it, mn_it, mx_it, note_it)):
+        for col, it in enumerate((name_it, val_it, phys_it, mn_it, mx_it, note_it)):
             self.tbl.setItem(r, col, it)
 
     def _est_current(self, name, val):
@@ -1549,6 +1859,22 @@ class MainWindow(QtWidgets.QMainWindow):
         self._log(f"tune → {name} = {value} (pushing…)")
         self.worker.submit("set_param", pid=p.get("id"), name=name, value=value)
 
+    def _log_ata_diag(self, d):
+        gdus = "NORMAL" if (d["DSR1"] != 0xFF and d["DSR1"] & 0x04) else "NOT normal"
+        sirs = " ".join(f"SIR{i}={d[f'SIR{i}']:02X}" for i in range(1, 6))
+        faults = any(d[f"SIR{i}"] for i in range(1, 6))
+        self._log("ATA6847 gate driver:")
+        self._log(f"  DSR1={d['DSR1']:02X} ({gdus})  DSR2={d['DSR2']:02X}  "
+                  f"GOPMCR={d['GOPMCR']:02X}")
+        self._log(f"  {sirs}"
+                  + ("   ← LATCHED FAULT FLAGS (now cleared by this read)"
+                     if faults else "   (no latched faults)"))
+        self._log(f"  last GDU bring-up: result={d['lastGduResult']} "
+                  f"attempts={d['lastGduAttempts']} "
+                  f"dsr1={d['lastDsr1AtNormal']:02X}  ataReady={d['ataReady']}")
+        if d["DSR1"] == 0xFF:
+            self._log("  ⚠ DSR1=FF: SPI likely not answering (all-ones bus)")
+
     def on_param_written(self, res):
         if not res.get("ok"):
             self._log(f"tune ✗ {res.get('name')}: {res.get('error')}")
@@ -1556,6 +1882,9 @@ class MainWindow(QtWidgets.QMainWindow):
                 self.worker.submit("refresh_params")     # restore truth
             return
         name, val = res.get("name"), res.get("value")
+        if name == "(ATA diag)":
+            self._log_ata_diag(val)
+            return
         self._log(f"tune ✓ {name} = {val}")
         if name in self.params:
             self.params[name]["value"] = val
@@ -1638,6 +1967,8 @@ class MainWindow(QtWidgets.QMainWindow):
             self.t0 = time.monotonic()
         t = time.monotonic() - self.t0
         self._last_vbus = s.get("vbus_V")
+        self._last_snap = s
+        self._sweep_step(s)   # advance sample-point sweep if one is running
         self.statebar.set_state(s["state_name"], s["fault"] != 0)
         if s["fault"]:
             self.fault.setText(f"⚠  FAULT: {s['fault_name']}")
@@ -1648,36 +1979,124 @@ class MainWindow(QtWidgets.QMainWindow):
             self.fault.setStyleSheet("")
 
         rej_tot = s["hwzc_zc"] + s["hwzc_reject"]
+        now_mono = time.monotonic()
+        caprate = None   # accepts per expected sector — LOCK QUALITY (rej% is only noise exposure)
         if self._prev_rej is not None:
             d_acc = max(0, s["hwzc_zc"] - self._prev_rej[0])
             d_rej = max(0, s["hwzc_reject"] - self._prev_rej[1])
             denom = d_acc + d_rej
             rejrate = (100.0 * d_rej / denom) if denom > 0 else 0.0
+            # capture ratio: accepted captures / commutations expected from eRPM
+            # (sectors/s = eRPM/10). Computed over a ROLLING >=150ms window —
+            # telemetry frames arrive in close pairs, and per-frame deltas
+            # undercount on the short gap (counter quantization), which made
+            # live cap= alternate 50<->100 on a healthy run (bench 2026-07-04).
+            self._cap_hist.append((now_mono, s["hwzc_zc"], s["eRPM"]))
+            while len(self._cap_hist) > 2 and now_mono - self._cap_hist[0][0] > 0.6:
+                self._cap_hist.popleft()
+            base = None
+            for e in self._cap_hist:
+                if now_mono - e[0] >= 0.15:
+                    base = e            # newest entry at least 150ms old
+                else:
+                    break
+            if base is not None:
+                dtw = now_mono - base[0]
+                d_acc_w = s["hwzc_zc"] - base[1]
+                if d_acc_w < 0:         # firmware counter reset (stop/restart)
+                    self._cap_hist.clear()
+                else:
+                    e_avg = (s["eRPM"] + base[2]) / 2.0
+                    exp_sectors = (e_avg / 10.0) * dtw
+                    if exp_sectors >= 20:
+                        caprate = max(0.0, min(100.0, 100.0 * d_acc_w / exp_sectors))
         else:
             rejrate = (100.0 * s["hwzc_reject"] / rej_tot) if rej_tot else 0.0
         rejrate = max(0.0, min(100.0, rejrate))   # can't exceed 100%
-        self._prev_rej = (s["hwzc_zc"], s["hwzc_reject"])
+        self._prev_rej = (s["hwzc_zc"], s["hwzc_reject"], now_mono)
 
         ia = s.get("ia_pk_mag", 0.0)
         ibus = s.get("ibus_win_A", s["ibus_A"])   # windowed = trustworthy (not valley artifact)
+        foc = bool(self.info.get("isFoc"))
+        iq_m  = s.get("focIqMeas", 0.0)
+        id_m  = s.get("focIdMeas", 0.0)
+        mod_i = s.get("focModIndex", 0.0)
+        conf  = s.get("focObsConfidence", 0.0)
+        # One-shot FOC dashboard switch: the 6-step Ia/Ibus/BEMF/HWZC fields
+        # are compiled out in AN1078 builds (always 0) — retitle the tiles and
+        # swap the default chart channels to the live FOC signals.
+        if foc and not getattr(self, "_foc_ui_done", False):
+            self._foc_ui_done = True
+            self.ro["ibus"].t.setText("Iq meas")
+            self.ro["iapk"].t.setText("Id meas")
+            self.ro["hwzc"].t.setText("Obs conf")
+            # BEMF/ZC-thresh are dead in FOC — repurpose the two tiles into the
+            # per-phase OC picture the fast-OC actually trips on.
+            self.ro["bemf"].t.setText("Iph pk")
+            self.ro["zcthr"].t.setText("OC head")
+            for k in ("iqM", "idM", "mod", "iw", "ibusR"):
+                self.checks[k].setChecked(True)
+            for k in ("ia", "ibus", "rejrate", "bemf", "zcthr", "goodzc"):
+                self.checks[k].setChecked(False)
         self.ro["eRPM"].set(f"{s['eRPM']:,}")
         self.ro["duty"].set(s["duty"])
         self.ro["vbus"].set(f"{s['vbus_V']:.1f}", "#ef5350" if s["vbus_V"] > 30 else None)
-        self.ro["ibus"].set(f"{ibus:.1f}")
         self.ro["thr"].set(s["throttle"])
-        self.ro["iapk"].set(f"{ia:.1f}", "#ef5350" if ia > 18 else None)
-        self.ro["hwzc"].set(f"{rejrate:.0f}",
-                            "#ef5350" if rejrate > 80 else ("#ffa726" if rejrate > 50 else None))
+        if foc:
+            self.ro["ibus"].set(f"{iq_m:+.1f}", "#ef5350" if abs(iq_m) > 18 else None)
+            self.ro["iapk"].set(f"{id_m:+.1f}", "#ef5350" if abs(id_m) > 5 else None)
+            self.ro["hwzc"].set(f"{conf:.2f}",
+                                "#ef5350" if (s["eRPM"] > 1000 and conf < 0.15) else None)
+        else:
+            self.ro["ibus"].set(f"{ibus:.1f}")
+            self.ro["iapk"].set(f"{ia:.1f}", "#ef5350" if ia > 18 else None)
+            self.ro["hwzc"].set(f"{rejrate:.0f}",
+                                "#ef5350" if rejrate > 80 else ("#ffa726" if rejrate > 50 else None))
         cpu = s.get("cpu_load_pct", 0.0)
         self.ro["cpu"].set(f"{cpu:.0f}",
                            "#ef5350" if cpu > 85 else ("#ffa726" if cpu > 60 else "#66bb6a"))
+        # 6-step BEMF sample-point sweep readout. In FOC builds zc_thresh aliases
+        # vq, so show "--" there. Green = bemf_raw reached the threshold (crossing).
+        bemf_r = s.get("bemf_raw", 0); zcthr_r = s.get("zc_thresh", 0)
+        if foc:
+            # Iph pk = max(|Ia|,|Ib|) — the exact variable the fast-OC latches on
+            # (an1078_motor.c:986). OC head = amps left before the 27.3 A trip.
+            # Amber at ≥50 % of the limit, red at ≥80 % (head ≤20 %).
+            _oc_lim = 27.3   # AN_FASTCHK_OC_LIM_A
+            _ipk  = max(abs(s.get("focIa", 0.0)), abs(s.get("focIb", 0.0)))
+            _head = max(0.0, _oc_lim - _ipk)
+            self.ro["bemf"].set(f"{_ipk:.1f}",
+                                "#ef5350" if _ipk >= 0.8 * _oc_lim
+                                else ("#ffa726" if _ipk >= 0.5 * _oc_lim else None))
+            self.ro["zcthr"].set(f"{_head:.0f}",
+                                 "#ef5350" if _head <= 0.2 * _oc_lim
+                                 else ("#ffa726" if _head <= 0.5 * _oc_lim else None))
+        else:
+            self.ro["bemf"].set(f"{bemf_r}",
+                                "#66bb6a" if (zcthr_r > 0 and bemf_r >= zcthr_r) else None)
+            self.ro["zcthr"].set(f"{zcthr_r}")
+        # 2026-07-14: real 3rd-phase Iw, real DC-bus Ibus, NTC temperature
+        # (AN1078 build, snapshot ≥254B). None on older builds → show "--".
+        iw_r   = s.get("focIw_A")
+        ibus_r = s.get("focIbus_A")
+        temp_c = s.get("tempC")
+        self.ro["iw"].set("--" if iw_r is None else f"{iw_r:+.1f}")
+        self.ro["ibusR"].set("--" if ibus_r is None else f"{ibus_r:+.1f}",
+                             "#ef5350" if (ibus_r is not None and abs(ibus_r) > 20) else None)
+        self.ro["temp"].set(
+            "--" if temp_c is None else f"{temp_c:.0f}",
+            "#ef5350" if (temp_c is not None and temp_c > 80)
+            else ("#ffa726" if (temp_c is not None and temp_c > 60) else None))
         self.sector_box.update_from(s)
 
         raw = {"eRPM": s["eRPM"], "ia": ia, "ibus": ibus, "cpu": cpu,
                "rejrate": rejrate, "vbus": s["vbus_V"],
                "bemf": s.get("bemf_raw", 0), "zcthr": s.get("zc_thresh", 0),
                "goodzc": s.get("good_zc", 0),
-               "duty": s["duty"], "throttle": s["throttle"]}
+               "duty": s["duty"], "throttle": s["throttle"],
+               "iqM": iq_m, "idM": id_m, "mod": mod_i, "conf": conf,
+               "iw": (iw_r or 0.0), "ibusR": (ibus_r or 0.0),
+               "temp": (temp_c or 0.0)}
         self.buf["t"].append(t)
         for k, vv in raw.items():
             self.buf[k].append(vv)
@@ -1697,7 +2116,7 @@ class MainWindow(QtWidgets.QMainWindow):
         if ts and not self.scope_frozen:
             self.p_main.setXRange(max(0.0, ts[-1] - self.scope_window_s), ts[-1], padding=0)
         if s["eRPM"] > 100:
-            self.map_pts.append((s["eRPM"], ia))
+            self.map_pts.append((s["eRPM"], abs(iq_m) if foc else ia))
             self.scatter_map.setData([p[0] for p in self.map_pts],
                                      [p[1] for p in self.map_pts])
 
@@ -1739,9 +2158,73 @@ class MainWindow(QtWidgets.QMainWindow):
             if running:
                 mark = " ◀" if (self.live and len(self.live) >= 2 and
                                 self.live[-2]["state_name"] != s["state_name"]) else ""
+                cap_str = f"cap={caprate:3.0f}%" if caprate is not None else "cap=  -"
+                # FOC mode: the Ia/Ibus window is compiled out (garuda_service.c:1382),
+                # so show the REAL FOC loop internals instead — the discriminators for
+                # why speed sags under load: iqM (torque delivered), idM (angle-error
+                # proxy, ~0 when locked), iqRef~ (speed-PI integrator ≈ demand), mod
+                # (voltage saturation), conf (observer lock). 6-step keeps Ibus/Ia.
+                if self.info.get("isFoc"):
+                    _iw = s.get("focIw_A"); _ib = s.get("focIbus_A")
+                    _tc = s.get("tempC")
+                    # Phase A/B currents (focIa/focIb, offset-subtracted dsPIC-OA
+                    # shunts) — these are the EXACT variables the fast-OC trips on
+                    # (an1078_motor.c:986 latches when |ia| or |ib| > AN_FASTCHK_OC_LIM_A).
+                    # Ipk = max(|Ia|,|Ib|) vs the 27.3 A per-phase peak trip; '!' at ≥80%.
+                    _ia_ph = s.get("focIa", 0.0); _ib_ph = s.get("focIb", 0.0)
+                    _ipk = max(abs(_ia_ph), abs(_ib_ph))
+                    _oc_lim = 27.3   # AN_FASTCHK_OC_LIM_A (per-phase peak amps)
+                    _oc_w = "!" if _ipk >= 0.8 * _oc_lim else " "
+                    _iw_s = "  -  " if _iw is None else f"{_iw:+5.1f}"
+                    _ib_s = "  -  " if _ib is None else f"{_ib:+5.1f}"
+                    _tc_s = " - " if _tc is None else f"{_tc:3.0f}"
+                    diag = (f"iqM={s.get('focIqMeas', 0.0):+5.1f} "
+                            f"idM={s.get('focIdMeas', 0.0):+5.1f} "
+                            f"Ia={_ia_ph:+5.1f} Ib={_ib_ph:+5.1f} "
+                            f"Ipk={_ipk:4.1f}/{_oc_lim:.0f}{_oc_w} "
+                            f"iqRef~={s.get('focPidSpdInteg', 0.0):+5.1f} "
+                            f"mod={s.get('focModIndex', 0.0):4.2f} "
+                            f"conf={s.get('focObsConfidence', 0.0):4.2f} "
+                            f"Iw={_iw_s} Ibus={_ib_s} T={_tc_s}C")
+                else:
+                    # 6-step: surface the BEMF sample vs the ZC threshold so a
+                    # bemfSamplePhase (0x18) sweep is visible in the log. A '*'
+                    # flags bemf_raw ≥ zc_thresh = a crossing (the window found).
+                    _bem = s.get("bemf_raw", 0); _zct = s.get("zc_thresh", 0)
+                    _hit = "*" if (_zct > 0 and _bem >= _zct) else " "
+                    # Detector split: where in the sector each polarity's ZC
+                    # landed, per-mille of T. cR = rising (HW comparator),
+                    # cF = falling (SW OFF-centre, 1 PWM period resolution).
+                    # d = cR-cF; a large/widening |d| means the two polarities
+                    # are feeding the PI inconsistent phase — detector-limited.
+                    # nc = PI events that fired with no capture at all.
+                    # gsp_snapshot.c sets speedPiEnabled=0xDD as the marker that
+                    # the AK512_BRINGUP_DIAG block is populating these slots. No
+                    # marker => the numbers are stale/not ours, so don't plot a
+                    # gap that looks like a measurement.
+                    if s.get("spi_en", 0) == 0xDD:
+                        _cr = s.get("cap_rise_pm", 0); _cf = s.get("cap_fall_pm", 0)
+                        _dg = (_cr - _cf) if (_cr and _cf) else 0
+                        _cap_s = (f"cR={_cr:4d} cF={_cf:4d} d={_dg:+5d} "
+                                  f"nc={s.get('pi_nocap', 0):5d}")
+                    else:
+                        _cap_s = "cR=  -- cF=  -- d=   -- nc=   --"
+                    diag = (f"Ibus={ibus:+5.1f} Ia={ia:4.1f} "
+                            f"bemf={_bem:4d} zc={_zct:4d}{_hit} {_cap_s}")
                 self._log(f"{t:6.2f} {s['state_name']:<8} thr={s['throttle']:>4} "
                           f"duty={s['duty']:>3}% eRPM={s['eRPM']:>7,} Vbus={s['vbus_V']:4.1f} "
-                          f"Ibus={ibus:+5.1f} Ia={ia:4.1f} rej={rejrate:3.0f}% "
+                          f"{diag} {cap_str} rej={rejrate:3.0f}% "
+                          f"an={s.get('anMode', '?')}"
+                          f"{'R' if s.get('anRun') else '-'}"
+                          f"{'C' if s.get('anCal') else '-'}"
+                          f" lk={s.get('anLock', 0):6.0f}"
+                          f" st={s.get('anStarts', 0):3.0f}"
+                          f" isr={s.get('isrCount', 0):9.0f}"
+                          f" hw={s.get('isrFlags', 0):02X}"
+                          f" pg={s.get('pgAlive', 0):.0f}"
+                          f" rc={s.get('bootRcon', 0):04X}"
+                          f" pdc={s.get('pg1dc16', 0):5d}"
+                          f" ov={s.get('ovState', 0):X} "
                           f"{s['fault_name']}{mark}")
             elif self._was_running:
                 self._log(f"■──────── STOPPED @ {t:6.2f}s ────────")
@@ -1784,8 +2267,29 @@ class MainWindow(QtWidgets.QMainWindow):
         op = parts[0].lower()
         if op in ("help", "?"):
             self._log("commands: help · clear · pause · resume · mark <text> · "
-                      "diagnose · params · get <param> · set <param> <value> · "
-                      "export · reload · save")
+                      "diagnose · report · wl · params · get <param> · set <param> <value> · "
+                      "sweep [start stop step dwell] · export · reload · save · defaults · record · raw · ata")
+        elif op == "ata":
+            if not self.worker:
+                self._log("not connected"); return
+            self.worker.submit("ata_diag")
+        elif op == "raw":
+            s = getattr(self, "_last_snap", None)
+            if not s:
+                self._log("no snapshot yet — connect first"); return
+            self._log("current-sense chain (raw ADC counts, healthy bias ≈ 2048):")
+            self._log(f"  focOffsetIa = {s.get('focOffsetIa')}   "
+                      f"focOffsetIb = {s.get('focOffsetIb')}   (boot calibration)")
+            self._log(f"  focIa = {s.get('focIa', 0):+.3f} A   "
+                      f"focIb = {s.get('focIb', 0):+.3f} A   (offset-subtracted)")
+            self._log(f"  ia_raw = {s.get('ia_raw')}   ib_raw = {s.get('ib_raw')}   "
+                      f"(6-step monitor; 0 in FOC builds)")
+            self._log(f"  vbusRaw-derived Vbus = {s.get('vbus_V', 0):.2f} V   "
+                      f"state = {s.get('state_name')}")
+        elif op == "report":
+            self._copy_claude_report()
+        elif op == "wl":
+            self._export_wolfram()
         elif op == "clear":
             self.console.clear()
         elif op == "pause":
@@ -1825,9 +2329,192 @@ class MainWindow(QtWidgets.QMainWindow):
         elif op == "diagnose":
             self.run_diagnosis()
         elif op == "save":
+            if not self.worker:
+                self._log("save: not connected"); return
+            self._log("flash save → writing param table (motor must be stopped)…")
+            self.worker.submit("flash_cmd", cmd="save")
+        elif op == "defaults":
+            if not self.worker:
+                self._log("defaults: not connected"); return
+            self._log("factory defaults → restoring (RAM only until 'save')…")
+            self.worker.submit("flash_cmd", cmd="defaults")
+        elif op == "record":
             self.toggle_record()
+        elif op == "sweep":
+            self._cmd_sweep(parts)
         else:
             self._log(f"unknown command: {op}  (try 'help')")
+
+    def _cmd_sweep(self, parts):
+        """6-step BEMF sample-point sweep. Dwells at each bemfSamplePhase value,
+        captures the MAX bemf_raw seen over the dwell (beats the ~15 Hz telemetry
+        aliasing of the kHz BEMF waveform), and reports which phases cross the
+        threshold. Snapshot-driven state machine (see on_snapshot) — non-blocking,
+        shares the serial port. Motor must stay in CL for the whole sweep."""
+        if not self.worker:
+            self._log("sweep: not connected"); return
+        if len(parts) >= 2 and parts[1].lower() == "stop":
+            self._sweep = None; self._log("sweep aborted"); return
+        if self.info.get("isFoc"):
+            self._log("sweep: 6-step only (this is a FOC build)"); return
+        if "bemfSamplePhase" not in self.params:
+            self._log("sweep: firmware doesn't expose bemfSamplePhase "
+                      "(need the sample-point build)"); return
+        pid = self.params["bemfSamplePhase"].get("id")
+        pmax = self.params["bemfSamplePhase"].get("max") or 142190
+        try:
+            start = int(parts[1]) if len(parts) >= 2 else 0
+            stop  = int(parts[2]) if len(parts) >= 3 else pmax
+            step  = int(parts[3]) if len(parts) >= 4 else max(1, pmax // 28)
+            dwell = float(parts[4]) if len(parts) >= 5 else 0.8
+        except ValueError:
+            self._log("usage: sweep [start stop step dwell]  |  sweep stop"); return
+        phases = list(range(start, min(stop, pmax) + 1, max(1, step)))
+        if not phases:
+            self._log("sweep: empty phase list"); return
+        self._sweep = {"pid": pid, "phases": phases, "i": 0, "dwell": dwell,
+                       "results": [], "maxb": 0, "zc": 0, "t0": time.monotonic()}
+        self.worker.submit("set_param", pid=pid, name="bemfSamplePhase",
+                           value=phases[0])
+        self._log(f"⟳ sweep bemfSamplePhase {phases[0]}..{phases[-1]} step {step} "
+                  f"({len(phases)} pts × {dwell:.1f}s ≈ {len(phases)*dwell:.0f}s). "
+                  f"Keep the motor in CL. 'sweep stop' aborts.")
+
+    def _sweep_step(self, s):
+        """Advance the sample-point sweep on each snapshot. No-op unless a sweep
+        is active. Accumulates max bemf_raw per phase, then steps to the next."""
+        sw = getattr(self, "_sweep", None)
+        if sw is None:
+            return
+        if s.get("state", 0) == 0:          # motor left CL / stopped
+            self._log("sweep: motor left CL — aborted"); self._sweep = None; return
+        b = s.get("bemf_raw", 0); z = s.get("zc_thresh", 0)
+        if b > sw["maxb"]:
+            sw["maxb"] = b
+        if z:
+            sw["zc"] = z
+        if time.monotonic() - sw["t0"] < sw["dwell"]:
+            return
+        ph = sw["phases"][sw["i"]]
+        hit = "  ← CROSSES" if (sw["zc"] > 0 and sw["maxb"] >= sw["zc"]) else ""
+        self._log(f"  phase {ph:6d}: maxBemf={sw['maxb']:4d} zc={sw['zc']:3d}{hit}")
+        sw["results"].append((ph, sw["maxb"], sw["zc"]))
+        sw["i"] += 1
+        if sw["i"] >= len(sw["phases"]):
+            best = max(sw["results"], key=lambda r: r[1] - r[2])
+            crossers = [r for r in sw["results"] if r[2] > 0 and r[1] >= r[2]]
+            self._log(f"⟳ sweep done ({len(sw['results'])} pts). Best margin @ phase "
+                      f"{best[0]}: maxBemf={best[1]} vs zc={best[2]} "
+                      f"(margin {best[1]-best[2]:+d}).")
+            if crossers:
+                self._log(f"  {len(crossers)} phase(s) cross → set that phase and watch "
+                          f"cap:  set bemfSamplePhase {best[0]}")
+            else:
+                self._log("  NO phase reached threshold → sample-point isn't the "
+                          "limiter. Likely too slow (BEMF∝speed; ~3040 eRPM is low) or "
+                          "the floating phase isn't Hi-Z. Next: raise handoff eRPM, or "
+                          "Task-2 (measured neutral / differential).")
+            self._sweep = None
+        else:
+            sw["maxb"] = 0; sw["t0"] = time.monotonic()
+            self.worker.submit("set_param", pid=sw["pid"], name="bemfSamplePhase",
+                               value=sw["phases"][sw["i"]])
+
+    def _copy_claude_report(self):
+        """Compact markdown debug report -> clipboard + sessions/report_*.md.
+
+        Purpose: hand Claude (or a teammate) everything relevant in ~100 lines
+        instead of pasting thousands of raw telemetry rows."""
+        import types
+        lines = []
+        info = self.info or {}
+        lines.append(f"# Garuda debug report {time.strftime('%Y-%m-%d %H:%M:%S')}")
+        lines.append(f"fw: {info.get('fw_version','?')} build=0x{info.get('build_id',0):08X} "
+                     f"profile={info.get('profile_name','?')}")
+        samples = list(self.live)
+        if samples:
+            ns = types.SimpleNamespace(samples=samples, info=info, params=self.params)
+            try:
+                summ = DIAG.summarize(ns)
+                lines.append("")
+                lines.append("## Run summary (per state)")
+                for st, d in (summ.get("per_state") or {}).items():
+                    lines.append(f"- {st}: {d.get('n',0)} frames, "
+                                 f"{d.get('t0',0):.1f}-{d.get('t1',0):.1f}s, "
+                                 f"peak {d.get('peak_eRPM',0):,} eRPM / {d.get('peak_Ia',0):.1f} A")
+                if "rej_pct" in summ:
+                    lines.append(f"- ZC noise-rejection over run: {summ['rej_pct']:.1f}% "
+                                 f"(NOISE metric; lock quality is cap= on the console lines)")
+            except Exception as e:  # noqa
+                lines.append(f"(summary error: {e})")
+            # fault episodes
+            faults = [(x.get("t",0), x.get("fault_name","?")) for x in samples
+                      if x.get("fault") and x.get("fault_name") not in (None, "NONE")]
+            if faults:
+                lines.append("")
+                lines.append("## Fault frames")
+                seen = set()
+                for t, fn in faults:
+                    if fn not in seen:
+                        seen.add(fn)
+                        lines.append(f"- first {fn} at t={t:.2f}s "
+                                     f"({sum(1 for _,f in faults if f==fn)} frames)")
+            last = samples[-1]
+            lines.append("")
+            lines.append(f"## Last frame  t={last.get('t',0):.2f}s")
+            lines.append(f"state={last.get('state_name')} thr={last.get('throttle')} "
+                         f"duty={last.get('duty')}% eRPM={last.get('eRPM',0):,} "
+                         f"Vbus={last.get('vbus_V',0):.1f}V fault={last.get('fault_name')}")
+        else:
+            lines.append("(no telemetry captured yet)")
+        # params with physical units
+        if self.params:
+            lines.append("")
+            lines.append("## Parameters (raw -> physical)")
+            lines.append("| name | raw | phys | range |")
+            lines.append("|---|---|---|---|")
+            for name, p in sorted(self.params.items()):
+                v = p.get("value")
+                ph = PM.phys(name, v)
+                lines.append(f"| {name} | {v} | {ph} | {p.get('min')}-{p.get('max')} |")
+        # console tail
+        tail = self.console.toPlainText().split("\n")[-25:]
+        lines.append("")
+        lines.append("## Console tail")
+        lines.append("```")
+        lines.extend(tail)
+        lines.append("```")
+        md = "\n".join(lines)
+        QtWidgets.QApplication.clipboard().setText(md)
+        os.makedirs("sessions", exist_ok=True)
+        path = os.path.join("sessions", f"report_{time.strftime('%Y%m%d_%H%M%S')}.md")
+        with open(path, "w") as f:
+            f.write(md)
+        self._log(f"🤖 report copied to clipboard + saved {path} ({len(lines)} lines)")
+
+    def _export_wolfram(self):
+        """One aligned bundle for external modeling (tools/wolfram/garuda.wl):
+        telemetry + last burst capture + params(raw&physical) + fw info."""
+        import json
+        os.makedirs("sessions", exist_ok=True)
+        path = os.path.join("sessions", f"run_{time.strftime('%Y%m%d_%H%M%S')}.wl.json")
+        params = {}
+        for name, p in (self.params or {}).items():
+            params[name] = {"raw": p.get("value"), "phys": PM.phys(name, p.get("value")),
+                            "min": p.get("min"), "max": p.get("max")}
+        bundle = {
+            "info": self.info or {},
+            "params": params,
+            "telemetry": list(self.live),
+            "scope": self._scope_samples or [],
+            "exported_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
+        }
+        with open(path, "w") as f:
+            json.dump(bundle, f)
+        self._log(f"wolfram bundle: {path} "
+                  f"({len(bundle['telemetry'])} telem frames, "
+                  f"{len(bundle['scope'])} scope samples) — load with "
+                  f"GarudaImport[\"{path}\"] from tools/wolfram/garuda.wl")
 
     def run_diagnosis(self):
         if not self.live:
