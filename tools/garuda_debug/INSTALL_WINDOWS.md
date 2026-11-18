@@ -20,8 +20,9 @@ Close and reopen PowerShell afterwards (so `uv` is on PATH).
 uv tool install --python 3.11 "garuda-debug[gui] @ git+https://github.com/bhanuprakashjh/ProjectGaruda#subdirectory=tools/garuda_debug"
 ```
 
-This fetches the repo's default branch (`main`). The current GUI is on branch
-`ak512-port`; to install that, put `@ak512-port` after the repo name:
+This fetches the repo's default branch (`main`), which holds a synced copy of
+the GUI. Development happens on branch `ak512-port`; to install the very
+latest, put `@ak512-port` after the repo name:
 
 ```powershell
 uv tool install --python 3.11 "garuda-debug[gui] @ git+https://github.com/bhanuprakashjh/ProjectGaruda@ak512-port#subdirectory=tools/garuda_debug"

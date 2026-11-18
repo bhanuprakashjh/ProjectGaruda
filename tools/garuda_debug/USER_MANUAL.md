@@ -5,8 +5,9 @@ This is the **standalone desktop GUI** for the Garuda ESC: a Python application
 over USB serial. Its window title is "Garuda Studio — v2"; in this manual it is
 called the desktop GUI, to tell it apart from the web GUI.
 
-- Source: this folder (`tools/garuda_debug/`), on branch **`ak512-port`** of the
-  `ProjectGaruda` repo. That branch holds the current version; `main` is older.
+- Source: this folder (`tools/garuda_debug/`) of the `ProjectGaruda` repo. It is
+  developed on branch **`ak512-port`**; `main` carries a synced copy (last
+  synced 2026-11-18). If the two differ, `ak512-port` is newer.
 - Sister tool: the web GUI, Garuda Studio
   (<https://bhanuprakashjh.github.io/garuda-studio/>), which needs no install
   but has fewer features. See [section 10](#10-desktop-gui-or-web-gui).
@@ -42,7 +43,7 @@ This tool monitors and re-tunes a **real motor**.
 
 ### Linux / macOS
 
-From the repo root, on branch `ak512-port`, inside a virtual environment:
+From the repo root, inside a virtual environment:
 
 ```bash
 python3 -m venv venv && source venv/bin/activate
@@ -62,8 +63,9 @@ environment at `<repo root>/venv`.
 Use native Windows Python or `uv` — **not WSL**, which cannot see COM ports.
 [INSTALL_WINDOWS.md](INSTALL_WINDOWS.md) has the two-command `uv` install.
 
-To install the current version straight from GitHub, name the branch in the
-URL. Without `@ak512-port`, the installer fetches the older `main` branch:
+To install the development version straight from GitHub, name the branch in
+the URL. Without `@ak512-port`, the installer fetches `main`, which holds the
+last synced copy:
 
 ```powershell
 uv tool install --python 3.11 "garuda-debug[gui] @ git+https://github.com/bhanuprakashjh/ProjectGaruda@ak512-port#subdirectory=tools/garuda_debug"

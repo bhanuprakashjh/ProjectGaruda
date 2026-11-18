@@ -19,9 +19,14 @@ plus the shared serial-protocol library everything else is built on.
 
 ## Which branch
 
-**`ak512-port` is the current line** for this tool. `main` (the GitHub default)
-carries an older copy. Work on `ak512-port` unless told otherwise, and do not
-assume a file on `main` is up to date.
+**`ak512-port` is the development line** for this tool. `main` (the GitHub
+default) carries a copy of `tools/garuda_debug/` and `gui/` synced from it by a
+plain file copy, last on 2026-11-18; the firmware on `main` was NOT updated and
+is older. Work on `ak512-port` unless told otherwise. After a meaningful change
+here, re-sync `main` the same way (from a `main` checkout:
+`git restore --source=origin/ak512-port --staged --worktree -- tools/garuda_debug gui`,
+then commit) — only when the owner asks, since it changes what the default
+branch ships.
 
 The repository is a firmware monorepo with several worktrees and a lot of
 untracked reference material at the top level. **Stage files by explicit path**

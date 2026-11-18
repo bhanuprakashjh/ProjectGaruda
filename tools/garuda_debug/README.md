@@ -16,7 +16,9 @@ and rule-based analyzers.
 - **[CLAUDE.md](CLAUDE.md)** — for developers and AI assistants: layout,
   verification, protocol rules, packaging constraints, web-GUI parity table.
 
-The current version of this tool is on branch **`ak512-port`**; `main` is older.
+This tool is developed on branch **`ak512-port`**. `main` carries a copy of this
+folder synced from it (last synced 2026-11-18); if the two differ, `ak512-port`
+is newer.
 
 ## Install (Linux / Windows / macOS)
 
