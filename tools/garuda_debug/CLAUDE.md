@@ -209,9 +209,9 @@ needs the same change:
 | `garuda_gui/diagnose.py` (local rules only) | `src/sim/diagnose.ts` |
 | console commands in `app.py` | `src/components/ConsolePanel.tsx` |
 
-Not yet mirrored in Studio as of 2026-11-18: the `cap_rise_pm` / `cap_fall_pm`
-/ `pi_nocap` readout, `PROFILE_NAMES_V1`, and per-board bus-voltage scaling
-(Studio hard-codes a 19.8 divider for non-Simplified firmware).
+Not yet mirrored in Studio as of 2026-11-18: per-board bus-voltage scaling
+(Studio hard-codes a 19.8 divider for non-Simplified firmware), and the
+firmware 1.x numbering in Studio's profile *selector* (its display is correct).
 
 ## Loose ends elsewhere in the repo
 

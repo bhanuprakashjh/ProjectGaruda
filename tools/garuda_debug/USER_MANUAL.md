@@ -301,6 +301,6 @@ saved alongside.
 | Simulator | Yes | No |
 | SPICE deep-dive, real-capture ML | Yes | No |
 | Claude-assisted diagnosis, debug report | Yes | No |
-| Rising/falling capture readout, firmware 1.x profile names | Yes | Not yet |
+| Rising/falling capture readout, firmware 1.x profile names | Yes | Yes (console line and display only) |
 
 Use the desktop GUI for bench debugging. Use the web GUI to hand someone a link.
