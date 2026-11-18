@@ -24,7 +24,9 @@ def decode_info(payload: bytes) -> dict:
         "fwVersion": f"{f[1]}.{f[2]}.{f[3]}",
         "boardId": f[4],
         "motorProfileId": f[5],
-        "motorProfile": P.PROFILE_NAMES.get(f[5], f"unknown({f[5]})"),
+        # fw >= 1.x (garuda-ak512-6step) renumbered profiles 0-based
+        "motorProfile": (P.PROFILE_NAMES_V1 if f[1] >= 1 else P.PROFILE_NAMES
+                         ).get(f[5], f"unknown({f[5]})"),
         "motorPolePairs": f[6],
         "featureFlags": f[7],
         "isFoc": bool(f[7] & P.FEATURE_FOC_AN1078),
@@ -228,6 +230,21 @@ def decode_snapshot(p: bytes, t: float = 0.0) -> dict:
         (sp_en, _pad, sp_zcs, sp_target, sp_error,
          sp_output, sp_integ) = struct.unpack_from("<BBHIiIf", p, 208)
 
+    # 2026-07-25: in the 6-STEP build these three speed-PI slots are REUSED by
+    # gsp_snapshot.c:290-292 to carry HWZC detector diagnostics — the field
+    # names in GSP_SNAPSHOT_T are historical, the payload is not speed-PI:
+    #   speedPiZcsSinceEnable <- hwzc.dbgPiNoCap      (PI events with no capture)
+    #   speedPiTarget         <- hwzc.dbgLastCapPm    (RISING-sector cap pos, per-mille of T)
+    #   speedPiLastError      <- hwzc.dbgPiCrossSector(FALLING-sector cap pos, per-mille of T)
+    # Rising is detected by the HW comparator (~1 us resolution); falling by the
+    # SW OFF-centre compare (one PWM period = 22.2 us at 45 kHz). If the detector
+    # is the limiting factor, these two settle at different per-mille values and
+    # the gap WIDENS with eRPM. If they track each other, the detector is fine.
+    # Exposed under explicit names; the spi_* keys stay for compatibility.
+    cap_rise_pm = sp_target
+    cap_fall_pm = sp_error
+    pi_nocap    = sp_zcs
+
     # Diagnostics added 2026-06-06: CPU load (‰) + per-sector miss tally.
     cpu_load_pct = 0.0
     miss_by_sector = [0, 0, 0, 0, 0, 0]
@@ -359,6 +376,10 @@ def decode_snapshot(p: bytes, t: float = 0.0) -> dict:
         "uptime": uptime,
         "spi_en": sp_en, "spi_zcs": sp_zcs, "spi_target": sp_target,
         "spi_error": sp_error, "spi_output": sp_output, "spi_integ": sp_integ,
+        # HWZC detector diagnostics (same bytes as spi_target/spi_error/spi_zcs
+        # — see the reuse note above). Per-mille of the sector period T.
+        "cap_rise_pm": cap_rise_pm, "cap_fall_pm": cap_fall_pm,
+        "pi_nocap": pi_nocap,
         "cpu_load_pct": cpu_load_pct,
         "miss_by_sector": miss_by_sector,
         "fall_off_min": fall_off_min, "fall_off_max": fall_off_max,

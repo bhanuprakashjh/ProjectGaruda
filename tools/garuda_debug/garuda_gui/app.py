@@ -2087,8 +2087,25 @@ class MainWindow(QtWidgets.QMainWindow):
                     # flags bemf_raw ≥ zc_thresh = a crossing (the window found).
                     _bem = s.get("bemf_raw", 0); _zct = s.get("zc_thresh", 0)
                     _hit = "*" if (_zct > 0 and _bem >= _zct) else " "
+                    # Detector split: where in the sector each polarity's ZC
+                    # landed, per-mille of T. cR = rising (HW comparator),
+                    # cF = falling (SW OFF-centre, 1 PWM period resolution).
+                    # d = cR-cF; a large/widening |d| means the two polarities
+                    # are feeding the PI inconsistent phase — detector-limited.
+                    # nc = PI events that fired with no capture at all.
+                    # gsp_snapshot.c sets speedPiEnabled=0xDD as the marker that
+                    # the AK512_BRINGUP_DIAG block is populating these slots. No
+                    # marker => the numbers are stale/not ours, so don't plot a
+                    # gap that looks like a measurement.
+                    if s.get("spi_en", 0) == 0xDD:
+                        _cr = s.get("cap_rise_pm", 0); _cf = s.get("cap_fall_pm", 0)
+                        _dg = (_cr - _cf) if (_cr and _cf) else 0
+                        _cap_s = (f"cR={_cr:4d} cF={_cf:4d} d={_dg:+5d} "
+                                  f"nc={s.get('pi_nocap', 0):5d}")
+                    else:
+                        _cap_s = "cR=  -- cF=  -- d=   -- nc=   --"
                     diag = (f"Ibus={ibus:+5.1f} Ia={ia:4.1f} "
-                            f"bemf={_bem:4d} zc={_zct:4d}{_hit}")
+                            f"bemf={_bem:4d} zc={_zct:4d}{_hit} {_cap_s}")
                 self._log(f"{t:6.2f} {s['state_name']:<8} thr={s['throttle']:>4} "
                           f"duty={s['duty']:>3}% eRPM={s['eRPM']:>7,} Vbus={s['vbus_V']:4.1f} "
                           f"{diag} {cap_str} rej={rejrate:3.0f}% "

@@ -64,6 +64,12 @@ PROFILE_NAMES = {
     9: "U3-KV700",   # dspic33AKESC-Simplified default (motors.h PROFILE_U3)
 }
 
+# garuda-ak512-6step (fw >= 1.0.0) uses a clean 0-based profile table:
+# Motor 1 = the VEX, CUSTOM = 1. decode_info picks this map by fw major.
+PROFILE_NAMES_V1 = {
+    0: "Motor1 VEX-4000KV", 1: "Custom",
+}
+
 # ── Parameter IDs → names (gsp/gsp_params.h, descriptor table, 31 params) ─
 PARAM_NAMES = {
     0x15: "rampTargetErpm", 0x16: "rampAccelErpmPerS", 0x17: "rampDutyPct",
@@ -134,6 +140,9 @@ FEATURE_FOC_AN1078 = 1 << 23
 
 # ── ADC scaling — BOARD-SPECIFIC (MCLV-48V-300W). Key off boardId later. ─
 # These match tools/step6_session.py and are correct for the AKESC bench board.
+# 23.2 verified correct 2026-07-25 (the low reading was ADC acquisition,
+# fixed by SAMC 5 -> 31 in firmware). Keep in step with
+# VBUS_DIVIDER_RATIO in garuda_foc_params.h.
 VBUS_SCALE_V        = 3.3 * 23.2 / 4095.0
 
 # ── Board display-scaling modes ──────────────────────────────────────────
