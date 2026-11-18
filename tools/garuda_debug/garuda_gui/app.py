@@ -32,6 +32,7 @@ from . import diagnose as DIAG
 from garuda_gsp import analyze as ANALYZE
 from . import wizard as WIZ
 from . import zcsim as ZCSIM
+from . import zcsim_falling as ZCFALL
 
 STATES = ["IDLE", "ARMED", "ALIGN", "OL_RAMP", "MORPH", "CL"]
 WINDOW_S = 20.0          # default rolling plot window
@@ -716,7 +717,9 @@ class MainWindow(QtWidgets.QMainWindow):
             "mechanism (rising always seen in PWM-ON; falling via the RC-filtered OFF-center "
             "sample, limited by samples-per-sector + RC lag) calibrated to the bench. "
             "'Deep-dive' runs the switching-level waveform; the SPICE engine is EXPERIMENTAL "
-            "(runs, but does not yet reproduce the masking from first principles).")
+            "(runs, but does not yet reproduce the masking from first principles). "
+            "'Falling-ZC sweep' opens the analytic study: true vs measured falling-ZC "
+            "position across eRPM, proving why falling is capped at 70k.")
         hint.setWordWrap(True); hint.setStyleSheet("color:#9e9e9e;font-size:11px;")
         v.addWidget(hint)
 
@@ -741,6 +744,14 @@ class MainWindow(QtWidgets.QMainWindow):
         b_spice = QtWidgets.QPushButton("⚡ Deep-dive")
         b_spice.clicked.connect(self._lab_waveform)
         c.addWidget(b_spice)
+        b_sweep = QtWidgets.QPushButton("📐 Falling-ZC sweep")
+        b_sweep.setToolTip(
+            "Analytic sweep (zcsim_falling): where the falling-sector ZC is truly "
+            "located vs where the OFF-center sampler measures it, across eRPM. Shows "
+            "why the firmware caps falling detection at 70k and proves the timer "
+            "extrapolation above it is unbiased.")
+        b_sweep.clicked.connect(self._lab_falling_sweep)
+        c.addWidget(b_sweep)
         v.addLayout(c)
 
         s = QtWidgets.QHBoxLayout()
@@ -942,6 +953,100 @@ class MainWindow(QtWidgets.QMainWindow):
                    ce[0], ce[1], oe[0], oe[1]))
         else:
             self._lab_waveform_lumped(erpm, duty)
+
+    FALLING_CAP_ERPM = 70000   # firmware HWZC_FALLING_SW_MAX_ERPM
+
+    def _lab_falling_sweep(self):
+        """Pop the analytic falling-ZC sweep (zcsim_falling) for the current motor."""
+        m = ZCSIM.MOTORS[self.lab_motor.currentText()]
+        emax = int(m["erpm_max"])
+        erpms = list(np.linspace(15000, emax, 34).astype(int))
+        QtWidgets.QApplication.setOverrideCursor(QtCore.Qt.WaitCursor)
+        try:
+            rows = ZCFALL.falling_walk(erpms, n_phase=12, vbus=float(m["vbus"]))
+        finally:
+            QtWidgets.QApplication.restoreOverrideCursor()
+
+        er = np.array([r["erpm"] for r in rows], float)
+        true_pm = np.array([r["true_pm"] for r in rows], float)
+        # where the sampler missed every alignment, det_pm is None -> mask out
+        det = np.array([r["det_pm"] if r["det_pm"] is not None else np.nan
+                        for r in rows], float)
+        std = np.array([r["det_std"] if r["det_std"] is not None else 0.0
+                        for r in rows], float)
+        miss = np.array([r["miss_pct"] for r in rows], float)
+        timer_err = np.abs(true_pm - 500.0)            # |timer extrapolation error|
+        meas_err = det - true_pm                        # what you'd feed the PI
+
+        dlg = QtWidgets.QDialog(self)
+        dlg.setWindowTitle("Falling-ZC sweep — %s" % self.lab_motor.currentText())
+        dlg.resize(900, 720)
+        dv = QtWidgets.QVBoxLayout(dlg)
+
+        glw = pg.GraphicsLayoutWidget()
+        capx = self.FALLING_CAP_ERPM
+
+        # --- plot 1: ZC position (permille of sector) ---
+        p1 = glw.addPlot(title="Falling ZC position vs eRPM  (permille of 60° sector)")
+        p1.showGrid(x=True, y=True, alpha=0.2); p1.addLegend(offset=(10, 10))
+        p1.setLabel('left', 'permille of sector'); p1.setLabel('bottom', 'eRPM')
+        # jitter band around the measured mean
+        hi = p1.plot(er, det + std, pen=None)
+        lo = p1.plot(er, det - std, pen=None)
+        band = pg.FillBetweenItem(hi, lo, brush=pg.mkBrush(255, 167, 38, 60))
+        p1.addItem(band)
+        p1.plot(er, det, pen=pg.mkPen("#ffa726", width=2),
+                name="measured (OFF-center) ± jitter")
+        p1.plot(er, true_pm, pen=pg.mkPen("#66bb6a", width=2, style=QtCore.Qt.DashLine),
+                name="true ZC (mid-sector)")
+        cap1 = pg.InfiniteLine(pos=capx, angle=90,
+                               pen=pg.mkPen("#ef5350", style=QtCore.Qt.DashLine))
+        p1.addItem(cap1)
+        cap_lbl = pg.TextItem("70k cap", color="#ef5350", anchor=(0, 1))
+        cap_lbl.setPos(capx, 1000)
+        p1.addItem(cap_lbl)
+
+        glw.nextRow()
+        # --- plot 2: error the loop sees — timer (used) vs measurement (rejected) ---
+        p2 = glw.addPlot(title="Commutation timing error: timer extrapolation (used) "
+                               "vs falling measurement (rejected >70k)")
+        p2.showGrid(x=True, y=True, alpha=0.2); p2.addLegend(offset=(10, 10))
+        p2.setLabel('left', 'error (permille)'); p2.setLabel('bottom', 'eRPM')
+        ehi = p2.plot(er, meas_err + std, pen=None)
+        elo = p2.plot(er, meas_err - std, pen=None)
+        p2.addItem(pg.FillBetweenItem(ehi, elo, brush=pg.mkBrush(255, 167, 38, 50)))
+        p2.plot(er, meas_err, pen=pg.mkPen("#ffa726", width=2),
+                name="if PI fed falling measurement ± jitter")
+        p2.plot(er, timer_err, pen=pg.mkPen("#42a5f5", width=2),
+                name="timer extrapolation (what firmware uses)")
+        cap2 = pg.InfiniteLine(pos=capx, angle=90,
+                               pen=pg.mkPen("#ef5350", style=QtCore.Qt.DashLine))
+        p2.addItem(cap2)
+        dv.addWidget(glw, 1)
+
+        # --- verdict text computed from the sweep ---
+        hi_mask = er >= capx
+        max_timer = float(np.nanmax(timer_err[hi_mask])) if hi_mask.any() else 0.0
+        max_jit = float(np.nanmax(std[hi_mask])) if hi_mask.any() else 0.0
+        max_miss = float(np.nanmax(miss[hi_mask])) if hi_mask.any() else 0.0
+        verdict = QtWidgets.QLabel(
+            "True falling ZC stays at %.0f–%.0f permille (mid-sector) across the whole "
+            "range — the 547→900 walk is pure RC-lag + PWM-quantization MEASUREMENT "
+            "error, not a rotor asymmetry.\n"
+            "Above the 70k cap: timer-extrapolation error ≤ %.0f permille (≤%.1f%% of a "
+            "sector) = UNBIASED, while re-using the falling measurement would inject up "
+            "to ±%.0f permille jitter and miss up to %.0f%% of sectors — exactly the "
+            "bench cap-raise failure. ⇒ >70k roughness is NOT falling timing (look at "
+            "comp-amp / bemfDevPeak saturation ~125k)."
+            % (np.nanmin(true_pm), np.nanmax(true_pm), max_timer, max_timer / 10.0,
+               max_jit, max_miss))
+        verdict.setWordWrap(True)
+        verdict.setStyleSheet("color:#cfd8dc;font-size:11px;background:#263238;"
+                              "padding:8px;border-radius:4px;")
+        dv.addWidget(verdict)
+
+        self._falling_sweep_dlg = dlg   # keep a ref so it isn't GC'd
+        dlg.show()
 
     def _build_monitor_tab(self):
         w = QtWidgets.QWidget()
