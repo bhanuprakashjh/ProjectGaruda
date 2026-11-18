@@ -118,7 +118,7 @@ def bemf_curves(erpm, motor, n=720):
 
 def simulate(erpm, duty_frac, *, vbus=VBUS_DEFAULT, rc_fc=5500.0,
              spike_amp=0.0, spike_tau_us=0.6, ring_amp=0.0, ring_fhz=120e3,
-             ring_tau_us=3.0, n_sub=64, sector_index=1, seed=0):
+             ring_tau_us=3.0, n_sub=64, sector_index=1, seed=0, pwm_phase=0.0):
     """Simulate ONE sector's floating-phase signal + detection.
 
     sector_index: which of the 6 sectors (default 1 = a falling sector).
@@ -163,7 +163,8 @@ def simulate(erpm, duty_frac, *, vbus=VBUS_DEFAULT, rc_fc=5500.0,
 
         # center-aligned PWM: ON in the central 'duty' fraction; OFF at the edges
         # (period boundary = OFF-center, where bemfRaw samples).
-        ph = (t % T_pwm) / T_pwm               # 0..1 within PWM period
+        tph = t + pwm_phase * T_pwm            # grid-phase offset (sector vs PWM)
+        ph = (tph % T_pwm) / T_pwm             # 0..1 within PWM period
         on = abs(ph - 0.5) < (duty_frac / 2.0)
 
         # ideal floating-node voltage (V, ref to ground): ON ~ Vbus/2 + 3/2 e ;
@@ -211,7 +212,7 @@ def simulate(erpm, duty_frac, *, vbus=VBUS_DEFAULT, rc_fc=5500.0,
 
         # OFF-center sampler: once per PWM period at the boundary (ph wrap),
         # reads the RC-filtered line (clean average).
-        if k > 0 and (t % T_pwm) < dt:
+        if k > 0 and (tph % T_pwm) < dt:
             offc_min = min(offc_min, filt)
             offc_max = max(offc_max, filt)
             if offc_fired_t is None and frac > 0.25:
